@@ -1,0 +1,15 @@
+# Test image for confit. Matches host Fedora. The binary is not baked in:
+# the host ./target dir is bind-mounted :ro at runtime (see scripts/test-up.sh).
+# Built with: docker build -f Containerfile.test -t confit-test:latest .
+FROM quay.io/fedora/fedora-minimal:44
+
+RUN microdnf install -y shadow-utils bash coreutils findutils && microdnf clean all
+
+# Test user with its own HOME.
+RUN useradd -m -s /bin/bash tester
+
+WORKDIR /home/tester
+USER tester
+
+# Persistent container: scripts start this detached, then `docker exec` into it.
+CMD ["sleep", "infinity"]

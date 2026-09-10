@@ -1,0 +1,5 @@
+~/.bashrc: rc ← bat
+  + alias cat = bat (bat)
+~/.config/mise/config.toml: toml ← bat
+  + tools.bat = latest (bat)
+plan: 2 create, 0 update, 0 unchanged

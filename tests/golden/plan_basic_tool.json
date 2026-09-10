@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "created_at": "2026-09-09T00:00:00Z",
+  "root": "examples/0-basic_tool",
+  "profile": "examples/0-basic_tool/profile.lua",
+  "artifacts": [
+    {
+      "kind": "rc",
+      "path": "~/.bashrc",
+      "data": {
+        "rc": {
+          "profile": [],
+          "env": [],
+          "aliases": {
+            "cat": "bat"
+          },
+          "init": []
+        }
+      },
+      "contributions": [
+        {
+          "tool": "bat",
+          "order": 1
+        }
+      ],
+      "_blame": {
+        "aliases": {
+          "cat": "bat"
+        }
+      }
+    },
+    {
+      "kind": "toml",
+      "path": "~/.config/mise/config.toml",
+      "data": {
+        "toml": {
+          "tools": {
+            "bat": "latest"
+          }
+        }
+      },
+      "contributions": [
+        {
+          "tool": "bat",
+          "order": 0
+        }
+      ],
+      "_blame": {
+        "toml": {
+          "tools.bat": "bat"
+        }
+      }
+    }
+  ],
+  "hooks": [
+    "mise install"
+  ]
+}
