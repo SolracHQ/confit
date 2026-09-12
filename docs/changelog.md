@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2] - 2026-09-12
+
 ### Added
 
 - `render` module: pure data-to-bytes rendering for every artifact kind.
