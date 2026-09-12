@@ -1,5 +1,6 @@
 ~/.bashrc: rc ← bat
   + alias cat = bat (bat)
+  + init[0] = eval "$(mise activate bash)" (bat)
 ~/.config/mise/config.toml: toml ← bat
   + tools.bat = latest (bat)
-plan: 2 create, 0 update, 0 unchanged
+Plan: 2 to add, 0 to change, 0 to destroy.

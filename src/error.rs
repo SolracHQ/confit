@@ -1,8 +1,8 @@
-//! Defines the crate-wide error type and result alias.
+//! Error
 //!
-//! Provides one variant per failure domain. Layers map internal failures
-//! onto these variants at the boundary through this enum; callers match
-//! on cases they handle.
+//! This module holds the shared failure vocabulary. Every layer reports through one
+//! enum.
+
 use thiserror::Error;
 
 /// Defines failure domains for the whole crate.

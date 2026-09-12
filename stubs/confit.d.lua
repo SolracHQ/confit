@@ -18,14 +18,43 @@ local MisePackageOpts = {}
 local ToolOpts = {}
 
 ---@class InitSpec
----@field eval string[]? # Command argv evaluated as eval "$(argv...)". Exactly one of eval/cmd.
----@field cmd string[]? # Command argv run as a plain line. Exactly one of eval/cmd.
+---@field eval string[]? # Command argv evaluated as eval "$(argv...)". Exactly one of eval/cmd/source.
+---@field cmd string[]? # Command argv run as a plain line. Exactly one of eval/cmd/source.
+---@field source string? # File path sourced as source path. Exactly one of eval/cmd/source.
 -- Init entry for tool:init().
 local InitSpec = {}
 
 ---@class Tool
--- Rust-owned tool handle. Mutated in place by the :alias, :env, :profile and :init calls.
+-- Rust-owned tool handle. Mutated in place by the method calls.
 local Tool = {}
+
+---@class Artifact
+-- Artifact value built by confit.artifact constructors. Attached with tool:append_artifact.
+local Artifact = {}
+
+---@class MergeOpts
+---@field shallow boolean? # Merge top-level keys only. Defaults to false.
+---@field list_append boolean? # Concatenate arrays instead of replacing. Defaults to false.
+-- Options for confit.resources.merge. Unknown keys are plan errors.
+local MergeOpts = {}
+
+---@class TemplateOpts
+---@field src string # Inline content or project-root-relative path.
+---@field vars table? # Render variables.
+-- Input for confit.artifact.template.
+local TemplateOpts = {}
+
+---@class Resources
+-- File reads and table merge namespace.
+local Resources = {}
+
+---@class ArtifactNs
+-- Artifact value constructors namespace.
+local ArtifactNs = {}
+
+---@class PathLib
+-- Pure path helpers namespace.
+local PathLib = {}
 
 ---@class Mise
 -- Installer provider namespace.
@@ -33,6 +62,9 @@ local Mise = {}
 
 ---@class Confit
 ---@field mise Mise
+---@field resources Resources
+---@field artifact ArtifactNs
+---@field path PathLib
 -- The global scripting object. Provides tool handles and installer providers.
 local Confit = {}
 
@@ -73,7 +105,90 @@ function Tool:profile(name, value) end
 function Tool:profile_path(dir) end
 
 -- Contributes a shell init entry.
----@param spec InitSpec # Table with exactly one of eval or cmd holding a string argv array.
+---@param spec InitSpec # Table with exactly one of eval/cmd holding a string argv array, or source holding a string path.
 function Tool:init(spec) end
+
+-- Attaches a confit.artifact value to the tool. Merged by (kind, path).
+---@param artifact Artifact # Value from a confit.artifact constructor.
+function Tool:append_artifact(artifact) end
+
+-- Reads a root-relative TOML file into a Lua table.
+---@param path string # Project-root-relative path, e.g. "resources/starship.toml".
+---@return table
+function Resources.load_toml(path) end
+
+-- Reads a root-relative JSON file into a Lua table.
+---@param path string # Project-root-relative path.
+---@return table
+function Resources.load_json(path) end
+
+-- Reads a root-relative YAML file into a Lua table.
+---@param path string # Project-root-relative path.
+---@return table
+function Resources.load_yaml(path) end
+
+-- Deep-merges overlay over base. Tables recurse, everything else last-wins.
+---@param base table # Base table.
+---@param overlay table # Overlay table, wins on conflict.
+---@param opts MergeOpts? # Optional tweaks.
+---@return table
+function Resources.merge(base, overlay, opts) end
+
+-- Builds a TOML artifact value from a data table.
+---@param path string # Destination path.
+---@param data table # Data-only table.
+---@return Artifact
+function ArtifactNs.toml(path, data) end
+
+-- Builds a JSON artifact value from a data table.
+---@param path string # Destination path.
+---@param data table # Data-only table.
+---@return Artifact
+function ArtifactNs.json(path, data) end
+
+-- Builds a YAML artifact value from a data table.
+---@param path string # Destination path.
+---@param data table # Data-only table.
+---@return Artifact
+function ArtifactNs.yaml(path, data) end
+
+-- Builds a literal file artifact value.
+---@param path string # Destination path.
+---@param content string # Exact file text.
+---@return Artifact
+function ArtifactNs.file(path, content) end
+
+-- Builds a template artifact value.
+---@param path string # Destination path.
+---@param opts TemplateOpts # Source plus variables.
+---@return Artifact
+function ArtifactNs.template(path, opts) end
+
+-- Builds a symlink artifact value.
+---@param path string # Link path.
+---@param target string # Link target.
+---@return Artifact
+function ArtifactNs.link(path, target) end
+
+-- Joins $HOME with the segments.
+---@param ... string # Path segments.
+---@return string
+function PathLib.home(...) end
+
+-- Joins $XDG_CONFIG_HOME with the segments. Where managed files land.
+---@param ... string # Path segments.
+---@return string
+function PathLib.config(...) end
+
+-- Joins $XDG_DATA_HOME with the segments.
+---@param ... string # Path segments.
+---@return string
+function PathLib.data(...) end
+
+-- Joins the confit project root with the segments. Where files come from.
+-- Kept for symlinks to shipped resources.
+---@param ... string # Path segments.
+---@return string
+function PathLib.confroot(...) end
 
 confit = Confit

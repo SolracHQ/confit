@@ -1,36 +1,75 @@
 # ConfIt
 
-ConfIt (configure it!) is the spiritual successor of my old dotfiles repo.
+Successor to a dotfiles setup that installs languages and tools, fonts,
+a prompt, and a few configs. Same job, declarative, with a preview
+before anything gets touched.
 
-I format my computers a lot. Partly because I like a clean system, partly
-because I am curious and install software I only use once. That is why my
-dotfiles were born (and they are not dotfiles at all, apart from the
-starship config): set up a PC to be productive with a few commands. It
-never completely fit.
+## Objectives
 
-I have goals that are clear but not easy to achieve:
+- Idempotent changes: applying twice gives the same result.
+- Readable diffs before anything lands.
+- Configs shaped per machine from Lua.
+- Profiles sharing one config without redoing it.
+- Editor-checked key names, configs landing where loaders read them.
+- A preview loop borrowed from Terraform: desired vs previous vs actual
+  files, with hand edits reported before they get overwritten.
 
-- Idempotent changes
-- Easy to check diffs
-- Flexibility in configuration
-- Reproducibility
-- Reusability (profiles without redoing all the config)
-- LSP help (no spec I forget in a week, no forgotten key names, no configs
-  in the wrong place that fail, or worse, get silently ignored)
+## State
 
-Single Rust binary, Lua configuration, plan before apply. Two-phase
-workflow borrowed from Terraform: preview and diff before touching
-anything.
+One Rust binary, Lua 5.4 vendored inside, plan before apply. Two commands
+work today. `plan` writes a JSON plan of the desired state. `status`
+diffs desired vs previous vs the actual files on disk, in memory. Absent
+paths read as absence. Failing reads warn and continue with exit 0.
+Hand edits get named warnings. `apply` and `explain` do not exist yet.
 
-Spec: `docs/specs/current.md` (living record of what is implemented).
-Intent per version: `docs/design/`. Changes: `docs/changelog.md`.
+Profiles declare tools. Tools contribute aliases, env, profile entries,
+and init lines in `eval`, `cmd`, and `source` shapes. Tools also ship
+file artifacts: structured configs, minijinja templates, literal files,
+and symlinks. A mise install ships its own activation as the first init
+entry of every shell.
 
-Old setup for reference: [SolracHQ/dotfiles](https://github.com/SolracHQ/dotfiles).
+## Scope
 
-## Non-goals
+User-space files plus the post commands triggered after they land.
+Escalating permissions is not planned.
 
-- Not a system package manager, not Nix or Home-Manager. User-space only.
-- Not a general provisioner: no root, no services, no secrets management.
+## Show
+
+A profile declares tools, tools contribute entries:
+
+```lua
+-- examples/0-basic_tool/tools/bat.lua
+local bat = confit.tool("bat", {
+  install = confit.mise.package({ name = "bat" }),
+})
+bat:alias("cat", "bat")
+return bat
+```
+
+A plan run previews the change without touching anything:
+
+```sh
+$ confit plan --profile examples/0-basic_tool/profile.lua --root examples/0-basic_tool
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
+> Note: plans carry a `created_at` timestamp, so two runs differ in
+> that field alone. Everything else is byte-identical.
+
+| Fixture | Proves |
+|---|---|
+| `0-basic_tool` | mise package plus alias plus init |
+| `1-structured_resource` | starship config loaded through `confit.resources` and merged |
+| `2-templated_resource` | starship config rendered from a template with profile vars |
+
+| Command | Does |
+|---|---|
+| `plan` | writes the JSON plan, warnings on stderr |
+| `status` | same diff, in memory, nothing written |
+
+`--root` defaults to the profile file parent directory.
+`just plan-example` smokes the basic fixture and writes only to
+`./target`.
 
 ## Build
 
@@ -39,22 +78,10 @@ cargo run -- --help
 just check   # fmt + clippy (-D warnings) + test
 ```
 
-Rust + vendored Lua 5.4 via `mlua` (`lua54` + `vendored`), minijinja for
-template rendering at apply time. Dependencies go through `cargo add` only.
+Spec: `docs/spec.md` (living record of what is implemented).
+Intent per version: `docs/design/`. Changes: `docs/changelog.md`.
 
-## Use
-
-```sh
-confit plan --profile profiles/desktop.lua [-o ./plan.json] [--root .] [--format toml] [--state ./state.json] [--conflicts]
-confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [--conflicts]
-```
-
-`--root` defaults to the profile file's parent directory. Fixture profiles
-under `examples/` (`0-basic_tool`: bat via mise + alias, `just plan-example`
-to smoke it; writes only `./target`).
-
-Status: `plan` and `status` over Lua tools, JSON plans on disk with TOML
-export. `apply` does not exist yet.
+Old setup for reference: [SolracHQ/dotfiles](https://github.com/SolracHQ/dotfiles).
 
 ## Testing in docker
 
@@ -80,4 +107,4 @@ wrappers over `docker run/exec/volume`; `justfile` only forwards to them.
 
 ## License
 
-MIT. Fork away.
+MIT.

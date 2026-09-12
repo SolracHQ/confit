@@ -1,4 +1,4 @@
-//! M1 basic-tool behavior test: real fixture through the lib API.
+//! Basic-tool behavior test: real fixture through the lib API.
 //!
 //! Golden workflow: this test normalizes `created_at` to a fixed string,
 //! renders via the in-memory writer, and compares byte-for-byte against
@@ -6,7 +6,7 @@
 //! plan-shape change, print the rendered text from the golden test, eyeball
 //! it against the fixture (`bat` alias, mise `bat = "latest"`, 2 artifacts,
 //! `mise install` hook), then overwrite the golden file verbatim (no
-//! trailing newline: `PlanFormat::Json` emits none).
+//! trailing newline: `serialize` emits none).
 //!
 //! Uses memory store/writer fakes only; the fixture is read from the repo
 //! via `CARGO_MANIFEST_DIR`. Never touches `$HOME`.
@@ -15,14 +15,19 @@
 //! failure fails the test, which is the desired outcome.
 #![allow(clippy::expect_used)]
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit::lua::evaluate;
-use confit::model::{ArtifactData, Plan};
-use confit::plan::{diff, orchestrate, summarize};
-use confit::store::{
-    MemoryState, MemoryWriter, PlanFormat, PlanWriter, State, StateEntry, StateStore,
+use confit::actions::plan;
+use confit::model::state::State;
+use confit::model::state::StateEntry;
+use confit::model::state::artifact::ArtifactData;
+use confit::model::state::plan::PLAN_VERSION;
+use confit::model::state::plan::Plan;
+use confit::repository::MemoryFilesystem;
+use confit::services::plan::{
+    diff, evaluate_profile, load_state, serialize, summarize, write_plan,
 };
 
 /// Stable plan labels so the golden file is portable across checkouts.
@@ -39,30 +44,30 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
     (root, profile)
 }
 
-/// Evaluate the real fixture and orchestrate with stable labels.
+/// Evaluate the real fixture and plan with stable labels.
 fn build_plan() -> Plan {
     let (root, profile) = fixture_paths();
-    let graph = evaluate(&root, &profile).expect("fixture evaluates");
-    orchestrate(&graph, &State::empty(), GOLDEN_ROOT, GOLDEN_PROFILE).expect("orchestrate")
+    let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
+    plan(&graph, GOLDEN_ROOT, GOLDEN_PROFILE).expect("plan")
 }
 
-/// Render `plan` through the memory writer (exercises the writer seam).
+/// Render `plan` through the memory filesystem (exercises the filesystem seam).
 fn render_json(plan: &Plan) -> String {
-    let writer = MemoryWriter::new();
-    writer
-        .write(plan, Path::new("plan.json"), PlanFormat::Json)
-        .expect("memory write");
-    let (text, format) = writer.take().expect("write captures");
-    assert_eq!(format, PlanFormat::Json);
-    text
+    let text = serialize(plan).expect("serialize");
+    let fs = MemoryFilesystem {
+        files: RefCell::new(BTreeMap::new()),
+        failures: RefCell::new(BTreeMap::new()),
+    };
+    write_plan(&fs, text.as_bytes(), Path::new("plan.json")).expect("memory write");
+    let bytes = fs.files.borrow()["plan.json"].clone();
+    String::from_utf8(bytes).expect("utf8")
 }
 
 #[test]
 fn basic_tool_produces_rc_and_mise() {
     let plan = build_plan();
-    assert_eq!(plan.version, 1);
+    assert_eq!(plan.version, PLAN_VERSION);
     assert_eq!(plan.artifacts.len(), 2);
-    assert_eq!(plan.hooks, vec!["mise install".to_string()]);
 
     let rc = plan
         .artifacts
@@ -134,8 +139,15 @@ fn diff_counts_unchanged_when_state_matches() {
             data: None,
         },
     );
-    let store = MemoryState::with_state(State { artifacts });
-    let previous = store.load().expect("memory load");
+    let seed = State { artifacts };
+    let bytes = serde_json::to_vec(&seed).expect("state json");
+    let mut files = BTreeMap::new();
+    files.insert("state.json".to_string(), bytes);
+    let fs = MemoryFilesystem {
+        files: RefCell::new(files),
+        failures: RefCell::new(BTreeMap::new()),
+    };
+    let previous = load_state(&fs, Some(Path::new("state.json"))).expect("memory load");
     let summary = diff(&plan, &previous);
     assert_eq!(summary.create, 1);
     assert_eq!(summary.update, 0);
@@ -147,8 +159,9 @@ fn golden_summary_is_stable() {
     let plan = build_plan();
     let previous = State::empty();
     let counts = diff(&plan, &previous);
-    let details = confit::diff::detail(&plan, &previous);
-    let rendered = summarize(&plan, &counts, &details, false);
+    let shaped = summarize(&counts);
+    let details = confit::services::diff::detail(&plan, &previous);
+    let rendered = confit::presentation::render_plan(&plan, &shaped, &details, false);
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/plan_basic_tool.summary");
     let golden = std::fs::read_to_string(&golden_path).expect("read golden summary");
@@ -192,21 +205,33 @@ fn seeded_previous(plan: &Plan) -> State {
 #[test]
 fn seeded_state_renders_change_and_remove() {
     let plan = build_plan();
-    let previous = seeded_previous(&plan);
+    let seed = seeded_previous(&plan);
+    let bytes = serde_json::to_vec(&seed).expect("state json");
+    let mut files = BTreeMap::new();
+    files.insert("state.json".to_string(), bytes);
+    let fs = MemoryFilesystem {
+        files: RefCell::new(files),
+        failures: RefCell::new(BTreeMap::new()),
+    };
+    let previous = load_state(&fs, Some(Path::new("state.json"))).expect("memory load");
     let counts = diff(&plan, &previous);
     assert_eq!((counts.create, counts.update, counts.unchanged), (0, 1, 1));
-    let details = confit::diff::detail(&plan, &previous);
+    let details = confit::services::diff::detail(&plan, &previous);
     let mise = details
         .iter()
         .find(|detail| detail.key == "toml:~/.config/mise/config.toml")
         .expect("mise detail");
-    assert_eq!(mise.status, confit::diff::ArtifactStatus::Unchanged);
+    assert_eq!(
+        mise.status,
+        confit::model::dto::diff::ArtifactStatus::Unchanged
+    );
     let rc = details
         .iter()
         .find(|detail| detail.key == "rc:~/.bashrc")
         .expect("rc detail");
-    assert_eq!(rc.status, confit::diff::ArtifactStatus::Update);
-    let text = summarize(&plan, &counts, &details, false);
+    assert_eq!(rc.status, confit::model::dto::diff::ArtifactStatus::Update);
+    let shaped = summarize(&counts);
+    let text = confit::presentation::render_plan(&plan, &shaped, &details, false);
     assert!(
         text.contains("~/.bashrc: rc ~ update ← bat"),
         "rc header marks update: {text}"
@@ -230,15 +255,22 @@ fn seeded_state_renders_change_and_remove() {
     );
     assert_eq!(
         lines[mise_index + 1],
-        "plan: 0 create, 1 update, 1 unchanged",
+        "Plan: 0 to add, 1 to change, 0 to destroy.",
         "unchanged artifact emits no entry lines"
     );
 }
 
 #[test]
 fn conflicts_flag_toggles_loser_display() {
-    use confit::diff::{ArtifactDetail, ArtifactStatus, ChangeKind, EntryChange};
-    use confit::model::{Artifact, ArtifactData, ArtifactKind, BlameSet, Contribution};
+    use confit::model::dto::diff::ArtifactDetail;
+    use confit::model::dto::diff::ArtifactStatus;
+    use confit::model::dto::diff::ChangeKind;
+    use confit::model::dto::diff::EntryChange;
+    use confit::model::state::artifact::Artifact;
+    use confit::model::state::artifact::ArtifactData;
+    use confit::model::state::artifact::ArtifactKind;
+    use confit::model::state::artifact::BlameSet;
+    use confit::model::state::artifact::Contribution;
     use std::collections::BTreeMap;
 
     let mut aliases = BTreeMap::new();
@@ -246,14 +278,14 @@ fn conflicts_flag_toggles_loser_display() {
     let mut blame_aliases = BTreeMap::new();
     blame_aliases.insert("cat".to_string(), "bat".to_string());
     let plan = Plan {
-        version: 1,
+        version: PLAN_VERSION,
         created_at: "2026-09-09T00:00:00Z".into(),
         root: GOLDEN_ROOT.into(),
         profile: GOLDEN_PROFILE.into(),
         artifacts: vec![Artifact {
             kind: ArtifactKind::Rc,
             path: "~/.bashrc".into(),
-            data: ArtifactData::Rc(confit::model::RcData {
+            data: ArtifactData::Rc(confit::model::state::rc::RcData {
                 profile: Vec::new(),
                 env: Vec::new(),
                 aliases,
@@ -270,12 +302,12 @@ fn conflicts_flag_toggles_loser_display() {
             },
             data_hash: "new".into(),
         }],
-        hooks: Vec::new(),
     };
-    let counts = confit::plan::DiffSummary {
+    let counts = confit::model::dto::diff::DiffSummary {
         create: 0,
         update: 1,
         unchanged: 0,
+        delete: 0,
     };
     let details = vec![ArtifactDetail {
         key: "rc:~/.bashrc".to_string(),
@@ -290,13 +322,14 @@ fn conflicts_flag_toggles_loser_display() {
             over: Some("eza".to_string()),
         }],
     }];
-    let plain = summarize(&plan, &counts, &details, false);
+    let shaped = summarize(&counts);
+    let plain = confit::presentation::render_plan(&plan, &shaped, &details, false);
     assert!(
         plain.contains("~ alias cat = oldbat → bat (bat)"),
         "default shows winner only: {plain}"
     );
     assert!(!plain.contains("wins over"), "{plain}");
-    let conflicts = summarize(&plan, &counts, &details, true);
+    let conflicts = confit::presentation::render_plan(&plan, &shaped, &details, true);
     assert!(
         conflicts.contains("~ alias cat = oldbat → bat (bat wins over eza)"),
         "flag shows winner over loser: {conflicts}"

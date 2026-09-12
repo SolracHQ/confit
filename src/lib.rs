@@ -1,20 +1,21 @@
-//! Defines the pure model foundation.
+//! ConfIt
 //!
-//! Provides data-first plan artifacts: types (`model`), order-resolved
-//! merging (`merge`), plus canonical bytes and hashes (`canonical`).
-//! Supplies pure data and hashing. Filesystem and process effects go
-//! through `store` traits and the `plan` service.
+//! The library half of the binary. Everything reusable lives here so
+//! main stays a thin shell and tests link the same code the binary runs.
+//! Actions compose flows, services transform and run effects behind seams,
+//! presentation renders.
 
 //! Test builds allow `expect`: unwraps and expects assert success, and a
 //! failure panics the test, which is the desired outcome.
 #![cfg_attr(test, allow(clippy::expect_used))]
 
-pub mod canonical;
+pub mod actions;
+pub mod binding;
 pub mod cli;
-pub mod diff;
 pub mod error;
-pub mod lua;
-pub mod merge;
+pub mod framework;
 pub mod model;
-pub mod plan;
-pub mod store;
+pub mod presentation;
+pub mod repository;
+pub mod security;
+pub mod services;

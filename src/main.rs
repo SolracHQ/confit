@@ -2,7 +2,6 @@ use clap::Parser;
 
 use confit::cli::{Cli, Command};
 use confit::error::Result;
-use confit::store::{FsPlanWriter, FsStateStore, PlanWriter};
 
 fn main() {
     if let Err(error) = run() {
@@ -11,23 +10,33 @@ fn main() {
     }
 }
 
-/// Route the subcommand; plan payload to stdout or file, summaries to stderr.
+/// Runs the selected subcommand to completion.
+///
+/// # Errors
+///
+/// Fails with action plus presentation errors.
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
         Command::Plan(args) => {
-            let store = FsStateStore::new(args.state.clone());
-            let outcome = confit::cli::run_plan(args, &store)?;
-            match &args.output {
-                Some(dest) => FsPlanWriter::new().write(&outcome.plan, dest, args.format)?,
-                None => println!("{}", args.format.serialize(&outcome.plan)?),
+            let fs = confit::repository::OsFilesystem;
+            let outcome = confit::actions::run_plan(args, &fs)?;
+            for line in confit::presentation::render_warnings(&outcome.warnings) {
+                anstream::eprintln!("{line}");
             }
-            eprintln!("{}", outcome.summary);
+            if args.output.is_none() {
+                let payload = confit::presentation::render_plan_payload(&outcome.plan)?;
+                println!("{payload}");
+            }
+            anstream::eprintln!("{}", confit::presentation::render_plan_outcome(&outcome));
         }
         Command::Status(args) => {
-            let store = FsStateStore::new(args.state.clone());
-            let summary = confit::cli::run_status(args, &store)?;
-            eprintln!("{summary}");
+            let fs = confit::repository::OsFilesystem;
+            let outcome = confit::actions::run_status(args, &fs)?;
+            for line in confit::presentation::render_warnings(&outcome.warnings) {
+                anstream::eprintln!("{line}");
+            }
+            anstream::eprintln!("{}", confit::presentation::render_status_outcome(&outcome));
         }
     }
     Ok(())

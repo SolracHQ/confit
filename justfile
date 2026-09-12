@@ -38,7 +38,7 @@ plan-example:
 
 # Show the living spec as of a sealed tag.
 show-spec VERSION="0.1":
-  git show v{{VERSION}}:docs/specs/current.md
+  git show v{{VERSION}}:docs/spec.md
 
 # Full local verification.
 check:

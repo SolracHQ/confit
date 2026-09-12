@@ -14,7 +14,17 @@
           "aliases": {
             "cat": "bat"
           },
-          "init": []
+          "init": [
+            {
+              "eval": {
+                "argv": [
+                  "mise",
+                  "activate",
+                  "bash"
+                ]
+              }
+            }
+          ]
         }
       },
       "contributions": [
@@ -26,7 +36,10 @@
       "_blame": {
         "aliases": {
           "cat": "bat"
-        }
+        },
+        "init": [
+          "bat"
+        ]
       }
     },
     {
@@ -51,8 +64,5 @@
         }
       }
     }
-  ],
-  "hooks": [
-    "mise install"
   ]
 }
