@@ -19,8 +19,6 @@ pub struct PlanOutcome {
     pub details: Vec<ArtifactDetail>,
     /// Per artifact disk diffs in plan order.
     pub disk: Vec<DiskDetail>,
-    /// Winner over loser expansion for changed lines.
-    pub conflicts: bool,
 }
 
 /// Evaluated summary data for presentation to render.
@@ -36,6 +34,4 @@ pub struct StatusOutcome {
     pub details: Vec<ArtifactDetail>,
     /// Per artifact disk diffs in plan order.
     pub disk: Vec<DiskDetail>,
-    /// Winner over loser expansion for changed lines.
-    pub conflicts: bool,
 }

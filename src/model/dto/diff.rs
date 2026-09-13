@@ -163,15 +163,11 @@ pub enum ChangeKind {
     },
 }
 
-/// One labeled entry transition with winner attribution.
-///
-/// `tool` names the desired winner (removed entries carry `None`); `over` names the in-plan
-/// shadow loser when shadow history names a different tool than the winner, else `None`, so the
-/// conflicts flag renders losers exactly where history identifies one.
+/// One labeled entry transition.
 ///
 /// # Returns
 ///
-/// The label plus change plus winner/loser tools.
+/// The label plus change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryChange {
     /// Setting label: `alias cat`, `_ZO_DOCTOR`, `profile PATH`,
@@ -179,10 +175,6 @@ pub struct EntryChange {
     pub label: String,
     /// Transition with values.
     pub change: ChangeKind,
-    /// Winner tool (`None` for removed entries).
-    pub tool: Option<String>,
-    /// Shadow loser tool for `--conflicts` rendering.
-    pub over: Option<String>,
 }
 
 /// Per-artifact entry diff.
@@ -258,9 +250,6 @@ pub struct DiffSummary {
 ///         kind: ArtifactKind::File,
 ///         path: path.into(),
 ///         data: ArtifactData::File { content: "hi".into() },
-///         contributions: Vec::new(),
-///         shadowed: Default::default(),
-///         blame: Default::default(),
 ///         data_hash: "hash".into(),
 ///     }
 /// }

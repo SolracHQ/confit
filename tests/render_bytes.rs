@@ -6,7 +6,7 @@
 //!
 //! To regenerate after an intentional render change, run with
 //! `UPDATE_GOLDEN=1` to print fresh digests, eyeball the bytes against the
-//! layout documented in `src/render/rc.rs`, then overwrite the constants
+//! layout documented in `src/services/render/rc.rs`, then overwrite the constants
 //! below verbatim.
 
 #![allow(clippy::expect_used)]
@@ -15,8 +15,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use confit::model::state::artifact::ArtifactData;
-use confit::model::state::artifact::BlameSet;
 use confit::model::state::artifact::Table;
+use confit::model::state::rc::AliasEntry;
 use confit::model::state::rc::EnvEntry;
 use confit::model::state::rc::InitEntry;
 use confit::model::state::rc::PathOp;
@@ -38,8 +38,8 @@ const FILE_SHA: &str = "7f6e51ac7d765befc387a1bd87405065e0c60bfc442f4ad18d5a37d9
 const LINK_SHA: &str = "1d5e6a1edddf2cb59b7bbc0218e03c305de6c11485a2aa0d3bafc7466b4b8e3c";
 /// Golden: inline template `hello {{ name }}!` with `name = world`.
 const TEMPLATE_SHA: &str = "0fbd9f7acaf3edf65b61f048479552eac91eb22bbd133ae518a7bdd4fe8ea5dc";
-/// Golden: two-tool rc fixture in `two_tool_rc`.
-const RC_SHA: &str = "be5445783efb9c18cfe12751d66c895df56da92b521082c440cfb7e74f61fe8e";
+/// Golden: bare rc groups in `two_tool_rc`.
+const RC_SHA: &str = "af993886f9dd7fc5b24fd1ebbee90b769c1fc74160a9a52b190871e5b501e000";
 
 /// Flat single-pair table used by the structured goldens.
 fn flat_table() -> Table {
@@ -48,78 +48,70 @@ fn flat_table() -> Table {
         .collect()
 }
 
-/// Two-tool rc fixture: profile plus env, two alias owners, two init owners.
-fn two_tool_rc() -> (RcData, BlameSet) {
-    let data = RcData {
+/// Two-area rc fixture: profile plus env, two aliases, two init lines.
+fn two_tool_rc() -> RcData {
+    RcData {
         profile: vec![ProfileEntry {
             name: "PATH".into(),
             value: "/a".into(),
             op: PathOp::Prepend,
             when: None,
+            priority: 0,
         }],
         env: vec![
             EnvEntry {
                 name: "A".into(),
                 value: "1".into(),
                 when: None,
+                priority: 0,
             },
             EnvEntry {
                 name: "B".into(),
                 value: "x y".into(),
                 when: None,
+                priority: 0,
             },
         ],
-        aliases: [
-            ("cat".to_string(), "bat".to_string()),
-            ("ls".to_string(), "eza --icons".to_string()),
-        ]
-        .into_iter()
-        .collect(),
+        aliases: vec![
+            AliasEntry {
+                name: "cat".into(),
+                value: "bat".into(),
+                when: None,
+                priority: 0,
+            },
+            AliasEntry {
+                name: "ls".into(),
+                value: "eza --icons".into(),
+                when: None,
+                priority: 0,
+            },
+        ],
         init: vec![
             InitEntry::Eval {
                 argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+                when: None,
+                priority: 0,
             },
             InitEntry::Cmd {
                 argv: vec!["task".into(), "--completion".into(), "bash".into()],
+                when: None,
+                priority: 0,
             },
         ],
-    };
-    let blame = BlameSet {
-        aliases: [
-            ("cat".to_string(), "a-tool".to_string()),
-            ("ls".to_string(), "l-tool".to_string()),
-        ]
-        .into_iter()
-        .collect(),
-        env: vec!["e-tool".into(), "e-tool".into()],
-        profile: vec!["p-tool".into()],
-        init: vec!["i-tool".into(), "i-tool".into()],
-        toml: BTreeMap::new(),
-    };
-    (data, blame)
+    }
 }
 
-/// Expected bytes for the two-tool rc fixture.
+/// Expected bytes for the two-area rc fixture.
 fn expected_rc() -> &'static str {
-    "# >>> confit:p-tool\n\
-     export PATH=/a:\"${PATH}\"\n\
-     # <<< confit\n\
-     # >>> confit:e-tool\n\
+    "export PATH=/a:\"${PATH}\"\n\
      export A=1\n\
      export B='x y'\n\
-     # <<< confit\n\
      \n\
-     # >>> confit:a-tool\n\
      alias cat=bat\n\
-     # <<< confit\n\
-     # >>> confit:l-tool\n\
      alias ls='eza --icons'\n\
-     # <<< confit\n\
      \n\
-     # >>> confit:i-tool\n\
      eval \"$(zoxide init bash)\"\n\
-     task --completion bash\n\
-     # <<< confit\n"
+     task --completion bash\n"
 }
 
 /// Prints fresh digests when `UPDATE_GOLDEN=1`, else asserts goldens.
@@ -140,33 +132,18 @@ fn structured_kinds_match_golden_bytes_and_hashes() {
     let table = flat_table();
     let root = std::path::Path::new("root");
 
-    let toml_bytes = render_artifact(
-        &ArtifactData::Toml(table.clone()),
-        &BlameSet::default(),
-        &source,
-        root,
-    )
-    .expect("toml renders");
+    let toml_bytes =
+        render_artifact(&ArtifactData::Toml(table.clone()), &source, root).expect("toml renders");
     assert_eq!(toml_bytes, b"name = \"bat\"\n");
     check_golden("toml", &toml_bytes, TOML_SHA);
 
-    let json_bytes = render_artifact(
-        &ArtifactData::Json(table.clone()),
-        &BlameSet::default(),
-        &source,
-        root,
-    )
-    .expect("json renders");
+    let json_bytes =
+        render_artifact(&ArtifactData::Json(table.clone()), &source, root).expect("json renders");
     assert_eq!(json_bytes, b"{\n  \"name\": \"bat\"\n}");
     check_golden("json", &json_bytes, JSON_SHA);
 
-    let yaml_bytes = render_artifact(
-        &ArtifactData::Yaml(table),
-        &BlameSet::default(),
-        &source,
-        root,
-    )
-    .expect("yaml renders");
+    let yaml_bytes =
+        render_artifact(&ArtifactData::Yaml(table), &source, root).expect("yaml renders");
     assert_eq!(yaml_bytes, b"name: bat");
     check_golden("yaml", &yaml_bytes, YAML_SHA);
 }
@@ -183,7 +160,6 @@ fn file_and_link_pass_bytes_through() {
         &ArtifactData::File {
             content: "export X=1".into(),
         },
-        &BlameSet::default(),
         &source,
         root,
     )
@@ -195,7 +171,6 @@ fn file_and_link_pass_bytes_through() {
         &ArtifactData::Link {
             target: "dest".into(),
         },
-        &BlameSet::default(),
         &source,
         root,
     )
@@ -217,7 +192,6 @@ fn template_renders_inline_vars() {
             src: "hello {{ name }}!".into(),
             vars,
         },
-        &BlameSet::default(),
         &source,
         root,
     )
@@ -227,9 +201,9 @@ fn template_renders_inline_vars() {
 }
 
 #[test]
-fn rc_groups_by_tool_with_golden_hash() {
-    let (data, blame) = two_tool_rc();
-    let rendered = confit::services::render::rc::render_rc(&data, &blame);
+fn rc_sections_with_golden_hash() {
+    let data = two_tool_rc();
+    let rendered = confit::services::render::rc::render_rc(&data);
     assert_eq!(rendered, expected_rc());
     check_golden("rc", rendered.as_bytes(), RC_SHA);
 }

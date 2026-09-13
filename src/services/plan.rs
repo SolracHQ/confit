@@ -15,26 +15,60 @@ use crate::model::dto::warning::PlanWarning;
 use crate::model::dto::warning::WarningKind;
 use crate::model::state::State;
 use crate::model::state::artifact::ArtifactKind;
+use crate::model::state::plan::PLAN_VERSION;
 use crate::model::state::plan::Plan;
 use crate::repository::Filesystem;
 use crate::security::sha256_hex;
+use crate::services::fold::fold_profile;
 use crate::services::path::expand_tilde;
 
-/// Serializes a plan to pretty JSON text.
+/// Builds the desired state plan for a profile graph.
 ///
 /// # Arguments
 ///
-/// * `plan` - the merged plan.
+/// * `graph` - evaluated profile holding shells plus configs.
+/// * `root` - project root label recorded in the plan.
+/// * `profile` - profile label recorded in the plan.
 ///
 /// # Returns
 ///
-/// Pretty JSON text.
+/// Versioned plan holding hashed artifacts in fold order.
 ///
 /// # Errors
 ///
-/// Serialization failures surface as JSON errors.
-pub fn serialize(plan: &Plan) -> Result<String> {
-    Ok(serde_json::to_string_pretty(plan)?)
+/// Fails with merge plus hashing errors.
+///
+/// # Examples
+/// ```rust,no_run
+/// use std::path::Path;
+/// use confit::model::state::plan::PLAN_VERSION;
+/// use confit::services::plan::build_plan;
+/// use confit::services::plan::evaluate_profile;
+///
+/// let graph = match evaluate_profile(Path::new("examples/0-basic_tool"), Path::new("examples/0-basic_tool/profile.lua")) {
+///     Ok(graph) => graph,
+///     Err(error) => panic!("fixture evaluates: {error}"),
+/// };
+/// let plan = match build_plan(&graph, "examples/0-basic_tool", "examples/0-basic_tool/profile.lua") {
+///     Ok(plan) => plan,
+///     Err(error) => panic!("plan builds: {error}"),
+/// };
+/// assert_eq!(plan.version, PLAN_VERSION);
+/// ```
+pub fn build_plan(graph: &ProfileGraph, root: &str, profile: &str) -> Result<Plan> {
+    let mut artifacts = fold_profile(graph)?;
+    for artifact in &mut artifacts {
+        if artifact.data_hash.is_empty() {
+            artifact.data_hash = sha256_hex(&artifact.data.to_bytes()?);
+        }
+    }
+    Ok(Plan {
+        version: PLAN_VERSION,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        root: root.to_string(),
+        profile: profile.to_string(),
+        artifacts,
+    })
 }
 
 /// Evaluates the profile file into a graph.
@@ -46,7 +80,7 @@ pub fn serialize(plan: &Plan) -> Result<String> {
 ///
 /// # Returns
 ///
-/// Declared shells plus tool contributions in profile order.
+/// Declared shells plus config contributions in profile order.
 ///
 /// # Errors
 ///
@@ -79,15 +113,13 @@ pub fn load_state(fs: &dyn Filesystem, state: Option<&Path>) -> Result<State> {
     let bytes = match fs.read_bytes(&key) {
         Ok(None) => return Ok(State::empty()),
         Ok(Some(bytes)) => bytes,
-        Err(Error::Store(inner)) => {
-            return Err(Error::Store(format!(
-                "read state file '{}': {inner}",
-                path.display()
-            )));
-        }
         Err(error) => {
+            let detail = match error {
+                Error::Store(inner) => inner,
+                error => error.to_string(),
+            };
             return Err(Error::Store(format!(
-                "read state file '{}': {error}",
+                "read state file '{}': {detail}",
                 path.display()
             )));
         }
@@ -124,12 +156,15 @@ pub fn snapshot_current(fs: &dyn Filesystem, plan: &Plan) -> BTreeMap<String, Sn
                 let hash = sha256_hex(&bytes);
                 Snapshot::Present { bytes, hash }
             }
-            Err(Error::Store(inner)) => Snapshot::Unreadable {
-                reason: format!("cannot read '{}': {inner}", artifact.path),
-            },
-            Err(error) => Snapshot::Unreadable {
-                reason: format!("cannot read '{}': {error}", artifact.path),
-            },
+            Err(error) => {
+                let detail = match error {
+                    Error::Store(inner) => inner,
+                    error => error.to_string(),
+                };
+                Snapshot::Unreadable {
+                    reason: crate::presentation::unreadable_reason(&artifact.path, &detail),
+                }
+            }
         };
         out.insert(key, snapshot);
     }
@@ -181,9 +216,6 @@ pub fn write_plan(fs: &dyn Filesystem, bytes: &[u8], dest: &Path) -> Result<()> 
 ///         kind: ArtifactKind::File,
 ///         path: path.into(),
 ///         data: ArtifactData::File { content: "hi".into() },
-///         contributions: Vec::new(),
-///         shadowed: Default::default(),
-///         blame: Default::default(),
 ///         data_hash: "hash".into(),
 ///     }
 /// }
@@ -216,20 +248,6 @@ pub fn diff(plan: &Plan, previous: &State) -> DiffSummary {
     summary
 }
 
-/// Looks up the disk snapshot for an artifact.
-///
-/// # Arguments
-///
-/// * `snapshots` - disk states keyed by `kind:path`.
-/// * `key` - the artifact lookup key.
-///
-/// # Returns
-///
-/// The `kind:path` entry. Absent keys yield `None`.
-fn snapshot_for<'a>(snapshots: &'a BTreeMap<String, Snapshot>, key: &str) -> Option<&'a Snapshot> {
-    snapshots.get(key)
-}
-
 /// Collects disk warnings from record gated disk comparison.
 ///
 /// # Arguments
@@ -256,7 +274,7 @@ pub fn disk_warnings(
         };
         let rendered_hash = sha256_hex(desired);
         let record = previous.artifacts.get(&key);
-        let snapshot = snapshot_for(snapshots, &key);
+        let snapshot = snapshots.get(&key);
         match record {
             None => match snapshot {
                 None | Some(Snapshot::Absent) => {}
@@ -317,14 +335,12 @@ mod three_way_tests {
     use crate::model::state::artifact::Artifact;
     use crate::model::state::artifact::ArtifactData;
     use crate::model::state::artifact::ArtifactKind;
-    use crate::model::state::artifact::BlameSet;
-    use crate::model::state::artifact::ShadowedSet;
     use crate::model::state::artifact::Table;
     use crate::model::state::plan::PLAN_VERSION;
     use crate::model::state::rc::EnvEntry;
     use crate::repository::MemoryFilesystem;
     use crate::security::sha256_hex;
-    use crate::services::render::{rc, render_artifact, render_baseline};
+    use crate::services::render::{rc, render_baseline};
 
     const PATH: &str = "demo.toml";
     const KEY: &str = "toml:demo.toml";
@@ -342,9 +358,6 @@ mod three_way_tests {
             kind: ArtifactKind::Toml,
             path: PATH.into(),
             data,
-            contributions: Vec::new(),
-            shadowed: ShadowedSet::default(),
-            blame: BlameSet::default(),
             data_hash: hash,
         }
     }
@@ -647,9 +660,6 @@ mod three_way_tests {
             path: "app.conf".into(),
             data_hash: sha256_hex(&data.to_bytes().unwrap()),
             data,
-            contributions: Vec::new(),
-            shadowed: ShadowedSet::default(),
-            blame: BlameSet::default(),
         };
         let plan = plan_with(vec![artifact]);
         let files = MemoryFilesystem::default();
@@ -658,62 +668,55 @@ mod three_way_tests {
     }
 
     #[test]
-    fn rc_disk_compares_against_blame_markers() {
+    fn rc_disk_compares_against_rendered_markers() {
         let data = crate::model::state::rc::RcData {
             profile: Vec::new(),
             env: vec![EnvEntry {
                 name: "A".into(),
                 value: "1".into(),
                 when: None,
+                priority: 0,
             }],
-            aliases: BTreeMap::new(),
+            aliases: Vec::new(),
             init: Vec::new(),
         };
-        let mut blame = BlameSet::default();
-        blame.env.push("tool".into());
         let artifact = Artifact {
             kind: ArtifactKind::Rc,
             path: "~/.bashrc".into(),
             data_hash: sha256_hex(&ArtifactData::Rc(data.clone()).to_bytes().unwrap()),
             data: ArtifactData::Rc(data.clone()),
-            contributions: Vec::new(),
-            shadowed: ShadowedSet::default(),
-            blame: blame.clone(),
         };
         let plan = plan_with(vec![artifact.clone()]);
         let previous = state_with(vec![(
             "rc:~/.bashrc".to_string(),
             artifact.data_hash.clone(),
         )]);
-        let blamed = rc::render_rc(&data, &blame).into_bytes();
-        assert!(String::from_utf8_lossy(&blamed).contains("# >>> confit:tool"));
+        let rendered_bytes = rc::render_rc(&data).into_bytes();
+        assert!(String::from_utf8_lossy(&rendered_bytes).contains("export A=1"));
         let files = MemoryFilesystem::default();
         let rendered = render_baseline(&plan, Path::new("root"), &files).expect("renders");
-        assert_eq!(rendered["rc:~/.bashrc"], blamed);
+        assert_eq!(rendered["rc:~/.bashrc"], rendered_bytes);
         let counts = diff(&plan, &previous);
         assert_eq!((counts.update, counts.unchanged), (0, 1));
         let snapshots: BTreeMap<String, Snapshot> =
-            [("rc:~/.bashrc".to_string(), present(&blamed))]
+            [("rc:~/.bashrc".to_string(), present(&rendered_bytes))]
                 .into_iter()
                 .collect();
         let clean = disk_warnings(&plan, &previous, &snapshots, &rendered);
         assert!(clean.is_empty());
 
-        let unknown = render_artifact(
-            &artifact.data,
-            &BlameSet::default(),
-            &files,
-            Path::new("root"),
-        )
-        .unwrap();
-        assert!(String::from_utf8_lossy(&unknown).contains("# >>> confit:unknown"));
+        let edited = b"# edited bashrc\n".to_vec();
+        assert!(
+            String::from_utf8_lossy(&edited).contains("edited"),
+            "edited bytes differ"
+        );
         let edited_snapshots: BTreeMap<String, Snapshot> =
-            [("rc:~/.bashrc".to_string(), present(&unknown))]
+            [("rc:~/.bashrc".to_string(), present(&edited))]
                 .into_iter()
                 .collect();
-        let edited = disk_warnings(&plan, &previous, &edited_snapshots, &rendered);
-        assert_eq!(edited.len(), 1);
-        assert_eq!(edited[0].kind, WarningKind::ManualModification);
+        let warned = disk_warnings(&plan, &previous, &edited_snapshots, &rendered);
+        assert_eq!(warned.len(), 1);
+        assert_eq!(warned[0].kind, WarningKind::ManualModification);
     }
 
     #[test]
@@ -754,7 +757,6 @@ mod serialize_tests {
     use crate::model::state::artifact::Artifact;
     use crate::model::state::artifact::ArtifactData;
     use crate::model::state::artifact::ArtifactKind;
-    use crate::model::state::artifact::Contribution;
     use crate::model::state::plan::PLAN_VERSION;
 
     fn sample_plan() -> Plan {
@@ -769,12 +771,6 @@ mod serialize_tests {
                 data: ArtifactData::File {
                     content: "export X=1\n".into(),
                 },
-                contributions: vec![Contribution {
-                    tool: "base".into(),
-                    order: 0,
-                }],
-                shadowed: Default::default(),
-                blame: Default::default(),
                 data_hash: String::new(),
             }],
         }
@@ -783,7 +779,7 @@ mod serialize_tests {
     #[test]
     fn json_serialize_round_trips() {
         let plan = sample_plan();
-        let text = serialize(&plan).unwrap();
+        let text = serde_json::to_string_pretty(&plan).unwrap();
         assert_eq!(serde_json::from_str::<Plan>(&text).unwrap(), plan);
     }
 }

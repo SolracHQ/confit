@@ -8,22 +8,23 @@ use std::path::Path;
 use mlua::{Table, Value};
 
 use crate::error::{Error, Result};
-use crate::framework::{ToolBuilder, ToolContribution};
+use crate::framework::ConfigBuilder;
+use crate::model::state::config::ConfigContribution;
 
-/// Evaluated profile graph: declared shells plus tool contributions.
+/// Evaluated profile graph: declared shells plus config contributions.
 ///
-/// `shells` is non-empty; `tools` keeps profile order.
+/// `shells` plus `configs` stay non-empty and keep profile order.
 ///
 /// # Examples
 ///
-/// A profile returning `{ shells = { "bash" }, tools = { bat } }` evaluates to one shell and
-/// the `bat` contribution.
+/// A profile returning `{ shells = { "bash" }, configs = { web } }` evaluates to one shell and
+/// the `web` contribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileGraph {
     /// Declared shell names, e.g. `["bash"]`.
     pub shells: Vec<String>,
-    /// Tool contributions in profile order.
-    pub tools: Vec<ToolContribution>,
+    /// Config contributions in profile order.
+    pub configs: Vec<ConfigContribution>,
 }
 
 /// Evaluates the profile file into a profile graph.
@@ -35,7 +36,7 @@ pub struct ProfileGraph {
 ///
 /// # Returns
 ///
-/// Profile graph holding shells plus tool contributions.
+/// Profile graph holding shells plus config contributions.
 ///
 /// # Errors
 ///
@@ -53,9 +54,33 @@ pub struct ProfileGraph {
 /// assert_eq!(graph.shells, vec!["bash"]);
 /// ```
 pub fn evaluate(root: &Path, profile: &Path) -> Result<ProfileGraph> {
+    evaluate_with_plugins(root, profile, None)
+}
+
+/// Evaluates the profile file into a profile graph with plugins available.
+///
+/// # Arguments
+///
+/// * `root` - project root for module resolution.
+/// * `profile` - profile file path.
+/// * `plugins` - external plugins folder shaped `{user}/{name}/plugin.lua`,
+///   empty keeps embedded defaults only.
+///
+/// # Returns
+///
+/// Profile graph holding shells plus config contributions.
+///
+/// # Errors
+///
+/// Fails with `Error::Lua` for evaluation failures and `Error::Config` for malformed return tables.
+pub fn evaluate_with_plugins(
+    root: &Path,
+    profile: &Path,
+    plugins: Option<&Path>,
+) -> Result<ProfileGraph> {
     let lua = mlua::Lua::new();
     prepend_project_path(&lua, root)?;
-    crate::framework::install_confit(&lua, root)?;
+    crate::framework::install_confit_with_plugins(&lua, root, plugins)?;
     let source = std::fs::read(profile)?;
     let returned: Value = lua
         .load(&source)
@@ -66,13 +91,13 @@ pub fn evaluate(root: &Path, profile: &Path) -> Result<ProfileGraph> {
         Value::Table(table) => table,
         _ => {
             return Err(Error::Config(
-                "profile must return a table with 'shells' and 'tools'".to_string(),
+                "profile must return a table with 'shells' and 'configs'".to_string(),
             ));
         }
     };
     Ok(ProfileGraph {
         shells: read_shells(&table)?,
-        tools: read_tools(&table)?,
+        configs: read_configs(&table)?,
     })
 }
 
@@ -183,7 +208,7 @@ fn read_shells(profile: &Table) -> Result<Vec<String>> {
     Ok(shells)
 }
 
-/// Reads the profile tools field.
+/// Reads the profile configs field.
 ///
 /// # Arguments
 ///
@@ -191,52 +216,55 @@ fn read_shells(profile: &Table) -> Result<Vec<String>> {
 ///
 /// # Returns
 ///
-/// Tool contributions in profile order.
+/// Config contributions in profile order.
 ///
 /// # Errors
 ///
-/// Fails with `Error::Config` for unreadable fields and for entries holding values of other shapes, naming the index.
-fn read_tools(profile: &Table) -> Result<Vec<ToolContribution>> {
+/// Fails with `Error::Config` for absent fields and for empty arrays and for malformed entries, naming the index.
+fn read_configs(profile: &Table) -> Result<Vec<ConfigContribution>> {
+    const WHAT: &str = "profile: field 'configs' must be a non-empty array of configs";
     let raw: Value = profile
-        .get("tools")
-        .map_err(|err| Error::Config(format!("profile: field 'tools' unreadable: {err}")))?;
+        .get("configs")
+        .map_err(|_| Error::Config(WHAT.to_string()))?;
     let list = match raw {
+        Value::Nil => return Err(Error::Config(WHAT.to_string())),
         Value::Table(list) => list,
         _ => {
-            return Err(Error::Config(
-                "profile: field 'tools' must be an array of tools".to_string(),
-            ));
+            return Err(Error::Config(WHAT.to_string()));
         }
     };
     let len = list.raw_len();
-    let mut tools = Vec::with_capacity(len);
+    let mut configs = Vec::with_capacity(len);
     for index in 1..=len {
         let item: Value = list
             .get(index)
-            .map_err(|err| Error::Config(format!("profile: tools[{index}] unreadable: {err}")))?;
+            .map_err(|err| Error::Config(format!("profile: configs[{index}] unreadable: {err}")))?;
         match item {
-            Value::UserData(handle) => match handle.borrow::<ToolBuilder>() {
-                Ok(builder) => tools.push(builder.contribution().clone()),
+            Value::UserData(handle) => match handle.borrow::<ConfigBuilder>() {
+                Ok(builder) => configs.push(builder.contribution().clone()),
                 Err(_) => {
                     return Err(Error::Config(format!(
-                        "profile: tools[{index}] must be a tool (expected tool userdata)"
+                        "profile: configs[{index}] must be a config (expected config userdata)"
                     )));
                 }
             },
             _ => {
                 return Err(Error::Config(format!(
-                    "profile: tools[{index}] must be a tool (expected tool userdata)"
+                    "profile: configs[{index}] must be a config (expected config userdata)"
                 )));
             }
         }
     }
-    Ok(tools)
+    if configs.is_empty() {
+        return Err(Error::Config(WHAT.to_string()));
+    }
+    Ok(configs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::InitEntryShape;
+    use crate::model::state::rc::InitEntry;
 
     /// Builds a temp project root holding fixture files.
     ///
@@ -281,15 +309,13 @@ mod tests {
     }
 
     #[test]
-    fn minimal_tool_matches_fixture_shape() {
+    fn minimal_config_matches_fixture_shape() {
         let graph = run(
             &[(
                 "tools/bat.lua",
                 r#"
-                local bat = confit.tool("bat", {
-                  install = confit.mise.package({ name = "bat" }),
-                })
-                bat:alias("cat", "bat")
+                local bat = confit.config("bat")
+                bat:add_artifact(confit.artifact.rc.alias("cat", "bat"))
                 return bat
                 "#,
             )],
@@ -297,28 +323,21 @@ mod tests {
             local bat = require("tools.bat")
             return {
               shells = { "bash" },
-              tools = { bat },
+              configs = { bat },
             }
             "#,
         )
         .expect("evaluate");
         assert_eq!(graph.shells, vec!["bash"]);
-        assert_eq!(graph.tools.len(), 1);
-        let tool = &graph.tools[0];
-        assert_eq!(tool.tool, "bat");
-        assert!(tool.tags.is_empty());
-        assert_eq!(
-            tool.mise,
-            Some(crate::framework::MiseSpec {
-                name: "bat".to_string(),
-                version: "latest".to_string(),
-            })
-        );
-        assert_eq!(tool.aliases, vec![("cat".to_string(), "bat".to_string())]);
-        assert!(tool.envs.is_empty());
-        assert!(tool.profile_entries.is_empty());
-        assert!(tool.profile_paths.is_empty());
-        assert!(tool.inits.is_empty());
+        assert_eq!(graph.configs.len(), 1);
+        let config = &graph.configs[0];
+        assert_eq!(config.name, "bat");
+        assert_eq!(config.aliases.len(), 1);
+        assert_eq!(config.aliases[0].name, "cat");
+        assert_eq!(config.aliases[0].value, "bat");
+        assert!(config.envs.is_empty());
+        assert!(config.profile.is_empty());
+        assert!(config.inits.is_empty());
     }
 
     #[test]
@@ -326,84 +345,54 @@ mod tests {
         let graph = run(
             &[],
             r#"
-            local t = confit.tool("demo", {
-              install = confit.mise.package({ name = "demo", version = "1.2.3" }),
-            })
-            t:alias("ll", "eza -l")
-            t:env("EDITOR", "hx")
-            t:profile("PATH", "/home/u/.cargo/bin")
-            t:profile_path("/home/u/.local/bin")
-            t:init({ eval = { "zoxide", "init", "bash" } })
-            t:init({ cmd = { "task", "--completion", "bash" } })
-            t:init({ source = "~/.cargo/env" })
-            return { shells = { "bash", "zsh" }, tools = { t } }
+            local c = confit.config("demo")
+            c:add_artifact(confit.artifact.rc.alias("ll", "eza -l"))
+            c:add_artifact(confit.artifact.rc.env("EDITOR", "hx"))
+            c:add_artifact(confit.artifact.rc.profile("PATH", "/home/u/.cargo/bin"))
+            c:add_artifact(confit.artifact.rc.profile_path("/home/u/.local/bin"))
+            c:add_artifact(confit.artifact.rc.init({ eval = { "zoxide", "init", "bash" } }))
+            c:add_artifact(confit.artifact.rc.init({ cmd = { "task", "--completion", "bash" } }))
+            c:add_artifact(confit.artifact.rc.init({ source = "~/.cargo/env" }))
+            return { shells = { "bash", "zsh" }, configs = { c } }
             "#,
         )
         .expect("evaluate");
         assert_eq!(graph.shells, vec!["bash", "zsh"]);
-        let tool = &graph.tools[0];
-        assert_eq!(tool.tool, "demo");
-        assert_eq!(tool.mise.as_ref().unwrap().version, "1.2.3");
-        assert_eq!(tool.aliases, vec![("ll".to_string(), "eza -l".to_string())]);
-        assert_eq!(tool.envs, vec![("EDITOR".to_string(), "hx".to_string())]);
-        assert_eq!(
-            tool.profile_entries,
-            vec![("PATH".to_string(), "/home/u/.cargo/bin".to_string())]
-        );
-        assert_eq!(tool.profile_paths, vec!["/home/u/.local/bin"]);
-        assert_eq!(
-            tool.inits,
-            vec![
-                InitEntryShape::Eval(vec![
-                    "zoxide".to_string(),
-                    "init".to_string(),
-                    "bash".to_string()
-                ]),
-                InitEntryShape::Cmd(vec![
-                    "task".to_string(),
-                    "--completion".to_string(),
-                    "bash".to_string()
-                ]),
-                InitEntryShape::Source("~/.cargo/env".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn function_value_names_tool_and_field() {
-        let err = run(
-            &[],
-            r#"
-            local t = confit.tool("bad", {})
-            t:alias("x", function() end)
-            return { shells = { "bash" }, tools = { t } }
-            "#,
-        )
-        .expect_err("function value must fail");
-        match err {
-            Error::Lua(message) => {
-                assert!(message.contains("bad"), "names tool: {message}");
-                assert!(message.contains("alias"), "names field: {message}");
-            }
-            other => panic!("expected Error::Lua, got {other:?}"),
-        }
+        let config = &graph.configs[0];
+        assert_eq!(config.name, "demo");
+        assert_eq!(config.aliases.len(), 1);
+        assert_eq!(config.aliases[0].name, "ll");
+        assert_eq!(config.envs.len(), 1);
+        assert_eq!(config.envs[0].name, "EDITOR");
+        assert_eq!(config.profile.len(), 2);
+        assert_eq!(config.profile[0].name, "PATH");
+        assert_eq!(config.profile[0].value, "/home/u/.cargo/bin");
+        assert_eq!(config.profile[1].name, "PATH");
+        assert_eq!(config.profile[1].value, "/home/u/.local/bin");
+        assert_eq!(config.inits.len(), 3);
+        assert!(matches!(config.inits[0], InitEntry::Eval { .. }));
+        assert!(matches!(config.inits[1], InitEntry::Cmd { .. }));
+        assert!(matches!(config.inits[2], InitEntry::Source { .. }));
     }
 
     #[test]
     fn malformed_return_tables_are_config_errors() {
         for profile in [
             "return {}",
+            r#"return { shells = {}, configs = {} }"#,
             r#"return { shells = { "bash" } }"#,
-            r#"return { shells = {}, tools = {} }"#,
-            r#"return { shells = { "bash" }, tools = { "nope" } }"#,
-            r#"return { shells = "bash", tools = {} }"#,
+            r#"return { configs = { confit.config("a") } }"#,
+            r#"return { shells = { "bash" }, configs = {} }"#,
+            r#"return { shells = { "bash" }, configs = { "nope" } }"#,
+            r#"return { shells = "bash", configs = {} }"#,
+            r#"return { shells = { "bash" }, configs = "nope" }"#,
             "return 42",
         ] {
             let err = run(&[], profile).expect_err("must fail: {profile}");
             match err {
                 Error::Config(message) => {
-                    if profile.contains("\"nope\"") {
-                        assert!(message.contains("tools[1]"), "names index: {message}");
+                    if profile.contains("configs = { \"nope\" }") {
+                        assert!(message.contains("configs[1]"), "names index: {message}");
                     }
                 }
                 other => panic!("expected Error::Config for {profile}, got {other:?}"),
@@ -417,76 +406,19 @@ mod tests {
             &[(
                 "tools/greet.lua",
                 r#"
-                local g = confit.tool("greet", {})
-                g:env("HELLO", "world")
+                local g = confit.config("greet")
+                g:add_artifact(confit.artifact.rc.env("HELLO", "world"))
                 return g
                 "#,
             )],
             r#"
             local greet = require("tools.greet")
-            return { shells = { "bash" }, tools = { greet } }
+            return { shells = { "bash" }, configs = { greet } }
             "#,
         )
         .expect("evaluate");
-        assert_eq!(
-            graph.tools[0].envs,
-            vec![("HELLO".to_string(), "world".to_string())]
-        );
-    }
-
-    #[test]
-    fn init_and_mise_validation() {
-        for (field, profile) in [
-            (
-                "init",
-                r#"
-                local t = confit.tool("demo", {})
-                t:init({ eval = { "a" }, cmd = { "b" } })
-                return { shells = { "bash" }, tools = { t } }
-                "#,
-            ),
-            (
-                "init.eval",
-                r#"
-                local t = confit.tool("demo", {})
-                t:init({ eval = "nope" })
-                return { shells = { "bash" }, tools = { t } }
-                "#,
-            ),
-            (
-                "init.eval",
-                r#"
-                local t = confit.tool("demo", {})
-                t:init({ eval = { function() end } })
-                return { shells = { "bash" }, tools = { t } }
-                "#,
-            ),
-            (
-                "init",
-                r#"
-                local t = confit.tool("demo", {})
-                t:init({ source = { "x" } })
-                return { shells = { "bash" }, tools = { t } }
-                "#,
-            ),
-            (
-                "mise.package",
-                r#"
-                local t = confit.tool("demo", {
-                  install = confit.mise.package({}),
-                })
-                return { shells = { "bash" }, tools = { t } }
-                "#,
-            ),
-        ] {
-            let err = run(&[], profile).expect_err("must fail: {field}");
-            match err {
-                Error::Lua(message) => assert!(
-                    message.contains("demo") || message.contains(field),
-                    "names tool/field: {message}"
-                ),
-                other => panic!("expected Error::Lua for {field}, got {other:?}"),
-            }
-        }
+        assert_eq!(graph.configs[0].envs.len(), 1);
+        assert_eq!(graph.configs[0].envs[0].name, "HELLO");
+        assert_eq!(graph.configs[0].envs[0].value, "world");
     }
 }

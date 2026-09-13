@@ -1,6 +1,6 @@
 //! Diff
 //!
-//! Per setting plan diffs with winner attribution. Equal inputs yield
+//! Per setting plan diffs. Equal inputs yield
 //! equal outputs so every comparison stays directly testable.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,9 +21,12 @@ use crate::model::state::artifact::Artifact;
 use crate::model::state::artifact::ArtifactData;
 use crate::model::state::artifact::ArtifactKind;
 use crate::model::state::artifact::Table;
-use crate::model::state::condition::when_eq;
 use crate::model::state::plan::Plan;
-use crate::model::state::rc::InitEntry;
+use crate::model::state::rc::AliasEntry;
+use crate::model::state::rc::EnvEntry;
+use crate::model::state::rc::ProfileEntry;
+use crate::presentation::{render_init, render_leaf, render_prev_init, render_var};
+use crate::services::merge::walk_leaves;
 
 /// Diffs a plan against previous state entry by entry.
 ///
@@ -51,9 +54,6 @@ use crate::model::state::rc::InitEntry;
 ///         kind: ArtifactKind::File,
 ///         path: path.into(),
 ///         data: ArtifactData::File { content: "hi".into() },
-///         contributions: Vec::new(),
-///         shadowed: Default::default(),
-///         blame: Default::default(),
 ///         data_hash: "hash".into(),
 ///     }
 /// }
@@ -80,7 +80,7 @@ pub fn detail(plan: &Plan, previous: &State) -> Vec<ArtifactDetail> {
 ///
 /// Detail for the artifact.
 fn detail_one(artifact: &Artifact, previous: &State) -> ArtifactDetail {
-    let key = format!("{}:{}", artifact.kind, artifact.path);
+    let key = artifact.key_string();
     let previous_entry = previous.artifacts.get(&key);
     let status = match previous_entry {
         None => ArtifactStatus::Create,
@@ -89,12 +89,12 @@ fn detail_one(artifact: &Artifact, previous: &State) -> ArtifactDetail {
     };
     let snapshot = previous_entry.and_then(|entry| entry.data.as_ref());
     let entries = match &artifact.data {
-        ArtifactData::Rc(rc) => detail_rc(artifact, rc, snapshot),
-        ArtifactData::Toml(table) => detail_table(artifact, table, snapshot_tag(snapshot, "toml")),
-        ArtifactData::Json(table) => detail_table(artifact, table, snapshot_tag(snapshot, "json")),
-        ArtifactData::Yaml(table) => detail_table(artifact, table, snapshot_tag(snapshot, "yaml")),
+        ArtifactData::Rc(rc) => detail_rc(rc, snapshot),
+        ArtifactData::Toml(table) => detail_table(table, snapshot_tag(snapshot, "toml")),
+        ArtifactData::Json(table) => detail_table(table, snapshot_tag(snapshot, "json")),
+        ArtifactData::Yaml(table) => detail_table(table, snapshot_tag(snapshot, "yaml")),
         ArtifactData::Template { src, vars } => {
-            detail_template(artifact, src, vars, snapshot_tag(snapshot, "template"))
+            detail_template(src, vars, snapshot_tag(snapshot, "template"))
         }
         ArtifactData::File { .. } => {
             detail_singleton(artifact, previous_entry, snapshot.is_some(), "content")
@@ -137,134 +137,6 @@ fn short_hash(hash: &str) -> String {
     hash.chars().take(12).collect()
 }
 
-/// Yields the last contribution tool.
-///
-/// # Arguments
-///
-/// * `artifact` - the artifact under inspection.
-///
-/// # Returns
-///
-/// Tool with highest contribution order. Empty lists yield `None`.
-fn last_tool(artifact: &Artifact) -> Option<String> {
-    artifact
-        .contributions
-        .iter()
-        .max_by_key(|contribution| contribution.order)
-        .map(|contribution| contribution.tool.clone())
-}
-
-/// Yields the alias overwrite attribution.
-///
-/// # Arguments
-///
-/// * `artifact` - the artifact under inspection.
-/// * `name` - the alias name.
-/// * `tool` - the winning tool.
-///
-/// # Returns
-///
-/// Shadow winner differing from the winner. Absent shadows yield `None`.
-fn alias_over(artifact: &Artifact, name: &str, tool: Option<&str>) -> Option<String> {
-    let mut over = None;
-    for shadow in &artifact.shadowed.aliases {
-        if shadow.name == name
-            && let Some(winner) = tool
-            && shadow.winner != winner
-        {
-            over = Some(shadow.winner.clone());
-        }
-    }
-    over
-}
-
-/// Renders an rc init entry as shell text.
-///
-/// # Arguments
-///
-/// * `entry` - the init entry.
-///
-/// # Returns
-///
-/// Shell text for the entry.
-fn render_init(entry: &InitEntry) -> String {
-    match entry {
-        InitEntry::Eval { argv } => format!("eval \"$({})\"", argv.join(" ")),
-        InitEntry::Cmd { argv } => argv.join(" "),
-        InitEntry::Source { path } => format!("source {path}"),
-    }
-}
-
-/// Renders a previous init value as shell text.
-///
-/// # Arguments
-///
-/// * `value` - the stored snapshot value.
-///
-/// # Returns
-///
-/// Shell text for the value. Unrecognized shapes yield `None`.
-fn render_prev_init(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    if let Some(eval) = object.get("eval") {
-        let argv = eval.get("argv")?.as_array()?;
-        let parts: Vec<String> = argv
-            .iter()
-            .map(|item| item.as_str().map(str::to_string))
-            .collect::<Option<_>>()?;
-        return Some(format!("eval \"$({})\"", parts.join(" ")));
-    }
-    if let Some(cmd) = object.get("cmd") {
-        let argv = cmd.get("argv")?.as_array()?;
-        let parts: Vec<String> = argv
-            .iter()
-            .map(|item| item.as_str().map(str::to_string))
-            .collect::<Option<_>>()?;
-        return Some(parts.join(" "));
-    }
-    if let Some(source) = object.get("source") {
-        let path = source.get("path")?.as_str()?;
-        return Some(format!("source {path}"));
-    }
-    None
-}
-
-/// Renders a scalar leaf value.
-///
-/// # Arguments
-///
-/// * `value` - the leaf value.
-///
-/// # Returns
-///
-/// Display text for the leaf.
-fn render_leaf(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Number(_) | Value::Bool(_) => value.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Array(_) | Value::Object(_) => {
-            serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
-        }
-    }
-}
-
-/// Renders a template variable value.
-///
-/// # Arguments
-///
-/// * `value` - the variable value.
-///
-/// # Returns
-///
-/// Display text for the variable.
-fn render_var(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
-    }
-}
-
 /// Flattens a JSON value into dotted leaf paths.
 ///
 /// # Arguments
@@ -273,26 +145,9 @@ fn render_var(value: &Value) -> String {
 /// * `prefix` - the dotted prefix for this value.
 /// * `out` - the accumulator for leaf entries.
 fn flatten_value(value: &Value, prefix: &str, out: &mut BTreeMap<String, Value>) {
-    match value {
-        Value::Object(map) => {
-            for (key, item) in map {
-                let child = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{prefix}.{key}")
-                };
-                flatten_value(item, &child, out);
-            }
-        }
-        Value::Array(items) => {
-            for (index, item) in items.iter().enumerate() {
-                flatten_value(item, &format!("{prefix}[{index}]"), out);
-            }
-        }
-        _ => {
-            out.insert(prefix.to_string(), value.clone());
-        }
-    }
+    walk_leaves(value, prefix, &mut |path, leaf| {
+        out.insert(path.to_string(), leaf.clone());
+    });
 }
 
 /// Flattens a table into dotted leaf paths.
@@ -312,22 +167,284 @@ fn flatten_table(table: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     out
 }
 
+/// Matches one alias entry against previous items plus the legacy map.
+fn match_alias_slot(
+    entry: &AliasEntry,
+    prev_items: Option<&Vec<Value>>,
+    prev_map: Option<&serde_json::Map<String, Value>>,
+    matched: &[bool],
+) -> Option<(String, usize)> {
+    let desired_when = entry
+        .when
+        .as_ref()
+        .map(|when| serde_json::to_value(when).unwrap_or(Value::Null));
+    if let Some(previous) = prev_items {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object.and_then(|o| o.get("name")).and_then(Value::as_str);
+            if name != Some(entry.name.as_str()) {
+                continue;
+            }
+            let prev_when = object.and_then(|o| o.get("when")).and_then(|when| {
+                if when.is_null() {
+                    None
+                } else {
+                    Some(when.clone())
+                }
+            });
+            if prev_when == desired_when {
+                let value = object
+                    .and_then(|o| o.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                return Some((value, prev_index));
+            }
+        }
+    }
+    if let Some(map) = prev_map
+        && entry.when.is_none()
+        && let Some(previous) = map.get(&entry.name).and_then(Value::as_str)
+    {
+        return Some((previous.to_string(), usize::MAX));
+    }
+    None
+}
+
+/// Matches one env entry against previous items.
+fn match_env_slot(
+    entry: &EnvEntry,
+    prev: Option<&Vec<Value>>,
+    matched: &[bool],
+) -> Option<(String, usize)> {
+    let desired_when = entry
+        .when
+        .as_ref()
+        .map(|when| serde_json::to_value(when).unwrap_or(Value::Null));
+    if let Some(previous) = prev {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object.and_then(|o| o.get("name")).and_then(Value::as_str);
+            if name != Some(entry.name.as_str()) {
+                continue;
+            }
+            let prev_when = object.and_then(|o| o.get("when")).and_then(|when| {
+                if when.is_null() {
+                    None
+                } else {
+                    Some(when.clone())
+                }
+            });
+            if prev_when == desired_when {
+                let value = object
+                    .and_then(|o| o.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                return Some((value, prev_index));
+            }
+        }
+    }
+    None
+}
+
+/// Matches one profile entry against previous items.
+fn match_profile_slot(
+    entry: &ProfileEntry,
+    prev: Option<&Vec<Value>>,
+    matched: &[bool],
+) -> Option<(String, usize)> {
+    let desired_when = entry
+        .when
+        .as_ref()
+        .map(|when| serde_json::to_value(when).unwrap_or(Value::Null));
+    if let Some(previous) = prev {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object.and_then(|o| o.get("name")).and_then(Value::as_str);
+            if name != Some(entry.name.as_str()) {
+                continue;
+            }
+            let prev_when = object.and_then(|o| o.get("when")).and_then(|when| {
+                if when.is_null() {
+                    None
+                } else {
+                    Some(when.clone())
+                }
+            });
+            if prev_when == desired_when {
+                let value = object
+                    .and_then(|o| o.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                return Some((value, prev_index));
+            }
+        }
+    }
+    None
+}
+
+/// Matches one init index between desired plus previous shell text.
+fn match_init_index(
+    index: usize,
+    desired: Option<&String>,
+    previous: Option<&Option<String>>,
+    empty: bool,
+) -> Option<EntryChange> {
+    let label = format!("init[{index}]");
+    match (desired, previous) {
+        (Some(desired), _) if empty => Some(EntryChange {
+            label,
+            change: ChangeKind::Added {
+                value: desired.clone(),
+            },
+        }),
+        (Some(desired), Some(Some(previous))) if desired == previous => Some(EntryChange {
+            label,
+            change: ChangeKind::Unchanged {
+                value: desired.clone(),
+            },
+        }),
+        (Some(desired), Some(Some(previous))) => Some(EntryChange {
+            label,
+            change: ChangeKind::Changed {
+                from: previous.clone(),
+                to: desired.clone(),
+            },
+        }),
+        (Some(desired), _) => Some(EntryChange {
+            label,
+            change: ChangeKind::Added {
+                value: desired.clone(),
+            },
+        }),
+        (None, Some(Some(previous))) => Some(EntryChange {
+            label,
+            change: ChangeKind::Removed {
+                value: previous.clone(),
+            },
+        }),
+        (None, _) => None,
+    }
+}
+
+/// Collects previous-only alias plus env plus profile entries.
+#[allow(clippy::too_many_arguments)]
+fn collect_removed(
+    rc: &crate::model::state::rc::RcData,
+    prev_aliases: Option<&serde_json::Map<String, Value>>,
+    prev_alias_items: Option<&Vec<Value>>,
+    prev_env: Option<&Vec<Value>>,
+    prev_profile: Option<&Vec<Value>>,
+    matched_aliases: &[bool],
+    matched_env: &[bool],
+    matched_profile: &[bool],
+) -> Vec<EntryChange> {
+    let mut removed = Vec::new();
+    if let Some(map) = prev_aliases {
+        for (name, value) in map {
+            let kept = rc.aliases.iter().any(|entry| entry.name == *name);
+            if !kept {
+                removed.push(EntryChange {
+                    label: format!("alias {name}"),
+                    change: ChangeKind::Removed {
+                        value: value.as_str().unwrap_or(&render_leaf(value)).to_string(),
+                    },
+                });
+            }
+        }
+    }
+    if let Some(previous) = prev_alias_items {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched_aliases.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object
+                .and_then(|o| o.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let value = object
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            removed.push(EntryChange {
+                label: format!("alias {name}"),
+                change: ChangeKind::Removed {
+                    value: value.to_string(),
+                },
+            });
+        }
+    }
+    if let Some(previous) = prev_env {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched_env.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object
+                .and_then(|o| o.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let value = object
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            removed.push(EntryChange {
+                label: name.to_string(),
+                change: ChangeKind::Removed {
+                    value: format!("\"{value}\""),
+                },
+            });
+        }
+    }
+    if let Some(previous) = prev_profile {
+        for (prev_index, item) in previous.iter().enumerate() {
+            if matched_profile.get(prev_index).is_some_and(|used| *used) {
+                continue;
+            }
+            let object = item.as_object();
+            let name = object
+                .and_then(|o| o.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let value = object
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            removed.push(EntryChange {
+                label: format!("profile {name}"),
+                change: ChangeKind::Removed {
+                    value: format!("\"{value}\""),
+                },
+            });
+        }
+    }
+    removed.sort_by(|left: &EntryChange, right: &EntryChange| left.label.cmp(&right.label));
+    removed
+}
+
 /// Diffs rc artifacts against a snapshot.
 ///
 /// # Arguments
 ///
-/// * `artifact` - the desired artifact.
 /// * `rc` - the desired rc data.
 /// * `snapshot` - the stored snapshot value.
 ///
 /// # Returns
 ///
 /// Entry changes in display order.
-fn detail_rc(
-    artifact: &Artifact,
-    rc: &crate::model::state::rc::RcData,
-    snapshot: Option<&Value>,
-) -> Vec<EntryChange> {
+fn detail_rc(rc: &crate::model::state::rc::RcData, snapshot: Option<&Value>) -> Vec<EntryChange> {
     let mut entries = Vec::new();
     let empty = snapshot.is_none();
     let inner = snapshot
@@ -350,99 +467,66 @@ fn detail_rc(
         .and_then(|object| object.get("init"))
         .and_then(Value::as_array);
 
-    // Aliases, sorted by key (BTreeMap order).
-    for (name, value) in &rc.aliases {
-        let label = format!("alias {name}");
-        let tool = artifact.blame.aliases.get(name).cloned();
+    // Aliases, declaration order; identity is (name, structural-when).
+    let prev_alias_items: Option<&Vec<Value>> = inner
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("aliases"))
+        .and_then(Value::as_array);
+    let mut matched_prev_aliases = vec![false; prev_alias_items.map_or(0, Vec::len)];
+    for entry in rc.aliases.iter() {
+        let label = format!("alias {}", entry.name);
+        let matched =
+            match_alias_slot(entry, prev_alias_items, prev_aliases, &matched_prev_aliases);
         if empty {
             entries.push(EntryChange {
                 label,
                 change: ChangeKind::Added {
-                    value: value.clone(),
+                    value: entry.value.clone(),
                 },
-                over: None,
-                tool,
             });
             continue;
         }
-        let prev_value = prev_aliases
-            .and_then(|map| map.get(name))
-            .and_then(Value::as_str);
-        match prev_value {
+        match matched {
             None => entries.push(EntryChange {
                 label,
                 change: ChangeKind::Added {
-                    value: value.clone(),
+                    value: entry.value.clone(),
                 },
-                tool: tool.clone(),
-                over: None,
             }),
-            Some(previous) if previous == value => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Unchanged {
-                    value: value.clone(),
-                },
-                tool: tool.clone(),
-                over: None,
-            }),
-            Some(previous) => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Changed {
-                    from: previous.to_string(),
-                    to: value.clone(),
-                },
-                over: alias_over(artifact, name, tool.as_deref()),
-                tool,
-            }),
+            Some((previous, prev_index)) => {
+                if prev_index != usize::MAX {
+                    matched_prev_aliases[prev_index] = true;
+                }
+                if previous == entry.value {
+                    entries.push(EntryChange {
+                        label,
+                        change: ChangeKind::Unchanged {
+                            value: entry.value.clone(),
+                        },
+                    })
+                } else {
+                    entries.push(EntryChange {
+                        label,
+                        change: ChangeKind::Changed {
+                            from: previous,
+                            to: entry.value.clone(),
+                        },
+                    })
+                }
+            }
         }
     }
 
     // Env, declaration order; identity is (name, structural-when).
     let mut matched_prev_env = vec![false; prev_env.map_or(0, Vec::len)];
-    for (index, entry) in rc.env.iter().enumerate() {
-        let tool = artifact.blame.env.get(index).cloned();
-        let desired_when = entry
-            .when
-            .as_ref()
-            .map(|when| serde_json::to_value(when).unwrap_or(Value::Null));
-        let mut matched: Option<(String, usize)> = None;
-        if let Some(previous) = prev_env {
-            for (prev_index, item) in previous.iter().enumerate() {
-                if matched_prev_env[prev_index] {
-                    continue;
-                }
-                let object = item.as_object();
-                let name = object.and_then(|o| o.get("name")).and_then(Value::as_str);
-                if name != Some(entry.name.as_str()) {
-                    continue;
-                }
-                let prev_when = object.and_then(|o| o.get("when")).and_then(|when| {
-                    if when.is_null() {
-                        None
-                    } else {
-                        Some(when.clone())
-                    }
-                });
-                if prev_when == desired_when {
-                    let value = object
-                        .and_then(|o| o.get("value"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    matched = Some((value, prev_index));
-                    break;
-                }
-            }
-        }
-        let over = guarded_env_over(artifact, entry, tool.as_deref());
+    for entry in rc.env.iter() {
+        let matched = match_env_slot(entry, prev_env, &matched_prev_env);
         match matched {
             None => entries.push(EntryChange {
                 label: entry.name.clone(),
                 change: ChangeKind::Added {
                     value: format!("\"{}\"", entry.value),
                 },
-                tool,
-                over: None,
             }),
             Some((previous, prev_index)) => {
                 matched_prev_env[prev_index] = true;
@@ -452,8 +536,6 @@ fn detail_rc(
                         change: ChangeKind::Unchanged {
                             value: format!("\"{}\"", entry.value),
                         },
-                        tool,
-                        over: None,
                     });
                 } else {
                     entries.push(EntryChange {
@@ -462,8 +544,6 @@ fn detail_rc(
                             from: format!("\"{previous}\""),
                             to: format!("\"{}\"", entry.value),
                         },
-                        tool,
-                        over,
                     });
                 }
             }
@@ -472,51 +552,15 @@ fn detail_rc(
 
     // Profile, declaration order; same (name, when) identity as env.
     let mut matched_prev_profile = vec![false; prev_profile.map_or(0, Vec::len)];
-    for (index, entry) in rc.profile.iter().enumerate() {
+    for entry in rc.profile.iter() {
         let label = format!("profile {}", entry.name);
-        let tool = artifact.blame.profile.get(index).cloned();
-        let desired_when = entry
-            .when
-            .as_ref()
-            .map(|when| serde_json::to_value(when).unwrap_or(Value::Null));
-        let mut matched: Option<(String, usize)> = None;
-        if let Some(previous) = prev_profile {
-            for (prev_index, item) in previous.iter().enumerate() {
-                if matched_prev_profile[prev_index] {
-                    continue;
-                }
-                let object = item.as_object();
-                let name = object.and_then(|o| o.get("name")).and_then(Value::as_str);
-                if name != Some(entry.name.as_str()) {
-                    continue;
-                }
-                let prev_when = object.and_then(|o| o.get("when")).and_then(|when| {
-                    if when.is_null() {
-                        None
-                    } else {
-                        Some(when.clone())
-                    }
-                });
-                if prev_when == desired_when {
-                    let value = object
-                        .and_then(|o| o.get("value"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    matched = Some((value, prev_index));
-                    break;
-                }
-            }
-        }
-        let over = guarded_profile_over(artifact, entry, tool.as_deref());
+        let matched = match_profile_slot(entry, prev_profile, &matched_prev_profile);
         match matched {
             None => entries.push(EntryChange {
                 label,
                 change: ChangeKind::Added {
                     value: format!("\"{}\"", entry.value),
                 },
-                tool,
-                over: None,
             }),
             Some((previous, prev_index)) => {
                 matched_prev_profile[prev_index] = true;
@@ -526,8 +570,6 @@ fn detail_rc(
                         change: ChangeKind::Unchanged {
                             value: format!("\"{}\"", entry.value),
                         },
-                        tool,
-                        over: None,
                     });
                 } else {
                     entries.push(EntryChange {
@@ -536,8 +578,6 @@ fn detail_rc(
                             from: format!("\"{previous}\""),
                             to: format!("\"{}\"", entry.value),
                         },
-                        tool,
-                        over,
                     });
                 }
             }
@@ -551,198 +591,43 @@ fn detail_rc(
         .unwrap_or_default();
     let width = desired_init.len().max(prev_init_text.len());
     for index in 0..width {
-        let label = format!("init[{index}]");
-        match (desired_init.get(index), prev_init_text.get(index)) {
-            (Some(desired), _) if empty => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Added {
-                    value: desired.clone(),
-                },
-                tool: artifact.blame.init.get(index).cloned(),
-                over: None,
-            }),
-            (Some(desired), Some(Some(previous))) if desired == previous => {
-                entries.push(EntryChange {
-                    label,
-                    change: ChangeKind::Unchanged {
-                        value: desired.clone(),
-                    },
-                    tool: artifact.blame.init.get(index).cloned(),
-                    over: None,
-                })
-            }
-            (Some(desired), Some(Some(previous))) => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Changed {
-                    from: previous.clone(),
-                    to: desired.clone(),
-                },
-                tool: artifact.blame.init.get(index).cloned(),
-                over: None,
-            }),
-            (Some(desired), _) => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Added {
-                    value: desired.clone(),
-                },
-                tool: artifact.blame.init.get(index).cloned(),
-                over: None,
-            }),
-            (None, Some(Some(previous))) => entries.push(EntryChange {
-                label,
-                change: ChangeKind::Removed {
-                    value: previous.clone(),
-                },
-                tool: None,
-                over: None,
-            }),
-            (None, _) => {}
+        if let Some(change) = match_init_index(
+            index,
+            desired_init.get(index),
+            prev_init_text.get(index),
+            empty,
+        ) {
+            entries.push(change);
         }
     }
 
     // Removed: previous-only aliases, env, profile (init handled index-wise).
     if !empty {
-        let mut removed = Vec::new();
-        if let Some(map) = prev_aliases {
-            for (name, value) in map {
-                if !rc.aliases.contains_key(name) {
-                    removed.push(EntryChange {
-                        label: format!("alias {name}"),
-                        change: ChangeKind::Removed {
-                            value: value.as_str().unwrap_or(&render_leaf(value)).to_string(),
-                        },
-                        tool: None,
-                        over: None,
-                    });
-                }
-            }
-        }
-        if let Some(previous) = prev_env {
-            for (prev_index, item) in previous.iter().enumerate() {
-                if !matched_prev_env[prev_index] {
-                    let object = item.as_object();
-                    let name = object
-                        .and_then(|o| o.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("?");
-                    let value = object
-                        .and_then(|o| o.get("value"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    removed.push(EntryChange {
-                        label: name.to_string(),
-                        change: ChangeKind::Removed {
-                            value: format!("\"{value}\""),
-                        },
-                        tool: None,
-                        over: None,
-                    });
-                }
-            }
-        }
-        if let Some(previous) = prev_profile {
-            for (prev_index, item) in previous.iter().enumerate() {
-                if !matched_prev_profile[prev_index] {
-                    let object = item.as_object();
-                    let name = object
-                        .and_then(|o| o.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("?");
-                    let value = object
-                        .and_then(|o| o.get("value"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    removed.push(EntryChange {
-                        label: format!("profile {name}"),
-                        change: ChangeKind::Removed {
-                            value: format!("\"{value}\""),
-                        },
-                        tool: None,
-                        over: None,
-                    });
-                }
-            }
-        }
-        removed.sort_by(|left: &EntryChange, right: &EntryChange| left.label.cmp(&right.label));
-        entries.extend(removed);
+        entries.extend(collect_removed(
+            rc,
+            prev_aliases,
+            prev_alias_items,
+            prev_env,
+            prev_profile,
+            &matched_prev_aliases,
+            &matched_prev_env,
+            &matched_prev_profile,
+        ));
     }
     entries
-}
-
-/// Yields the env overwrite attribution.
-///
-/// # Arguments
-///
-/// * `artifact` - the artifact under inspection.
-/// * `entry` - the desired env entry.
-/// * `tool` - the winning tool.
-///
-/// # Returns
-///
-/// Shadow winner differing from the winner. Absent shadows yield `None`.
-fn guarded_env_over(
-    artifact: &Artifact,
-    entry: &crate::model::state::rc::EnvEntry,
-    tool: Option<&str>,
-) -> Option<String> {
-    let winner = tool?;
-    let mut over = None;
-    for shadow in &artifact.shadowed.env {
-        if shadow.entry.name == entry.name
-            && when_eq(shadow.entry.when.as_ref(), entry.when.as_ref())
-            && shadow.winner != winner
-        {
-            over = Some(shadow.winner.clone());
-        }
-    }
-    over
-}
-
-/// Yields the profile overwrite attribution.
-///
-/// # Arguments
-///
-/// * `artifact` - the artifact under inspection.
-/// * `entry` - the desired profile entry.
-/// * `tool` - the winning tool.
-///
-/// # Returns
-///
-/// Shadow winner differing from the winner. Absent shadows yield `None`.
-fn guarded_profile_over(
-    artifact: &Artifact,
-    entry: &crate::model::state::rc::ProfileEntry,
-    tool: Option<&str>,
-) -> Option<String> {
-    let winner = tool?;
-    let mut over = None;
-    for shadow in &artifact.shadowed.profile {
-        if shadow.entry.name == entry.name
-            && when_eq(shadow.entry.when.as_ref(), entry.when.as_ref())
-            && shadow.winner != winner
-        {
-            over = Some(shadow.winner.clone());
-        }
-    }
-    over
 }
 
 /// Diffs table artifacts against a snapshot.
 ///
 /// # Arguments
 ///
-/// * `artifact` - the desired artifact.
 /// * `table` - the desired table.
 /// * `snapshot` - the stored snapshot value.
 ///
 /// # Returns
 ///
 /// Entry changes in sorted path order.
-fn detail_table(
-    artifact: &Artifact,
-    table: &BTreeMap<String, Value>,
-    snapshot: Option<&Value>,
-) -> Vec<EntryChange> {
+fn detail_table(table: &BTreeMap<String, Value>, snapshot: Option<&Value>) -> Vec<EntryChange> {
     let desired = flatten_table(table);
     let previous = snapshot
         .and_then(Value::as_object)
@@ -757,23 +642,18 @@ fn detail_table(
     let empty = snapshot.is_none();
     let mut entries = Vec::new();
     for (path, value) in &desired {
-        let tool = artifact.blame.toml.get(path).cloned();
         match previous.get(path) {
             None => entries.push(EntryChange {
                 label: path.clone(),
                 change: ChangeKind::Added {
                     value: render_leaf(value),
                 },
-                tool,
-                over: None,
             }),
             Some(prev) if prev == value => entries.push(EntryChange {
                 label: path.clone(),
                 change: ChangeKind::Unchanged {
                     value: render_leaf(value),
                 },
-                tool,
-                over: None,
             }),
             Some(prev) => entries.push(EntryChange {
                 label: path.clone(),
@@ -781,8 +661,6 @@ fn detail_table(
                     from: render_leaf(prev),
                     to: render_leaf(value),
                 },
-                tool,
-                over: None,
             }),
         }
     }
@@ -795,8 +673,6 @@ fn detail_table(
                     change: ChangeKind::Removed {
                         value: render_leaf(value),
                     },
-                    tool: None,
-                    over: None,
                 });
             }
         }
@@ -809,7 +685,6 @@ fn detail_table(
 ///
 /// # Arguments
 ///
-/// * `artifact` - the desired artifact.
 /// * `src` - the desired template source.
 /// * `vars` - the desired template variables.
 /// * `snapshot` - the stored snapshot value.
@@ -818,12 +693,10 @@ fn detail_table(
 ///
 /// Entry changes with variables first and the source line last.
 fn detail_template(
-    artifact: &Artifact,
     src: &str,
     vars: &BTreeMap<String, Value>,
     snapshot: Option<&Value>,
 ) -> Vec<EntryChange> {
-    let tool = last_tool(artifact);
     let mut entries = Vec::new();
     let empty = snapshot.is_none();
     let (prev_src, prev_vars) = snapshot
@@ -855,24 +728,18 @@ fn detail_template(
                 change: ChangeKind::Added {
                     value: render_var(value),
                 },
-                tool: tool.clone(),
-                over: None,
             }),
             None => entries.push(EntryChange {
                 label,
                 change: ChangeKind::Added {
                     value: render_var(value),
                 },
-                tool: tool.clone(),
-                over: None,
             }),
             Some(prev) if prev == value => entries.push(EntryChange {
                 label,
                 change: ChangeKind::Unchanged {
                     value: render_var(value),
                 },
-                tool: tool.clone(),
-                over: None,
             }),
             Some(prev) => entries.push(EntryChange {
                 label,
@@ -880,8 +747,6 @@ fn detail_template(
                     from: render_var(prev),
                     to: render_var(value),
                 },
-                tool: tool.clone(),
-                over: None,
             }),
         }
     }
@@ -891,8 +756,6 @@ fn detail_template(
             change: ChangeKind::Added {
                 value: src.to_string(),
             },
-            tool: tool.clone(),
-            over: None,
         });
     } else if prev_src == src {
         entries.push(EntryChange {
@@ -900,8 +763,6 @@ fn detail_template(
             change: ChangeKind::Unchanged {
                 value: src.to_string(),
             },
-            tool: tool.clone(),
-            over: None,
         });
     } else {
         entries.push(EntryChange {
@@ -910,8 +771,6 @@ fn detail_template(
                 from: prev_src,
                 to: src.to_string(),
             },
-            tool: tool.clone(),
-            over: None,
         });
     }
     if !empty {
@@ -923,8 +782,6 @@ fn detail_template(
                 change: ChangeKind::Removed {
                     value: render_var(&prev_vars[key]),
                 },
-                tool: None,
-                over: None,
             })
             .collect();
         removed.sort_by(|left, right| left.label.cmp(&right.label));
@@ -956,26 +813,19 @@ fn detail_singleton(
     has_snapshot: bool,
     label: &str,
 ) -> Vec<EntryChange> {
-    let tool = last_tool(artifact);
     let current = short_hash(&artifact.data_hash);
     match previous_entry {
         None => vec![EntryChange {
             label: label.to_string(),
             change: ChangeKind::Added { value: current },
-            tool,
-            over: None,
         }],
         Some(_) if !has_snapshot => vec![EntryChange {
             label: label.to_string(),
             change: ChangeKind::Added { value: current },
-            tool,
-            over: None,
         }],
         Some(previous) if previous.data_hash == artifact.data_hash => vec![EntryChange {
             label: label.to_string(),
             change: ChangeKind::Unchanged { value: current },
-            tool,
-            over: None,
         }],
         Some(previous) => vec![EntryChange {
             label: label.to_string(),
@@ -983,8 +833,6 @@ fn detail_singleton(
                 from: short_hash(&previous.data_hash),
                 to: current,
             },
-            tool,
-            over: None,
         }],
     }
 }
@@ -1007,7 +855,7 @@ pub fn detail_disk(
 ) -> Vec<DiskDetail> {
     let mut out = Vec::new();
     for artifact in &plan.artifacts {
-        let key = format!("{}:{}", artifact.kind, artifact.path);
+        let key = artifact.key_string();
         let disk_bytes = match snapshots.get(&key) {
             Some(Snapshot::Present { bytes, .. }) => bytes,
             _ => continue,
@@ -1289,6 +1137,7 @@ fn rc_disk_lines(desired_text: &str, disk_text: &str) -> Vec<ChangeLine> {
 mod tests {
     use super::*;
     use crate::model::state::plan::PLAN_VERSION;
+    use crate::model::state::rc::InitEntry;
 
     #[test]
     fn link_disk_lines_compare_targets_only() {
@@ -1305,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn flatten_matches_merge_blame_paths() {
+    fn flatten_matches_merge_leaf_paths() {
         let table: BTreeMap<String, Value> =
             serde_json::from_value(serde_json::json!({"tools": {"bat": "latest"}, "list": [1, 2]}))
                 .unwrap();
@@ -1323,14 +1172,20 @@ mod tests {
     fn init_renders_shell_text() {
         let eval = InitEntry::Eval {
             argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+            when: None,
+            priority: 0,
         };
         assert_eq!(render_init(&eval), "eval \"$(zoxide init bash)\"");
         let cmd = InitEntry::Cmd {
             argv: vec!["task".into(), "--completion".into()],
+            when: None,
+            priority: 0,
         };
         assert_eq!(render_init(&cmd), "task --completion");
         let source = InitEntry::Source {
             path: "~/.cargo/env".into(),
+            when: None,
+            priority: 0,
         };
         assert_eq!(render_init(&source), "source ~/.cargo/env");
         let prev = serde_json::json!({"eval": {"argv": ["zoxide", "init", "bash"]}});
@@ -1351,9 +1206,6 @@ mod tests {
             kind: crate::model::state::artifact::ArtifactKind::Toml,
             path: "p".into(),
             data: ArtifactData::Toml(serde_json::from_value(serde_json::json!({"a": 1})).unwrap()),
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "new".into(),
         };
         let plan = Plan {
@@ -1389,9 +1241,6 @@ mod tests {
             kind: crate::model::state::artifact::ArtifactKind::Toml,
             path: path.into(),
             data: ArtifactData::Toml(serde_json::from_value(value).unwrap()),
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "hash".into(),
         }
     }
@@ -1403,9 +1252,6 @@ mod tests {
             data: ArtifactData::File {
                 content: content.into(),
             },
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "hash".into(),
         }
     }
@@ -1450,9 +1296,6 @@ mod tests {
             data: ArtifactData::Json(
                 serde_json::from_value(serde_json::json!({"k": "v"})).unwrap(),
             ),
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "hash".into(),
         }]);
         let rendered = [("json:j".to_string(), b"{}".to_vec())]
@@ -1476,9 +1319,6 @@ mod tests {
             kind: crate::model::state::artifact::ArtifactKind::Yaml,
             path: "y".into(),
             data: ArtifactData::Yaml(serde_json::from_value(serde_json::json!({"k": 1})).unwrap()),
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "hash".into(),
         }]);
         let rendered = [("yaml:y".to_string(), b"k: 1\n".to_vec())]

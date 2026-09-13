@@ -6,7 +6,7 @@
 //! plan-shape change, print the rendered text from the golden test, eyeball
 //! it against the fixture (`bat` alias, mise `bat = "latest"`, 2 artifacts,
 //! `mise install` hook), then overwrite the golden file verbatim (no
-//! trailing newline: `serialize` emits none).
+//! trailing newline: `serde_json::to_string_pretty` emits none).
 //!
 //! Uses memory store/writer fakes only; the fixture is read from the repo
 //! via `CARGO_MANIFEST_DIR`. Never touches `$HOME`.
@@ -19,16 +19,13 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit::actions::plan;
 use confit::model::state::State;
 use confit::model::state::StateEntry;
 use confit::model::state::artifact::ArtifactData;
 use confit::model::state::plan::PLAN_VERSION;
 use confit::model::state::plan::Plan;
 use confit::repository::MemoryFilesystem;
-use confit::services::plan::{
-    diff, evaluate_profile, load_state, serialize, summarize, write_plan,
-};
+use confit::services::plan::{diff, evaluate_profile, load_state, summarize, write_plan};
 
 /// Stable plan labels so the golden file is portable across checkouts.
 const GOLDEN_ROOT: &str = "examples/0-basic_tool";
@@ -48,12 +45,12 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
 fn build_plan() -> Plan {
     let (root, profile) = fixture_paths();
     let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
-    plan(&graph, GOLDEN_ROOT, GOLDEN_PROFILE).expect("plan")
+    confit::services::plan::build_plan(&graph, GOLDEN_ROOT, GOLDEN_PROFILE).expect("plan")
 }
 
 /// Render `plan` through the memory filesystem (exercises the filesystem seam).
 fn render_json(plan: &Plan) -> String {
-    let text = serialize(plan).expect("serialize");
+    let text = serde_json::to_string_pretty(plan).expect("serialize");
     let fs = MemoryFilesystem {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(BTreeMap::new()),
@@ -77,7 +74,13 @@ fn basic_tool_produces_rc_and_mise() {
     let ArtifactData::Rc(data) = &rc.data else {
         panic!("rc artifact holds rc data");
     };
-    assert_eq!(data.aliases.get("cat").map(String::as_str), Some("bat"));
+    assert_eq!(
+        data.aliases
+            .iter()
+            .find(|entry| entry.name == "cat")
+            .map(|entry| entry.value.as_str()),
+        Some("bat")
+    );
 
     let mise = plan
         .artifacts
@@ -161,7 +164,7 @@ fn golden_summary_is_stable() {
     let counts = diff(&plan, &previous);
     let shaped = summarize(&counts);
     let details = confit::services::diff::detail(&plan, &previous);
-    let rendered = confit::presentation::render_plan(&plan, &shaped, &details, false);
+    let rendered = confit::presentation::render_plan(&plan, &shaped, &details);
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/plan_basic_tool.summary");
     let golden = std::fs::read_to_string(&golden_path).expect("read golden summary");
@@ -193,7 +196,10 @@ fn seeded_previous(plan: &Plan) -> State {
                 "rc": {
                     "profile": [],
                     "env": [],
-                    "aliases": {"cat": "oldbat", "oldkey": "oldval"},
+                    "aliases": [
+                        {"name": "cat", "value": "oldbat", "when": {"in_path": {"name": "bat"}}},
+                        {"name": "oldkey", "value": "oldval", "when": null}
+                    ],
                     "init": []
                 }
             })),
@@ -231,13 +237,14 @@ fn seeded_state_renders_change_and_remove() {
         .expect("rc detail");
     assert_eq!(rc.status, confit::model::dto::diff::ArtifactStatus::Update);
     let shaped = summarize(&counts);
-    let text = confit::presentation::render_plan(&plan, &shaped, &details, false);
+    let text = confit::presentation::render_plan(&plan, &shaped, &details);
     assert!(
-        text.contains("~/.bashrc: rc ~ update ← bat"),
+        text.contains("~/.bashrc: rc ~ update"),
         "rc header marks update: {text}"
     );
+    assert!(!text.contains("←"), "headers carry no attribution: {text}");
     assert!(
-        text.contains("~ alias cat = oldbat → bat (bat)"),
+        text.contains("~ alias cat = oldbat → bat"),
         "altered alias renders changed: {text}"
     );
     assert!(
@@ -250,7 +257,7 @@ fn seeded_state_renders_change_and_remove() {
         .position(|line| line.starts_with("~/.config/mise/config.toml"))
         .expect("mise header");
     assert_eq!(
-        lines[mise_index], "~/.config/mise/config.toml: toml ← bat",
+        lines[mise_index], "~/.config/mise/config.toml: toml",
         "matching artifact collapses to header alone"
     );
     assert_eq!(
@@ -261,77 +268,36 @@ fn seeded_state_renders_change_and_remove() {
 }
 
 #[test]
-fn conflicts_flag_toggles_loser_display() {
-    use confit::model::dto::diff::ArtifactDetail;
-    use confit::model::dto::diff::ArtifactStatus;
-    use confit::model::dto::diff::ChangeKind;
-    use confit::model::dto::diff::EntryChange;
-    use confit::model::state::artifact::Artifact;
-    use confit::model::state::artifact::ArtifactData;
-    use confit::model::state::artifact::ArtifactKind;
-    use confit::model::state::artifact::BlameSet;
-    use confit::model::state::artifact::Contribution;
-    use std::collections::BTreeMap;
-
-    let mut aliases = BTreeMap::new();
-    aliases.insert("cat".to_string(), "bat".to_string());
-    let mut blame_aliases = BTreeMap::new();
-    blame_aliases.insert("cat".to_string(), "bat".to_string());
-    let plan = Plan {
-        version: PLAN_VERSION,
-        created_at: "2026-09-09T00:00:00Z".into(),
-        root: GOLDEN_ROOT.into(),
-        profile: GOLDEN_PROFILE.into(),
-        artifacts: vec![Artifact {
-            kind: ArtifactKind::Rc,
-            path: "~/.bashrc".into(),
-            data: ArtifactData::Rc(confit::model::state::rc::RcData {
-                profile: Vec::new(),
-                env: Vec::new(),
-                aliases,
-                init: Vec::new(),
-            }),
-            contributions: vec![Contribution {
-                tool: "bat".into(),
-                order: 1,
-            }],
-            shadowed: Default::default(),
-            blame: BlameSet {
-                aliases: blame_aliases,
-                ..BlameSet::default()
-            },
-            data_hash: "new".into(),
-        }],
+fn colliding_alias_emits_winner_note() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let profile_path = dir.path().join("profile.lua");
+    std::fs::write(
+        &profile_path,
+        r#"
+        local aaa = confit.config("aaa")
+        aaa:add_artifact(confit.artifact.rc.alias("cat", "bat"))
+        local zzz = confit.config("zzz")
+        zzz:add_artifact(confit.artifact.rc.alias("cat", "eza"))
+        return { shells = { "bash" }, configs = { aaa, zzz } }
+        "#,
+    )
+    .expect("write profile");
+    let graph = evaluate_profile(dir.path(), &profile_path).expect("evaluate");
+    let planned = confit::services::plan::build_plan(&graph, "root", "profile").expect("plan");
+    let rc = planned
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path == "~/.bashrc")
+        .expect("rc artifact");
+    let ArtifactData::Rc(data) = &rc.data else {
+        panic!("rc artifact holds rc data");
     };
-    let counts = confit::model::dto::diff::DiffSummary {
-        create: 0,
-        update: 1,
-        unchanged: 0,
-        delete: 0,
-    };
-    let details = vec![ArtifactDetail {
-        key: "rc:~/.bashrc".to_string(),
-        status: ArtifactStatus::Update,
-        entries: vec![EntryChange {
-            label: "alias cat".to_string(),
-            change: ChangeKind::Changed {
-                from: "oldbat".to_string(),
-                to: "bat".to_string(),
-            },
-            tool: Some("bat".to_string()),
-            over: Some("eza".to_string()),
-        }],
-    }];
-    let shaped = summarize(&counts);
-    let plain = confit::presentation::render_plan(&plan, &shaped, &details, false);
-    assert!(
-        plain.contains("~ alias cat = oldbat → bat (bat)"),
-        "default shows winner only: {plain}"
-    );
-    assert!(!plain.contains("wins over"), "{plain}");
-    let conflicts = confit::presentation::render_plan(&plan, &shaped, &details, true);
-    assert!(
-        conflicts.contains("~ alias cat = oldbat → bat (bat wins over eza)"),
-        "flag shows winner over loser: {conflicts}"
+    assert_eq!(
+        data.aliases
+            .iter()
+            .find(|entry| entry.name == "cat")
+            .map(|entry| entry.value.as_str()),
+        Some("bat"),
+        "winner value lands in the plan"
     );
 }

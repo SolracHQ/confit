@@ -1,8 +1,8 @@
-//! Behavior tests: resources, artifact constructors, and append.
+//! Behavior tests: resources, artifact constructors, and config attach.
 //!
 //! Exercises the Lua surface through the lib API on tempfile project
 //! roots: loads for all three formats, merge through constructors into
-//! appended artifacts, and the `examples/1-structured_resource` plus
+//! config artifacts, and the `examples/1-structured_resource` plus
 //! `examples/2-templated_resource` fixtures end to end. Error-domain checks assert root escapes and unknown merge keys
 //! surface as plan errors, bad Lua types as Lua errors, and kind
 //! mismatches on one path as merge errors.
@@ -13,10 +13,10 @@
 
 use std::path::PathBuf;
 
-use confit::actions::plan;
 use confit::error::Error;
 use confit::model::state::artifact::ArtifactData;
 use confit::model::state::artifact::ArtifactKind;
+use confit::services::plan::build_plan;
 use confit::services::plan::evaluate_profile;
 use confit::services::render::render_artifact;
 
@@ -63,18 +63,18 @@ fn loads_merge_and_constructors_land_in_plan() {
     local merged = confit.resources.merge(base, extra)
     local over = confit.resources.load_yaml("extra.yaml")
     merged = confit.resources.merge(merged, over)
-    local t = confit.tool("demo", {})
-    t:append_artifact(confit.artifact.toml("demo.toml", merged))
-    t:append_artifact(confit.artifact.file("demo.txt", "hi"))
-    t:append_artifact(confit.artifact.link("demo.link", "target"))
-    return { shells = { "bash" }, tools = { t } }
+    local c = confit.config("demo")
+    c:add_artifact(confit.artifact.toml("demo.toml", merged))
+    c:add_artifact(confit.artifact.file("demo.txt", "hi"))
+    c:add_artifact(confit.artifact.link("demo.link", "target"))
+    return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path) = project(&files, profile);
     let graph = evaluate_profile(dir.path(), &profile_path).expect("evaluate");
-    assert_eq!(graph.tools.len(), 1);
-    assert_eq!(graph.tools[0].artifacts.len(), 3);
+    assert_eq!(graph.configs.len(), 1);
+    assert_eq!(graph.configs[0].artifacts.len(), 3);
 
-    let plan = plan(&graph, "root", "profile").expect("plan");
+    let plan = build_plan(&graph, "root", "profile").expect("plan");
     let toml = plan
         .artifacts
         .iter()
@@ -94,12 +94,6 @@ fn loads_merge_and_constructors_land_in_plan() {
     assert_eq!(nested.get("y").and_then(serde_json::Value::as_i64), Some(1));
     assert_eq!(nested.get("z").and_then(serde_json::Value::as_i64), Some(2));
     assert!(!toml.data_hash.is_empty());
-    let tools: Vec<&str> = toml
-        .contributions
-        .iter()
-        .map(|contribution| contribution.tool.as_str())
-        .collect();
-    assert_eq!(tools, vec!["demo"]);
 
     let file = plan
         .artifacts
@@ -126,17 +120,17 @@ fn loads_merge_and_constructors_land_in_plan() {
 }
 
 #[test]
-fn same_key_appends_merge_across_tools() {
+fn same_key_appends_merge_across_configs() {
     let profile = r#"
-    local a = confit.tool("a", {})
-    a:append_artifact(confit.artifact.toml("shared.toml", {x = 1, n = {y = 1}}))
-    local b = confit.tool("b", {})
-    b:append_artifact(confit.artifact.toml("shared.toml", {n = {z = 2}}))
-    return { shells = { "bash" }, tools = { a, b } }
+    local a = confit.config("a")
+    a:add_artifact(confit.artifact.toml("shared.toml", {x = 1, n = {y = 1}}))
+    local b = confit.config("b")
+    b:add_artifact(confit.artifact.toml("shared.toml", {n = {z = 2}}))
+    return { shells = { "bash" }, configs = { a, b } }
     "#;
     let (dir, profile_path) = project(&[], profile);
     let graph = evaluate_profile(dir.path(), &profile_path).expect("evaluate");
-    let plan = plan(&graph, "root", "profile").expect("plan");
+    let plan = build_plan(&graph, "root", "profile").expect("plan");
     let shared: Vec<_> = plan
         .artifacts
         .iter()
@@ -149,12 +143,6 @@ fn same_key_appends_merge_across_tools() {
     let nested = table.get("n").expect("nested");
     assert_eq!(nested.get("y").and_then(serde_json::Value::as_i64), Some(1));
     assert_eq!(nested.get("z").and_then(serde_json::Value::as_i64), Some(2));
-    let tools: Vec<&str> = shared[0]
-        .contributions
-        .iter()
-        .map(|contribution| contribution.tool.as_str())
-        .collect();
-    assert_eq!(tools, vec!["a", "b"]);
 }
 
 #[test]
@@ -163,11 +151,11 @@ fn structured_resource_fixture_end_to_end() {
     let profile = root.join("profile.lua");
     let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
     assert_eq!(graph.shells, vec!["bash"]);
-    assert_eq!(graph.tools.len(), 1);
-    assert_eq!(graph.tools[0].tool, "starship");
-    assert_eq!(graph.tools[0].artifacts.len(), 1);
+    assert_eq!(graph.configs.len(), 1);
+    assert_eq!(graph.configs[0].name, "starship");
+    assert_eq!(graph.configs[0].artifacts.len(), 2);
 
-    let plan = plan(&graph, "root", "profile").expect("plan");
+    let plan = build_plan(&graph, "root", "profile").expect("plan");
     let starship = plan
         .artifacts
         .iter()
@@ -197,7 +185,13 @@ fn structured_resource_fixture_end_to_end() {
     let ArtifactData::Rc(data) = &rc.data else {
         panic!("rc artifact holds rc data");
     };
-    assert_eq!(data.aliases.get("s").map(String::as_str), Some("starship"));
+    assert_eq!(
+        data.aliases
+            .iter()
+            .find(|entry| entry.name == "s")
+            .map(|entry| entry.value.as_str()),
+        Some("starship")
+    );
 
     let mise = plan
         .artifacts
@@ -222,11 +216,11 @@ fn templated_resource_fixture_end_to_end() {
     let profile = root.join("profile.lua");
     let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
     assert_eq!(graph.shells, vec!["bash"]);
-    assert_eq!(graph.tools.len(), 1);
-    assert_eq!(graph.tools[0].tool, "starship");
-    assert_eq!(graph.tools[0].artifacts.len(), 1);
+    assert_eq!(graph.configs.len(), 1);
+    assert_eq!(graph.configs[0].name, "starship");
+    assert_eq!(graph.configs[0].artifacts.len(), 2);
 
-    let plan = plan(&graph, "root", "profile").expect("plan");
+    let plan = build_plan(&graph, "root", "profile").expect("plan");
     let starship = plan
         .artifacts
         .iter()
@@ -248,7 +242,7 @@ fn templated_resource_fixture_end_to_end() {
     );
 
     let fs = confit::repository::OsFilesystem;
-    let rendered = render_artifact(&starship.data, &starship.blame, &fs, &root).expect("render");
+    let rendered = render_artifact(&starship.data, &fs, &root).expect("render");
     assert_eq!(
         rendered,
         b"command_timeout = 10000\npalette = \"catppuccin\"".to_vec()
@@ -259,19 +253,19 @@ fn templated_resource_fixture_end_to_end() {
 fn escapes_and_unknown_keys_are_plan_errors() {
     let (dir, _) = project(
         &[("inside.toml", "x = 1\n")],
-        r#"return { shells = { "bash" }, tools = {} }"#,
+        r#"local c = confit.config("demo") return { shells = { "bash" }, configs = { c } }"#,
     );
     let root = dir.path().to_path_buf();
     for lua_case in [
-        r#"local t = confit.tool("demo", {})
+        r#"local c = confit.config("demo")
            local _ = confit.resources.load_toml("../escape.toml")
-           return { shells = { "bash" }, tools = { t } }"#,
-        r#"local t = confit.tool("demo", {})
+           return { shells = { "bash" }, configs = { c } }"#,
+        r#"local c = confit.config("demo")
            local _ = confit.resources.load_json("/abs.json")
-           return { shells = { "bash" }, tools = { t } }"#,
-        r#"local t = confit.tool("demo", {})
+           return { shells = { "bash" }, configs = { c } }"#,
+        r#"local c = confit.config("demo")
            local _ = confit.resources.merge({a = 1}, {b = 2}, {bogus = true})
-           return { shells = { "bash" }, tools = { t } }"#,
+           return { shells = { "bash" }, configs = { c } }"#,
     ] {
         let path = root.join("profile.lua");
         std::fs::write(&path, lua_case).expect("write profile");
@@ -285,12 +279,12 @@ fn bad_lua_types_are_lua_errors() {
     let (dir, _) = project(&[], "");
     let root = dir.path().to_path_buf();
     for lua_case in [
-        r#"local t = confit.tool("demo", {})
-           t:append_artifact(confit.artifact.toml("p", {f = function() end}))
-           return { shells = { "bash" }, tools = { t } }"#,
-        r#"local t = confit.tool("demo", {})
-           t:append_artifact("nope")
-           return { shells = { "bash" }, tools = { t } }"#,
+        r#"local c = confit.config("demo")
+           c:add_artifact(confit.artifact.toml("p", {f = function() end}))
+           return { shells = { "bash" }, configs = { c } }"#,
+        r#"local c = confit.config("demo")
+           c:add_artifact(confit.artifact.json("p", {{function() end}}))
+           return { shells = { "bash" }, configs = { c } }"#,
     ] {
         let path = root.join("profile.lua");
         std::fs::write(&path, lua_case).expect("write profile");
@@ -302,15 +296,15 @@ fn bad_lua_types_are_lua_errors() {
 #[test]
 fn kind_mismatch_on_one_path_stays_merge_error() {
     let profile = r#"
-    local a = confit.tool("a", {})
-    a:append_artifact(confit.artifact.toml("shared", {x = 1}))
-    local b = confit.tool("b", {})
-    b:append_artifact(confit.artifact.json("shared", {x = 1}))
-    return { shells = { "bash" }, tools = { a, b } }
+    local a = confit.config("a")
+    a:add_artifact(confit.artifact.toml("shared", {x = 1}))
+    local b = confit.config("b")
+    b:add_artifact(confit.artifact.json("shared", {x = 1}))
+    return { shells = { "bash" }, configs = { a, b } }
     "#;
     let (dir, profile_path) = project(&[], profile);
     let graph = evaluate_profile(dir.path(), &profile_path).expect("evaluate");
-    let err = plan(&graph, "root", "profile").expect_err("must fail");
+    let err = build_plan(&graph, "root", "profile").expect_err("must fail");
     match err {
         Error::Merge(message) => {
             assert!(message.contains("shared"), "names path: {message}");

@@ -5,6 +5,7 @@
 
 pub mod artifact;
 pub mod condition;
+pub mod config;
 pub mod plan;
 pub mod rc;
 

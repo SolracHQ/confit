@@ -22,10 +22,10 @@ diffs desired vs previous vs the actual files on disk, in memory. Absent
 paths read as absence. Failing reads warn and continue with exit 0.
 Hand edits get named warnings. `apply` and `explain` do not exist yet.
 
-Profiles declare tools. Tools contribute aliases, env, profile entries,
-and init lines in `eval`, `cmd`, and `source` shapes. Tools also ship
+Profiles declare configs. Configs collect aliases, env, profile entries,
+and init lines in `eval`, `cmd`, and `source` shapes. Configs also carry
 file artifacts: structured configs, minijinja templates, literal files,
-and symlinks. A mise install ships its own activation as the first init
+and symlinks. The mise plugin ships its activation as the first init
 entry of every shell.
 
 ## Scope
@@ -35,14 +35,15 @@ Escalating permissions is not planned.
 
 ## Show
 
-A profile declares tools, tools contribute entries:
+A profile declares configs, configs collect entries:
 
 ```lua
 -- examples/0-basic_tool/tools/bat.lua
-local bat = confit.tool("bat", {
-  install = confit.mise.package({ name = "bat" }),
-})
-bat:alias("cat", "bat")
+local mise_package = confit.plugin.solrachq.mise_package
+
+local bat = mise_package("bat", function(rc)
+  rc:alias("cat", "bat")
+end)
 return bat
 ```
 

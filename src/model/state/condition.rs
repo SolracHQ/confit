@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 /// Describes a predicate over shell-session facts, held as data.
 ///
-/// Serialized shape uses externally tagged snake_case names, with `Not` serializing as `not_`
-/// matching the Lua constructor `confit.shell.not_`: `{ "env_eq": { "key": "..", "value": ".."
-/// } }`, `{ "env_set": { "key": ".." } }`, `{ "all": [...] }`, `{ "any": [...] }`, `{ "not_":
-/// ... }`.
+/// Serialized shape uses externally tagged snake_case names, with `Not` serializing as `nop`
+/// matching the Lua constructor `confit.shell.nop`: `{ "env_eq": { "key": "..", "value": ".."
+/// } }`, `{ "env_set": { "key": ".." } }`, `{ "in_path": { "name": ".." } }`, `{ "exists":
+/// { "path": ".." } }`, `{ "all": [...] }`, `{ "any": [...] }`, `{ "nop": ... }`.
 ///
 /// The closed enum covers every shape. Optionality lives in `Option<Condition>` at use sites,
 /// with `None` marking unconditional entries. `All`/`Any` compare pairwise in order: `any(a,
@@ -40,6 +40,18 @@ pub enum Condition {
     ///
     /// * `key` - the variable name.
     EnvSet { key: String },
+    /// Asserts a binary resolves on PATH.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - the binary name.
+    InPath { name: String },
+    /// Asserts a path exists.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - the path under test.
+    Exists { path: String },
     /// Combines nested conditions as a conjunction.
     ///
     /// Element order is significant for equality.
@@ -58,12 +70,12 @@ pub enum Condition {
     Any(Vec<Condition>),
     /// Negates a nested condition.
     ///
-    /// Serializes as `not_`.
+    /// Serializes as `nop`.
     ///
     /// # Arguments
     ///
     /// * inner condition.
-    #[serde(rename = "not_")]
+    #[serde(rename = "nop")]
     Not(Box<Condition>),
 }
 
@@ -91,6 +103,12 @@ impl Condition {
             ) => self_key == other_key && self_value == other_value,
             (Self::EnvSet { key: self_key }, Self::EnvSet { key: other_key }) => {
                 self_key == other_key
+            }
+            (Self::InPath { name: self_name }, Self::InPath { name: other_name }) => {
+                self_name == other_name
+            }
+            (Self::Exists { path: self_path }, Self::Exists { path: other_path }) => {
+                self_path == other_path
             }
             (Self::All(self_items), Self::All(other_items))
             | (Self::Any(self_items), Self::Any(other_items)) => {
@@ -143,6 +161,18 @@ mod tests {
         }
     }
 
+    fn on_path() -> Condition {
+        Condition::InPath {
+            name: "mybin".into(),
+        }
+    }
+
+    fn seed_path() -> Condition {
+        Condition::Exists {
+            path: "/data/seed".into(),
+        }
+    }
+
     #[test]
     fn nil_equals_only_nil() {
         assert!(when_eq(None, None));
@@ -161,6 +191,16 @@ mod tests {
         assert!(!warp().structural_eq(&ssh()));
         assert!(ssh().structural_eq(&ssh()));
         assert!(!ssh().structural_eq(&Condition::EnvSet { key: "TERM".into() }));
+        assert!(on_path().structural_eq(&on_path()));
+        assert!(!on_path().structural_eq(&Condition::InPath {
+            name: "otherbin".into(),
+        }));
+        assert!(!on_path().structural_eq(&ssh()));
+        assert!(seed_path().structural_eq(&seed_path()));
+        assert!(!seed_path().structural_eq(&Condition::Exists {
+            path: "/data/other".into(),
+        }));
+        assert!(!seed_path().structural_eq(&on_path()));
     }
 
     #[test]
@@ -203,11 +243,23 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(Condition::Not(Box::new(ssh()))).unwrap(),
-            serde_json::json!({"not_": {"env_set": {"key": "SSH_TTY"}}})
+            serde_json::json!({"nop": {"env_set": {"key": "SSH_TTY"}}})
+        );
+        assert_eq!(
+            serde_json::to_value(on_path()).unwrap(),
+            serde_json::json!({"in_path": {"name": "mybin"}})
+        );
+        assert_eq!(
+            serde_json::to_value(seed_path()).unwrap(),
+            serde_json::json!({"exists": {"path": "/data/seed"}})
         );
         let all = Condition::All(vec![warp()]);
         let round_tripped: Condition =
             serde_json::from_value(serde_json::to_value(&all).unwrap()).unwrap();
         assert!(all.structural_eq(&round_tripped));
+        let guarded = Condition::All(vec![on_path(), seed_path()]);
+        let round_tripped: Condition =
+            serde_json::from_value(serde_json::to_value(&guarded).unwrap()).unwrap();
+        assert!(guarded.structural_eq(&round_tripped));
     }
 }

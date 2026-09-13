@@ -11,6 +11,14 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "confit", version, about = "Declarative user-space state")]
 pub struct Cli {
+    /// External plugin folder shaped `{user}/{name}/plugin.lua`; empty keeps
+    /// embedded defaults only.
+    #[arg(long, global = true)]
+    pub plugins: Option<PathBuf>,
+    /// Collision log file; empty resolves to a per-process path under the
+    /// system temp folder.
+    #[arg(long, global = true)]
+    pub log_file: Option<PathBuf>,
     /// Subcommand to run.
     #[command(subcommand)]
     pub command: Command,
@@ -46,9 +54,6 @@ pub struct PlanArgs {
     /// Previous state file; empty resolves to the empty previous directly.
     #[arg(long)]
     pub state: Option<PathBuf>,
-    /// Show winner-over-loser attribution on changed lines.
-    #[arg(long, default_value_t = false)]
-    pub conflicts: bool,
 }
 
 /// Arguments for `confit status`.
@@ -66,7 +71,4 @@ pub struct StatusArgs {
     /// Previous state file; empty resolves to the empty previous directly.
     #[arg(long)]
     pub state: Option<PathBuf>,
-    /// Show winner-over-loser attribution on changed lines.
-    #[arg(long, default_value_t = false)]
-    pub conflicts: bool,
 }

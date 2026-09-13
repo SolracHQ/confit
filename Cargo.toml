@@ -9,6 +9,8 @@ chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive"] }
 diffy = "0.5.2"
 directories = "6.0.0"
+fern = "0.7.1"
+log = "0.4.34"
 minijinja = "2.24.0"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
 noyalib = "0.0.43"

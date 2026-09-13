@@ -1,14 +1,15 @@
-local starship = confit.tool("starship", {
-	install = confit.mise.package({ name = "starship" }),
-})
-starship:alias("s", "starship")
-starship:init({ eval = { "starship", "init", "bash" } })
+local mise_package = confit.plugin.solrachq.mise_package
+
+local starship = mise_package("starship", function(rc)
+	rc:alias("s", "starship")
+	rc:init({ eval = { "starship", "init", "bash" } })
+end)
 
 return function(user_config)
 	local artifact = confit.artifact.template(
 		confit.path.config("starship.toml"),
 		{ src = "resources/starship.toml.j2", vars = user_config }
 	)
-	starship:append_artifact(artifact)
+	starship:add_artifact(artifact)
 	return starship
 end

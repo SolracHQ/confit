@@ -27,7 +27,6 @@ fn plan_with_missing_and_unreadable_still_warns() {
         root: Some(root),
         output: None,
         state: None,
-        conflicts: false,
     };
     let home = std::env::var("HOME").expect("HOME reads");
     let expanded = format!("{home}/.bashrc");

@@ -2,7 +2,7 @@
 //!
 //! Data-to-bytes rendering for every artifact kind.
 
-/// Shell rc text rendering with per-tool markers.
+/// Shell rc text rendering with structural markers.
 pub mod rc;
 /// Bourne shell argument quoting.
 pub mod shell_escape;
@@ -14,18 +14,36 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::model::state::artifact::ArtifactData;
-use crate::model::state::artifact::BlameSet;
 use crate::model::state::artifact::Table;
 use crate::model::state::plan::Plan;
 use crate::repository::Filesystem;
 
 use crate::services::path::resolve_src;
 
+/// Renders text with minijinja, mapping syntax failures to plan errors.
+///
+/// # Arguments
+///
+/// * `text` - the template text under rendering.
+/// * `facts` - the values feeding template slots.
+/// * `prefix` - the error context naming the render site.
+///
+/// # Returns
+///
+/// Rendered text.
+///
+/// # Errors
+///
+/// Template syntax failures yield plan errors carrying the site prefix.
+pub(crate) fn render_str(text: &str, facts: &Table, prefix: &str) -> Result<String> {
+    minijinja::Environment::new()
+        .render_str(text, facts)
+        .map_err(|e| Error::Plan(format!("{prefix}{e}")))
+}
+
 /// Renders resolved template text, mapping syntax failures to plan errors.
 fn render_template(text: &str, vars: &Table) -> Result<String> {
-    minijinja::Environment::new()
-        .render_str(text, vars)
-        .map_err(|e| Error::Plan(format!("render template: {e}")))
+    render_str(text, vars, "render template: ")
 }
 
 /// Renders artifact data to on-disk bytes.
@@ -33,7 +51,6 @@ fn render_template(text: &str, vars: &Table) -> Result<String> {
 /// # Arguments
 ///
 /// * `data` - the merged payload.
-/// * `blame` - per-entry winners for rc sections.
 /// * `files` - reads `src` fields.
 /// * `root` - the project root for template `src` reads.
 ///
@@ -50,17 +67,15 @@ fn render_template(text: &str, vars: &Table) -> Result<String> {
 /// ```rust
 /// use std::path::Path;
 /// use confit::model::state::artifact::ArtifactData;
-/// use confit::model::state::artifact::BlameSet;
 /// use confit::repository::MemoryFilesystem;
 /// use confit::services::render::render_artifact;
 ///
 /// let source = MemoryFilesystem::default();
 /// let data = ArtifactData::File { content: "hi".into() };
-/// assert!(matches!(render_artifact(&data, &BlameSet::default(), &source, Path::new("root")), Ok(bytes) if bytes == b"hi"));
+/// assert!(matches!(render_artifact(&data, &source, Path::new("root")), Ok(bytes) if bytes == b"hi"));
 /// ```
 pub fn render_artifact(
     data: &ArtifactData,
-    blame: &BlameSet,
     files: &dyn Filesystem,
     root: &Path,
 ) -> Result<Vec<u8>> {
@@ -78,7 +93,7 @@ pub fn render_artifact(
         }
         ArtifactData::File { content } => Ok(content.as_bytes().to_vec()),
         ArtifactData::Link { target } => Ok(target.as_bytes().to_vec()),
-        ArtifactData::Rc(rc) => Ok(rc::render_rc(rc, blame).into_bytes()),
+        ArtifactData::Rc(rc) => Ok(rc::render_rc(rc).into_bytes()),
     }
 }
 
@@ -105,7 +120,7 @@ pub fn render_baseline(
     let mut rendered = BTreeMap::new();
     for artifact in &plan.artifacts {
         let key = artifact.key_string();
-        let bytes = render_artifact(&artifact.data, &artifact.blame, files, root)?;
+        let bytes = render_artifact(&artifact.data, files, root)?;
         rendered.insert(key, bytes);
     }
     Ok(rendered)
@@ -175,15 +190,12 @@ mod tests {
             ),
         ];
         for (data, expected) in cases {
-            assert_eq!(
-                render_artifact(&data, &BlameSet::default(), &source, root).unwrap(),
-                expected
-            );
+            assert_eq!(render_artifact(&data, &source, root).unwrap(), expected);
         }
     }
 
     #[test]
-    fn rc_dispatch_uses_unknown_owner() {
+    fn rc_dispatch_renders_generic_section() {
         let source = MemoryFilesystem::default();
         let data = ArtifactData::Rc(crate::model::state::rc::RcData {
             profile: Vec::new(),
@@ -191,16 +203,14 @@ mod tests {
                 name: "A".into(),
                 value: "1".into(),
                 when: None,
+                priority: 0,
             }],
-            aliases: Table::new()
-                .into_iter()
-                .map(|(key, value)| (key, value.to_string()))
-                .collect(),
+            aliases: Vec::new(),
             init: Vec::new(),
         });
         assert_eq!(
-            render_artifact(&data, &BlameSet::default(), &source, Path::new("root")).unwrap(),
-            b"# >>> confit:unknown\nexport A=1\n# <<< confit\n"
+            render_artifact(&data, &source, Path::new("root")).unwrap(),
+            b"export A=1\n"
         );
     }
 
@@ -222,7 +232,7 @@ mod tests {
             vars: table(&[("who", serde_json::json!("you"))]),
         };
         assert_eq!(
-            render_artifact(&data, &BlameSet::default(), &files, Path::new("root")).unwrap(),
+            render_artifact(&data, &files, Path::new("root")).unwrap(),
             b"stored you"
         );
     }

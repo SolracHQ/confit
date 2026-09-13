@@ -17,7 +17,7 @@ seams, with every effect arriving as a parameter.
 `repository` is the persistence seam. All disk touch passes through
 it.
 
-`binding` evaluates the Lua profile into a tool graph.
+`binding` evaluates the Lua profile into a config graph.
 
 `framework` holds the Lua-facing API surface. Profiles script
 against it while `binding` runs it, so the API versions apart from

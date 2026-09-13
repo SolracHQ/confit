@@ -11,9 +11,18 @@
         "rc": {
           "profile": [],
           "env": [],
-          "aliases": {
-            "cat": "bat"
-          },
+          "aliases": [
+            {
+              "name": "cat",
+              "value": "bat",
+              "when": {
+                "in_path": {
+                  "name": "bat"
+                }
+              },
+              "priority": 0
+            }
+          ],
           "init": [
             {
               "eval": {
@@ -21,25 +30,13 @@
                   "mise",
                   "activate",
                   "bash"
-                ]
+                ],
+                "when": null,
+                "priority": 0
               }
             }
           ]
         }
-      },
-      "contributions": [
-        {
-          "tool": "bat",
-          "order": 1
-        }
-      ],
-      "_blame": {
-        "aliases": {
-          "cat": "bat"
-        },
-        "init": [
-          "bat"
-        ]
       }
     },
     {
@@ -50,17 +47,6 @@
           "tools": {
             "bat": "latest"
           }
-        }
-      },
-      "contributions": [
-        {
-          "tool": "bat",
-          "order": 0
-        }
-      ],
-      "_blame": {
-        "toml": {
-          "tools.bat": "bat"
         }
       }
     }

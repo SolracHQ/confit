@@ -40,7 +40,7 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
 fn build_plan() -> (Plan, PathBuf) {
     let (root, profile) = fixture_paths();
     let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
-    let plan = confit::actions::plan(
+    let plan = confit::services::plan::build_plan(
         &graph,
         "examples/0-basic_tool",
         "examples/0-basic_tool/profile.lua",
@@ -273,7 +273,7 @@ fn stale_record_counts_update_and_delete_flows_to_summary() {
     );
     let details = confit::services::diff::detail(&plan, &previous);
     let shaped = summarize(&counts);
-    let text = render_plan(&plan, &shaped, &details, false);
+    let text = render_plan(&plan, &shaped, &details);
     assert!(
         text.ends_with("Plan: 1 to add, 1 to change, 1 to destroy."),
         "{text}"
@@ -297,9 +297,6 @@ fn file_disk_diff_is_unified_and_snapshot_variants_stay_silent() {
             data: ArtifactData::File {
                 content: "one\ntwo\n".into(),
             },
-            contributions: Vec::new(),
-            shadowed: Default::default(),
-            blame: Default::default(),
             data_hash: "hash".into(),
         }],
     };
