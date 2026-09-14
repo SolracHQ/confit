@@ -6,14 +6,13 @@ local Config = {}
 
 ---@class RcOpts
 ---@field when? table|fun(shell: ShellNs): table # Guard condition table, or a builder function receiving confit.shell.
----@field lane? string # Init lane, "first" or "last". Default middle. Stored on init entries only.
 -- Options for confit.document.rc entry builders.
 local RcOpts = {}
 
 ---@class RcSections
----@field profile? RcEntry[] # Setup entries: environment, profile, path, plus early init.
----@field config? RcEntry[] # Interactive entries: aliases.
----@field final? RcEntry[] # Final entries: init list in listed order.
+---@field profile? RcEntry[] # Entries rendering before the guard.
+---@field config? RcEntry[] # Entries rendering after the guard.
+---@field final? RcEntry[] # Entries rendering last.
 -- Sections for confit.document.rc.new. Every key stays optional. Unknown keys are plan errors.
 local RcSections = {}
 
@@ -42,9 +41,9 @@ local TextDocument = {}
 local LinkDocument = {}
 
 ---@class RcDocument
----@field profile? RcEntry[] # Setup entries.
----@field config? RcEntry[] # Interactive entries.
----@field final? RcEntry[] # Final entries.
+---@field profile? RcEntry[] # Entries rendering before the guard.
+---@field config? RcEntry[] # Entries rendering after the guard.
+---@field final? RcEntry[] # Entries rendering last.
 -- Plain rc document table. Carries an rc marker.
 local RcDocument = {}
 
@@ -53,46 +52,42 @@ local RcDocument = {}
 local Document = {}
 
 ---@class AliasEntry
----@field name string # Alias name.
----@field value string # Alias expansion.
+---@field alias table # Alias op with name plus expansion.
 ---@field when? table # Guard condition table.
--- Plain alias entry table. Carries an alias area marker.
+-- Plain alias entry table. Carries an rc-entry marker.
 local AliasEntry = {}
 
 ---@class EnvEntry
----@field name string # Variable name.
----@field value string # Variable value.
+---@field env table # Env op with name plus value.
 ---@field when? table # Guard condition table.
--- Plain env entry table. Carries an env area marker.
+-- Plain env entry table. Carries an rc-entry marker.
 local EnvEntry = {}
 
----@class ProfileEntry
----@field name string # Variable name.
----@field value string # Directory value.
----@field op string # Path operation, "prepend".
+---@class PathEntry
+---@field path table # Path op with name plus dir plus op ("prepend").
 ---@field when? table # Guard condition table.
--- Plain profile entry table. Carries a profile area marker.
-local ProfileEntry = {}
+-- Plain path entry table. Carries an rc-entry marker.
+local PathEntry = {}
 
 ---@class EvalEntry
----@field eval table # Eval spec with argv plus lane.
+---@field eval table # Eval op with argv.
 ---@field when? table # Guard condition table.
--- Plain eval entry table. Carries an init area marker.
+-- Plain eval entry table. Carries an rc-entry marker.
 local EvalEntry = {}
 
 ---@class CmdEntry
----@field cmd table # Cmd spec with argv plus lane.
+---@field cmd table # Cmd op with argv.
 ---@field when? table # Guard condition table.
--- Plain cmd entry table. Carries an init area marker.
+-- Plain cmd entry table. Carries an rc-entry marker.
 local CmdEntry = {}
 
 ---@class SourceEntry
----@field source table # Source spec with path plus lane.
+---@field source table # Source op with path.
 ---@field when? table # Guard condition table.
--- Plain source entry table. Carries an init area marker.
+-- Plain source entry table. Carries an rc-entry marker.
 local SourceEntry = {}
 
----@class RcEntry : AliasEntry, EnvEntry, ProfileEntry, EvalEntry, CmdEntry, SourceEntry
+---@class RcEntry : AliasEntry, EnvEntry, PathEntry, EvalEntry, CmdEntry, SourceEntry
 -- Plain rc entry table built by confit.document.rc constructors. Attached with config:add_document.
 local RcEntry = {}
 
@@ -158,8 +153,36 @@ local PathLib = {}
 -- Plan-domain error helper namespace.
 local PluginHelpers = {}
 
+---@class MergeOpts
+---@field shallow? boolean # Merge top-level keys only, replacing nested tables wholesale.
+---@field list_append? boolean # Concatenate arrays keeping every element.
+-- Options for the solrachq.merge plugin. Unknown keys are plan errors.
+local MergeOpts = {}
+
+---@class TemplateOpts
+---@field src string # Root-relative template file read through confit.resources.load_text.
+---@field vars? table # Variables feeding minijinja slots.
+-- Options for the solrachq.template plugin. Unknown keys are plan errors.
+local TemplateOpts = {}
+
+---@class MiseCollector
+-- Rc collector handed to mise.package callbacks. Every entry carries the binary guard.
+local MiseCollector = {}
+
+---@class MiseNs
+-- Installer dialect namespace over config plus document primitives.
+local MiseNs = {}
+
+---@class SolrachqNs
+---@field mise MiseNs # Installer dialect with package plus activate.
+---@field merge fun(base: table, overlay: table, opts?: MergeOpts): table # Deep merge returning a fresh table.
+---@field template fun(path: string, opts: TemplateOpts): Document # Rendered plain text document.
+-- Embedded default plugins in external shape. Always loaded.
+local SolrachqNs = {}
+
 ---@class PluginNs
 ---@field helpers PluginHelpers
+---@field solrachq SolrachqNs
 -- Lazy plugin namespace. User tables resolve on first access.
 local PluginNs = {}
 
@@ -180,7 +203,7 @@ local Confit = {}
 ---@field shells string[] # Shells to render, e.g. {"bash"}. One rc document per entry.
 ---@field documents Document[]? # Machine-owned base documents, e.g. the rc document.
 ---@field configs Config[] # Config handles composed into this profile.
--- Profile return table. Extra keys are ignored.
+-- Profile return table. A parametrizing function returning this table also reads valid.
 local Profile = {}
 
 -- Creates a config handle collecting contributions for the plan.
@@ -263,51 +286,51 @@ function RcNs.new(sections) end
 -- Builds one alias rc entry table.
 ---@param name string # Alias name, e.g. "cat".
 ---@param value string # Alias expansion, e.g. "bat".
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.alias(name, value, opts) end
 
 -- Builds one env rc entry table.
 ---@param name string # Variable name.
 ---@param value string # Variable value.
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.env(name, value, opts) end
 
 -- Builds one profile rc entry table.
 ---@param name string # Variable name.
 ---@param value string # Variable value.
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.profile(name, value, opts) end
 
 -- Builds one profile_path rc entry table.
 ---@param dir string # Directory, e.g. "~/.cargo/bin".
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.profile_path(dir, opts) end
 
 -- Builds one path_entry rc entry table, prepend sugar for PATH.
 ---@param dir string # Directory, e.g. "~/.cargo/bin".
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.path_entry(dir, opts) end
 
 -- Builds one eval init rc entry table.
 ---@param argv string[] # Command argv evaluated as eval "$(argv...)".
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.eval(argv, opts) end
 
 -- Builds one cmd init rc entry table.
 ---@param argv string[] # Command argv run as a plain line.
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.cmd(argv, opts) end
 
 -- Builds one source init rc entry table.
 ---@param path string # File path sourced as source path.
----@param opts RcOpts? # Optional guard plus lane.
+---@param opts RcOpts? # Optional guard.
 ---@return RcEntry
 function RcNs.source(path, opts) end
 
@@ -362,23 +385,70 @@ function ShellNs.nop(cond) end
 ---@param message string # Error text.
 function PluginHelpers.error(message) end
 
+-- Declares one mise package plus its callback rc entries.
+---@param name string # Package name, e.g. "bat". Names the config plus the binary guard.
+---@param callback? fun(rc: MiseCollector) # Callback filling guarded rc entries.
+---@return Config
+function MiseNs.package(name, callback) end
+
+-- Returns the eval entry for mise activation with the {{shell}} slot.
+---@return RcEntry
+function MiseNs.activate() end
+
+-- Adds one guarded alias entry to the package config.
+---@param name string # Alias name.
+---@param value string # Alias expansion.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:alias(name, value, opts) end
+
+-- Adds one guarded env entry to the package config.
+---@param name string # Variable name.
+---@param value string # Variable value.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:env(name, value, opts) end
+
+-- Adds one guarded profile entry to the package config.
+---@param name string # Variable name.
+---@param value string # Variable value.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:profile(name, value, opts) end
+
+-- Adds one guarded profile_path entry to the package config.
+---@param dir string # Directory.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:profile_path(dir, opts) end
+
+-- Adds one guarded eval entry to the package config.
+---@param argv string[] # Command argv.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:eval(argv, opts) end
+
+-- Adds one guarded cmd entry to the package config.
+---@param argv string[] # Command argv.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:cmd(argv, opts) end
+
+-- Adds one guarded source entry to the package config.
+---@param path string # File path.
+---@param opts? RcOpts? # Optional guard. The binary guard always applies.
+function MiseCollector:source(path, opts) end
+
 -- Joins $HOME with the segments.
 ---@param ... string # Path segments.
 ---@return string
 function PathLib.home(...) end
 
--- Joins $XDG_CONFIG_HOME with the segments. Where managed files land.
+-- Joins the OS config folder with the segments. Where managed files land.
 ---@param ... string # Path segments.
 ---@return string
 function PathLib.config(...) end
 
--- Joins $XDG_DATA_HOME with the segments.
+-- Joins the OS data folder with the segments. Serves local installs like fonts.
 ---@param ... string # Path segments.
 ---@return string
 function PathLib.data(...) end
 
--- Joins the confit project root with the segments. Where files come from.
--- Kept for symlinks to shipped resources.
+-- Joins the confit project root with the segments. Serves symlinks to shipped resources.
 ---@param ... string # Path segments.
 ---@return string
 function PathLib.confroot(...) end

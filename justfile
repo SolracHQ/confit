@@ -42,4 +42,4 @@ show-spec VERSION="0.1":
 
 # Full local verification.
 check:
-  cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+  cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace

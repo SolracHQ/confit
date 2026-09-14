@@ -1,0 +1,21 @@
+[package]
+name = "confit-engine"
+version = "0.4.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-core = { path = "../core" }
+directories.workspace = true
+log.workspace = true
+minijinja.workspace = true
+mlua = { workspace = true, features = ["lua54", "vendored"] }
+noyalib.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

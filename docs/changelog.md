@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+## [0.4] - 2026-09-14
+
+Design spec: `docs/design/v0.4.md`. v0.3 was planned and half
+built, then superseded without sealing.
+
+### Added
+
+- Workspace with three crates: `confit-core` (types plus pure
+  functions), `confit-engine` (every Lua touch), `confit-cli`
+  (args, files, terminal, logging). `engine::evaluate` returns
+  finished `Vec<Document>`; configs, patches, shells, and owners
+  never cross the boundary.
+- Documents, patches, configs, profiles as the only concepts.
+  Profiles declare machine-owned bases, configs contribute,
+  patches modify through live callbacks in pipeline order
+  (priority desc plus owner asc, op order verbatim).
+- Five priority levels on patches (`MINOR` to `MAJOR`, default
+  `NORMAL`). The engine sorts and never interprets beyond order.
+- Plugin namespaces (`confit.plugin.{user}.{name}`), embedded
+  `solrachq` defaults (mise, merge, template) in external shape,
+  lazy loading, note-and-skip collisions, reads jailed to the
+  project root.
+- Rc sections as position plus guard: any entry in any section,
+  profile always runs, guard splits the rest, declaration order
+  inside sections. One `RcOp`/`RcEntry` model replaces the four
+  entry structs.
+- Plan format version 2. Version 1 covered artifacts and reads
+  incompatible.
+- `Filesystem` trait plus `MemoryFs` fake in the cli crate. Tests
+  run on memory and never touch home folders.
+
+### Changed
+
+- Everything rewritten from the v0.3 tree, nothing copied. Behavior
+  colocates with data; no separate model layer, no free functions
+  with long parameter lists.
+- One path holds one document. Repeats fail as plan errors naming
+  the path. Documents carry no owner.
+- Collision slots span sections by name; exec entries accumulate
+  with no collision. Collision lines keep their shape with op
+  kind labels.
+- Shells expand to per-shell rc documents inside the engine with
+  `{{shell}}` substitution. Core render is shell-agnostic.
+
+### Removed
+
+- Artifacts and tools vocabulary, plan format version 1.
+- `--strict` flag plus warn-keep-first conflicts.
+- Lanes, document owners, `ProfileGraph`, layered architecture doc.
+- Legacy `plugins/` folder; engine embeds from
+  `crates/engine/plugins/`.
+
 ## [0.2] - 2026-09-12
 
 ### Added

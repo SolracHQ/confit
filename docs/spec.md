@@ -1,6 +1,6 @@
 # ConfIt spec (current)
 
-Spec-Version: 0.3.0
+Spec-Version: 0.4.0
 
 Living description of what confit does today. If you want to know why
 it looks like this, the intent behind each version lives in `../design/`.
@@ -51,7 +51,7 @@ manual modification will be overwritten` for manual edits, and
   diffable, git-storable.
   Contains document data plus `created_at`
   metadata (excluded from the SHA).
-- State v1: JSON file (`--state`; omitted means empty previous, the run
+- State: JSON file (`--state`; omitted means empty previous, the run
   skips disk reads). `{ document_id -> { data_hash, output_hash, data? } }`.
 
 ### Terminal summary and color
@@ -99,9 +99,10 @@ runs them in that order. Op order inside one callback stays verbatim.
 
 A **config** is a named bag holding documents plus patches for fonts,
 tool settings, shell entries. The name serves as uid per plan plus
-owner stamp on every patch; repeats are plan errors. A patch to an
-undeclared document creates it. Patches to one path agree on one
-format; mismatches fail as plan errors.
+owner stamp on every patch; repeats are plan errors. One path holds
+one document; repeated declarations fail as plan errors naming the
+path. A patch to an undeclared document creates it. Patches to one
+path agree on one format; mismatches fail as plan errors.
 
 A **profile** is the composition root per machine or role. Its return
 value is the entire resource graph; the return value serves as the
@@ -133,7 +134,7 @@ Plain text plus link read declaration only.
 | Kind | How it is built | Merge rule |
 | --- | --- | --- |
 | `structured` | `confit.document.structured(format, { path, data })` declarations; `confit.patch.structured(format, path, fn)` tweaks | callbacks run in pipeline order, first writer wins per slot |
-| `text` | `confit.document.text(path, content)` declarations | same path with different bytes warns, `--strict` escalates |
+| `text` | `confit.document.text(path, content)` declarations | one path holds one document; repeats fail as plan errors |
 | `link` | `confit.document.link(path, target)` declarations | same rule as text |
 | `rc` | `confit.document.rc.new({ profile, config, final })` base plus bare rc entries; `confit.patch.rc(fn)` tweaks; one file per declared shell (`bash` writes `~/.bashrc`) | sections plus slots, first writer wins, see Shell rc |
 
@@ -144,17 +145,18 @@ templates.
 
 ### Shell rc
 
-The rc document holds three groups. `profile` holds setup entries,
-`config` holds interactive aliases, `final` holds the init list in
-listed order. Every key stays optional. `confit.document.rc.new` builds the
+The rc document holds three sections. Sections mark position
+plus guard alone: `profile` renders before the guard, `config`
+renders after it, `final` renders last. Any entry kind renders
+in any section. Every key stays optional. `confit.document.rc.new` builds the
 machine-owned base; bare rc entry tables attach through
 `config:add_document`; `confit.patch.rc` tweaks entries through `set`
 plus `append` over the three section names.
 
-Entry builders take `when` plus `lane` through opts. `when` holds a
+Entry builders take `when` through opts. `when` holds a
 condition table or a builder function over `confit.shell`, evaluated
-by each new shell session. `lane` rides init entries alone, `first` or
-`last`, default middle. Init strings render a `{{shell}}` slot with
+by each new shell session. Unknown opts fields fail as plan errors.
+Init strings render a `{{shell}}` slot with
 the target shell name, so one entry addresses every shell.
 
 ```lua
@@ -167,11 +169,15 @@ return rc.new({
 ```
 
 A write to a slot another patch wrote drops, plus one collision line
-in the log.
+in the log. Named entries collide globally on name: one slot per name
+across every section, first writer wins. Exec entries accumulate with
+no collision.
 
-Rc layout per file holds setup lines, then the guard, then aliases,
-then init lines. Setup holds profile plus env plus first lane init
-lines. One guard follows while alias or final lines follow.
+Rc layout per file holds profile lines, then the guard, then config
+lines, then final lines. The guard renders while config or final holds
+entries. Within one section, entries render in declaration order.
+Patches run in pipeline order, so appended entries follow the order
+their patches ran.
 
 ```sh
 case $- in
@@ -180,9 +186,7 @@ case $- in
 esac
 ```
 
-Setup-only output skips the guard. Aliases hold the third block.
-Middle lane init lines plus last lane init lines hold the final block.
-Blocks join with one blank line. Plain entries render as bare lines.
+Setup-only output skips the guard. Blocks join with one blank line. Plain entries render as bare lines.
 Guarded entries render inline, evaluated by each new shell session.
 
 ```sh
@@ -234,8 +238,8 @@ end):priority(confit.priority.HIGH))
 ```
 
 - `confit.document.rc.alias/env/profile/profile_path/path_entry/eval/cmd/source`
-  build rc entry tables, each taking `when` through opts, init entries
-  also taking `lane`. `confit.document.structured/text/link` plus
+  build rc entry tables, each taking `when` through opts.
+  `confit.document.structured/text/link` plus
   `confit.document.rc.new` build document tables for
   `config:add_document`.
 - `confit.patch.rc(fn)` plus `confit.patch.structured(format, path, fn)`
@@ -291,8 +295,8 @@ end
 ## CLI guide
 
 ```sh
-confit plan --profile profiles/desktop.lua [-o ./plan.json] [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log] [--strict]
-confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log] [--strict]
+confit plan --profile profiles/desktop.lua [-o ./plan.json] [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log]
+confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log]
 ```
 
 - `-o`/`--output` is the explicit output path; omitted prints the plan to
@@ -305,4 +309,3 @@ confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [
 - `--log-file` sets the collision log path; empty resolves to a
   per-process file under the system temp folder. The run prints
   `log: <path>` on stderr after the summary.
-- `--strict` escalates declaration conflicts to plan errors.
