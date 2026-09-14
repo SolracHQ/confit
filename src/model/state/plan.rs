@@ -4,14 +4,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::artifact::Artifact;
+use super::document::Document;
 
 /// Plan format version written by every plan run.
 pub const PLAN_VERSION: u32 = 1;
 
 /// Holds the versioned desired-state document written by `plan`.
 ///
-/// `artifacts` hold canonical merged data; `created_at` holds an RFC3339 timestamp assigned by
+/// `documents` hold canonical merged data; `created_at` holds an RFC3339 timestamp assigned by
 /// the service, the single clock source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
@@ -23,6 +23,6 @@ pub struct Plan {
     pub root: String,
     /// Holds the active profile name.
     pub profile: String,
-    /// Holds merged artifacts in plan order.
-    pub artifacts: Vec<Artifact>,
+    /// Holds merged documents in plan order.
+    pub documents: Vec<Document>,
 }

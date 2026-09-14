@@ -1,6 +1,7 @@
-local mise_package = confit.plugin.solrachq.mise_package
+local mise = confit.plugin.solrachq.mise
 
-local bat = mise_package("bat", function(rc)
+local bat = mise.package("bat", function(rc)
 	rc:alias("cat", "bat")
 end)
+bat:add_document(mise.activate())
 return bat

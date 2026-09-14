@@ -22,11 +22,11 @@ diffs desired vs previous vs the actual files on disk, in memory. Absent
 paths read as absence. Failing reads warn and continue with exit 0.
 Hand edits get named warnings. `apply` and `explain` do not exist yet.
 
-Profiles declare configs. Configs collect aliases, env, profile entries,
-and init lines in `eval`, `cmd`, and `source` shapes. Configs also carry
-file artifacts: structured configs, minijinja templates, literal files,
-and symlinks. The mise plugin ships its activation as the first init
-entry of every shell.
+Profiles declare documents plus configs. Configs hold documents plus
+patches. Documents cover shell entries plus structured configs plus
+literal files plus symlinks. Patches tweak documents through callbacks
+in pipeline order. The mise plugin ships package configs plus shell
+activation entries.
 
 ## Scope
 
@@ -39,11 +39,12 @@ A profile declares configs, configs collect entries:
 
 ```lua
 -- examples/0-basic_tool/tools/bat.lua
-local mise_package = confit.plugin.solrachq.mise_package
+local mise = confit.plugin.solrachq.mise
 
-local bat = mise_package("bat", function(rc)
-  rc:alias("cat", "bat")
+local bat = mise.package("bat", function(rc)
+	rc:alias("cat", "bat")
 end)
+bat:add_document(mise.activate())
 return bat
 ```
 
@@ -60,7 +61,7 @@ Plan: 2 to add, 0 to change, 0 to destroy.
 | Fixture | Proves |
 |---|---|
 | `0-basic_tool` | mise package plus alias plus init |
-| `1-structured_resource` | starship config loaded through `confit.resources` and merged |
+| `1-structured_resource` | starship config declared plus patched |
 | `2-templated_resource` | starship config rendered from a template with profile vars |
 
 | Command | Does |

@@ -2,40 +2,43 @@
 //!
 //! Named contribution bags built by `confit.config` for Lua.
 
-use super::artifact::{ArtifactData, ArtifactKind};
-use super::rc::{AliasEntry, EnvEntry, InitEntry, ProfileEntry};
+use serde::{Deserialize, Serialize};
 
-/// Holds one file artifact pending fold into the plan.
+use super::document::{Document, StructuredFormat};
+use super::level::Level;
+
+/// Holds one patch record: target plus owner plus priority.
 ///
-/// Carries the merge key (`kind`, `path`) plus the payload (`data`); the plan service folds
-/// pending entries into the artifact map keyed by `(kind, path)` with `merge_artifact`.
+/// Callbacks execute live, nothing records ops. Binding sorts records
+/// by priority desc plus owner asc, then runs each callback.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use confit::model::state::artifact::{ArtifactData, ArtifactKind};
-/// use confit::model::state::config::PendingArtifact;
+/// use confit::model::state::config::Patch;
+/// use confit::model::state::level::Level;
 ///
-/// let pending = PendingArtifact { kind: ArtifactKind::File, path: "note.txt".into(), data: ArtifactData::File { content: "hi".into() }, priority: 0 };
-/// assert_eq!(pending.path, "note.txt");
-/// assert!(matches!(pending.kind, ArtifactKind::File));
+/// let patch = Patch { document: "rc".into(), format: None, owner: "bat".into(), priority: Level::Normal };
+/// assert_eq!(patch.owner, "bat");
+/// assert_eq!(patch.document, "rc");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingArtifact {
-    /// Materialization kind, half of the `(kind, path)` merge key.
-    pub kind: ArtifactKind,
-    /// Destination path, half of the `(kind, path)` merge key.
-    pub path: String,
-    /// Merged payload for the plan service.
-    pub data: ArtifactData,
-    /// Merge priority for the artifact, defaulting to 0.
-    pub priority: u32,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Patch {
+    /// Holds the target document key.
+    pub document: String,
+    /// Holds the structured format for patch-created documents.
+    pub format: Option<StructuredFormat>,
+    /// Holds the contributing config name.
+    pub owner: String,
+    /// Holds the merge priority for the patch.
+    pub priority: Level,
 }
 
-/// Accumulated per-config contribution built by `config:add_artifact`.
+/// Accumulated per-config contribution built by `config:add_document`.
 ///
-/// Each list keeps declaration order; every entry and artifact carries its own
-/// merge priority for deterministic slot resolution.
+/// Holds declared documents plus patch records in declaration order.
+/// Callbacks execute live, so patches carry target plus owner plus
+/// priority only.
 ///
 /// # Examples
 ///
@@ -49,14 +52,8 @@ pub struct PendingArtifact {
 pub struct ConfigContribution {
     /// Config name from `confit.config(name)`, unique per evaluation.
     pub name: String,
-    /// Alias entries in declaration order, guarded entries keeping their `when`.
-    pub aliases: Vec<AliasEntry>,
-    /// Env entries in declaration order, guarded entries keeping their `when`.
-    pub envs: Vec<EnvEntry>,
-    /// Profile entries in declaration order, `profile_path` dirs appended as `PATH` prepends.
-    pub profile: Vec<ProfileEntry>,
-    /// Init entries in declaration order, guarded entries keeping their `when`.
-    pub inits: Vec<InitEntry>,
-    /// Pending file artifacts in declaration order.
-    pub artifacts: Vec<PendingArtifact>,
+    /// Declared documents in declaration order.
+    pub documents: Vec<Document>,
+    /// Patch records in declaration order.
+    pub patches: Vec<Patch>,
 }

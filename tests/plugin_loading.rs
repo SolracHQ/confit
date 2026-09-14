@@ -1,7 +1,7 @@
 //! Behavior tests: lazy plugin loading plus scoped requires plus helper errors.
 //!
 //! Exercises `confit.plugin` through the lib API on tempfile project roots:
-//! the embedded mise_package, lazy external plugins from a tempfile plugins
+//! the embedded mise namespace, lazy external plugins from a tempfile plugins
 //! folder, collision note-and-skip, traversal rejection, scoped require
 //! across sibling files, `@` chunk names in sibling failures, and the
 //! plan-domain `helpers.error` attribution.
@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use confit::binding::evaluate_with_plugins;
+use confit::binding::evaluate;
 use confit::error::Error;
 use confit::model::state::condition::Condition;
 
@@ -61,10 +61,10 @@ fn run(
     profile: &Path,
     plugins: Option<&Path>,
 ) -> Result<confit::binding::ProfileGraph, Error> {
-    evaluate_with_plugins(dir.path(), profile, plugins)
+    evaluate(dir.path(), profile, plugins)
 }
 
-/// Reads one env entry from the first config contribution.
+/// Reads one env entry from merged rc.
 ///
 /// # Arguments
 ///
@@ -75,11 +75,19 @@ fn run(
 ///
 /// Env entry value.
 fn env_of(graph: &confit::binding::ProfileGraph, name: &str) -> String {
-    graph.configs[0]
-        .envs
+    let merged = graph
+        .merged
         .iter()
-        .find(|entry| entry.name == name)
+        .find(|item| item.path == "rc")
+        .expect("rc");
+    let confit::model::state::document::DocumentData::Rc(data) = &merged.data else {
+        panic!("rc data");
+    };
+    data.env
+        .iter()
+        .find(|entry| entry.spec.name == name)
         .expect("env entry")
+        .spec
         .value
         .clone()
 }
@@ -95,12 +103,13 @@ fn is_lua(err: &Error) -> bool {
 }
 
 #[test]
-fn embedded_mise_package_loads_eagerly() {
+fn embedded_mise_loads_eagerly() {
     let profile = r#"
-    local mise_package = confit.plugin.solrachq.mise_package
-    local c = mise_package("demo", function(rc)
+    local mise = confit.plugin.solrachq.mise
+    local c = mise.package("demo", function(rc)
         rc:alias("ll", "eza -l")
     end)
+    c:add_document(mise.activate())
     return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path, _) = project(profile, &[]);
@@ -108,60 +117,90 @@ fn embedded_mise_package_loads_eagerly() {
     assert_eq!(graph.configs.len(), 1);
     let config = &graph.configs[0];
     assert_eq!(config.name, "demo");
-    assert_eq!(config.aliases.len(), 1);
-    assert_eq!(config.aliases[0].name, "ll");
-    assert_eq!(config.aliases[0].value, "eza -l");
+    let merged = graph
+        .merged
+        .iter()
+        .find(|item| item.path == "rc")
+        .expect("rc");
+    let confit::model::state::document::DocumentData::Rc(data) = &merged.data else {
+        panic!("rc data");
+    };
+    let entry = data
+        .aliases
+        .iter()
+        .find(|item| item.spec.name == "ll")
+        .expect("alias");
+    assert_eq!(entry.spec.value, "eza -l");
     assert!(
-        matches!(&config.aliases[0].when, Some(Condition::InPath { name }) if name == "demo"),
+        matches!(&entry.when, Some(Condition::InPath { name }) if name == "demo"),
         "callback alias carries the in_path guard",
     );
 }
 
 #[test]
-fn mise_package_declares_mise_toml_and_template_activation() {
+fn mise_declares_mise_toml_and_activation_entry() {
     let profile = r#"
-    local mise_package = confit.plugin.solrachq.mise_package
-    local c = mise_package("demo")
+    local mise = confit.plugin.solrachq.mise
+    local c = mise.package("demo")
+    c:add_document(mise.activate())
     return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path, _) = project(profile, &[]);
     let graph = run(&dir, &profile_path, None).expect("evaluate");
     assert_eq!(graph.configs.len(), 1);
     let config = &graph.configs[0];
-    assert_eq!(config.artifacts.len(), 1);
-    assert_eq!(config.artifacts[0].path, "~/.config/mise/config.toml");
-    assert_eq!(config.inits.len(), 1);
-    match &config.inits[0] {
-        confit::model::state::rc::InitEntry::Eval { argv, when, .. } => {
+    assert_eq!(config.documents.len(), 2);
+    assert!(
+        config
+            .documents
+            .iter()
+            .any(|item| item.path == "~/.config/mise/config.toml")
+    );
+    assert!(config.documents.iter().any(|item| item.path == "rc"));
+    let merged = graph
+        .merged
+        .iter()
+        .find(|item| item.path == "rc")
+        .expect("rc");
+    let confit::model::state::document::DocumentData::Rc(data) = &merged.data else {
+        panic!("rc data");
+    };
+    assert_eq!(data.init.len(), 1);
+    match &data.init[0].spec {
+        confit::model::state::rc::InitSpec::Eval { argv, .. } => {
             assert_eq!(
-                argv,
-                &vec![
+                argv.clone(),
+                vec![
                     "mise".to_string(),
                     "activate".to_string(),
                     "{{shell}}".to_string()
                 ]
             );
-            assert!(when.is_none(), "activation stays unconditional");
+            assert!(
+                data.init[0].when.is_none(),
+                "activation stays unconditional"
+            );
         }
         other => panic!("activation holds eval init, got {other:?}"),
     }
 }
 
 #[test]
-fn mise_package_mistakes_are_plan_errors_with_attribution() {
+fn mise_mistakes_are_plan_errors_with_attribution() {
     for snippet in [
-        r#"confit.plugin.solrachq.mise_package(42)"#,
-        r#"confit.plugin.solrachq.mise_package("")"#,
-        r#"confit.plugin.solrachq.mise_package("demo", 42)"#,
+        r#"confit.plugin.solrachq.mise.package(42)"#,
+        r#"confit.plugin.solrachq.mise.package("")"#,
+        r#"confit.plugin.solrachq.mise.package("demo", 42)"#,
+        r#"confit.plugin.solrachq.mise.activate(42)"#,
     ] {
         let profile =
             format!("local c = {snippet}\nreturn {{ shells = {{ \"bash\" }}, configs = {{ c }} }}");
         let (dir, profile_path, _) = project(&profile, &[]);
         let err = run(&dir, &profile_path, None).expect_err("must fail");
-        assert!(is_plan(&err), "mise_package mistake is plan: {err}");
+        assert!(is_plan(&err), "mise mistake is plan: {err}");
         let message = format!("{err}");
         assert!(
-            message.contains("mise_package"),
+            message.contains("mise"),
             "attributes plugin file: {message}"
         );
     }
@@ -171,7 +210,7 @@ fn mise_package_mistakes_are_plan_errors_with_attribution() {
 fn external_plugin_resolves_lazily() {
     let profile = r#"
     local c = confit.config("demo")
-    c:add_artifact(confit.artifact.rc.env("GREETING", confit.plugin.acme.widget.GREETING))
+    c:add_document(confit.document.rc.env("GREETING", confit.plugin.acme.widget.GREETING))
     return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path, root) = project(
@@ -199,20 +238,74 @@ fn unaccessed_external_plugins_stay_unloaded() {
 #[test]
 fn collision_keeps_embedded_default() {
     let profile = r#"
-    local mise_package = confit.plugin.solrachq.mise_package
-    local c = mise_package("demo")
+    local mise = confit.plugin.solrachq.mise
+    local c = mise.package("demo")
     return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path, root) = project(
         profile,
         &[(
-            "solrachq/mise_package/plugin.lua",
+            "solrachq/mise/plugin.lua",
             r#"return { MARKER = "external" }"#,
         )],
     );
     let graph = run(&dir, &profile_path, Some(&root)).expect("evaluate");
     assert_eq!(graph.configs.len(), 1);
     assert_eq!(graph.configs[0].name, "demo");
+}
+
+#[test]
+fn merge_plugin_deep_merges_with_opts() {
+    let profile = r#"
+    local merge = confit.plugin.solrachq.merge
+    local merged = merge({a = 1, n = {x = 1, y = 1}, l = {1, 2}}, {n = {y = 2}, l = {3}})
+    assert(merged.a == 1 and merged.n.x == 1 and merged.n.y == 2 and #merged.l == 1 and merged.l[1] == 3, "deep merge")
+    local appended = merge({l = {1, 2}}, {l = {2, 3}}, {list_append = true})
+    assert(#appended.l == 4, "list append")
+    local shallow = merge({n = {x = 1, y = 1}, keep = 1}, {n = {y = 2}}, {shallow = true})
+    assert(shallow.n.x == nil and shallow.n.y == 2 and shallow.keep == 1, "shallow")
+    local c = confit.config("demo")
+    c:add_document(confit.document.structured("toml", { path = "demo.toml", data = merged }))
+    return { shells = { "bash" }, configs = { c } }
+    "#;
+    let (dir, profile_path, _) = project(profile, &[]);
+    let graph = run(&dir, &profile_path, None).expect("evaluate");
+    assert_eq!(graph.configs.len(), 1);
+}
+
+#[test]
+fn merge_plugin_unknown_option_is_plan_error() {
+    let profile = r#"
+    local merge = confit.plugin.solrachq.merge
+    local _ = merge({a = 1}, {b = 2}, {bogus = true})
+    local c = confit.config("demo")
+    return { shells = { "bash" }, configs = { c } }
+    "#;
+    let (dir, profile_path, _) = project(profile, &[]);
+    let err = run(&dir, &profile_path, None).expect_err("must fail");
+    assert!(is_plan(&err), "unknown key is plan: {err}");
+    assert!(format!("{err}").contains("bogus"), "names key: {err}");
+}
+
+#[test]
+fn template_plugin_renders_text_documents() {
+    let profile = r#"
+    local c = confit.config("demo")
+    c:add_document(confit.plugin.solrachq.template("demo.txt", { src = "greet.txt", vars = { name = "ada" } }))
+    return { shells = { "bash" }, configs = { c } }
+    "#;
+    let (dir, profile_path, _) = project(profile, &[]);
+    std::fs::write(dir.path().join("greet.txt"), "hi {{ name }}").expect("write template");
+    let graph = run(&dir, &profile_path, None).expect("evaluate");
+    let document = graph.configs[0]
+        .documents
+        .iter()
+        .find(|item| item.path == "demo.txt")
+        .expect("text document");
+    let confit::model::state::document::DocumentData::Text { content } = &document.data else {
+        panic!("text data");
+    };
+    assert_eq!(content, "hi ada");
 }
 
 #[test]
@@ -253,7 +346,7 @@ fn traversal_is_plan_error() {
 fn scoped_require_shares_sibling_files() {
     let profile = r#"
     local c = confit.config("demo")
-    c:add_artifact(confit.artifact.rc.env("VALUE", confit.plugin.acme.multi.VALUE))
+    c:add_document(confit.document.rc.env("VALUE", confit.plugin.acme.multi.VALUE))
     return { shells = { "bash" }, configs = { c } }
     "#;
     let (dir, profile_path, root) = project(

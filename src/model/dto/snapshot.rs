@@ -1,11 +1,11 @@
 //! Snapshot
 //!
-//! Actual bytes behind each artifact path.
+//! Actual bytes behind each document path.
 
-/// Disk state behind one artifact path.
+/// Disk state behind one document path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Snapshot {
-    /// Empty path; the artifact awaits creation.
+    /// Empty path; the document awaits creation.
     Absent,
     /// Bytes plus their hex SHA-256.
     Present {

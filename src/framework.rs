@@ -10,6 +10,7 @@ use mlua::{Lua, Table};
 use crate::error::{Error, Result};
 
 // Builds a Lua domain error from format arguments.
+#[macro_export]
 macro_rules! lua_err {
     ($($arg:tt)*) => {
         mlua::Error::external($crate::error::Error::Lua(format!($($arg)*)))
@@ -17,22 +18,26 @@ macro_rules! lua_err {
 }
 
 // Builds a plan domain error from format arguments.
+#[macro_export]
 macro_rules! plan_err {
     ($($arg:tt)*) => {
         mlua::Error::external($crate::error::Error::Plan(format!($($arg)*)))
     };
 }
 
-pub mod artifact;
+pub mod apply;
 pub mod config;
+pub mod document;
+pub mod patch;
 pub mod path;
 pub mod plugin;
 pub mod resources;
 pub mod shell;
+pub mod text;
 
-pub use artifact::{LuaArtifact, RcEntry, RcPayload, RcSpec};
 pub use config::ConfigBuilder;
-pub use resources::{MergeOpts, PROJECT_ROOT_KEY};
+pub use patch::LuaPatch;
+pub use resources::PROJECT_ROOT_KEY;
 
 /// Fetches the confit global table for namespace setup.
 ///
@@ -73,10 +78,6 @@ pub(crate) fn confit_table(lua: &Lua) -> mlua::Result<Table> {
 ///
 /// Fails with Lua errors for table creation failures and with the path
 /// namespace errors for missing home directories.
-pub fn install_confit(lua: &Lua, root: &Path) -> Result<()> {
-    install_confit_with_plugins(lua, root, None)
-}
-
 /// Installs the confit global plus every namespace on a Lua state.
 ///
 /// # Arguments
@@ -89,14 +90,16 @@ pub fn install_confit(lua: &Lua, root: &Path) -> Result<()> {
 ///
 /// Fails with Lua errors for table creation failures and with the path
 /// namespace errors for missing home directories.
-pub fn install_confit_with_plugins(lua: &Lua, root: &Path, plugins: Option<&Path>) -> Result<()> {
+pub fn install_confit(lua: &Lua, root: &Path, plugins: Option<&Path>) -> Result<()> {
     lua.globals()
         .set("confit", lua.create_table().map_err(wrap_install)?)
         .map_err(wrap_install)?;
     config::install(lua).map_err(wrap_install)?;
     resources::install(lua, root.to_path_buf()).map_err(wrap_install)?;
-    artifact::install(lua).map_err(wrap_install)?;
+    document::install(lua).map_err(wrap_install)?;
+    patch::install(lua).map_err(wrap_install)?;
     shell::install(lua).map_err(wrap_install)?;
+    text::install(lua).map_err(wrap_install)?;
     plugin::install(lua, plugins.map(Path::to_path_buf)).map_err(wrap_install)?;
     path::install(lua, root.to_path_buf())
 }

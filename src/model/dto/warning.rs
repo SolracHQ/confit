@@ -2,7 +2,7 @@
 //!
 //! Filesystem warning shapes carried beside plan counts.
 
-/// Filesystem warning shape for one artifact path.
+/// Filesystem warning shape for one document path.
 /// Stays data; presentation renders each warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WarningKind {
@@ -16,12 +16,17 @@ pub enum WarningKind {
         /// Snapshot reason naming the path and the IO failure.
         reason: String,
     },
+    /// Same path declared with different bytes; holds owner names in order.
+    DeclarationConflict {
+        /// Owner names sharing the path, sorted for stable output.
+        owners: Vec<String>,
+    },
 }
 
-/// One filesystem warning attached to an artifact path.
+/// One filesystem warning attached to a document path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanWarning {
-    /// Artifact path the warning belongs to.
+    /// Document path the warning belongs to.
     pub path: String,
     /// Warning shape.
     pub kind: WarningKind,

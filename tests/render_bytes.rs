@@ -1,6 +1,6 @@
 //! Render behavior test: data-to-bytes goldens with SHA assertions.
 //!
-//! Covers every artifact kind through `render_artifact` plus `render_rc`
+//! Covers every document kind through `render_document` plus `render_rc`
 //! grouping, asserting exact bytes and golden SHA-256 digests. Uses
 //! memory template sources only; never touches `$HOME`.
 //!
@@ -11,20 +11,23 @@
 
 #![allow(clippy::expect_used)]
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-
-use confit::model::state::artifact::ArtifactData;
-use confit::model::state::artifact::Table;
+use confit::model::state::document::DocumentData;
+use confit::model::state::document::StructuredFormat;
+use confit::model::state::document::Table;
+use confit::model::state::level::Level;
 use confit::model::state::rc::AliasEntry;
+use confit::model::state::rc::AliasSpec;
 use confit::model::state::rc::EnvEntry;
+use confit::model::state::rc::EnvSpec;
 use confit::model::state::rc::InitEntry;
+use confit::model::state::rc::InitSpec;
+use confit::model::state::rc::Lane;
 use confit::model::state::rc::PathOp;
 use confit::model::state::rc::ProfileEntry;
+use confit::model::state::rc::ProfileSpec;
 use confit::model::state::rc::RcData;
-use confit::repository::MemoryFilesystem;
 use confit::security::sha256_hex;
-use confit::services::render::render_artifact;
+use confit::services::render::render_document;
 
 /// Golden: `render_toml({"name": "bat"})` plus newline.
 const TOML_SHA: &str = "961136fcff2451c2193d8c19f6080d4c385eb30462e640ef9a02ee0a4224a23f";
@@ -32,14 +35,12 @@ const TOML_SHA: &str = "961136fcff2451c2193d8c19f6080d4c385eb30462e640ef9a02ee0a
 const JSON_SHA: &str = "6977ae416db389f8a6bdec4d5138ae5081a8e5513a9131c8663df31f766613ac";
 /// Golden: `render_yaml({"name": "bat"})`, no trailing newline.
 const YAML_SHA: &str = "743f2f5a0147b84bde1814819c773c04e2057f71984226e90b0e8dee8d3cf427";
-/// Golden: file content `export X=1` with no added newline.
-const FILE_SHA: &str = "7f6e51ac7d765befc387a1bd87405065e0c60bfc442f4ad18d5a37d9901b249e";
+/// Golden: plain text `export X=1` with no added newline.
+const TEXT_SHA: &str = "7f6e51ac7d765befc387a1bd87405065e0c60bfc442f4ad18d5a37d9901b249e";
 /// Golden: link target `dest` bytes.
 const LINK_SHA: &str = "1d5e6a1edddf2cb59b7bbc0218e03c305de6c11485a2aa0d3bafc7466b4b8e3c";
-/// Golden: inline template `hello {{ name }}!` with `name = world`.
-const TEMPLATE_SHA: &str = "0fbd9f7acaf3edf65b61f048479552eac91eb22bbd133ae518a7bdd4fe8ea5dc";
 /// Golden: bare rc groups in `two_tool_rc`.
-const RC_SHA: &str = "af993886f9dd7fc5b24fd1ebbee90b769c1fc74160a9a52b190871e5b501e000";
+const RC_SHA: &str = "a8dd1d50ccfd26c437382b7c81d3f8975a43252f7672edfa81124e4b3812e690";
 
 /// Flat single-pair table used by the structured goldens.
 fn flat_table() -> Table {
@@ -52,50 +53,66 @@ fn flat_table() -> Table {
 fn two_tool_rc() -> RcData {
     RcData {
         profile: vec![ProfileEntry {
-            name: "PATH".into(),
-            value: "/a".into(),
-            op: PathOp::Prepend,
+            spec: ProfileSpec {
+                name: "PATH".into(),
+                value: "/a".into(),
+                op: PathOp::Prepend,
+            },
             when: None,
-            priority: 0,
+            priority: Level::Normal,
         }],
         env: vec![
             EnvEntry {
-                name: "A".into(),
-                value: "1".into(),
+                spec: EnvSpec {
+                    name: "A".into(),
+                    value: "1".into(),
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
             EnvEntry {
-                name: "B".into(),
-                value: "x y".into(),
+                spec: EnvSpec {
+                    name: "B".into(),
+                    value: "x y".into(),
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
         ],
         aliases: vec![
             AliasEntry {
-                name: "cat".into(),
-                value: "bat".into(),
+                spec: AliasSpec {
+                    name: "cat".into(),
+                    value: "bat".into(),
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
             AliasEntry {
-                name: "ls".into(),
-                value: "eza --icons".into(),
+                spec: AliasSpec {
+                    name: "ls".into(),
+                    value: "eza --icons".into(),
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
         ],
         init: vec![
-            InitEntry::Eval {
-                argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+            InitEntry {
+                spec: InitSpec::Eval {
+                    argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+                    lane: Lane::Middle,
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
-            InitEntry::Cmd {
-                argv: vec!["task".into(), "--completion".into(), "bash".into()],
+            InitEntry {
+                spec: InitSpec::Cmd {
+                    argv: vec!["task".into(), "--completion".into(), "bash".into()],
+                    lane: Lane::Middle,
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             },
         ],
     }
@@ -106,6 +123,11 @@ fn expected_rc() -> &'static str {
     "export PATH=/a:\"${PATH}\"\n\
      export A=1\n\
      export B='x y'\n\
+     \n\
+     case $- in\n\
+     *i*) ;;\n\
+     *) return ;;\n\
+     esac\n\
      \n\
      alias cat=bat\n\
      alias ls='eza --icons'\n\
@@ -125,79 +147,43 @@ fn check_golden(label: &str, bytes: &[u8], golden: &str) {
 
 #[test]
 fn structured_kinds_match_golden_bytes_and_hashes() {
-    let source = MemoryFilesystem {
-        files: RefCell::new(BTreeMap::new()),
-        failures: RefCell::new(BTreeMap::new()),
-    };
     let table = flat_table();
-    let root = std::path::Path::new("root");
+    let structured = |format: StructuredFormat, table: Table| DocumentData::Structured {
+        format,
+        data: table,
+    };
 
     let toml_bytes =
-        render_artifact(&ArtifactData::Toml(table.clone()), &source, root).expect("toml renders");
+        render_document(&structured(StructuredFormat::Toml, table.clone())).expect("toml renders");
     assert_eq!(toml_bytes, b"name = \"bat\"\n");
     check_golden("toml", &toml_bytes, TOML_SHA);
 
     let json_bytes =
-        render_artifact(&ArtifactData::Json(table.clone()), &source, root).expect("json renders");
+        render_document(&structured(StructuredFormat::Json, table.clone())).expect("json renders");
     assert_eq!(json_bytes, b"{\n  \"name\": \"bat\"\n}");
     check_golden("json", &json_bytes, JSON_SHA);
 
     let yaml_bytes =
-        render_artifact(&ArtifactData::Yaml(table), &source, root).expect("yaml renders");
+        render_document(&structured(StructuredFormat::Yaml, table)).expect("yaml renders");
     assert_eq!(yaml_bytes, b"name: bat");
     check_golden("yaml", &yaml_bytes, YAML_SHA);
 }
 
 #[test]
-fn file_and_link_pass_bytes_through() {
-    let source = MemoryFilesystem {
-        files: RefCell::new(BTreeMap::new()),
-        failures: RefCell::new(BTreeMap::new()),
-    };
-    let root = std::path::Path::new("root");
+fn text_and_link_pass_bytes_through() {
+    let text_bytes = render_document(&DocumentData::Text {
+        content: "export X=1".into(),
+    })
+    .expect("text renders");
+    assert_eq!(text_bytes, b"export X=1");
+    check_golden("text", &text_bytes, TEXT_SHA);
 
-    let file_bytes = render_artifact(
-        &ArtifactData::File {
-            content: "export X=1".into(),
-        },
-        &source,
-        root,
-    )
-    .expect("file renders");
-    assert_eq!(file_bytes, b"export X=1");
-    check_golden("file", &file_bytes, FILE_SHA);
-
-    let link_bytes = render_artifact(
-        &ArtifactData::Link {
-            target: "dest".into(),
-        },
-        &source,
-        root,
-    )
+    let link_bytes = render_document(&DocumentData::Link {
+        target: "dest".into(),
+    })
     .expect("link renders");
     assert_eq!(link_bytes, b"dest");
     check_golden("link", &link_bytes, LINK_SHA);
-}
-
-#[test]
-fn template_renders_inline_vars() {
-    let source = MemoryFilesystem {
-        files: RefCell::new(BTreeMap::new()),
-        failures: RefCell::new(BTreeMap::new()),
-    };
-    let root = std::path::Path::new("root");
-    let vars = flat_table();
-    let bytes = render_artifact(
-        &ArtifactData::Template {
-            src: "hello {{ name }}!".into(),
-            vars,
-        },
-        &source,
-        root,
-    )
-    .expect("template renders");
-    assert_eq!(bytes, b"hello bat!");
-    check_golden("template", &bytes, TEMPLATE_SHA);
 }
 
 #[test]

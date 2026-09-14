@@ -1,8 +1,8 @@
 //! Path
 //!
-//! Project root plus artifact path resolution.
+//! Project root plus document path resolution.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
@@ -37,7 +37,7 @@ pub fn resolve_root(root: &Option<PathBuf>, profile: &Path) -> Result<PathBuf> {
 ///
 /// # Arguments
 ///
-/// * `path` - the raw artifact path, holding a leading tilde where applicable.
+/// * `path` - the raw document path, holding a leading tilde where applicable.
 ///
 /// # Returns
 ///
@@ -51,74 +51,6 @@ pub(crate) fn expand_tilde(path: &str) -> PathBuf {
         },
         None => PathBuf::from(path),
     }
-}
-
-/// Yields a lexically normalized path.
-///
-/// # Arguments
-///
-/// * `path` - the path under normalization.
-///
-/// # Returns
-///
-/// Normalized path.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    if out.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        out
-    }
-}
-
-/// Checks root containment for a candidate path.
-///
-/// # Arguments
-///
-/// * `root` - the containing root.
-/// * `candidate` - the path under test.
-///
-/// # Returns
-///
-/// `true` while the candidate stays lexically within the root.
-fn is_within(root: &Path, candidate: &Path) -> bool {
-    normalize(candidate).starts_with(normalize(root))
-}
-
-/// Resolves a template source under the project root.
-///
-/// # Arguments
-///
-/// * `root` - the project root for resolution.
-/// * `src` - inline content or a root-relative path.
-///
-/// # Returns
-///
-/// Joined path for the source.
-///
-/// # Errors
-///
-/// Paths escaping the root yield plan errors.
-pub(crate) fn resolve_src(root: &Path, src: &str) -> Result<PathBuf> {
-    let candidate = root.join(src);
-    if !is_within(root, &candidate) {
-        return Err(Error::Plan(format!(
-            "template src '{src}' escapes project root '{}'",
-            root.display()
-        )));
-    }
-    Ok(candidate)
 }
 
 #[cfg(test)]

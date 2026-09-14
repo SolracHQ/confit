@@ -1,6 +1,6 @@
 //! Render
 //!
-//! Data-to-bytes rendering for every artifact kind.
+//! Data-to-bytes rendering for every document kind.
 
 /// Shell rc text rendering with structural markers.
 pub mod rc;
@@ -10,15 +10,12 @@ pub mod shell_escape;
 pub mod structured;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::model::state::artifact::ArtifactData;
-use crate::model::state::artifact::Table;
+use crate::model::state::document::DocumentData;
+use crate::model::state::document::StructuredFormat;
+use crate::model::state::document::Table;
 use crate::model::state::plan::Plan;
-use crate::repository::Filesystem;
-
-use crate::services::path::resolve_src;
 
 /// Renders text with minijinja, mapping syntax failures to plan errors.
 ///
@@ -41,69 +38,46 @@ pub(crate) fn render_str(text: &str, facts: &Table, prefix: &str) -> Result<Stri
         .map_err(|e| Error::Plan(format!("{prefix}{e}")))
 }
 
-/// Renders resolved template text, mapping syntax failures to plan errors.
-fn render_template(text: &str, vars: &Table) -> Result<String> {
-    render_str(text, vars, "render template: ")
-}
-
-/// Renders artifact data to on-disk bytes.
+/// Renders document data to on-disk bytes.
 ///
 /// # Arguments
 ///
 /// * `data` - the merged payload.
-/// * `files` - reads `src` fields.
-/// * `root` - the project root for template `src` reads.
 ///
 /// # Returns
 ///
-/// Exact bytes landing on disk for the artifact.
+/// Exact bytes landing on disk for the document.
 ///
 /// # Errors
 ///
-/// Template syntax failures and TOML null values yield plan errors. Escapes yield plan errors.
-/// Template reads yield store errors.
+/// Structured syntax failures and TOML null values yield plan errors.
 ///
 /// # Examples
 /// ```rust
-/// use std::path::Path;
-/// use confit::model::state::artifact::ArtifactData;
-/// use confit::repository::MemoryFilesystem;
-/// use confit::services::render::render_artifact;
+/// use confit::model::state::document::DocumentData;
+/// use confit::services::render::render_document;
 ///
-/// let source = MemoryFilesystem::default();
-/// let data = ArtifactData::File { content: "hi".into() };
-/// assert!(matches!(render_artifact(&data, &source, Path::new("root")), Ok(bytes) if bytes == b"hi"));
+/// let data = DocumentData::Text { content: "hi".into() };
+/// assert!(matches!(render_document(&data), Ok(_)));
 /// ```
-pub fn render_artifact(
-    data: &ArtifactData,
-    files: &dyn Filesystem,
-    root: &Path,
-) -> Result<Vec<u8>> {
+pub fn render_document(data: &DocumentData) -> Result<Vec<u8>> {
     match data {
-        ArtifactData::Toml(table) => Ok(structured::render_toml(table)?.into_bytes()),
-        ArtifactData::Json(table) => Ok(structured::render_json(table)?.into_bytes()),
-        ArtifactData::Yaml(table) => Ok(structured::render_yaml(table)?.into_bytes()),
-        ArtifactData::Template { src, vars } => {
-            let candidate = resolve_src(root, src)?;
-            let text = match files.read_string(&candidate.display().to_string())? {
-                Some(text) => text,
-                None => src.clone(),
-            };
-            Ok(render_template(&text, vars)?.into_bytes())
-        }
-        ArtifactData::File { content } => Ok(content.as_bytes().to_vec()),
-        ArtifactData::Link { target } => Ok(target.as_bytes().to_vec()),
-        ArtifactData::Rc(rc) => Ok(rc::render_rc(rc).into_bytes()),
+        DocumentData::Structured { format, data } => match format {
+            StructuredFormat::Toml => Ok(structured::render_toml(data)?.into_bytes()),
+            StructuredFormat::Json => Ok(structured::render_json(data)?.into_bytes()),
+            StructuredFormat::Yaml => Ok(structured::render_yaml(data)?.into_bytes()),
+        },
+        DocumentData::Text { content } => Ok(content.as_bytes().to_vec()),
+        DocumentData::Link { target } => Ok(target.as_bytes().to_vec()),
+        DocumentData::Rc(rc) => Ok(rc::render_rc(rc).into_bytes()),
     }
 }
 
-/// Renders baseline bytes for every planned artifact.
+/// Renders baseline bytes for every planned document.
 ///
 /// # Arguments
 ///
-/// * `plan` - plan holding artifacts for rendering.
-/// * `root` - root holding template sources.
-/// * `files` - reads template `src` fields.
+/// * `plan` - plan holding documents for rendering.
 ///
 /// # Returns
 ///
@@ -112,15 +86,11 @@ pub fn render_artifact(
 /// # Errors
 ///
 /// Fails with render errors from file reads.
-pub fn render_baseline(
-    plan: &Plan,
-    root: &Path,
-    files: &dyn Filesystem,
-) -> Result<BTreeMap<String, Vec<u8>>> {
+pub fn render_baseline(plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut rendered = BTreeMap::new();
-    for artifact in &plan.artifacts {
-        let key = artifact.key_string();
-        let bytes = render_artifact(&artifact.data, files, root)?;
+    for document in &plan.documents {
+        let key = document.key_string();
+        let bytes = render_document(&document.data)?;
         rendered.insert(key, bytes);
     }
     Ok(rendered)
@@ -130,8 +100,7 @@ pub fn render_baseline(
 mod tests {
     use super::*;
 
-    use crate::model::state::artifact::Table;
-    use crate::repository::MemoryFilesystem;
+    use crate::model::state::document::Table;
 
     fn table(pairs: &[(&str, serde_json::Value)]) -> Table {
         pairs
@@ -142,99 +111,79 @@ mod tests {
 
     #[test]
     fn dispatch_covers_every_kind() {
-        let source = MemoryFilesystem::default();
-        let root = Path::new("root");
-        let cases: Vec<(ArtifactData, Vec<u8>)> = vec![
+        let structured = |format: StructuredFormat| DocumentData::Structured {
+            format,
+            data: table(&[("a", serde_json::json!(1))]),
+        };
+        let cases: Vec<(DocumentData, Vec<u8>)> = vec![
+            (structured(StructuredFormat::Toml), b"a = 1\n".to_vec()),
             (
-                ArtifactData::Toml(table(&[("a", serde_json::json!(1))])),
-                b"a = 1\n".to_vec(),
-            ),
-            (
-                ArtifactData::Json(table(&[("a", serde_json::json!(1))])),
+                structured(StructuredFormat::Json),
                 b"{\n  \"a\": 1\n}".to_vec(),
             ),
+            (structured(StructuredFormat::Yaml), b"a: 1".to_vec()),
             (
-                ArtifactData::Yaml(table(&[("a", serde_json::json!(1))])),
-                b"a: 1".to_vec(),
-            ),
-            (
-                ArtifactData::Template {
-                    src: "hi {{ who }}".into(),
-                    vars: table(&[("who", serde_json::json!("you"))]),
-                },
-                b"hi you".to_vec(),
-            ),
-            (
-                ArtifactData::File {
+                DocumentData::Text {
                     content: "raw".into(),
                 },
                 b"raw".to_vec(),
             ),
             (
-                ArtifactData::File {
+                DocumentData::Text {
                     content: String::new(),
                 },
                 Vec::new(),
             ),
             (
-                ArtifactData::Link {
+                DocumentData::Link {
                     target: "dest".into(),
                 },
                 b"dest".to_vec(),
             ),
             (
-                ArtifactData::Link {
+                DocumentData::Link {
                     target: String::new(),
                 },
                 Vec::new(),
             ),
         ];
         for (data, expected) in cases {
-            assert_eq!(render_artifact(&data, &source, root).unwrap(), expected);
+            assert_eq!(render_document(&data).unwrap(), expected);
         }
     }
 
     #[test]
     fn rc_dispatch_renders_generic_section() {
-        let source = MemoryFilesystem::default();
-        let data = ArtifactData::Rc(crate::model::state::rc::RcData {
+        let data = DocumentData::Rc(crate::model::state::rc::RcData {
             profile: Vec::new(),
             env: vec![crate::model::state::rc::EnvEntry {
-                name: "A".into(),
-                value: "1".into(),
+                spec: crate::model::state::rc::EnvSpec {
+                    name: "A".into(),
+                    value: "1".into(),
+                },
                 when: None,
-                priority: 0,
+                priority: crate::model::state::level::Level::Normal,
             }],
             aliases: Vec::new(),
             init: Vec::new(),
         });
-        assert_eq!(
-            render_artifact(&data, &source, Path::new("root")).unwrap(),
-            b"export A=1\n"
-        );
+        assert_eq!(render_document(&data).unwrap(), b"export A=1\n");
     }
 
     #[test]
     fn syntax_error_is_plan_error() {
-        let error = render_template("{{ unclosed", &table(&[])).unwrap_err();
+        let error = render_str("{{ unclosed", &table(&[]), "render init: ").unwrap_err();
         assert!(matches!(error, Error::Plan(_)), "{error}");
     }
 
     #[test]
-    fn memory_hit_renders_registered_key() {
-        let files = MemoryFilesystem::default();
-        files.files.borrow_mut().insert(
-            Path::new("root").join("app.conf").display().to_string(),
-            b"stored {{ who }}".to_vec(),
-        );
-        let data = ArtifactData::Template {
-            src: "app.conf".into(),
-            vars: table(&[("who", serde_json::json!("you"))]),
+    fn null_toml_value_is_plan_error() {
+        let data = DocumentData::Structured {
+            format: StructuredFormat::Toml,
+            data: table(&[("a", serde_json::Value::Null)]),
         };
-        assert_eq!(
-            render_artifact(&data, &files, Path::new("root")).unwrap(),
-            b"stored you"
-        );
+        let error = render_document(&data).unwrap_err();
+        assert!(matches!(error, Error::Plan(_)), "{error}");
     }
 
     #[test]

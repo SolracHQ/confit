@@ -45,8 +45,7 @@ fn run_inner(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Plan(args) => {
             let fs = confit::repository::OsFilesystem;
-            let outcome =
-                confit::actions::run_plan_with_plugins(args, &fs, cli.plugins.as_deref())?;
+            let outcome = confit::actions::run_plan(args, &fs, cli.plugins.as_deref(), cli.strict)?;
             for line in confit::presentation::render_warnings(&outcome.warnings) {
                 anstream::eprintln!("{line}");
             }
@@ -59,7 +58,7 @@ fn run_inner(cli: &Cli) -> Result<()> {
         Command::Status(args) => {
             let fs = confit::repository::OsFilesystem;
             let outcome =
-                confit::actions::run_status_with_plugins(args, &fs, cli.plugins.as_deref())?;
+                confit::actions::run_status(args, &fs, cli.plugins.as_deref(), cli.strict)?;
             for line in confit::presentation::render_warnings(&outcome.warnings) {
                 anstream::eprintln!("{line}");
             }

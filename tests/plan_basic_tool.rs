@@ -4,7 +4,7 @@
 //! renders via the in-memory writer, and compares byte-for-byte against
 //! `tests/golden/plan_basic_tool.json`. To regenerate after an intentional
 //! plan-shape change, print the rendered text from the golden test, eyeball
-//! it against the fixture (`bat` alias, mise `bat = "latest"`, 2 artifacts,
+//! it against the fixture (`bat` alias, mise `bat = "latest"`, 2 documents,
 //! `mise install` hook), then overwrite the golden file verbatim (no
 //! trailing newline: `serde_json::to_string_pretty` emits none).
 //!
@@ -19,13 +19,15 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use confit::binding::evaluate;
 use confit::model::state::State;
 use confit::model::state::StateEntry;
-use confit::model::state::artifact::ArtifactData;
+use confit::model::state::document::DocumentData;
+use confit::model::state::document::StructuredFormat;
 use confit::model::state::plan::PLAN_VERSION;
 use confit::model::state::plan::Plan;
 use confit::repository::MemoryFilesystem;
-use confit::services::plan::{diff, evaluate_profile, load_state, summarize, write_plan};
+use confit::services::plan::{diff, load_state, summarize, write_plan};
 
 /// Stable plan labels so the golden file is portable across checkouts.
 const GOLDEN_ROOT: &str = "examples/0-basic_tool";
@@ -44,8 +46,10 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
 /// Evaluate the real fixture and plan with stable labels.
 fn build_plan() -> Plan {
     let (root, profile) = fixture_paths();
-    let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
-    confit::services::plan::build_plan(&graph, GOLDEN_ROOT, GOLDEN_PROFILE).expect("plan")
+    let graph = evaluate(&root, &profile, None).expect("fixture evaluates");
+    confit::services::plan::build_plan(&graph, GOLDEN_ROOT, GOLDEN_PROFILE, false)
+        .expect("plan")
+        .0
 }
 
 /// Render `plan` through the memory filesystem (exercises the filesystem seam).
@@ -64,32 +68,37 @@ fn render_json(plan: &Plan) -> String {
 fn basic_tool_produces_rc_and_mise() {
     let plan = build_plan();
     assert_eq!(plan.version, PLAN_VERSION);
-    assert_eq!(plan.artifacts.len(), 2);
+    assert_eq!(plan.documents.len(), 2);
 
     let rc = plan
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.bashrc")
-        .expect("rc artifact");
-    let ArtifactData::Rc(data) = &rc.data else {
-        panic!("rc artifact holds rc data");
+        .find(|document| document.path == "~/.bashrc")
+        .expect("rc document");
+    let DocumentData::Rc(data) = &rc.data else {
+        panic!("rc document holds rc data");
     };
     assert_eq!(
         data.aliases
             .iter()
-            .find(|entry| entry.name == "cat")
-            .map(|entry| entry.value.as_str()),
+            .find(|entry| entry.spec.name == "cat")
+            .map(|entry| entry.spec.value.as_str()),
         Some("bat")
     );
 
     let mise = plan
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.config/mise/config.toml")
-        .expect("mise artifact");
-    let ArtifactData::Toml(table) = &mise.data else {
-        panic!("mise artifact holds toml data");
+        .find(|document| document.path == "~/.config/mise/config.toml")
+        .expect("mise document");
+    let DocumentData::Structured {
+        format,
+        data: table,
+    } = &mise.data
+    else {
+        panic!("mise document holds structured data");
     };
+    assert_eq!(*format, StructuredFormat::Toml);
     let tools = table.get("tools").expect("tools table");
     assert_eq!(
         tools.get("bat").and_then(serde_json::Value::as_str),
@@ -99,7 +108,6 @@ fn basic_tool_produces_rc_and_mise() {
     let summary = diff(&plan, &State::empty());
     assert_eq!(summary.create, 2);
     assert_eq!(summary.update, 0);
-    assert_eq!(summary.unchanged, 0);
 }
 
 #[test]
@@ -117,8 +125,8 @@ fn golden_json_is_stable() {
 fn hashes_are_stable_across_runs() {
     let first = build_plan();
     let second = build_plan();
-    assert_eq!(first.artifacts.len(), second.artifacts.len());
-    for (left, right) in first.artifacts.iter().zip(second.artifacts.iter()) {
+    assert_eq!(first.documents.len(), second.documents.len());
+    for (left, right) in first.documents.iter().zip(second.documents.iter()) {
         assert_eq!(left.path, right.path);
         assert!(!left.data_hash.is_empty());
         assert_eq!(left.data_hash, right.data_hash);
@@ -126,23 +134,22 @@ fn hashes_are_stable_across_runs() {
 }
 
 #[test]
-fn diff_counts_unchanged_when_state_matches() {
+fn diff_counts_stable_when_state_matches() {
     let plan = build_plan();
     let rc = plan
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.bashrc")
-        .expect("rc artifact");
-    let mut artifacts = BTreeMap::new();
-    artifacts.insert(
+        .find(|document| document.path == "~/.bashrc")
+        .expect("rc document");
+    let mut documents = BTreeMap::new();
+    documents.insert(
         "rc:~/.bashrc".to_string(),
         StateEntry {
             data_hash: rc.data_hash.clone(),
-            output_hash: String::new(),
             data: None,
         },
     );
-    let seed = State { artifacts };
+    let seed = State { documents };
     let bytes = serde_json::to_vec(&seed).expect("state json");
     let mut files = BTreeMap::new();
     files.insert("state.json".to_string(), bytes);
@@ -154,7 +161,6 @@ fn diff_counts_unchanged_when_state_matches() {
     let summary = diff(&plan, &previous);
     assert_eq!(summary.create, 1);
     assert_eq!(summary.update, 0);
-    assert_eq!(summary.unchanged, 1);
 }
 
 #[test]
@@ -174,24 +180,22 @@ fn golden_summary_is_stable() {
 /// Seeded previous: matching mise collapses, altered alias changes, extra alias removes.
 fn seeded_previous(plan: &Plan) -> State {
     let mise = plan
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.config/mise/config.toml")
-        .expect("mise artifact");
-    let mut artifacts = BTreeMap::new();
-    artifacts.insert(
-        "toml:~/.config/mise/config.toml".to_string(),
+        .find(|document| document.path == "~/.config/mise/config.toml")
+        .expect("mise document");
+    let mut documents = BTreeMap::new();
+    documents.insert(
+        "structured:~/.config/mise/config.toml".to_string(),
         StateEntry {
             data_hash: mise.data_hash.clone(),
-            output_hash: String::new(),
             data: Some(serde_json::to_value(&mise.data).expect("mise snapshot")),
         },
     );
-    artifacts.insert(
+    documents.insert(
         "rc:~/.bashrc".to_string(),
         StateEntry {
             data_hash: "previous".to_string(),
-            output_hash: String::new(),
             data: Some(serde_json::json!({
                 "rc": {
                     "profile": [],
@@ -205,7 +209,7 @@ fn seeded_previous(plan: &Plan) -> State {
             })),
         },
     );
-    State { artifacts }
+    State { documents }
 }
 
 #[test]
@@ -221,21 +225,21 @@ fn seeded_state_renders_change_and_remove() {
     };
     let previous = load_state(&fs, Some(Path::new("state.json"))).expect("memory load");
     let counts = diff(&plan, &previous);
-    assert_eq!((counts.create, counts.update, counts.unchanged), (0, 1, 1));
+    assert_eq!((counts.create, counts.update), (0, 1));
     let details = confit::services::diff::detail(&plan, &previous);
     let mise = details
         .iter()
-        .find(|detail| detail.key == "toml:~/.config/mise/config.toml")
+        .find(|detail| detail.key == "structured:~/.config/mise/config.toml")
         .expect("mise detail");
     assert_eq!(
         mise.status,
-        confit::model::dto::diff::ArtifactStatus::Unchanged
+        confit::model::dto::diff::DocumentStatus::Unchanged
     );
     let rc = details
         .iter()
         .find(|detail| detail.key == "rc:~/.bashrc")
         .expect("rc detail");
-    assert_eq!(rc.status, confit::model::dto::diff::ArtifactStatus::Update);
+    assert_eq!(rc.status, confit::model::dto::diff::DocumentStatus::Update);
     let shaped = summarize(&counts);
     let text = confit::presentation::render_plan(&plan, &shaped, &details);
     assert!(
@@ -257,13 +261,13 @@ fn seeded_state_renders_change_and_remove() {
         .position(|line| line.starts_with("~/.config/mise/config.toml"))
         .expect("mise header");
     assert_eq!(
-        lines[mise_index], "~/.config/mise/config.toml: toml",
-        "matching artifact collapses to header alone"
+        lines[mise_index], "~/.config/mise/config.toml: structured",
+        "matching document collapses to header alone"
     );
     assert_eq!(
         lines[mise_index + 1],
         "Plan: 0 to add, 1 to change, 0 to destroy.",
-        "unchanged artifact emits no entry lines"
+        "unchanged document emits no entry lines"
     );
 }
 
@@ -275,28 +279,30 @@ fn colliding_alias_emits_winner_note() {
         &profile_path,
         r#"
         local aaa = confit.config("aaa")
-        aaa:add_artifact(confit.artifact.rc.alias("cat", "bat"))
+        aaa:add_document(confit.document.rc.alias("cat", "bat"))
         local zzz = confit.config("zzz")
-        zzz:add_artifact(confit.artifact.rc.alias("cat", "eza"))
+        zzz:add_document(confit.document.rc.alias("cat", "eza"))
         return { shells = { "bash" }, configs = { aaa, zzz } }
         "#,
     )
     .expect("write profile");
-    let graph = evaluate_profile(dir.path(), &profile_path).expect("evaluate");
-    let planned = confit::services::plan::build_plan(&graph, "root", "profile").expect("plan");
+    let graph = evaluate(dir.path(), &profile_path, None).expect("evaluate");
+    let planned = confit::services::plan::build_plan(&graph, "root", "profile", false)
+        .expect("plan")
+        .0;
     let rc = planned
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.bashrc")
-        .expect("rc artifact");
-    let ArtifactData::Rc(data) = &rc.data else {
-        panic!("rc artifact holds rc data");
+        .find(|document| document.path == "~/.bashrc")
+        .expect("rc document");
+    let DocumentData::Rc(data) = &rc.data else {
+        panic!("rc document holds rc data");
     };
     assert_eq!(
         data.aliases
             .iter()
-            .find(|entry| entry.name == "cat")
-            .map(|entry| entry.value.as_str()),
+            .find(|entry| entry.spec.name == "cat")
+            .map(|entry| entry.spec.value.as_str()),
         Some("bat"),
         "winner value lands in the plan"
     );

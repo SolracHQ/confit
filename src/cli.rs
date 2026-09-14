@@ -19,6 +19,9 @@ pub struct Cli {
     /// system temp folder.
     #[arg(long, global = true)]
     pub log_file: Option<PathBuf>,
+    /// Escalate declaration conflicts to plan errors.
+    #[arg(long, global = true)]
+    pub strict: bool,
     /// Subcommand to run.
     #[command(subcommand)]
     pub command: Command,

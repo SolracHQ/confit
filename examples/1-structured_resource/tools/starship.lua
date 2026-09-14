@@ -1,17 +1,22 @@
-local mise_package = confit.plugin.solrachq.mise_package
+local mise = confit.plugin.solrachq.mise
 
-local starship = mise_package("starship", function(rc)
+local starship = mise.package("starship", function(rc)
 	rc:alias("s", "starship")
-	rc:init({ eval = { "starship", "init", "bash" } })
+	rc:eval({ "starship", "init", "bash" })
 end)
+starship:add_document(mise.activate())
 
 return function(user_config)
-	local resource = confit.resources.load_toml("resources/starship.toml")
-	local config = confit.resources.merge(resource, user_config)
-	local artifact = confit.artifact.toml(
-		confit.path.config("starship.toml"),
-		config
-	)
-	starship:add_artifact(artifact)
+	local path = confit.path.config("starship.toml")
+	local base = confit.resources.load_toml("resources/starship.toml")
+	starship:add_document(confit.document.structured("toml", {
+		path = path,
+		data = base,
+	}))
+	starship:add_patch(confit.patch.structured("toml", path, function(data)
+		for key, value in pairs(user_config) do
+			data:set(key, value)
+		end
+	end))
 	return starship
 end

@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use crate::cli::{PlanArgs, StatusArgs};
 use crate::error::Result;
-use crate::model::dto::diff::ArtifactDetail;
 use crate::model::dto::diff::DiskDetail;
+use crate::model::dto::diff::DocumentDetail;
 use crate::model::dto::diff::PlanSummary;
 use crate::model::dto::outcome::PlanOutcome;
 use crate::model::dto::outcome::StatusOutcome;
@@ -30,7 +30,7 @@ use crate::services::render::render_baseline;
 struct Prepared {
     plan: Plan,
     summary: PlanSummary,
-    details: Vec<ArtifactDetail>,
+    details: Vec<DocumentDetail>,
     disk: Vec<DiskDetail>,
     warnings: Vec<PlanWarning>,
 }
@@ -43,6 +43,7 @@ struct Prepared {
 /// * `root` - configured root override.
 /// * `state` - state file override.
 /// * `plugins` - external plugins folder, empty keeps embedded defaults only.
+/// * `strict` - true escalates declaration conflicts to plan errors.
 /// * `fs` - filesystem backend holding state plus snapshots.
 ///
 /// # Returns
@@ -57,23 +58,27 @@ fn prepare<F: Filesystem>(
     root: &Option<PathBuf>,
     state: Option<&Path>,
     plugins: Option<&Path>,
+    strict: bool,
     fs: &F,
 ) -> Result<Prepared> {
     let resolved = resolve_root(root, profile)?;
-    let graph = crate::binding::evaluate_with_plugins(&resolved, profile, plugins)?;
+    let graph = crate::binding::evaluate(&resolved, profile, plugins)?;
     let previous = load_state(fs, state)?;
-    let plan = build_plan(
+    let built = build_plan(
         &graph,
         &resolved.display().to_string(),
         &profile.display().to_string(),
+        strict,
     )?;
+    let plan = built.0;
+    let mut warnings = built.1;
     let disk_snapshots = snapshot_current(fs, &plan);
     let counts = diff(&plan, &previous);
     let summary = summarize(&counts);
     let details = detail(&plan, &previous);
-    let rendered = render_baseline(&plan, &resolved, fs)?;
+    let rendered = render_baseline(&plan)?;
     let disk = detail_disk(&plan, &rendered, &disk_snapshots);
-    let warnings = disk_warnings(&plan, &previous, &disk_snapshots, &rendered);
+    warnings.extend(disk_warnings(&plan, &previous, &disk_snapshots, &rendered));
     Ok(Prepared {
         plan,
         summary,
@@ -98,6 +103,23 @@ fn prepare<F: Filesystem>(
 ///
 /// Fails with evaluation plus state plus diff plus render plus serialization errors.
 ///
+/// Evaluates the profile and builds the plan outcome with plugins available.
+///
+/// # Arguments
+///
+/// * `args` - plan flags holding profile plus root plus output plus state.
+/// * `fs` - filesystem backend holding state plus snapshots plus plan writes.
+/// * `plugins` - external plugins folder, empty keeps embedded defaults only.
+/// * `strict` - true escalates declaration conflicts to plan errors.
+///
+/// # Returns
+///
+/// Plan plus summary plus details plus disk comparison plus warnings.
+///
+/// # Errors
+///
+/// Fails with evaluation plus state plus diff plus render plus serialization errors.
+///
 /// # Examples
 /// ```rust,no_run
 /// use std::path::PathBuf;
@@ -112,64 +134,24 @@ fn prepare<F: Filesystem>(
 ///     state: None,
 /// };
 /// let fs = MemoryFilesystem::default();
-/// let outcome = match run_plan(&args, &fs) {
+/// let outcome = match run_plan(&args, &fs, None, false) {
 ///     Ok(outcome) => outcome,
 ///     Err(error) => panic!("plan runs: {error}"),
 /// };
-/// assert_eq!(outcome.plan.artifacts.len(), 2);
-/// assert!(outcome.warnings.is_empty());
+/// assert_eq!(outcome.plan.documents.len(), 2);
 /// ```
-pub fn run_plan<F: Filesystem>(args: &PlanArgs, fs: &F) -> Result<PlanOutcome> {
-    run_plan_with_plugins(args, fs, None)
-}
-
-/// Evaluates the profile and builds the plan outcome with plugins available.
-///
-/// # Arguments
-///
-/// * `args` - plan flags holding profile plus root plus output plus state.
-/// * `fs` - filesystem backend holding state plus snapshots plus plan writes.
-/// * `plugins` - external plugins folder, empty keeps embedded defaults only.
-///
-/// # Returns
-///
-/// Plan plus summary plus details plus disk comparison plus warnings.
-///
-/// # Errors
-///
-/// Fails with evaluation plus state plus diff plus render plus serialization errors.
-///
-/// # Examples
-/// ```rust,no_run
-/// use std::path::PathBuf;
-/// use confit::actions::run_plan_with_plugins;
-/// use confit::cli::PlanArgs;
-/// use confit::repository::MemoryFilesystem;
-///
-/// let args = PlanArgs {
-///     profile: PathBuf::from("examples/0-basic_tool/profile.lua"),
-///     root: Some(PathBuf::from("examples/0-basic_tool")),
-///     output: None,
-///     state: None,
-/// };
-/// let fs = MemoryFilesystem::default();
-/// let outcome = match run_plan_with_plugins(&args, &fs, None) {
-///     Ok(outcome) => outcome,
-///     Err(error) => panic!("plan runs: {error}"),
-/// };
-/// assert_eq!(outcome.plan.artifacts.len(), 2);
-/// assert!(outcome.warnings.is_empty());
-/// ```
-pub fn run_plan_with_plugins<F: Filesystem>(
+pub fn run_plan<F: Filesystem>(
     args: &PlanArgs,
     fs: &F,
     plugins: Option<&Path>,
+    strict: bool,
 ) -> Result<PlanOutcome> {
     let prepared = prepare(
         &args.profile,
         &args.root,
         args.state.as_deref(),
         plugins,
+        strict,
         fs,
     )?;
     if let Some(dest) = &args.output {
@@ -199,10 +181,6 @@ pub fn run_plan_with_plugins<F: Filesystem>(
 /// # Errors
 ///
 /// Fails with evaluation plus state plus diff plus render errors.
-pub fn run_status<F: Filesystem>(args: &StatusArgs, fs: &F) -> Result<StatusOutcome> {
-    run_status_with_plugins(args, fs, None)
-}
-
 /// Evaluates the profile and builds the status outcome with plugins available.
 ///
 /// # Arguments
@@ -210,6 +188,7 @@ pub fn run_status<F: Filesystem>(args: &StatusArgs, fs: &F) -> Result<StatusOutc
 /// * `args` - status flags holding profile plus root plus state.
 /// * `fs` - filesystem backend holding state plus snapshots.
 /// * `plugins` - external plugins folder, empty keeps embedded defaults only.
+/// * `strict` - true escalates declaration conflicts to plan errors.
 ///
 /// # Returns
 ///
@@ -218,16 +197,18 @@ pub fn run_status<F: Filesystem>(args: &StatusArgs, fs: &F) -> Result<StatusOutc
 /// # Errors
 ///
 /// Fails with evaluation plus state plus diff plus render errors.
-pub fn run_status_with_plugins<F: Filesystem>(
+pub fn run_status<F: Filesystem>(
     args: &StatusArgs,
     fs: &F,
     plugins: Option<&Path>,
+    strict: bool,
 ) -> Result<StatusOutcome> {
     let prepared = prepare(
         &args.profile,
         &args.root,
         args.state.as_deref(),
         plugins,
+        strict,
         fs,
     )?;
     Ok(StatusOutcome {

@@ -3,7 +3,7 @@
   "created_at": "2026-09-09T00:00:00Z",
   "root": "examples/0-basic_tool",
   "profile": "examples/0-basic_tool/profile.lua",
-  "artifacts": [
+  "documents": [
     {
       "kind": "rc",
       "path": "~/.bashrc",
@@ -20,7 +20,7 @@
                   "name": "bat"
                 }
               },
-              "priority": 0
+              "priority": "normal"
             }
           ],
           "init": [
@@ -30,22 +30,25 @@
                   "mise",
                   "activate",
                   "bash"
-                ],
-                "when": null,
-                "priority": 0
-              }
+                ]
+              },
+              "when": null,
+              "priority": "normal"
             }
           ]
         }
       }
     },
     {
-      "kind": "toml",
+      "kind": "structured",
       "path": "~/.config/mise/config.toml",
       "data": {
-        "toml": {
-          "tools": {
-            "bat": "latest"
+        "structured": {
+          "format": "toml",
+          "data": {
+            "tools": {
+              "bat": "latest"
+            }
           }
         }
       }

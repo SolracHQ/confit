@@ -4,11 +4,11 @@
 
 use mlua::{AnyUserData, Lua, Table, UserData, UserDataMethods, Value};
 
-use super::LuaArtifact;
-use super::artifact::{RcEntry, RcPayload, RcSpec};
 use super::confit_table;
-use crate::model::state::config::{ConfigContribution, PendingArtifact};
-use crate::model::state::rc::{AliasEntry, EnvEntry, InitEntry, PathOp, ProfileEntry};
+use super::document::{document_table_to_document, push_entry_table, table_kind};
+use super::patch::LuaPatch;
+use crate::model::state::config::ConfigContribution;
+use crate::model::state::document::Document;
 
 /// Named-registry key holding the per-evaluation config name set.
 ///
@@ -16,14 +16,44 @@ use crate::model::state::rc::{AliasEntry, EnvEntry, InitEntry, PathOp, ProfileEn
 /// errors naming the repeated config.
 const SEEN_KEY: &str = "confit.config.names";
 
+/// Stored patch handle plus owner for live execution.
+///
+/// Holds the Lua handle carrying target plus format plus callback plus
+/// priority, stamped with the contributing config name at `add_patch`.
+#[derive(Debug, Clone)]
+pub struct StoredPatch {
+    /// Holds the patch handle.
+    pub handle: LuaPatchHandle,
+    /// Holds the contributing config name.
+    pub owner: String,
+}
+
+/// Cloneable patch handle data for storage.
+///
+/// Holds target plus format plus priority plus callback. Functions
+/// clone by reference on the same state.
+#[derive(Debug, Clone)]
+pub struct LuaPatchHandle {
+    /// Holds the target document key.
+    pub target: String,
+    /// Holds the structured format, empty for rc.
+    pub format: Option<crate::model::state::document::StructuredFormat>,
+    /// Holds the callback receiving the wrapper.
+    pub callback: mlua::Function,
+    /// Holds the merge priority.
+    pub priority: crate::model::state::level::Level,
+}
+
 /// Rust-owned builder behind the `confit.config` userdata.
 ///
-/// Mutated in place by `add_artifact`; profile parsing snapshots it
+/// Mutated in place by `add_document`; profile parsing snapshots it
 /// into a [`ConfigContribution`] via [`ConfigBuilder::contribution`].
 #[derive(Debug, Clone)]
 pub struct ConfigBuilder {
     /// Accumulated contribution.
     contribution: ConfigContribution,
+    /// Patch handles for live execution, in declaration order.
+    handles: Vec<StoredPatch>,
 }
 
 impl ConfigBuilder {
@@ -42,6 +72,7 @@ impl ConfigBuilder {
                 name,
                 ..ConfigContribution::default()
             },
+            handles: Vec::new(),
         }
     }
 
@@ -52,6 +83,15 @@ impl ConfigBuilder {
     /// Accumulated contribution.
     pub fn contribution(&self) -> &ConfigContribution {
         &self.contribution
+    }
+
+    /// Returns patch handles for live execution.
+    ///
+    /// # Returns
+    ///
+    /// Handles in declaration order with owners.
+    pub fn handles(&self) -> &[StoredPatch] {
+        &self.handles
     }
 }
 
@@ -123,86 +163,86 @@ fn claim_name(lua: &Lua, name: &str) -> mlua::Result<()> {
     }
 }
 
-/// Converts one rc entry handle into contribution entries.
-fn push_rc_handle(contribution: &mut ConfigContribution, entry: &RcEntry) {
-    let when = entry.when.clone();
-    let priority = entry.priority;
-    match &entry.payload {
-        RcPayload::Alias { name, value } => contribution.aliases.push(AliasEntry {
-            name: name.clone(),
-            value: value.clone(),
-            when,
-            priority,
-        }),
-        RcPayload::Env { name, value } => contribution.envs.push(EnvEntry {
-            name: name.clone(),
-            value: value.clone(),
-            when,
-            priority,
-        }),
-        RcPayload::Profile { name, value } => contribution.profile.push(ProfileEntry {
-            name: name.clone(),
-            value: value.clone(),
-            op: PathOp::Prepend,
-            when,
-            priority,
-        }),
-        RcPayload::ProfilePath { dir } => contribution.profile.push(ProfileEntry {
-            name: "PATH".to_string(),
-            value: dir.clone(),
-            op: PathOp::Prepend,
-            when,
-            priority,
-        }),
-        RcPayload::Init { spec } => contribution.inits.push(match spec {
-            RcSpec::Eval(argv) => InitEntry::Eval {
-                argv: argv.clone(),
-                when,
-                priority,
-            },
-            RcSpec::Cmd(argv) => InitEntry::Cmd {
-                argv: argv.clone(),
-                when,
-                priority,
-            },
-            RcSpec::Source(path) => InitEntry::Source {
-                path: path.clone(),
-                when,
-                priority,
-            },
-        }),
-    }
+/// Appends one rc entry table into the per-config rc document.
+///
+/// Creates the rc document while absent, then pushes the entry into
+/// the matching RcData lists. Routing follows the `__area` metatable.
+///
+/// # Arguments
+///
+/// * `documents` - declared documents under extension, mutated in place.
+/// * `table` - entry table under conversion.
+/// * `ctx` - error context naming the caller.
+///
+/// # Errors
+///
+/// Fails with plan errors for missing areas plus bad entry shapes.
+fn push_rc_table(documents: &mut Vec<Document>, table: &Table, ctx: &str) -> mlua::Result<()> {
+    push_entry_table(documents, table, ctx)
 }
 
 impl UserData for ConfigBuilder {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("add_artifact", |_, this, value: Value| {
+        methods.add_method_mut("add_document", |_, this, value: Value| {
             let config = this.contribution.name.clone();
+            let ctx = format!("config '{config}': field 'add_document'");
             match value {
-                Value::UserData(handle) => {
-                    if let Ok(item) = handle.borrow::<LuaArtifact>() {
-                        this.contribution.artifacts.push(PendingArtifact {
-                            kind: item.kind,
-                            path: item.path.clone(),
-                            data: item.data.clone(),
-                            priority: item.priority,
-                        });
-                        return Ok(());
+                Value::Table(table) => match table_kind(&table) {
+                    Some(kind) if kind == "rc-entry" => {
+                        push_rc_table(&mut this.contribution.documents, &table, &ctx)?;
+                        Ok(())
                     }
-                    if let Ok(entry) = handle.borrow::<RcEntry>() {
-                        push_rc_handle(&mut this.contribution, &entry);
-                        return Ok(());
+                    Some(kind)
+                        if matches!(kind.as_str(), "rc" | "structured" | "text" | "link") =>
+                    {
+                        let document = document_table_to_document(&table, &ctx)?;
+                        this.contribution.documents.push(document);
+                        Ok(())
                     }
-                    Err(config_field_error(
+                    Some(kind) => Err(plan_err!("{ctx} unknown document kind '{kind}'")),
+                    None => Err(config_field_error(
                         &config,
-                        "add_artifact",
-                        "must be a confit.artifact value or rc entry",
-                    ))
-                }
+                        "add_document",
+                        "must be a confit.document value or rc entry",
+                    )),
+                },
                 _ => Err(config_field_error(
                     &config,
-                    "add_artifact",
-                    "must be a confit.artifact value or rc entry",
+                    "add_document",
+                    "must be a confit.document value or rc entry",
+                )),
+            }
+        });
+        methods.add_method_mut("add_patch", |_, this, value: Value| {
+            let config = this.contribution.name.clone();
+            match value {
+                Value::UserData(handle) => match handle.borrow::<LuaPatch>() {
+                    Ok(patch) => {
+                        let owned = patch.clone();
+                        this.contribution
+                            .patches
+                            .push(owned.clone().into_model(&config));
+                        this.handles.push(StoredPatch {
+                            handle: LuaPatchHandle {
+                                target: owned.target.clone(),
+                                format: owned.format,
+                                callback: owned.callback.clone(),
+                                priority: owned.priority,
+                            },
+                            owner: config,
+                        });
+                        Ok(())
+                    }
+                    Err(_) => Err(config_field_error(
+                        &config,
+                        "add_patch",
+                        "must be a confit.patch value",
+                    )),
+                },
+                _ => Err(config_field_error(
+                    &config,
+                    "add_patch",
+                    "must be a confit.patch value",
                 )),
             }
         });

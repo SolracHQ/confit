@@ -20,19 +20,20 @@ Working today: `plan` and `status` over Lua configs, JSON plans on disk.
 
 ### Plan before apply
 
-`confit plan` loads a Lua entrypoint, evaluates it to a set of
-configs, folds their artifacts, hashes the data, loads previous state,
-and diffs desired vs previous. Output: a JSON
-plan file plus a terminal summary, with zero writes to home paths.
+`confit plan` loads a Lua entrypoint, evaluates it to documents plus
+patches plus configs, runs patch callbacks in pipeline order, hashes
+the data, loads previous state, and diffs desired vs previous. Output:
+a JSON plan file plus a terminal summary, with zero writes to home
+paths.
 
 ### Status and drift
 
-`diff` compares each artifact's `data_hash` against the previous state in
+`diff` compares each document's `data_hash` against the previous state in
 memory: absent means create, different means update, equal means
 unchanged, previous-only keys mean delete. Plan files carry data payloads
 alone, with `data_hash` computed at runtime.
 
-`plan` also snapshots each artifact path off disk (`~` expands via the
+`plan` also snapshots each document path off disk (`~` expands via the
 home folder). Absent paths read as absence. Unreadable paths warn
 on stderr naming path and reason, read as absent, exit stays 0. Disk
 differs from recorded means manual modification: warned, counted as
@@ -48,14 +49,14 @@ manual modification will be overwritten` for manual edits, and
 
 - Plan: JSON pretty-printed (`-o ./plan.json`, omitted prints to stdout),
   diffable, git-storable.
-  Contains artifact data plus `created_at`
+  Contains document data plus `created_at`
   metadata (excluded from the SHA).
 - State v1: JSON file (`--state`; omitted means empty previous, the run
-  skips disk reads). `{ artifact_id -> { data_hash, output_hash, data? } }`.
+  skips disk reads). `{ document_id -> { data_hash, output_hash, data? } }`.
 
 ### Terminal summary and color
 
-The summary lists every entry per artifact; winners surface in the
+The summary lists every entry per document; winners surface in the
 collision log. Same-slot
 collisions record one log-file line naming winner and loser:
 
@@ -80,17 +81,27 @@ plan half when disk reads show changes.
 
 ## Concepts
 
-### Configs, artifacts, profiles, plugins
+### Documents, patches, configs, profiles, plugins
 
-A **config** is a named bag for artifacts: fonts, tool settings,
-anything with files or shell entries. The name serves as uid per plan;
-repeats are plan errors. Priority lives on submitted artifacts alone,
-defaulting to 0.
+A **document** is the unit that touches disk once `apply` exists.
+Every document has a `path`. Plan diffs and hashes happen at document
+level alone. Four kinds cover everything: structured plus plain text
+plus rc plus link.
 
-An **artifact** is the unit that will touch disk once `apply` exists.
-Every artifact has a `path`. Plan diffs and hashes happen only at
-artifact level. Rc entries (aliases, env, profile, init) are artifacts
-too, merged by `(name, when)` slots like everything else.
+A **patch** modifies documents through callbacks. `confit.patch.rc`
+carries one callback for the rc document.
+`confit.patch.structured` carries a format plus a path plus one
+callback. The callback receives a live wrapper with `set` plus
+`append`. Paths hold dotted keys plus single indices, one path per
+call (`a.b[0]`). Each patch rides one of five priority levels, default
+`NORMAL`. The engine sorts patches by priority desc plus owner asc and
+runs them in that order. Op order inside one callback stays verbatim.
+
+A **config** is a named bag holding documents plus patches for fonts,
+tool settings, shell entries. The name serves as uid per plan plus
+owner stamp on every patch; repeats are plan errors. A patch to an
+undeclared document creates it. Patches to one path agree on one
+format; mismatches fail as plan errors.
 
 A **profile** is the composition root per machine or role. Its return
 value is the entire resource graph; the return value serves as the
@@ -99,99 +110,144 @@ registration:
 ```lua
 return {
   shells = { "bash" },
+  documents = { rc },
   configs = { bat },
 }
 ```
+
+Profiles declare machine-owned bases, configs declare tool-owned
+documents or just contribute.
 
 A **plugin** is Lua framework code under
 `confit.plugin.{username}.{plugin_name}`, embedded defaults plus a
 `--plugins` folder. Plugins compose primitives: installers, helpers,
 dialects. Data alone crosses the engine boundary, in both directions.
 
-### Artifacts plan produces
+### Documents plan produces
 
-`toml` (mise, via the plugin) and `rc` assembled by the engine, plus any
-artifacts configs submit. Structured kinds merge by `(kind, path)`,
-rc entries by `(name, when)`.
+`structured` plus `text` plus `rc` plus `link` assembled by the engine
+from profile documents plus config documents plus patch output.
+Structured documents merge through live patch callbacks.
+Plain text plus link read declaration only.
 
 | Kind | How it is built | Merge rule |
 | --- | --- | --- |
-| `toml` | plugin specs group into `~/.config/mise/config.toml`; `confit.artifact.toml(path, table)` values submitted by configs | nested tables, deep-merge, priority plus name order |
-| `rc` | one per declared shell (`bash` to `~/.bashrc`) from submitted entries | per-shell data object, see Shell rc |
+| `structured` | `confit.document.structured(format, { path, data })` declarations; `confit.patch.structured(format, path, fn)` tweaks | callbacks run in pipeline order, first writer wins per slot |
+| `text` | `confit.document.text(path, content)` declarations | same path with different bytes warns, `--strict` escalates |
+| `link` | `confit.document.link(path, target)` declarations | same rule as text |
+| `rc` | `confit.document.rc.new({ profile, config, final })` base plus bare rc entries; `confit.patch.rc(fn)` tweaks; one file per declared shell (`bash` writes `~/.bashrc`) | sections plus slots, first writer wins, see Shell rc |
 
-Confit supports more kinds (`json`, `yaml`, `template`, `file`,
-`link`) with constructors ready; the fixtures exercise `toml` plus
+Formats cover `json`, `toml`, `yaml`. Template rendering lives in the
+`solrachq.template` Lua plugin over `load_text` plus `text.render`
+plus a plain text document; the fixtures exercise `toml` plus
 templates.
 
 ### Shell rc
 
-Core accumulates one data object per declared shell from submitted
-entries:
+The rc document holds three groups. `profile` holds setup entries,
+`config` holds interactive aliases, `final` holds the init list in
+listed order. Every key stays optional. `confit.document.rc.new` builds the
+machine-owned base; bare rc entry tables attach through
+`config:add_document`; `confit.patch.rc` tweaks entries through `set`
+plus `append` over the three section names.
 
-- `profile`: ordered list, every entry prepends (`profile_path(dir)` is
-  prepend sugar for `PATH`). Destined for the always-loaded file per shell.
-- `env`: ordered list `{ name, value, when, priority }`. Same name plus
-  structurally equal `when` is one slot; different conditions coexist.
-- `aliases`: entry list `{ name, value, when, priority }`, same slot rule as env.
-- `init`: ordered list. `eval` means `eval "$(argv...)"`; `cmd` means the
-  argv as a plain command line; `source` means `source path` for a single
-file path. Identity is `(spec, when)`; priority decides collisions
-separately. Identical pairs collapse, different conditions coexist.
+Entry builders take `when` plus `lane` through opts. `when` holds a
+condition table or a builder function over `confit.shell`, evaluated
+by each new shell session. `lane` rides init entries alone, `first` or
+`last`, default middle. Init strings render a `{{shell}}` slot with
+the target shell name, so one entry addresses every shell.
 
-Same-slot collisions resolve by highest carried priority, ties by
-lexicographically smaller config name. Total order, independent of
-registration order. Every cross-config collision records one log-file
-line; exit stays 0.
+```lua
+local rc = confit.document.rc
+return rc.new({
+  profile = { rc.path_entry(confit.path.home(".local/bin")) },
+  config = { rc.alias("ll", "ls -l") },
+  final = { rc.eval({ "starship", "init", confit.shell.SHELL }) },
+})
+```
 
-Rc layout per file: plain entries in env, aliases, init blocks separated
-by blank lines. Conditional entries render guarded inline with
-`if <test>; then ... fi`, evaluated by each new shell session.
+A write to a slot another patch wrote drops, plus one collision line
+in the log.
+
+Rc layout per file holds setup lines, then the guard, then aliases,
+then init lines. Setup holds profile plus env plus first lane init
+lines. One guard follows while alias or final lines follow.
+
+```sh
+case $- in
+*i*) ;;
+*) return ;;
+esac
+```
+
+Setup-only output skips the guard. Aliases hold the third block.
+Middle lane init lines plus last lane init lines hold the final block.
+Blocks join with one blank line. Plain entries render as bare lines.
+Guarded entries render inline, evaluated by each new shell session.
+
+```sh
+if command -v bat >/dev/null 2>&1; then
+  alias cat=bat
+fi
+```
 
 ### Hashing
 
 Tables hold fixed order (`BTreeMap`), ordered lists (`env`, `profile`,
-`init`) keep declaration order. Each artifact hashes with SHA-256 over
+`init`) keep declaration order. Each document hashes with SHA-256 over
 its rendered bytes.
 
 ## DSL guide
 
-`confit.config(name)` returns a handle: userdata with one
-method, `add_artifact`. Everything nice lives in plugins composing
-this primitive:
+`confit.config(name)` returns a handle: userdata with two
+methods, `add_document` plus `add_patch`. Everything nice lives in
+plugins composing these primitives:
 
 ```lua
-local mise_package = confit.plugin.solrachq.mise_package
+local mise = confit.plugin.solrachq.mise
 
-local bat = mise_package("bat", function(rc)
+local bat = mise.package("bat", function(rc)
   rc:alias("cat", "bat --colors=always")
   rc:alias("c", "bat")
 end)
+bat:add_document(mise.activate())
 return bat
 ```
 
 One call generates the config under the package name, declares the
 install, and sets `when` on every callback entry against the binary.
+`activate()` returns the eval entry for mise activation.
 Raw bags stay available:
 
 ```lua
 local c = confit.config("bat")
-c:add_artifact(confit.artifact.rc.alias("cat", "bat", {
+c:add_document(confit.document.rc.alias("cat", "bat", {
   when = confit.shell.in_path("bat"),
-  priority = 1,
 }))
-c:add_artifact(confit.artifact.toml(path, data):with_priority(1))
+c:add_document(confit.document.structured("toml", {
+  path = path,
+  data = data,
+}))
+c:add_patch(confit.patch.structured("toml", path, function(data)
+  data:set("user.theme", "catppuccin")
+end):priority(confit.priority.HIGH))
 ```
 
-- `confit.artifact.rc.alias/env/profile/profile_path/init` build rc
-  entry handles, each taking `when` plus `priority` through opts or
-  through the chainable `:when` and `:with_priority` methods. File kinds
-  (`toml/json/yaml/file/template/link`) take `:with_priority` the same way.
+- `confit.document.rc.alias/env/profile/profile_path/path_entry/eval/cmd/source`
+  build rc entry tables, each taking `when` through opts, init entries
+  also taking `lane`. `confit.document.structured/text/link` plus
+  `confit.document.rc.new` build document tables for
+  `config:add_document`.
+- `confit.patch.rc(fn)` plus `confit.patch.structured(format, path, fn)`
+  build patch handles for `config:add_patch`. The chainable `:priority`
+  method sets one of five levels (`MINOR`, `LOW`, `NORMAL`, `HIGH`,
+  `MAJOR`), default `NORMAL`.
 - `confit.shell.env_eq/env_set/in_path/exists/all/any/nop` build
   conditions as data. `when` takes a shape directly or a builder
   function over `confit.shell`, run during evaluation.
 - `confit.plugin.helpers.error(msg)` raises plan errors with plugin
   attribution.
-- Tables in artifact data hold JSON-shaped values alone; `plan`
+- Tables in document data hold JSON-shaped values alone; `plan`
   rejects functions (and userdata) with an error naming config and
   field.
 
@@ -200,13 +256,17 @@ with user values:
 
 ```lua
 return function(user_config)
-  local resource = confit.resources.load_toml("resources/starship.toml")
-  local config = confit.resources.merge(resource, user_config)
-  local artifact = confit.artifact.toml(
-    confit.path.config("starship.toml"),
-    config
-  )
-  starship:add_artifact(artifact)
+  local path = confit.path.config("starship.toml")
+  local base = confit.resources.load_toml("resources/starship.toml")
+  starship:add_document(confit.document.structured("toml", {
+    path = path,
+    data = base,
+  }))
+  starship:add_patch(confit.patch.structured("toml", path, function(data)
+    for key, value in pairs(user_config) do
+      data:set(key, value)
+    end
+  end))
   return starship
 end
 ```
@@ -214,10 +274,15 @@ end
 - `confit.resources.load_toml/load_json/load_yaml(path)` read a
   root-relative file into a Lua table. Absolute paths and escapes above
   root are plan errors.
-- `confit.resources.merge(base, overlay, opts?)` deep-merges: tables
-  recurse, everything else (arrays included) last-wins. `shallow = true`
-  merges top-level keys only; `list_append = true` concatenates arrays
-  keeping duplicates. Unknown option keys are plan errors.
+- `confit.resources.load_text(path)` reads a root-relative file into a
+  Lua string. Absolute paths and escapes above root are plan errors.
+- `confit.text.render(template, vars)` renders minijinja slots with a
+  vars table. Syntax failures are plan errors.
+- `confit.plugin.solrachq.merge(base, overlay, opts?)` deep-merges:
+  tables recurse, everything else (arrays included) last-wins.
+  `shallow = true` merges top-level keys only; `list_append = true`
+  concatenates arrays keeping duplicates. Unknown option keys are plan
+  errors.
 - `confit.path.home/config/data/confroot` join `$HOME`, the OS config
   folder, the OS data folder, and the project root with the segments.
   `data` serves local installs like fonts. `confroot` serves symlinks
@@ -226,8 +291,8 @@ end
 ## CLI guide
 
 ```sh
-confit plan --profile profiles/desktop.lua [-o ./plan.json] [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log]
-confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log]
+confit plan --profile profiles/desktop.lua [-o ./plan.json] [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log] [--strict]
+confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [--plugins ./plugins] [--log-file ./confit.log] [--strict]
 ```
 
 - `-o`/`--output` is the explicit output path; omitted prints the plan to
@@ -240,3 +305,4 @@ confit status --profile profiles/desktop.lua [--root .] [--state ./state.json] [
 - `--log-file` sets the collision log path; empty resolves to a
   per-process file under the system temp folder. The run prints
   `log: <path>` on stderr after the summary.
+- `--strict` escalates declaration conflicts to plan errors.

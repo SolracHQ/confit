@@ -6,16 +6,20 @@ use crate::model::state::condition::Condition;
 use crate::model::state::rc::AliasEntry;
 use crate::model::state::rc::EnvEntry;
 use crate::model::state::rc::InitEntry;
+use crate::model::state::rc::InitSpec;
 use crate::model::state::rc::ProfileEntry;
 use crate::model::state::rc::RcData;
+
+use crate::model::state::rc::Lane;
 
 use super::shell_escape::escape_argv;
 
 /// Renders rc data to shell text with bare entry lines.
 ///
-/// Groups follow entry kinds, never origins: profile plus env lines share
-/// one group, aliases share one group, init lines share one group.
-/// Origin names live only at merge time inside collision notes.
+/// Setup holds profile plus env plus first lane init lines. One guard
+/// follows setup while alias or final lines follow. Aliases hold the
+/// third block. Middle lane init lines plus last lane init lines hold
+/// the final block. Blocks join with one blank line.
 ///
 /// # Arguments
 ///
@@ -23,53 +27,48 @@ use super::shell_escape::escape_argv;
 ///
 /// # Returns
 ///
-/// Shell text. Empty data yields the empty string; empty sections yield zero lines.
+/// Shell text with trailing newline. Empty data yields the empty string.
+/// Setup only output carries no guard.
 ///
 /// # Examples
 /// ```rust
+/// use confit::model::state::level::Level;
 /// use confit::model::state::rc::AliasEntry;
+/// use confit::model::state::rc::AliasSpec;
 /// use confit::model::state::rc::EnvEntry;
+/// use confit::model::state::rc::EnvSpec;
 /// use confit::model::state::rc::RcData;
 /// use confit::services::render::rc::render_rc;
 ///
 /// let data = RcData {
 ///     profile: Vec::new(),
-///     env: vec![EnvEntry { name: "A".into(), value: "1".into(), when: None, priority: 0 }],
-///     aliases: vec![AliasEntry { name: "cat".into(), value: "bat".into(), when: None, priority: 0 }],
+///     env: vec![EnvEntry { spec: EnvSpec { name: "A".into(), value: "1".into() }, when: None, priority: Level::Normal }],
+///     aliases: vec![AliasEntry { spec: AliasSpec { name: "cat".into(), value: "bat".into() }, when: None, priority: Level::Normal }],
 ///     init: Vec::new(),
 /// };
 /// let rendered = render_rc(&data);
 /// assert!(rendered.contains("export A=1"));
+/// assert!(rendered.contains("case $- in"));
 /// assert!(rendered.contains("alias cat=bat"));
+/// assert!(matches!((rendered.find("export A=1"), rendered.find("case $- in")), (Some(a), Some(b)) if a < b));
+/// assert!(matches!((rendered.find("case $- in"), rendered.find("alias cat=bat")), (Some(a), Some(b)) if a < b));
 /// ```
 pub fn render_rc(data: &RcData) -> String {
-    let mut env_lines: Vec<String> = Vec::new();
-    for entry in &data.profile {
-        env_lines.push(render_profile_entry(entry));
-    }
-    for entry in &data.env {
-        env_lines.push(render_env_entry(entry));
-    }
-
-    let mut alias_lines: Vec<String> = Vec::new();
-    for entry in &data.aliases {
-        alias_lines.push(render_alias_line(entry));
-    }
-
-    let mut init_lines: Vec<String> = Vec::new();
-    for entry in &data.init {
-        init_lines.push(render_init_entry(entry));
-    }
-
+    let setup = setup_lines(data);
+    let aliases = alias_lines(data);
+    let final_block = final_lines(data);
     let mut blocks: Vec<String> = Vec::new();
-    if !env_lines.is_empty() {
-        blocks.push(env_lines.join("\n"));
+    if !setup.is_empty() {
+        blocks.push(setup.join("\n"));
     }
-    if !alias_lines.is_empty() {
-        blocks.push(alias_lines.join("\n"));
+    if !aliases.is_empty() || !final_block.is_empty() {
+        blocks.push(guard_text().to_string());
     }
-    if !init_lines.is_empty() {
-        blocks.push(init_lines.join("\n"));
+    if !aliases.is_empty() {
+        blocks.push(aliases.join("\n"));
+    }
+    if !final_block.is_empty() {
+        blocks.push(final_block.join("\n"));
     }
     if blocks.is_empty() {
         return String::new();
@@ -77,6 +76,94 @@ pub fn render_rc(data: &RcData) -> String {
     let mut out = blocks.join("\n\n");
     out.push('\n');
     out
+}
+
+/// Collects setup lines in render order.
+///
+/// # Arguments
+///
+/// * `data` - the merged per-shell entries.
+///
+/// # Returns
+///
+/// Profile lines plus env lines plus first lane init lines in listed order.
+fn setup_lines(data: &RcData) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in &data.profile {
+        out.push(render_profile_entry(entry));
+    }
+    for entry in &data.env {
+        out.push(render_env_entry(entry));
+    }
+    for entry in &data.init {
+        if init_lane(entry) == Lane::First {
+            out.push(render_init_entry(entry));
+        }
+    }
+    out
+}
+
+/// Reports the interactivity guard text.
+///
+/// # Returns
+///
+/// The guard block text shared by every shell file.
+fn guard_text() -> &'static str {
+    "case $- in\n*i*) ;;\n*) return ;;\nesac"
+}
+
+/// Collects alias lines in listed order.
+///
+/// # Arguments
+///
+/// * `data` - the merged per-shell entries.
+///
+/// # Returns
+///
+/// Alias lines in listed order.
+fn alias_lines(data: &RcData) -> Vec<String> {
+    data.aliases.iter().map(render_alias_line).collect()
+}
+
+/// Collects final init lines in lane order.
+///
+/// # Arguments
+///
+/// * `data` - the merged per-shell entries.
+///
+/// # Returns
+///
+/// Middle lane init lines in listed order plus last lane init lines in listed order.
+fn final_lines(data: &RcData) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in &data.init {
+        if init_lane(entry) == Lane::Middle {
+            out.push(render_init_entry(entry));
+        }
+    }
+    for entry in &data.init {
+        if init_lane(entry) == Lane::Last {
+            out.push(render_init_entry(entry));
+        }
+    }
+    out
+}
+
+/// Reports the execution lane of one init entry.
+///
+/// # Arguments
+///
+/// * `entry` - the init entry under inspection.
+///
+/// # Returns
+///
+/// The lane carried by the entry spec.
+fn init_lane(entry: &InitEntry) -> Lane {
+    match &entry.spec {
+        InitSpec::Eval { lane, .. }
+        | InitSpec::Cmd { lane, .. }
+        | InitSpec::Source { lane, .. } => *lane,
+    }
 }
 
 /// Renders one env entry as an export line.
@@ -89,9 +176,9 @@ pub fn render_rc(data: &RcData) -> String {
 ///
 /// Shell export line for the entry, guarded by the entry condition.
 fn render_env_entry(entry: &EnvEntry) -> String {
-    let value = escape_argv(std::slice::from_ref(&entry.value));
+    let value = escape_argv(std::slice::from_ref(&entry.spec.value));
     wrap_conditional(
-        format!("export {}={value}", entry.name),
+        format!("export {}={value}", entry.spec.name),
         entry.when.as_ref(),
     )
 }
@@ -106,13 +193,19 @@ fn render_env_entry(entry: &EnvEntry) -> String {
 ///
 /// Shell export line for the entry, guarded by the entry condition.
 fn render_profile_entry(entry: &ProfileEntry) -> String {
-    let value = escape_argv(std::slice::from_ref(&entry.value));
-    let line = match entry.op {
+    let value = escape_argv(std::slice::from_ref(&entry.spec.value));
+    let line = match entry.spec.op {
         crate::model::state::rc::PathOp::Prepend => {
-            format!("export {}={value}:\"${{{}}}\"", entry.name, entry.name)
+            format!(
+                "export {}={value}:\"${{{}}}\"",
+                entry.spec.name, entry.spec.name
+            )
         }
         crate::model::state::rc::PathOp::Append => {
-            format!("export {}=\"${{{}}}\":{value}", entry.name, entry.name)
+            format!(
+                "export {}=\"${{{}}}\":{value}",
+                entry.spec.name, entry.spec.name
+            )
         }
     };
     wrap_conditional(line, entry.when.as_ref())
@@ -128,9 +221,9 @@ fn render_profile_entry(entry: &ProfileEntry) -> String {
 ///
 /// Shell alias line for the entry, guarded by the entry condition.
 fn render_alias_line(entry: &AliasEntry) -> String {
-    let quoted = escape_argv(std::slice::from_ref(&entry.value));
+    let quoted = escape_argv(std::slice::from_ref(&entry.spec.value));
     wrap_conditional(
-        format!("alias {}={quoted}", entry.name),
+        format!("alias {}={quoted}", entry.spec.name),
         entry.when.as_ref(),
     )
 }
@@ -145,14 +238,15 @@ fn render_alias_line(entry: &AliasEntry) -> String {
 ///
 /// Shell line for the entry, guarded by the entry condition.
 fn render_init_entry(entry: &InitEntry) -> String {
-    match entry {
-        InitEntry::Eval { argv, when, .. } => {
-            wrap_conditional(format!("eval \"$({})\"", escape_argv(argv)), when.as_ref())
-        }
-        InitEntry::Cmd { argv, when, .. } => wrap_conditional(escape_argv(argv), when.as_ref()),
-        InitEntry::Source { path, when, .. } => wrap_conditional(
+    match &entry.spec {
+        InitSpec::Eval { argv, .. } => wrap_conditional(
+            format!("eval \"$({})\"", escape_argv(argv)),
+            entry.when.as_ref(),
+        ),
+        InitSpec::Cmd { argv, .. } => wrap_conditional(escape_argv(argv), entry.when.as_ref()),
+        InitSpec::Source { path, .. } => wrap_conditional(
             format!("source {}", escape_argv(std::slice::from_ref(path))),
-            when.as_ref(),
+            entry.when.as_ref(),
         ),
     }
 }
@@ -217,69 +311,72 @@ fn wrap_conditional(line: String, when: Option<&Condition>) -> String {
 mod tests {
     use super::*;
 
+    use crate::model::state::level::Level;
+    use crate::model::state::rc::AliasSpec;
+    use crate::model::state::rc::EnvSpec;
+    use crate::model::state::rc::Lane;
+    use crate::model::state::rc::ProfileSpec;
+
     fn env(name: &str, value: &str) -> EnvEntry {
         EnvEntry {
-            name: name.into(),
-            value: value.into(),
+            spec: EnvSpec {
+                name: name.into(),
+                value: value.into(),
+            },
             when: None,
-            priority: 0,
+            priority: Level::Normal,
         }
     }
 
     fn alias(name: &str, value: &str) -> AliasEntry {
         AliasEntry {
-            name: name.into(),
-            value: value.into(),
+            spec: AliasSpec {
+                name: name.into(),
+                value: value.into(),
+            },
             when: None,
-            priority: 0,
+            priority: Level::Normal,
         }
     }
 
     fn guarded_alias(name: &str, value: &str, when: Condition) -> AliasEntry {
         AliasEntry {
-            name: name.into(),
-            value: value.into(),
+            spec: AliasSpec {
+                name: name.into(),
+                value: value.into(),
+            },
             when: Some(when),
-            priority: 0,
+            priority: Level::Normal,
         }
     }
 
     fn guarded_init(entry: InitEntry, when: Condition) -> InitEntry {
-        match entry {
-            InitEntry::Eval { argv, priority, .. } => InitEntry::Eval {
-                argv,
-                when: Some(when),
-                priority,
-            },
-            InitEntry::Cmd { argv, priority, .. } => InitEntry::Cmd {
-                argv,
-                when: Some(when),
-                priority,
-            },
-            InitEntry::Source { path, priority, .. } => InitEntry::Source {
-                path,
-                when: Some(when),
-                priority,
-            },
+        InitEntry {
+            when: Some(when),
+            ..entry
         }
     }
 
     fn profile(value: &str, op: crate::model::state::rc::PathOp) -> ProfileEntry {
         ProfileEntry {
-            name: "PATH".into(),
-            value: value.into(),
-            op,
+            spec: ProfileSpec {
+                name: "PATH".into(),
+                value: value.into(),
+                op,
+            },
             when: None,
-            priority: 0,
+            priority: Level::Normal,
         }
     }
 
     fn guarded_env(name: &str, value: &str, when: Condition) -> EnvEntry {
         EnvEntry {
-            name: name.into(),
-            value: value.into(),
+            spec: EnvSpec {
+                name: name.into(),
+                value: value.into(),
+            },
             when: Some(when),
-            priority: 0,
+            priority: Level::Normal,
         }
     }
 
@@ -399,11 +496,13 @@ mod tests {
     fn conditional_profile_wraps_init_line() {
         let data = RcData {
             profile: vec![ProfileEntry {
-                name: "PATH".into(),
-                value: "/a".into(),
-                op: crate::model::state::rc::PathOp::Prepend,
+                spec: ProfileSpec {
+                    name: "PATH".into(),
+                    value: "/a".into(),
+                    op: crate::model::state::rc::PathOp::Prepend,
+                },
                 when: Some(Condition::InPath { name: "bat".into() }),
-                priority: 0,
+                priority: Level::Normal,
             }],
             env: Vec::new(),
             aliases: Vec::new(),
@@ -428,7 +527,7 @@ mod tests {
         };
         assert_eq!(
             render_rc(&data),
-            "alias ls=eza\nif command -v bat >/dev/null 2>&1; then\n  alias cat=bat\nfi\n"
+            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\nalias ls=eza\nif command -v bat >/dev/null 2>&1; then\n  alias cat=bat\nfi\n"
         );
     }
 
@@ -443,18 +542,24 @@ mod tests {
             aliases: Vec::new(),
             init: vec![
                 guarded_init(
-                    InitEntry::Cmd {
-                        argv: vec!["task".into(), "--completion".into()],
+                    InitEntry {
+                        spec: InitSpec::Cmd {
+                            argv: vec!["task".into(), "--completion".into()],
+                            lane: Lane::Middle,
+                        },
                         when: None,
-                        priority: 0,
+                        priority: Level::Normal,
                     },
                     guard.clone(),
                 ),
                 guarded_init(
-                    InitEntry::Source {
-                        path: "~/.cargo/env".into(),
+                    InitEntry {
+                        spec: InitSpec::Source {
+                            path: "~/.cargo/env".into(),
+                            lane: Lane::Middle,
+                        },
                         when: None,
-                        priority: 0,
+                        priority: Level::Normal,
                     },
                     guard.clone(),
                 ),
@@ -462,7 +567,7 @@ mod tests {
         };
         assert_eq!(
             render_rc(&data),
-            "if [ -n \"${SSH_TTY}\" ]; then\n  task --completion\nfi\nif [ -n \"${SSH_TTY}\" ]; then\n  source '~/.cargo/env'\nfi\n"
+            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\nif [ -n \"${SSH_TTY}\" ]; then\n  task --completion\nfi\nif [ -n \"${SSH_TTY}\" ]; then\n  source '~/.cargo/env'\nfi\n"
         );
     }
 
@@ -508,16 +613,24 @@ mod tests {
             profile: Vec::new(),
             env: vec![env("A", "1")],
             aliases: vec![alias("cat", "bat")],
-            init: vec![InitEntry::Cmd {
-                argv: vec!["task".into(), "--completion".into()],
+            init: vec![InitEntry {
+                spec: InitSpec::Cmd {
+                    argv: vec!["task".into(), "--completion".into()],
+                    lane: Lane::Middle,
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             }],
         };
         let rendered = render_rc(&data);
         assert_eq!(
             rendered,
             "export A=1\n\
+             \n\
+             case $- in\n\
+             *i*) ;;\n\
+             *) return ;;\n\
+             esac\n\
              \n\
              alias cat=bat\n\
              \n\
@@ -555,21 +668,27 @@ mod tests {
             env: Vec::new(),
             aliases: Vec::new(),
             init: vec![
-                InitEntry::Eval {
-                    argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+                InitEntry {
+                    spec: InitSpec::Eval {
+                        argv: vec!["zoxide".into(), "init".into(), "bash".into()],
+                        lane: Lane::Middle,
+                    },
                     when: None,
-                    priority: 0,
+                    priority: Level::Normal,
                 },
-                InitEntry::Eval {
-                    argv: vec!["echo".into(), "a b".into()],
+                InitEntry {
+                    spec: InitSpec::Eval {
+                        argv: vec!["echo".into(), "a b".into()],
+                        lane: Lane::Middle,
+                    },
                     when: None,
-                    priority: 0,
+                    priority: Level::Normal,
                 },
             ],
         };
         assert_eq!(
             render_rc(&data),
-            "eval \"$(zoxide init bash)\"\neval \"$(echo 'a b')\"\n"
+            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\neval \"$(zoxide init bash)\"\neval \"$(echo 'a b')\"\n"
         );
     }
 
@@ -579,13 +698,19 @@ mod tests {
             profile: Vec::new(),
             env: Vec::new(),
             aliases: Vec::new(),
-            init: vec![InitEntry::Source {
-                path: "~/.cargo/env".into(),
+            init: vec![InitEntry {
+                spec: InitSpec::Source {
+                    path: "~/.cargo/env".into(),
+                    lane: Lane::Middle,
+                },
                 when: None,
-                priority: 0,
+                priority: Level::Normal,
             }],
         };
-        assert_eq!(render_rc(&data), "source '~/.cargo/env'\n");
+        assert_eq!(
+            render_rc(&data),
+            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\nsource '~/.cargo/env'\n"
+        );
     }
 
     #[test]
@@ -608,5 +733,90 @@ mod tests {
             init: Vec::new(),
         };
         assert_eq!(render_rc(&data), "export A=1\nexport B=2\nexport C=3\n");
+    }
+
+    #[test]
+    fn first_lane_init_sits_before_guard() {
+        let data = RcData {
+            profile: Vec::new(),
+            env: vec![env("A", "1")],
+            aliases: vec![alias("cat", "bat")],
+            init: vec![
+                InitEntry {
+                    spec: InitSpec::Cmd {
+                        argv: vec!["nim".into(), "init".into()],
+                        lane: Lane::First,
+                    },
+                    when: None,
+                    priority: Level::Normal,
+                },
+                InitEntry {
+                    spec: InitSpec::Cmd {
+                        argv: vec!["task".into(), "--completion".into()],
+                        lane: Lane::Middle,
+                    },
+                    when: None,
+                    priority: Level::Normal,
+                },
+            ],
+        };
+        assert_eq!(
+            render_rc(&data),
+            "export A=1\nnim init\n\ncase $- in\n*i*) ;;\n*) return ;;\nesac\n\nalias cat=bat\n\ntask --completion\n"
+        );
+    }
+
+    #[test]
+    fn last_lane_init_follows_middle() {
+        let data = RcData {
+            profile: Vec::new(),
+            env: Vec::new(),
+            aliases: vec![alias("cat", "bat")],
+            init: vec![
+                InitEntry {
+                    spec: InitSpec::Cmd {
+                        argv: vec!["sdkman".into(), "init".into()],
+                        lane: Lane::Last,
+                    },
+                    when: None,
+                    priority: Level::Normal,
+                },
+                InitEntry {
+                    spec: InitSpec::Cmd {
+                        argv: vec!["task".into(), "--completion".into()],
+                        lane: Lane::Middle,
+                    },
+                    when: None,
+                    priority: Level::Normal,
+                },
+            ],
+        };
+        assert_eq!(
+            render_rc(&data),
+            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\nalias cat=bat\n\ntask --completion\nsdkman init\n"
+        );
+    }
+
+    #[test]
+    fn setup_only_omits_guard() {
+        let data = RcData {
+            profile: vec![profile("/a", crate::model::state::rc::PathOp::Prepend)],
+            env: vec![env("A", "1")],
+            aliases: Vec::new(),
+            init: vec![InitEntry {
+                spec: InitSpec::Cmd {
+                    argv: vec!["nim".into(), "init".into()],
+                    lane: Lane::First,
+                },
+                when: None,
+                priority: Level::Normal,
+            }],
+        };
+        let rendered = render_rc(&data);
+        assert!(!rendered.contains("case $- in"));
+        assert_eq!(
+            rendered,
+            "export PATH=/a:\"${PATH}\"\nexport A=1\nnim init\n"
+        );
     }
 }

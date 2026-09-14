@@ -4,9 +4,40 @@
 //! Prefer plain Lua tables so the Lua dialect can build and inspect them without registry machinery.
 
 use mlua::{Lua, Table, Value};
+use serde::Deserialize;
+use serde_json::Value as Json;
 
 use super::confit_table;
 use crate::error::Error;
+
+/// Leaf `env_eq` opts in Lua shape.
+///
+/// Fields stay `Json` so type mistakes keep the hand-checked field
+/// errors below; `deny_unknown_fields` rejects unknown keys as plan
+/// errors naming the key.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvEqOpts {
+    /// Holds the variable name value.
+    #[serde(default)]
+    key: Option<Json>,
+    /// Holds the expected value.
+    #[serde(default)]
+    value: Option<Json>,
+}
+
+/// Leaf `env_set` opts in Lua shape.
+///
+/// The field stays `Json` so type mistakes keep the hand-checked field
+/// error below; `deny_unknown_fields` rejects unknown keys as plan
+/// errors naming the key.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvSetOpts {
+    /// Holds the variable name value.
+    #[serde(default)]
+    key: Option<Json>,
+}
 
 /// Installs the shell namespace on a Lua state.
 ///
@@ -60,16 +91,43 @@ fn take_string(value: Value, ctor: &str, field: &str) -> mlua::Result<String> {
 }
 
 /// Builds an `env_eq` condition table.
+///
+/// Leaf opts parse through `EnvEqOpts` with denied unknown fields fed by
+/// the shared table conversion, so unknown keys fail as plan errors
+/// naming the key. Nested shapes (`all`, `any`, `nop`) stay hand parsed:
+/// serde fights the recursive single-shape dispatch, so manual parsing
+/// keeps the errors readable.
+///
+/// # Arguments
+///
+/// * `lua` - state owning the table.
+/// * `opts` - raw opts value.
+///
+/// # Returns
+///
+/// Condition table shaped `{ env_eq = { key = "..", value = ".." } }`.
+///
+/// # Errors
+///
+/// Fails with plan errors for opts holding values of other shapes, for
+/// unknown keys, and for fields holding values of other shapes.
 fn env_eq_impl(lua: &Lua, opts: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.shell.env_eq";
     let table = match opts {
         Value::Table(table) => table,
         _ => return Err(field_error(CTOR, "opts", "must be a table")),
     };
-    let key: Value = table.get("key")?;
-    let value: Value = table.get("value")?;
-    let key = take_string(key, CTOR, "key")?;
-    let value = take_string(value, CTOR, "value")?;
+    let ctx = format!("{CTOR}: field 'opts'");
+    let parsed: EnvEqOpts = serde_json::from_value(super::document::table_to_json(&table, &ctx)?)
+        .map_err(|err| field_error(CTOR, "opts", &format!("{err}")))?;
+    let key = match parsed.key {
+        Some(Json::String(key)) => key,
+        _ => return Err(field_error(CTOR, "key", "must be a string")),
+    };
+    let value = match parsed.value {
+        Some(Json::String(value)) => value,
+        _ => return Err(field_error(CTOR, "value", "must be a string")),
+    };
     let inner = lua.create_table()?;
     inner.set("key", key)?;
     inner.set("value", value)?;
@@ -79,14 +137,36 @@ fn env_eq_impl(lua: &Lua, opts: Value) -> mlua::Result<Table> {
 }
 
 /// Builds an `env_set` condition table.
+///
+/// Leaf opts parse through `EnvSetOpts` with denied unknown fields, as
+/// `env_eq` does above.
+///
+/// # Arguments
+///
+/// * `lua` - state owning the table.
+/// * `opts` - raw opts value.
+///
+/// # Returns
+///
+/// Condition table shaped `{ env_set = { key = ".." } }`.
+///
+/// # Errors
+///
+/// Fails with plan errors for opts holding values of other shapes, for
+/// unknown keys, and for fields holding values of other shapes.
 fn env_set_impl(lua: &Lua, opts: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.shell.env_set";
     let table = match opts {
         Value::Table(table) => table,
         _ => return Err(field_error(CTOR, "opts", "must be a table")),
     };
-    let key: Value = table.get("key")?;
-    let key = take_string(key, CTOR, "key")?;
+    let ctx = format!("{CTOR}: field 'opts'");
+    let parsed: EnvSetOpts = serde_json::from_value(super::document::table_to_json(&table, &ctx)?)
+        .map_err(|err| field_error(CTOR, "opts", &format!("{err}")))?;
+    let key = match parsed.key {
+        Some(Json::String(key)) => key,
+        _ => return Err(field_error(CTOR, "key", "must be a string")),
+    };
     let inner = lua.create_table()?;
     inner.set("key", key)?;
     let outer = lua.create_table()?;

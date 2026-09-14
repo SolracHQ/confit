@@ -1,9 +1,9 @@
 //! Structured Rendering
 //!
-//! Table serializers for TOML, JSON, and YAML artifacts.
+//! Table serializers for TOML, JSON, and YAML documents.
 
 use crate::error::{Error, Result};
-use crate::model::state::artifact::Table;
+use crate::model::state::document::Table;
 
 /// Renders a table to TOML text.
 ///
@@ -23,7 +23,7 @@ use crate::model::state::artifact::Table;
 /// ```rust
 /// use confit::services::render::structured::render_toml;
 ///
-/// let mut table = confit::model::state::artifact::Table::new();
+/// let mut table = confit::model::state::document::Table::new();
 /// table.insert("name".into(), serde_json::json!("bat"));
 /// assert!(matches!(render_toml(&table), Ok(text) if text == "name = \"bat\"\n"));
 /// ```
@@ -49,7 +49,7 @@ pub fn render_toml(table: &Table) -> Result<String> {
 /// ```rust
 /// use confit::services::render::structured::render_json;
 ///
-/// let table = confit::model::state::artifact::Table::new();
+/// let table = confit::model::state::document::Table::new();
 /// assert!(matches!(render_json(&table), Ok(text) if text == "{}"));
 /// ```
 pub fn render_json(table: &Table) -> Result<String> {
@@ -74,7 +74,7 @@ pub fn render_json(table: &Table) -> Result<String> {
 /// ```rust
 /// use confit::services::render::structured::render_yaml;
 ///
-/// let mut table = confit::model::state::artifact::Table::new();
+/// let mut table = confit::model::state::document::Table::new();
 /// table.insert("name".into(), serde_json::json!("bat"));
 /// assert!(matches!(render_yaml(&table), Ok(text) if text == "name: bat"));
 /// ```

@@ -8,11 +8,11 @@ use std::borrow::Cow;
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::model::dto::diff::ArtifactDetail;
-use crate::model::dto::diff::ArtifactStatus;
 use crate::model::dto::diff::ChangeKind;
 use crate::model::dto::diff::ChangeLine;
 use crate::model::dto::diff::DiskDetail;
+use crate::model::dto::diff::DocumentDetail;
+use crate::model::dto::diff::DocumentStatus;
 use crate::model::dto::diff::EntryChange;
 use crate::model::dto::diff::PlanSummary;
 use crate::model::dto::diff::Sigil;
@@ -20,12 +20,13 @@ use crate::model::dto::outcome::PlanOutcome;
 use crate::model::dto::outcome::StatusOutcome;
 use crate::model::dto::warning::PlanWarning;
 use crate::model::dto::warning::WarningKind;
-use crate::model::state::artifact::Artifact;
-use crate::model::state::artifact::ArtifactData;
-use crate::model::state::artifact::ArtifactKind;
+use crate::model::state::document::Document;
+use crate::model::state::document::DocumentData;
+use crate::model::state::document::DocumentKind;
 use crate::model::state::plan::Plan;
 use crate::model::state::rc::EnvEntry;
 use crate::model::state::rc::InitEntry;
+use crate::model::state::rc::InitSpec;
 use crate::model::state::rc::RcData;
 
 /// Palette: one ANSI style per change sigil.
@@ -89,7 +90,7 @@ fn color_on() -> bool {
 ///
 /// # Arguments
 ///
-/// * `path` - the artifact path under display.
+/// * `path` - the document path under display.
 /// * `detail` - the IO failure detail.
 ///
 /// # Returns
@@ -123,6 +124,17 @@ pub fn warning_line(warning: &PlanWarning) -> String {
             )
         }
         WarningKind::Unreadable { reason } => reason.clone(),
+        WarningKind::DeclarationConflict { owners } => {
+            format!(
+                "{}: conflicting declarations by {}",
+                warning.path,
+                owners
+                    .iter()
+                    .map(|owner| format!("'{owner}'"))
+                    .collect::<Vec<_>>()
+                    .join(" plus ")
+            )
+        }
     }
 }
 
@@ -136,10 +148,10 @@ pub fn warning_line(warning: &PlanWarning) -> String {
 ///
 /// Shell text for the entry.
 pub fn render_init(entry: &InitEntry) -> String {
-    match entry {
-        InitEntry::Eval { argv, .. } => format!("eval \"$({})\"", argv.join(" ")),
-        InitEntry::Cmd { argv, .. } => argv.join(" "),
-        InitEntry::Source { path, .. } => format!("source {path}"),
+    match &entry.spec {
+        InitSpec::Eval { argv, .. } => format!("eval \"$({})\"", argv.join(" ")),
+        InitSpec::Cmd { argv, .. } => argv.join(" "),
+        InitSpec::Source { path, .. } => format!("source {path}"),
     }
 }
 
@@ -197,33 +209,17 @@ pub fn render_leaf(value: &Value) -> String {
     }
 }
 
-/// Renders a template variable value.
-///
-/// # Arguments
-///
-/// * `value` - the variable value.
-///
-/// # Returns
-///
-/// Display text for the variable.
-pub fn render_var(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
-    }
-}
-
 /// Renders one structured change item as one plain line.
 ///
 /// # Arguments
 ///
-/// * `kind` - the artifact kind holding the line.
+/// * `kind` - the document kind holding the line.
 /// * `line` - the change line under display.
 ///
 /// # Returns
 ///
 /// The plain line for terminal display.
-pub fn render_change_line(kind: ArtifactKind, line: &ChangeLine) -> String {
+pub fn render_change_line(kind: DocumentKind, line: &ChangeLine) -> String {
     if line.is_header() {
         return line.key.clone();
     }
@@ -241,18 +237,18 @@ pub fn render_change_line(kind: ArtifactKind, line: &ChangeLine) -> String {
 ///
 /// # Arguments
 ///
-/// * `kind` - the artifact kind holding the line.
+/// * `kind` - the document kind holding the line.
 /// * `line` - the change line under display.
 ///
 /// # Returns
 ///
 /// The plain line for terminal display.
-fn render_text_line(kind: ArtifactKind, line: &ChangeLine) -> String {
+fn render_text_line(kind: DocumentKind, line: &ChangeLine) -> String {
     match line.sigil {
         Sigil::Context => format!(" {}", line.key),
         Sigil::Add | Sigil::Remove => {
             let mark = sigil_mark(line.sigil).unwrap_or('+');
-            if kind == ArtifactKind::Rc {
+            if kind == DocumentKind::Rc {
                 format!("  {mark} {}", line.key)
             } else {
                 format!("{mark}{}", line.key)
@@ -261,20 +257,6 @@ fn render_text_line(kind: ArtifactKind, line: &ChangeLine) -> String {
         Sigil::Update => format!("  ~ {}", line.key),
         Sigil::Header => line.key.clone(),
     }
-}
-
-/// Paints one rendered change line.
-///
-/// # Arguments
-///
-/// * `kind` - the artifact kind holding the line.
-/// * `line` - the change line under paint.
-///
-/// # Returns
-///
-/// The painted line, ready for terminal display.
-pub fn paint_change_line(kind: ArtifactKind, line: &ChangeLine) -> String {
-    paint(line.sigil, Cow::Owned(render_change_line(kind, line))).into_owned()
 }
 
 /// Renders the drift note.
@@ -289,8 +271,8 @@ pub fn paint_change_line(kind: ArtifactKind, line: &ChangeLine) -> String {
 /// The drift note, holding an empty string while disk aligns with the baseline.
 pub fn render_drift(plan: &Plan, disk: &[DiskDetail]) -> String {
     let mut blocks = Vec::new();
-    for artifact in &plan.artifacts {
-        let key = artifact.key_string();
+    for document in &plan.documents {
+        let key = document.key_string();
         let detail = disk.iter().find(|entry| entry.key == key);
         let Some(detail) = detail else {
             continue;
@@ -301,18 +283,18 @@ pub fn render_drift(plan: &Plan, disk: &[DiskDetail]) -> String {
         let mut block: Vec<Cow<'_, str>> = vec![
             paint(
                 Sigil::Header,
-                Cow::Owned(format!("  # {} has changed", artifact.path)),
+                Cow::Owned(format!("  # {} has changed", document.path)),
             ),
             paint(
                 Sigil::Header,
                 Cow::Owned(format!(
-                    "  ~ artifact \"{}\" \"{}\" {{",
-                    artifact.kind, artifact.path
+                    "  ~ document \"{}\" \"{}\" {{",
+                    document.kind, document.path
                 )),
             ),
         ];
         for line in &detail.lines {
-            let plain = format!("  {}", render_change_line(artifact.kind, line));
+            let plain = format!("  {}", render_change_line(document.kind, line));
             block.push(paint(line.sigil, Cow::Owned(plain)));
         }
         block.push(Cow::Borrowed(
@@ -336,28 +318,28 @@ pub fn render_drift(plan: &Plan, disk: &[DiskDetail]) -> String {
 ///
 /// * `plan` - the desired plan under display.
 /// * `summary` - the counts backing the closing line.
-/// * `details` - the per-artifact diffs backing the body.
+/// * `details` - the per-document diffs backing the body.
 ///
 /// # Returns
 ///
 /// The plan text, closing with the add, change, and destroy counts.
-pub fn render_plan(plan: &Plan, summary: &PlanSummary, details: &[ArtifactDetail]) -> String {
+pub fn render_plan(plan: &Plan, summary: &PlanSummary, details: &[DocumentDetail]) -> String {
     let mut lines: Vec<Cow<'_, str>> = Vec::new();
-    for artifact in &plan.artifacts {
-        let key = artifact.key_string();
+    for document in &plan.documents {
+        let key = document.key_string();
         let detail = details.iter().find(|detail| detail.key == key);
         let status = detail.map(|detail| detail.status);
         lines.push(paint(
             Sigil::Header,
-            Cow::Owned(header_line(artifact, status)),
+            Cow::Owned(header_line(document, status)),
         ));
         let Some(detail) = detail else {
             continue;
         };
-        if detail.status == ArtifactStatus::Unchanged {
+        if detail.status == DocumentStatus::Unchanged {
             continue;
         }
-        let body = if let ArtifactData::Rc(rc) = &artifact.data {
+        let body = if let DocumentData::Rc(rc) = &document.data {
             rc_entry_lines(rc, &detail.entries)
         } else {
             detail.entries.iter().map(render_entry).collect()
@@ -451,19 +433,19 @@ pub fn render_plan_payload(plan: &Plan) -> Result<String> {
     Ok(serde_json::to_string_pretty(plan)?)
 }
 
-/// Builds the header line for one artifact.
+/// Builds the header line for one document.
 ///
 /// # Arguments
 ///
-/// * `artifact` - the artifact naming the header.
+/// * `document` - the document naming the header.
 /// * `status` - the lifecycle status marking updates.
 ///
 /// # Returns
 ///
 /// The header line holding path plus kind plus update marks.
-fn header_line(artifact: &Artifact, status: Option<ArtifactStatus>) -> String {
-    let mut header = format!("{}: {}", artifact.path, artifact.kind);
-    if status == Some(ArtifactStatus::Update) {
+fn header_line(document: &Document, status: Option<DocumentStatus>) -> String {
+    let mut header = format!("{}: {}", document.path, document.kind);
+    if status == Some(DocumentStatus::Update) {
         header.push_str(" ~ update");
     }
     header
@@ -695,7 +677,7 @@ fn summarize_env_group<'a>(name: &'a str, members: &[&'a EnvEntry]) -> (&'a str,
         .iter()
         .find(|entry| entry.when.is_none())
         .or(members.first())
-        .map(|entry| entry.value.as_str())
+        .map(|entry| entry.spec.value.as_str())
         .unwrap_or("");
     (name, display, conditional)
 }
@@ -712,9 +694,9 @@ fn summarize_env_group<'a>(name: &'a str, members: &[&'a EnvEntry]) -> (&'a str,
 fn env_winners<'a>(entries: impl Iterator<Item = &'a EnvEntry>) -> Vec<(&'a str, &'a str, usize)> {
     let mut groups: Vec<(&'a str, Vec<&'a EnvEntry>)> = Vec::new();
     for entry in entries {
-        match groups.iter_mut().find(|(name, _)| *name == entry.name) {
+        match groups.iter_mut().find(|(name, _)| *name == entry.spec.name) {
             Some((_, members)) => members.push(entry),
-            None => groups.push((entry.name.as_str(), vec![entry])),
+            None => groups.push((entry.spec.name.as_str(), vec![entry])),
         }
     }
     groups

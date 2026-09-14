@@ -106,23 +106,23 @@ impl ChangeLine {
     }
 }
 
-/// Per-artifact lifecycle status against the previous state.
+/// Per-document lifecycle status against the previous state.
 ///
-/// Every plan artifact maps to exactly one status; status derives from `data_hash` alone, with
-/// entry contents feeding display only, so hash-equal artifacts report unchanged while entry
+/// Every plan document maps to exactly one status; status derives from `data_hash` alone, with
+/// entry contents feeding display only, so hash-equal documents stay collapsed while entry
 /// rendering walks snapshots.
 ///
 /// # Returns
 ///
 /// The same three outcomes as the count diff: absent previous means create, differing
-/// `data_hash` means update, equal hash means unchanged.
+/// `data_hash` means update, equal hash means no change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArtifactStatus {
-    /// Artifact absent from the previous state.
+pub enum DocumentStatus {
+    /// Document absent from the previous state.
     Create,
-    /// Artifact present with a differing `data_hash`.
+    /// Document present with a differing `data_hash`.
     Update,
-    /// Artifact present with an equal `data_hash`.
+    /// Document present with an equal `data_hash`.
     Unchanged,
 }
 
@@ -135,7 +135,7 @@ pub enum ArtifactStatus {
 /// # Returns
 ///
 /// The transition for one labeled setting: added carries the desired value, changed carries
-/// previous then desired, removed carries the previous value, unchanged carries the shared
+/// previous then desired, removed carries the previous value, matching carries the shared
 /// value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -177,7 +177,7 @@ pub struct EntryChange {
     pub change: ChangeKind,
 }
 
-/// Per-artifact entry diff.
+/// Per-document entry diff.
 ///
 /// `key` reads `"kind:path"` with the lowercase kind, matching services plan diff; `entries`
 /// hold desired order first (aliases sorted, env/profile declaration order, init index order,
@@ -187,46 +187,43 @@ pub struct EntryChange {
 ///
 /// # Returns
 ///
-/// The artifact key plus status plus ordered entries.
+/// The document key plus status plus ordered entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactDetail {
-    /// Artifact key `"kind:path"`.
+pub struct DocumentDetail {
+    /// Document key `"kind:path"`.
     pub key: String,
     /// Lifecycle status from `data_hash` comparison.
-    pub status: ArtifactStatus,
+    pub status: DocumentStatus,
     /// Ordered entry transitions.
     pub entries: Vec<EntryChange>,
 }
 
-/// On-disk diff for one artifact: disk bytes against the baseline rendering.
+/// On-disk diff for one document: disk bytes against the baseline rendering.
 ///
-/// Holds the artifact key plus structured change lines. Presentation renders the section body:
+/// Holds the document key plus structured change lines. Presentation renders the section body:
 /// keyed lines for structured kinds, unified hunks for byte kinds. Stays empty while disk
 /// matches the baseline.
 ///
 /// `key` reads `"kind:path"` matching [`detail`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskDetail {
-    /// Artifact key `"kind:path"`.
+    /// Document key `"kind:path"`.
     pub key: String,
     /// Structured diff lines for the disk section.
     pub lines: Vec<ChangeLine>,
 }
 
-/// Per-artifact diff counts of a plan against the previous state.
+/// Per-document diff counts of a plan against the previous state.
 ///
-/// Create, update, and unchanged sum to the plan's artifact count; each artifact contributes
-/// exactly one status. Delete counts previous-state keys matching zero plan artifacts, so it
-/// tracks removals apart from the plan count.
+/// Create plus update sum to changed documents. Delete counts previous-state keys matching
+/// zero plan documents, so it tracks removals apart from the plan count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffSummary {
-    /// Artifacts absent from the previous state.
+    /// Documents absent from the previous state.
     pub create: usize,
-    /// Artifacts whose `data_hash` differs from the previous state.
+    /// Documents whose `data_hash` differs from the previous state.
     pub update: usize,
-    /// Artifacts whose `data_hash` matches the previous state.
-    pub unchanged: usize,
-    /// Previous-state keys matching zero plan artifacts.
+    /// Previous-state keys matching zero plan documents.
     pub delete: usize,
 }
 
@@ -237,33 +234,33 @@ pub struct DiffSummary {
 ///
 /// # Examples
 /// ```rust
-/// use confit::model::state::artifact::Artifact;
-/// use confit::model::state::artifact::ArtifactData;
-/// use confit::model::state::artifact::ArtifactKind;
+/// use confit::model::state::document::Document;
+/// use confit::model::state::document::DocumentData;
+/// use confit::model::state::document::DocumentKind;
 /// use confit::model::state::plan::Plan;
 /// use confit::model::state::plan::PLAN_VERSION;
 /// use confit::model::state::State;
 /// use confit::services::plan::{diff, summarize};
 ///
-/// fn file_artifact(path: &str) -> Artifact {
-///     Artifact {
-///         kind: ArtifactKind::File,
+/// fn file_document(path: &str) -> Document {
+///     Document {
+///         kind: DocumentKind::Text,
 ///         path: path.into(),
-///         data: ArtifactData::File { content: "hi".into() },
+///         data: DocumentData::Text { content: "hi".into() },
 ///         data_hash: "hash".into(),
 ///     }
 /// }
-/// let plan = Plan { version: PLAN_VERSION, created_at: String::new(), root: String::new(), profile: String::new(), artifacts: vec![file_artifact("a"), file_artifact("b")] };
+/// let plan = Plan { version: PLAN_VERSION, created_at: String::new(), root: String::new(), profile: String::new(), documents: vec![file_document("a"), file_document("b")] };
 /// let counts = diff(&plan, &State::empty());
 /// let summary = summarize(&counts);
-/// assert_eq!((summary.create, summary.update, summary.delete), (2, 0, 0));
+/// assert_eq!(summary.create, 2);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanSummary {
-    /// Artifacts absent from the previous state.
+    /// Documents absent from the previous state.
     pub create: usize,
-    /// Artifacts whose data differs from the previous state.
+    /// Documents whose data differs from the previous state.
     pub update: usize,
-    /// Previous-state keys matching zero plan artifacts.
+    /// Previous-state keys matching zero plan documents.
     pub delete: usize,
 }

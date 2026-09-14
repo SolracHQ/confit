@@ -11,7 +11,7 @@ use thiserror::Error;
 /// logs and plan debug sections alongside errors.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Covers two contributions or artifacts failing to combine.
+    /// Covers two contributions or documents failing to combine.
     ///
     /// Raised for structural conflicts alone (matching path with differing
     /// kind). Order-resolved shadowing merges normally.
@@ -22,7 +22,7 @@ pub enum Error {
     Store(String),
     /// Covers Lua evaluation or Lua value conversion failures.
     ///
-    /// Spans function-values in artifact data plus unrecognized fields;
+    /// Spans function-values in document data plus unrecognized fields;
     /// the message names tool and field.
     #[error("lua error: {0}")]
     Lua(String),

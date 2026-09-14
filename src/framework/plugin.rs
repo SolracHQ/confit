@@ -27,11 +27,23 @@ const NOTED_KEY: &str = "confit.plugin.noted";
 /// Each source compiles in from `plugins/{user}/{name}/plugin.lua` and
 /// installs eagerly under `confit.plugin.{user}.{name}`. Later defaults
 /// extend this list with their own `include_str!` line.
-const EMBEDDED: &[(&str, &str, &str)] = &[(
-    "solrachq",
-    "mise_package",
-    include_str!("../../plugins/solrachq/mise_package/plugin.lua"),
-)];
+const EMBEDDED: &[(&str, &str, &str)] = &[
+    (
+        "solrachq",
+        "mise",
+        include_str!("../../plugins/solrachq/mise/plugin.lua"),
+    ),
+    (
+        "solrachq",
+        "merge",
+        include_str!("../../plugins/solrachq/merge/plugin.lua"),
+    ),
+    (
+        "solrachq",
+        "template",
+        include_str!("../../plugins/solrachq/template/plugin.lua"),
+    ),
+];
 
 /// Installs the plugin namespace on a Lua state.
 ///
@@ -53,7 +65,7 @@ const EMBEDDED: &[(&str, &str, &str)] = &[(
 /// let lua = Lua::new();
 /// assert!(install(&lua, None).is_ok());
 /// let result: mlua::Result<String> =
-///     lua.load(r#"return type(confit.plugin.solrachq.mise_package)"#).eval();
+///     lua.load(r#"return type(confit.plugin.solrachq.mise.package)"#).eval();
 /// assert!(matches!(&result, Ok(kind) if kind == "function"));
 /// ```
 pub fn install(lua: &Lua, plugins: Option<PathBuf>) -> mlua::Result<()> {

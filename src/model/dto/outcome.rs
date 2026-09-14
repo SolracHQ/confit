@@ -3,7 +3,7 @@
 //! Evaluated plan data returned for presentation to render.
 
 use super::super::state::plan::Plan;
-use super::diff::{ArtifactDetail, DiskDetail, PlanSummary};
+use super::diff::{DiskDetail, DocumentDetail, PlanSummary};
 use super::warning::PlanWarning;
 
 /// Evaluated plan plus warnings and counts for presentation to render.
@@ -15,9 +15,9 @@ pub struct PlanOutcome {
     pub warnings: Vec<PlanWarning>,
     /// Lifecycle counts for the summary line.
     pub summary: PlanSummary,
-    /// Per artifact entry diffs in plan order.
-    pub details: Vec<ArtifactDetail>,
-    /// Per artifact disk diffs in plan order.
+    /// Per document entry diffs in plan order.
+    pub details: Vec<DocumentDetail>,
+    /// Per document disk diffs in plan order.
     pub disk: Vec<DiskDetail>,
 }
 
@@ -30,8 +30,8 @@ pub struct StatusOutcome {
     pub warnings: Vec<PlanWarning>,
     /// Lifecycle counts for the summary line.
     pub summary: PlanSummary,
-    /// Per artifact entry diffs in plan order.
-    pub details: Vec<ArtifactDetail>,
-    /// Per artifact disk diffs in plan order.
+    /// Per document entry diffs in plan order.
+    pub details: Vec<DocumentDetail>,
+    /// Per document disk diffs in plan order.
     pub disk: Vec<DiskDetail>,
 }

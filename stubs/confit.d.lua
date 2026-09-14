@@ -1,41 +1,108 @@
 ---@meta _
 
 ---@class Config
--- Rust-owned config handle. Mutated in place by add_artifact.
+-- Rust-owned config handle. Mutated in place by add_document and add_patch.
 local Config = {}
 
 ---@class RcOpts
 ---@field when? table|fun(shell: ShellNs): table # Guard condition table, or a builder function receiving confit.shell.
----@field priority? integer # Merge priority, higher wins. Defaults to 0.
--- Options for confit.artifact.rc constructors.
+---@field lane? string # Init lane, "first" or "last". Default middle. Stored on init entries only.
+-- Options for confit.document.rc entry builders.
 local RcOpts = {}
 
----@class InitSpec
----@field eval string[]? # Command argv evaluated as eval "$(argv...)". Exactly one of eval/cmd/source.
----@field cmd string[]? # Command argv run as a plain line. Exactly one of eval/cmd/source.
----@field source string? # File path sourced as source path. Exactly one of eval/cmd/source.
--- Init entry for confit.artifact.rc.init().
-local InitSpec = {}
+---@class RcSections
+---@field profile? RcEntry[] # Setup entries: environment, profile, path, plus early init.
+---@field config? RcEntry[] # Interactive entries: aliases.
+---@field final? RcEntry[] # Final entries: init list in listed order.
+-- Sections for confit.document.rc.new. Every key stays optional. Unknown keys are plan errors.
+local RcSections = {}
 
----@class Artifact
--- Artifact value built by confit.artifact constructors. Attached with config:add_artifact.
-local Artifact = {}
+---@class StructuredArgs
+---@field path string # Destination path.
+---@field data table # Data-only table.
+-- Input for confit.document.structured. Unknown keys are plan errors.
+local StructuredArgs = {}
 
----@class RcEntry
--- Rc entry handle built by confit.artifact.rc constructors. Attached with config:add_artifact.
+---@class StructuredDocument
+---@field path string # Destination path.
+---@field data table # Data-only table.
+-- Plain structured document table. Carries a structured marker.
+local StructuredDocument = {}
+
+---@class TextDocument
+---@field path string # Destination path.
+---@field content string # Exact file text.
+-- Plain text document table. Carries a text marker.
+local TextDocument = {}
+
+---@class LinkDocument
+---@field path string # Link path.
+---@field target string # Link target.
+-- Plain link document table. Carries a link marker.
+local LinkDocument = {}
+
+---@class RcDocument
+---@field profile? RcEntry[] # Setup entries.
+---@field config? RcEntry[] # Interactive entries.
+---@field final? RcEntry[] # Final entries.
+-- Plain rc document table. Carries an rc marker.
+local RcDocument = {}
+
+---@class Document : StructuredDocument, TextDocument, LinkDocument, RcDocument
+-- Plain document table built by confit.document constructors. Attached with config:add_document.
+local Document = {}
+
+---@class AliasEntry
+---@field name string # Alias name.
+---@field value string # Alias expansion.
+---@field when? table # Guard condition table.
+-- Plain alias entry table. Carries an alias area marker.
+local AliasEntry = {}
+
+---@class EnvEntry
+---@field name string # Variable name.
+---@field value string # Variable value.
+---@field when? table # Guard condition table.
+-- Plain env entry table. Carries an env area marker.
+local EnvEntry = {}
+
+---@class ProfileEntry
+---@field name string # Variable name.
+---@field value string # Directory value.
+---@field op string # Path operation, "prepend".
+---@field when? table # Guard condition table.
+-- Plain profile entry table. Carries a profile area marker.
+local ProfileEntry = {}
+
+---@class EvalEntry
+---@field eval table # Eval spec with argv plus lane.
+---@field when? table # Guard condition table.
+-- Plain eval entry table. Carries an init area marker.
+local EvalEntry = {}
+
+---@class CmdEntry
+---@field cmd table # Cmd spec with argv plus lane.
+---@field when? table # Guard condition table.
+-- Plain cmd entry table. Carries an init area marker.
+local CmdEntry = {}
+
+---@class SourceEntry
+---@field source table # Source spec with path plus lane.
+---@field when? table # Guard condition table.
+-- Plain source entry table. Carries an init area marker.
+local SourceEntry = {}
+
+---@class RcEntry : AliasEntry, EnvEntry, ProfileEntry, EvalEntry, CmdEntry, SourceEntry
+-- Plain rc entry table built by confit.document.rc constructors. Attached with config:add_document.
 local RcEntry = {}
 
----@class MergeOpts
----@field shallow boolean? # Merge top-level keys only. Defaults to false.
----@field list_append boolean? # Concatenate arrays instead of replacing. Defaults to false.
--- Options for confit.resources.merge. Unknown keys are plan errors.
-local MergeOpts = {}
+---@class Patch
+-- Patch handle built by confit.patch constructors. Attached with config:add_patch.
+local Patch = {}
 
----@class TemplateOpts
----@field src string # Inline content or project-root-relative path.
----@field vars table? # Render variables.
--- Input for confit.artifact.template.
-local TemplateOpts = {}
+---@class PatchProxy
+-- Live document wrapper handed to patch callbacks. Wraps one live table.
+local PatchProxy = {}
 
 ---@class EnvEqOpts
 ---@field key string # Variable name.
@@ -49,17 +116,34 @@ local EnvEqOpts = {}
 local EnvSetOpts = {}
 
 ---@class Resources
--- File reads and table merge namespace.
+-- File reads namespace. Reads stay jailed to the project root.
 local Resources = {}
 
----@class ArtifactNs
+---@class TextNs
+-- Template rendering namespace.
+local TextNs = {}
+
+---@class DocumentNs
 ---@field rc RcNs # Rc entry table constructors namespace.
--- Artifact value constructors namespace.
-local ArtifactNs = {}
+-- Document table constructors namespace.
+local DocumentNs = {}
 
 ---@class RcNs
--- Rc entry handle constructors namespace. Each entry goes to config:add_artifact.
+-- Rc entry table constructors namespace. Each entry goes to config:add_document.
 local RcNs = {}
+
+---@class PatchNs
+-- Patch handle constructors namespace. Each patch goes to config:add_patch.
+local PatchNs = {}
+
+---@class Priority
+---@field MINOR string # Lowest priority.
+---@field LOW string # Low priority.
+---@field NORMAL string # Default priority.
+---@field HIGH string # High priority.
+---@field MAJOR string # Highest priority.
+-- Patch priority levels for confit.patch handles.
+local Priority = {}
 
 ---@class ShellNs
 ---@field SHELL string # Template slot for the declared shell name, "{{shell}}". Materialized per shell at fold time.
@@ -81,16 +165,20 @@ local PluginNs = {}
 
 ---@class Confit
 ---@field config fun(name: string): Config
----@field artifact ArtifactNs
+---@field document DocumentNs
+---@field patch PatchNs
+---@field priority Priority
 ---@field shell ShellNs
 ---@field resources Resources
+---@field text TextNs
 ---@field path PathLib
 ---@field plugin PluginNs
 -- The global scripting object. Provides config handles plus value namespaces.
 local Confit = {}
 
 ---@class Profile
----@field shells string[] # Shells to render, e.g. {"bash"}. One rc artifact per entry.
+---@field shells string[] # Shells to render, e.g. {"bash"}. One rc document per entry.
+---@field documents Document[]? # Machine-owned base documents, e.g. the rc document.
 ---@field configs Config[] # Config handles composed into this profile.
 -- Profile return table. Extra keys are ignored.
 local Profile = {}
@@ -100,24 +188,28 @@ local Profile = {}
 ---@return Config
 function Confit.config(name) end
 
--- Attaches a confit.artifact value or rc entry handle to the config.
----@param artifact Artifact|RcEntry # Value from a confit.artifact constructor, tuned by with_priority (and when for rc entries).
-function Config:add_artifact(artifact) end
+-- Attaches a confit.document table or rc entry table to the config.
+---@param document Document|RcEntry # Table from a confit.document constructor, tuned by when opts for rc entries.
+function Config:add_document(document) end
 
--- Sets the merge priority on a file artifact value. Chainable.
----@param n integer # Merge priority, higher wins.
----@return Artifact
-function Artifact:with_priority(n) end
+-- Attaches a confit.patch value to the config, stamping the config name as owner.
+---@param patch Patch # Value from a confit.patch constructor, tuned by priority.
+function Config:add_patch(patch) end
 
--- Sets the guard condition on an rc entry handle. Chainable.
----@param cond table|fun(shell: ShellNs): table # Guard condition table, or a builder function receiving confit.shell.
----@return RcEntry
-function RcEntry:when(cond) end
+-- Sets the merge priority on a patch handle. Chainable.
+---@param level string # One confit.priority level. Defaults to NORMAL.
+---@return Patch
+function Patch:priority(level) end
 
--- Sets the merge priority on an rc entry handle. Chainable.
----@param n integer # Merge priority, higher wins.
----@return RcEntry
-function RcEntry:with_priority(n) end
+-- Writes one path through the patch proxy.
+---@param path string # Dotted keys for structured documents, one of profile/config/final for rc documents.
+---@param value any # Data-only value, or an rc entry table for rc documents.
+function PatchProxy:set(path, value) end
+
+-- Extends one list through the patch proxy.
+---@param path string # Dotted keys for structured documents, one of profile/config/final for rc documents.
+---@param value any # Data-only value, or an rc entry table for rc documents.
+function PatchProxy:append(path, value) end
 
 -- Reads a root-relative TOML file into a Lua table.
 ---@param path string # Project-root-relative path, e.g. "resources/starship.toml".
@@ -134,81 +226,102 @@ function Resources.load_json(path) end
 ---@return table
 function Resources.load_yaml(path) end
 
--- Deep-merges overlay over base. Tables recurse, everything else last-wins.
----@param base table # Base table.
----@param overlay table # Overlay table, wins on overlap.
----@param opts MergeOpts? # Optional tweaks.
----@return table
-function Resources.merge(base, overlay, opts) end
+-- Reads a root-relative text file into a Lua string.
+---@param path string # Project-root-relative path, e.g. "resources/starship.toml.j2".
+---@return string
+function Resources.load_text(path) end
 
--- Builds a TOML artifact value from a data table.
----@param path string # Destination path.
----@param data table # Data-only table.
----@return Artifact
-function ArtifactNs.toml(path, data) end
+-- Renders a template string with a vars table.
+---@param template string # Template text with minijinja slots.
+---@param vars table # Variables feeding template slots.
+---@return string
+function TextNs.render(template, vars) end
 
--- Builds a JSON artifact value from a data table.
----@param path string # Destination path.
----@param data table # Data-only table.
----@return Artifact
-function ArtifactNs.json(path, data) end
+-- Builds a structured document table from format plus args.
+---@param format string # One of "json", "toml", or "yaml".
+---@param args StructuredArgs # Destination path plus data-only table.
+---@return Document
+function DocumentNs.structured(format, args) end
 
--- Builds a YAML artifact value from a data table.
----@param path string # Destination path.
----@param data table # Data-only table.
----@return Artifact
-function ArtifactNs.yaml(path, data) end
-
--- Builds a literal file artifact value.
+-- Builds a literal text document table.
 ---@param path string # Destination path.
 ---@param content string # Exact file text.
----@return Artifact
-function ArtifactNs.file(path, content) end
+---@return Document
+function DocumentNs.text(path, content) end
 
--- Builds a template artifact value.
----@param path string # Destination path.
----@param opts TemplateOpts # Source plus variables.
----@return Artifact
-function ArtifactNs.template(path, opts) end
-
--- Builds a symlink artifact value.
+-- Builds a symlink document table.
 ---@param path string # Link path.
 ---@param target string # Link target.
----@return Artifact
-function ArtifactNs.link(path, target) end
+---@return Document
+function DocumentNs.link(path, target) end
 
--- Builds one alias rc entry handle.
+-- Builds the single rc document table from section lists.
+---@param sections RcSections # Optional profile/config/final entry-table lists.
+---@return Document
+function RcNs.new(sections) end
+
+-- Builds one alias rc entry table.
 ---@param name string # Alias name, e.g. "cat".
 ---@param value string # Alias expansion, e.g. "bat".
----@param opts RcOpts? # Optional guard plus priority. Both tunable later through methods.
+---@param opts RcOpts? # Optional guard plus lane.
 ---@return RcEntry
 function RcNs.alias(name, value, opts) end
 
--- Builds one env rc entry handle.
+-- Builds one env rc entry table.
 ---@param name string # Variable name.
 ---@param value string # Variable value.
----@param opts RcOpts? # Optional guard plus priority. Both tunable later through methods.
+---@param opts RcOpts? # Optional guard plus lane.
 ---@return RcEntry
 function RcNs.env(name, value, opts) end
 
--- Builds one profile rc entry handle.
+-- Builds one profile rc entry table.
 ---@param name string # Variable name.
 ---@param value string # Variable value.
----@param opts RcOpts? # Optional guard plus priority. Both tunable later through methods.
+---@param opts RcOpts? # Optional guard plus lane.
 ---@return RcEntry
 function RcNs.profile(name, value, opts) end
 
--- Builds one profile_path rc entry handle.
+-- Builds one profile_path rc entry table.
 ---@param dir string # Directory, e.g. "~/.cargo/bin".
----@param opts RcOpts? # Optional guard plus priority. Both tunable later through methods.
+---@param opts RcOpts? # Optional guard plus lane.
 ---@return RcEntry
 function RcNs.profile_path(dir, opts) end
 
--- Builds one init rc entry handle.
----@param spec InitSpec # Table with exactly one of eval/cmd holding a string argv array, or source holding a string path.
----@param opts RcOpts? # Optional guard plus priority. Both tunable later through methods.
+-- Builds one path_entry rc entry table, prepend sugar for PATH.
+---@param dir string # Directory, e.g. "~/.cargo/bin".
+---@param opts RcOpts? # Optional guard plus lane.
 ---@return RcEntry
-function RcNs.init(spec, opts) end
+function RcNs.path_entry(dir, opts) end
+
+-- Builds one eval init rc entry table.
+---@param argv string[] # Command argv evaluated as eval "$(argv...)".
+---@param opts RcOpts? # Optional guard plus lane.
+---@return RcEntry
+function RcNs.eval(argv, opts) end
+
+-- Builds one cmd init rc entry table.
+---@param argv string[] # Command argv run as a plain line.
+---@param opts RcOpts? # Optional guard plus lane.
+---@return RcEntry
+function RcNs.cmd(argv, opts) end
+
+-- Builds one source init rc entry table.
+---@param path string # File path sourced as source path.
+---@param opts RcOpts? # Optional guard plus lane.
+---@return RcEntry
+function RcNs.source(path, opts) end
+
+-- Builds an rc patch handle carrying the callback for live execution.
+---@param callback fun(document: PatchProxy) # Callback running set and append live.
+---@return Patch
+function PatchNs.rc(callback) end
+
+-- Builds a structured patch handle carrying the callback for live execution.
+---@param format string # One of "json", "toml", or "yaml".
+---@param path string # Target document path.
+---@param callback fun(data: PatchProxy) # Callback running set and append live.
+---@return Patch
+function PatchNs.structured(format, path, callback) end
 
 -- Builds an env_eq condition table.
 ---@param opts EnvEqOpts # Variable name plus expected value.

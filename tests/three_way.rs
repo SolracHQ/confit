@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use confit::binding::evaluate;
 use confit::model::dto::diff::ChangeLine;
 use confit::model::dto::diff::Sigil;
 use confit::model::dto::snapshot::Snapshot;
@@ -26,7 +27,7 @@ use confit::presentation::{render_drift, render_plan, warning_line};
 use confit::repository::MemoryFilesystem;
 use confit::security::sha256_hex;
 use confit::services::diff::detail_disk;
-use confit::services::plan::{diff, disk_warnings, evaluate_profile, snapshot_current, summarize};
+use confit::services::plan::{diff, disk_warnings, snapshot_current, summarize};
 
 /// Fixture root and profile path inside the repo.
 fn fixture_paths() -> (PathBuf, PathBuf) {
@@ -39,13 +40,15 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
 /// Evaluate the real fixture and plan with stable labels.
 fn build_plan() -> (Plan, PathBuf) {
     let (root, profile) = fixture_paths();
-    let graph = evaluate_profile(&root, &profile).expect("fixture evaluates");
+    let graph = evaluate(&root, &profile, None).expect("fixture evaluates");
     let plan = confit::services::plan::build_plan(
         &graph,
         "examples/0-basic_tool",
         "examples/0-basic_tool/profile.lua",
+        false,
     )
-    .expect("plan");
+    .expect("plan")
+    .0;
     (plan, root)
 }
 
@@ -61,44 +64,39 @@ fn expanded_key(path: &str) -> String {
     }
 }
 
-/// Render every plan artifact to its desired bytes, keyed `"kind:path"`.
-fn render_all(plan: &Plan, root: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
-    let files = MemoryFilesystem {
-        files: RefCell::new(BTreeMap::new()),
-        failures: RefCell::new(BTreeMap::new()),
-    };
-    confit::services::render::render_baseline(plan, root, &files).expect("renders")
+/// Render every plan document to its desired bytes, keyed `"kind:path"`.
+fn render_all(plan: &Plan) -> BTreeMap<String, Vec<u8>> {
+    confit::services::render::render_baseline(plan).expect("renders")
 }
 
 #[test]
-fn clean_disk_reports_unchanged_without_warnings() {
-    let (plan, root) = build_plan();
-    let rendered = render_all(&plan, &root);
+fn clean_disk_reports_stable_without_warnings() {
+    let (plan, _root) = build_plan();
+    let rendered = render_all(&plan);
     let fs = MemoryFilesystem {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(BTreeMap::new()),
     };
-    for artifact in &plan.artifacts {
-        let key = format!("{}:{}", artifact.kind, artifact.path);
+    for document in &plan.documents {
+        let key = format!("{}:{}", document.kind, document.path);
         fs.files
             .borrow_mut()
-            .insert(expanded_key(&artifact.path), rendered[&key].clone());
+            .insert(expanded_key(&document.path), rendered[&key].clone());
     }
     let snapshots = snapshot_current(&fs, &plan);
     // Seed the previous record from the plan itself: hashes match.
     let mut previous = State::empty();
-    for artifact in &plan.artifacts {
-        previous.artifacts.insert(
-            format!("{}:{}", artifact.kind, artifact.path),
+    for document in &plan.documents {
+        previous.documents.insert(
+            format!("{}:{}", document.kind, document.path),
             StateEntry {
-                data_hash: artifact.data_hash.clone(),
-                output_hash: sha256_hex(&rendered[&format!("{}:{}", artifact.kind, artifact.path)]),
+                data_hash: document.data_hash.clone(),
                 data: None,
             },
         );
     }
     let counts = diff(&plan, &previous);
-    assert_eq!((counts.create, counts.update, counts.unchanged), (0, 0, 2));
+    assert_eq!((counts.create, counts.update), (0, 0));
     assert_eq!(counts.delete, 0);
     let warnings = disk_warnings(&plan, &previous, &snapshots, &rendered);
     assert!(warnings.is_empty());
@@ -111,16 +109,16 @@ fn clean_disk_reports_unchanged_without_warnings() {
 
 #[test]
 fn edited_disk_reports_manual_modification() {
-    let (plan, root) = build_plan();
-    let rendered = render_all(&plan, &root);
+    let (plan, _root) = build_plan();
+    let rendered = render_all(&plan);
     let fs = MemoryFilesystem {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(BTreeMap::new()),
     };
-    for artifact in &plan.artifacts {
+    for document in &plan.documents {
         fs.files.borrow_mut().insert(
-            expanded_key(&artifact.path),
-            rendered[&format!("{}:{}", artifact.kind, artifact.path)].clone(),
+            expanded_key(&document.path),
+            rendered[&format!("{}:{}", document.kind, document.path)].clone(),
         );
     }
     // Hand-edit the mise file on disk.
@@ -130,18 +128,17 @@ fn edited_disk_reports_manual_modification() {
     );
     let snapshots = snapshot_current(&fs, &plan);
     let mut previous = State::empty();
-    for artifact in &plan.artifacts {
-        previous.artifacts.insert(
-            format!("{}:{}", artifact.kind, artifact.path),
+    for document in &plan.documents {
+        previous.documents.insert(
+            format!("{}:{}", document.kind, document.path),
             StateEntry {
-                data_hash: artifact.data_hash.clone(),
-                output_hash: String::new(),
+                data_hash: document.data_hash.clone(),
                 data: None,
             },
         );
     }
     let counts = diff(&plan, &previous);
-    assert_eq!((counts.create, counts.update, counts.unchanged), (0, 0, 2));
+    assert_eq!((counts.create, counts.update), (0, 0));
     let warnings = disk_warnings(&plan, &previous, &snapshots, &rendered);
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].path, "~/.config/mise/config.toml");
@@ -154,7 +151,7 @@ fn edited_disk_reports_manual_modification() {
     let disk = detail_disk(&plan, &rendered, &snapshots);
     let mise = disk
         .iter()
-        .find(|entry| entry.key == "toml:~/.config/mise/config.toml")
+        .find(|entry| entry.key == "structured:~/.config/mise/config.toml")
         .expect("mise disk detail");
     assert_eq!(
         mise.lines,
@@ -171,15 +168,15 @@ fn edited_disk_reports_manual_modification() {
         "{text}"
     );
     assert!(
-        text.contains("  ~ artifact \"toml\" \"~/.config/mise/config.toml\" {"),
+        text.contains("  ~ document \"structured\" \"~/.config/mise/config.toml\" {"),
         "{text}"
     );
 }
 
 #[test]
 fn untracked_disk_file_warns_overwrite() {
-    let (plan, root) = build_plan();
-    let rendered = render_all(&plan, &root);
+    let (plan, _root) = build_plan();
+    let rendered = render_all(&plan);
     let fs = MemoryFilesystem {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(BTreeMap::new()),
@@ -190,7 +187,7 @@ fn untracked_disk_file_warns_overwrite() {
     let snapshots = snapshot_current(&fs, &plan);
     let previous = State::empty();
     let counts = diff(&plan, &previous);
-    assert_eq!((counts.create, counts.update, counts.unchanged), (2, 0, 0));
+    assert_eq!((counts.create, counts.update), (2, 0));
     let warnings = disk_warnings(&plan, &previous, &snapshots, &rendered);
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].kind, WarningKind::OverwriteUntracked);
@@ -201,8 +198,8 @@ fn untracked_disk_file_warns_overwrite() {
 }
 
 #[test]
-fn unreadable_disk_warns_and_stays_unchanged() {
-    let (plan, root) = build_plan();
+fn unreadable_disk_warns_and_stays_matching() {
+    let (plan, _root) = build_plan();
     let fs = MemoryFilesystem {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(BTreeMap::new()),
@@ -212,22 +209,21 @@ fn unreadable_disk_warns_and_stays_unchanged() {
         .insert(expanded_key("~/.bashrc"), "permission denied".to_string());
     let snapshots = snapshot_current(&fs, &plan);
     let rc = plan
-        .artifacts
+        .documents
         .iter()
-        .find(|artifact| artifact.path == "~/.bashrc")
-        .expect("rc artifact");
+        .find(|document| document.path == "~/.bashrc")
+        .expect("rc document");
     let mut previous = State::empty();
-    previous.artifacts.insert(
+    previous.documents.insert(
         "rc:~/.bashrc".to_string(),
         StateEntry {
             data_hash: rc.data_hash.clone(),
-            output_hash: String::new(),
             data: None,
         },
     );
-    let rendered = render_all(&plan, &root);
+    let rendered = render_all(&plan);
     let counts = diff(&plan, &previous);
-    assert_eq!((counts.create, counts.update, counts.unchanged), (1, 0, 1));
+    assert_eq!((counts.create, counts.update), (1, 0));
     let warnings = disk_warnings(&plan, &previous, &snapshots, &rendered);
     assert_eq!(warnings.len(), 1);
     assert!(
@@ -245,32 +241,22 @@ fn unreadable_disk_warns_and_stays_unchanged() {
 fn stale_record_counts_update_and_delete_flows_to_summary() {
     let (plan, _root) = build_plan();
     let mut previous = State::empty();
-    previous.artifacts.insert(
+    previous.documents.insert(
         "rc:~/.bashrc".to_string(),
         StateEntry {
             data_hash: "stale".into(),
-            output_hash: String::new(),
             data: None,
         },
     );
-    previous.artifacts.insert(
-        "toml:gone.toml".to_string(),
+    previous.documents.insert(
+        "structured:gone.toml".to_string(),
         StateEntry {
             data_hash: "old".into(),
-            output_hash: String::new(),
             data: None,
         },
     );
     let counts = diff(&plan, &previous);
-    assert_eq!(
-        (
-            counts.create,
-            counts.update,
-            counts.unchanged,
-            counts.delete
-        ),
-        (1, 1, 0, 1)
-    );
+    assert_eq!((counts.create, counts.update, counts.delete), (1, 1, 1));
     let details = confit::services::diff::detail(&plan, &previous);
     let shaped = summarize(&counts);
     let text = render_plan(&plan, &shaped, &details);
@@ -282,29 +268,29 @@ fn stale_record_counts_update_and_delete_flows_to_summary() {
 
 #[test]
 fn file_disk_diff_is_unified_and_snapshot_variants_stay_silent() {
-    use confit::model::state::artifact::Artifact;
-    use confit::model::state::artifact::ArtifactData;
-    use confit::model::state::artifact::ArtifactKind;
+    use confit::model::state::document::Document;
+    use confit::model::state::document::DocumentData;
+    use confit::model::state::document::DocumentKind;
 
     let plan = Plan {
         version: PLAN_VERSION,
         created_at: "2026-09-09T00:00:00Z".into(),
         root: "r".into(),
         profile: "p".into(),
-        artifacts: vec![Artifact {
-            kind: ArtifactKind::File,
+        documents: vec![Document {
+            kind: DocumentKind::Text,
             path: "dot.txt".into(),
-            data: ArtifactData::File {
+            data: DocumentData::Text {
                 content: "one\ntwo\n".into(),
             },
             data_hash: "hash".into(),
         }],
     };
-    let rendered = [("file:dot.txt".to_string(), b"one\ntwo\n".to_vec())]
+    let rendered = [("text:dot.txt".to_string(), b"one\ntwo\n".to_vec())]
         .into_iter()
         .collect();
     let snapshots = [(
-        "file:dot.txt".to_string(),
+        "text:dot.txt".to_string(),
         Snapshot::Present {
             bytes: b"one\nCHANGED\n".to_vec(),
             hash: sha256_hex(b"one\nCHANGED\n"),
@@ -332,7 +318,7 @@ fn file_disk_diff_is_unified_and_snapshot_variants_stay_silent() {
     );
     assert!(note.contains("  # dot.txt has changed"), "{note}");
     assert!(
-        note.contains("  ~ artifact \"file\" \"dot.txt\" {"),
+        note.contains("  ~ document \"text\" \"dot.txt\" {"),
         "{note}"
     );
     assert!(note.contains("+two"), "{note}");

@@ -1,10 +1,11 @@
 //! Resources
 //!
-//! Root-relative file loads plus table merge for Lua.
+//! Root-relative file loads for Lua.
 
 use std::path::{Component, Path, PathBuf};
 
-use mlua::{Lua, MultiValue, Table, Value};
+use mlua::{Lua, Value};
+
 use serde_json::Value as Json;
 
 use super::confit_table;
@@ -15,18 +16,6 @@ use super::confit_table;
 /// future path helpers resolve under the same `--root`. Readers use
 /// `lua.named_registry_value::<String>(PROJECT_ROOT_KEY)`.
 pub const PROJECT_ROOT_KEY: &str = "confit.project_root";
-
-/// Tweaks for [`install`] merge behavior.
-///
-/// Both flags default to `false`. Unknown option keys are plan errors
-/// naming the key; non-boolean values for known keys are Lua errors.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MergeOpts {
-    /// Merge top-level keys only, replacing nested tables wholesale.
-    pub shallow: bool,
-    /// Concatenate arrays instead of replacing, keeping every element.
-    pub list_append: bool,
-}
 
 /// Installs the resources namespace on a Lua state.
 ///
@@ -58,8 +47,10 @@ pub fn install(lua: &Lua, root: PathBuf) -> mlua::Result<()> {
         lua.create_function(move |lua, path: Value| load_yaml_impl(lua, &yaml_root, path))?;
     resources.set("load_yaml", load_yaml)?;
 
-    let merge = lua.create_function(|lua, args: MultiValue| merge_impl(lua, args))?;
-    resources.set("merge", merge)?;
+    let text_root = root.clone();
+    let load_text =
+        lua.create_function(move |lua, path: Value| load_text_impl(lua, &text_root, path))?;
+    resources.set("load_text", load_text)?;
 
     confit.set("resources", resources)?;
     Ok(())
@@ -222,245 +213,26 @@ fn load_yaml_impl(lua: &Lua, root: &Path, path: Value) -> mlua::Result<Value> {
     json_to_lua(lua, &json)
 }
 
-/// Merges two Lua tables into a fresh table.
+/// Loads a text file as a Lua string.
 ///
 /// # Arguments
 ///
-/// * `lua` - state building the result.
-/// * `args` - raw call arguments holding base plus overlay plus options.
+/// * `_lua` - state, unused for plain text.
+/// * `root` - project root.
+/// * `path` - raw Lua path argument.
 ///
 /// # Returns
 ///
-/// Merged Lua value.
+/// File text.
 ///
 /// # Errors
 ///
-/// Fails with Lua errors for table shape mismatches and with plan errors for unexpected option keys.
-fn merge_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Value> {
-    const CALLER: &str = "resources.merge";
-    let collected: Vec<Value> = args.into_iter().collect();
-    if collected.len() < 2 || collected.len() > 3 {
-        return Err(lua_err!("{CALLER}: expects (base, overlay, opts?)"));
-    }
-    let base = match collected.first() {
-        Some(Value::Table(table)) => table.clone(),
-        _ => {
-            return Err(lua_err!("{CALLER}: argument 'base' must be a table"));
-        }
-    };
-    let overlay = match collected.get(1) {
-        Some(Value::Table(table)) => table.clone(),
-        _ => {
-            return Err(lua_err!("{CALLER}: argument 'overlay' must be a table"));
-        }
-    };
-    let opts = match collected.get(2) {
-        None | Some(Value::Nil) => MergeOpts::default(),
-        Some(Value::Table(table)) => parse_merge_opts(table, CALLER)?,
-        Some(_) => {
-            return Err(lua_err!("{CALLER}: field 'opts' must be a table"));
-        }
-    };
-    let base_json = table_to_json(&base, "resources.merge argument 'base'")?;
-    let overlay_json = table_to_json(&overlay, "resources.merge argument 'overlay'")?;
-    let merged = merge_value(&base_json, &overlay_json, &opts, 0);
-    json_to_lua(lua, &merged)
-}
-
-/// Parses merge options from a Lua table.
-///
-/// # Arguments
-///
-/// * `table` - raw option table.
-/// * `caller` - calling function name for errors.
-///
-/// # Returns
-///
-/// Merge options holding flag values.
-///
-/// # Errors
-///
-/// Fails with plan errors for unexpected keys and with Lua errors for flag values of other shapes.
-fn parse_merge_opts(table: &Table, caller: &str) -> mlua::Result<MergeOpts> {
-    let mut opts = MergeOpts::default();
-    for pair in table.pairs::<Value, Value>() {
-        let (key, value) = pair?;
-        let name = match key {
-            Value::String(text) => text.to_string_lossy(),
-            _ => {
-                return Err(plan_err!("{caller}: unknown option '<non-string key>'"));
-            }
-        };
-        match name.as_str() {
-            "shallow" => match value {
-                Value::Boolean(flag) => opts.shallow = flag,
-                _ => {
-                    return Err(lua_err!("{caller}: field 'shallow' must be a boolean"));
-                }
-            },
-            "list_append" => match value {
-                Value::Boolean(flag) => opts.list_append = flag,
-                _ => {
-                    return Err(lua_err!("{caller}: field 'list_append' must be a boolean"));
-                }
-            },
-            _ => {
-                return Err(plan_err!("{caller}: unknown option '{name}'"));
-            }
-        }
-    }
-    Ok(opts)
-}
-
-/// Merges an overlay JSON value over a base JSON value.
-///
-/// # Arguments
-///
-/// * `base` - earlier value.
-/// * `overlay` - winning value.
-/// * `opts` - tweaks for merge shape.
-/// * `depth` - recursion level from the top call.
-///
-/// # Returns
-///
-/// Merged JSON value.
-fn merge_value(base: &Json, overlay: &Json, opts: &MergeOpts, depth: usize) -> Json {
-    match (base, overlay) {
-        (Json::Object(base_map), Json::Object(overlay_map)) if !opts.shallow || depth == 0 => {
-            let mut merged = base_map.clone();
-            for (key, overlay_value) in overlay_map {
-                match merged.remove(key) {
-                    Some(base_value) => {
-                        if opts.shallow {
-                            match (&base_value, overlay_value) {
-                                (Json::Array(base_items), Json::Array(overlay_items))
-                                    if opts.list_append =>
-                                {
-                                    let mut items = base_items.clone();
-                                    items.extend(overlay_items.clone());
-                                    merged.insert(key.clone(), Json::Array(items));
-                                }
-                                _ => {
-                                    merged.insert(key.clone(), overlay_value.clone());
-                                }
-                            }
-                        } else {
-                            merged.insert(
-                                key.clone(),
-                                merge_value(&base_value, overlay_value, opts, depth + 1),
-                            );
-                        }
-                    }
-                    None => {
-                        merged.insert(key.clone(), overlay_value.clone());
-                    }
-                }
-            }
-            Json::Object(merged)
-        }
-        (Json::Array(base_items), Json::Array(overlay_items)) if opts.list_append => {
-            let mut items = base_items.clone();
-            items.extend(overlay_items.clone());
-            Json::Array(items)
-        }
-        _ => overlay.clone(),
-    }
-}
-
-/// Converts a Lua value into JSON.
-///
-/// # Arguments
-///
-/// * `value` - Lua value.
-/// * `ctx` - field path for errors.
-///
-/// # Returns
-///
-/// JSON holding value data.
-///
-/// # Errors
-///
-/// Fails with Lua errors for values carrying executable shapes.
-fn lua_to_json(value: Value, ctx: &str) -> mlua::Result<Json> {
-    match value {
-        Value::Nil => Ok(Json::Null),
-        Value::Boolean(flag) => Ok(Json::Bool(flag)),
-        Value::Integer(number) => Ok(Json::Number(number.into())),
-        Value::Number(number) => match serde_json::Number::from_f64(number) {
-            Some(parsed) => Ok(Json::Number(parsed)),
-            None => Err(lua_err!("{ctx} must be a finite number")),
-        },
-        Value::String(text) => Ok(Json::String(text.to_string_lossy())),
-        Value::Table(table) => table_to_json(&table, ctx),
-        Value::Function(_) => Err(lua_err!("{ctx} must be data-only (function not allowed)")),
-        Value::UserData(_) => Err(lua_err!("{ctx} must be data-only (userdata not allowed)")),
-        Value::LightUserData(_) => Err(lua_err!("{ctx} must be data-only (userdata not allowed)")),
-        Value::Thread(_) => Err(lua_err!("{ctx} must be data-only (thread not allowed)")),
-        Value::Error(_) => Err(lua_err!("{ctx} must be data-only")),
-        Value::Other(_) => Err(lua_err!("{ctx} must be data-only")),
-    }
-}
-
-/// Converts a Lua table into a JSON value.
-///
-/// # Arguments
-///
-/// * `table` - Lua table.
-/// * `ctx` - field path for errors.
-///
-/// # Returns
-///
-/// JSON array for dense arrays, else JSON object.
-///
-/// # Errors
-///
-/// Fails with Lua errors for keys of other shapes and for values carrying executable shapes.
-fn table_to_json(table: &Table, ctx: &str) -> mlua::Result<Json> {
-    let mut entries: Vec<(Value, Value)> = Vec::new();
-    for pair in table.pairs::<Value, Value>() {
-        entries.push(pair?);
-    }
-    if entries.is_empty() {
-        return Ok(Json::Object(serde_json::Map::new()));
-    }
-    let mut indexed: Vec<(i64, Value)> = Vec::new();
-    let mut all_integer = true;
-    for (key, value) in &entries {
-        match key {
-            Value::Integer(index) => indexed.push((*index, value.clone())),
-            _ => {
-                all_integer = false;
-                break;
-            }
-        }
-    }
-    if all_integer {
-        indexed.sort_by_key(|(index, _)| *index);
-        let dense = indexed
-            .iter()
-            .enumerate()
-            .all(|(position, (index, _))| *index == position as i64 + 1);
-        if dense {
-            let mut items = Vec::with_capacity(indexed.len());
-            for (index, value) in &indexed {
-                let child = format!("{ctx}[{index}]");
-                items.push(lua_to_json(value.clone(), &child)?);
-            }
-            return Ok(Json::Array(items));
-        }
-    }
-    let mut map = serde_json::Map::new();
-    for (key, value) in &entries {
-        let name = match key {
-            Value::String(text) => text.to_string_lossy(),
-            _ => {
-                return Err(lua_err!("{ctx} must be a table with string keys"));
-            }
-        };
-        let child = format!("{ctx}.{name}");
-        map.insert(name, lua_to_json(value.clone(), &child)?);
-    }
-    Ok(Json::Object(map))
+/// Fails with plan errors for read failures.
+fn load_text_impl(_lua: &Lua, root: &Path, path: Value) -> mlua::Result<String> {
+    const CALLER: &str = "resources.load_text";
+    let rel = take_rel_path(path, CALLER)?;
+    let full = resolve_under_root(root, &rel, CALLER)?;
+    std::fs::read_to_string(&full).map_err(|err| plan_err!("{CALLER}: cannot read '{rel}': {err}"))
 }
 
 /// Converts a JSON value into a Lua value.
@@ -588,7 +360,9 @@ mod tests {
     fn eval_table(lua: &Lua, expr: &str) -> Json {
         let value: Value = lua.load(expr).eval().expect("evaluate");
         match value {
-            Value::Table(table) => table_to_json(&table, "test").expect("convert"),
+            Value::Table(table) => {
+                super::super::document::table_to_json(&table, "test").expect("convert")
+            }
             other => panic!("expected table, got {other:?}"),
         }
     }
@@ -679,89 +453,34 @@ mod tests {
     }
 
     #[test]
-    fn merge_deep_last_wins_arrays() {
-        let (_dir, lua) = setup(&[]);
-        let merged = eval_table(
-            &lua,
-            r#"return confit.resources.merge({a = 1, n = {x = 1, y = 1}, l = {1, 2}}, {n = {y = 2}, l = {3}})"#,
-        );
-        assert_eq!(merged.get("a").and_then(Json::as_i64), Some(1));
-        let nested = merged.get("n").expect("nested");
-        assert_eq!(nested.get("x").and_then(Json::as_i64), Some(1));
-        assert_eq!(nested.get("y").and_then(Json::as_i64), Some(2));
-        assert_eq!(
-            merged.get("l").expect("list"),
-            &Json::Array(vec![Json::from(3)])
-        );
+    fn load_text_returns_file_bytes() {
+        let (_dir, lua) = setup(&[("note.txt", "hello {{ name }}\n")]);
+        let text: String = lua
+            .load(r#"return confit.resources.load_text("note.txt")"#)
+            .eval()
+            .expect("evaluate");
+        assert_eq!(text, "hello {{ name }}\n");
     }
 
     #[test]
-    fn merge_list_append_concatenates_without_dedup() {
-        let (_dir, lua) = setup(&[]);
-        let merged = eval_table(
-            &lua,
-            r#"return confit.resources.merge({l = {1, 2}}, {l = {2, 3}}, {list_append = true})"#,
-        );
-        assert_eq!(
-            merged.get("l").expect("list"),
-            &Json::Array(vec![
-                Json::from(1),
-                Json::from(2),
-                Json::from(2),
-                Json::from(3)
-            ])
-        );
-        let nested = eval_table(
-            &lua,
-            r#"return confit.resources.merge({n = {l = {1}}}, {n = {l = {2}}}, {list_append = true})"#,
-        );
-        assert_eq!(
-            nested
-                .get("n")
-                .and_then(|n| n.get("l"))
-                .expect("nested list"),
-            &Json::Array(vec![Json::from(1), Json::from(2)])
-        );
-    }
-
-    #[test]
-    fn merge_shallow_replaces_nested_wholesale() {
-        let (_dir, lua) = setup(&[]);
-        let merged = eval_table(
-            &lua,
-            r#"return confit.resources.merge({n = {x = 1, y = 1}, keep = 1}, {n = {y = 2}}, {shallow = true})"#,
-        );
-        let nested = merged.get("n").expect("nested");
-        assert!(
-            nested.get("x").is_none(),
-            "shallow drops base-only nested keys"
-        );
-        assert_eq!(nested.get("y").and_then(Json::as_i64), Some(2));
-        assert_eq!(merged.get("keep").and_then(Json::as_i64), Some(1));
-    }
-
-    #[test]
-    fn merge_unknown_option_is_plan_error_naming_key() {
-        let (_dir, lua) = setup(&[]);
-        let err = lua
-            .load(r#"return confit.resources.merge({a = 1}, {b = 2}, {bogus = true})"#)
-            .eval::<Value>()
-            .expect_err("unknown key must fail");
-        assert!(is_plan_error(&err), "unknown key is plan: {err}");
-        assert!(format!("{err}").contains("bogus"), "names key: {err}");
-    }
-
-    #[test]
-    fn merge_bad_types_are_lua_errors() {
-        let (_dir, lua) = setup(&[]);
+    fn load_text_escape_and_bad_types_fail() {
+        let (_dir, lua) = setup(&[("inside.txt", "hi\n")]);
         for expr in [
-            r#"return confit.resources.merge(42, {})"#,
-            r#"return confit.resources.merge({}, "nope")"#,
-            r#"return confit.resources.merge({}, {}, 42)"#,
-            r#"return confit.resources.merge({f = function() end}, {})"#,
+            r#"return confit.resources.load_text("../escape.txt")"#,
+            r#"return confit.resources.load_text("/abs.txt")"#,
+            r#"return confit.resources.load_text(42)"#,
         ] {
             let err = lua.load(expr).eval::<Value>().expect_err("must fail");
-            assert!(is_lua_error(&err), "bad types are Lua: {expr}: {err}");
+            if expr.contains("42") {
+                assert!(is_lua_error(&err), "bad type is Lua: {err}");
+            } else {
+                assert!(is_plan_error(&err), "escape is plan: {err}");
+            }
         }
+        let missing = lua
+            .load(r#"return confit.resources.load_text("missing.txt")"#)
+            .eval::<Value>()
+            .expect_err("must fail");
+        assert!(is_plan_error(&missing), "missing file is plan: {missing}");
     }
 }

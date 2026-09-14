@@ -1,6 +1,6 @@
 //! Plan warnings behavior: missing plus unreadable snapshots still succeed.
 //!
-//! Runs `run_plan` against a memory snapshot where one artifact path is
+//! Runs `run_plan` against a memory snapshot where one document path is
 //! absent (silent) and another is unreadable (warning). The run must stay
 //! `Ok` while carrying at least one warning. Uses memory fakes only and
 //! never touches `$HOME`.
@@ -36,8 +36,8 @@ fn plan_with_missing_and_unreadable_still_warns() {
         files: RefCell::new(BTreeMap::new()),
         failures: RefCell::new(failures),
     };
-    let outcome = run_plan(&args, &fs).expect("plan succeeds with warnings");
-    assert_eq!(outcome.plan.artifacts.len(), 2);
+    let outcome = run_plan(&args, &fs, None, false).expect("plan succeeds with warnings");
+    assert_eq!(outcome.plan.documents.len(), 2);
     let summary = confit::presentation::render_plan_outcome(&outcome);
     assert!(
         summary.contains("Plan:"),
