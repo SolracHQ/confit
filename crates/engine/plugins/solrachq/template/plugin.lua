@@ -2,7 +2,7 @@
 --
 -- Template rendering over engine atoms. `template(path, opts)` reads the
 -- `src` file with `confit.resources.load_text`, renders it with
--- `confit.text.render` plus the `vars` table, then returns a plain text
+-- `confit.utils.render` plus the `vars` table, then returns a plain text
 -- document for the destination path. Unknown option keys fail through
 -- confit.plugin.helpers.error. Only existing primitives compose this
 -- module.
@@ -41,7 +41,7 @@ local function template(path, opts)
   end
   local src, vars = parse_opts(opts)
   local text = confit.resources.load_text(src)
-  local rendered = confit.text.render(text, vars)
+  local rendered = confit.utils.render(text, vars)
   return confit.document.text(path, rendered)
 end
 

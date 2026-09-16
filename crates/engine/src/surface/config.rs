@@ -5,10 +5,12 @@
 use mlua::{AnyUserData, Lua, Table, UserData, UserDataMethods, Value};
 
 use super::confit_table;
-use super::document::{Declared, convert_document, convert_entry};
+use super::document::Declared;
+use super::document::convert::convert_document;
 use super::patch::LuaPatch;
+use crate::error::plan_error;
+use crate::lua::{ValueExt, read_marker};
 use crate::model::{ConfigData, StoredPatch};
-use crate::values::{plan_error, read_marker};
 
 /// Registry key holding the per-evaluation config name set.
 const SEEN_KEY: &str = "confit.config.names";
@@ -35,57 +37,86 @@ impl ConfigBuilder {
     pub(crate) fn contribution(&self) -> &ConfigData {
         &self.data
     }
+
+    /// Records one document table in the contribution.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - candidate document table value.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the declaration lands in the contribution.
+    ///
+    /// # Errors
+    ///
+    /// Non-document values fail as plan errors. Rc entries fail as plan errors.
+    /// Repeated rc bases fail as plan errors.
+    ///
+    pub(crate) fn add_document(&mut self, value: Value) -> mlua::Result<()> {
+        let name = self.data.name.clone();
+        let ctx = format!("config '{name}': field 'add_document'");
+        let Some(table) = value.opt_table() else {
+            return Err(plan_error(format!(
+                "config '{name}': field 'add_document' must be a confit.document value"
+            )));
+        };
+        let marker = read_marker(&table, "__kind");
+        let Some(kind) = marker.as_deref() else {
+            return Err(plan_error(format!(
+                "config '{name}': field 'add_document' must be a confit.document value"
+            )));
+        };
+        if kind == "rc-entry" {
+            return Err(plan_error(format!(
+                "config '{name}': field 'add_document' must be a confit.document value (got rc entry)"
+            )));
+        }
+        push_declared(&mut self.data, &table, &ctx)
+    }
+
+    /// Records one patch handle in the contribution.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - candidate patch userdata value.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the handle lands in the contribution.
+    ///
+    /// # Errors
+    ///
+    /// Non-patch values fail as plan errors.
+    ///
+    pub(crate) fn add_patch(&mut self, value: Value) -> mlua::Result<()> {
+        let name = self.data.name.clone();
+        let domain = || {
+            plan_error(format!(
+                "config '{name}': field 'add_patch' must be a confit.patch value"
+            ))
+        };
+        let Some(handle) = value.as_userdata() else {
+            return Err(domain());
+        };
+        let owned = handle.borrow::<LuaPatch>().map_err(|_| domain())?.clone();
+        self.data.patches.push(StoredPatch {
+            target: owned.target,
+            format: owned.format,
+            callback: owned.callback,
+            priority: owned.priority,
+            owner: name,
+        });
+        Ok(())
+    }
 }
 
 impl UserData for ConfigBuilder {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method_mut("add_document", |_, this, value: Value| {
-            let name = this.data.name.clone();
-            let ctx = format!("config '{name}': field 'add_document'");
-            match value {
-                Value::Table(table) => match read_marker(&table, "__kind").as_deref() {
-                    Some("rc-entry") => {
-                        let entry = convert_entry(&table, &ctx)?;
-                        this.data.rc.push(entry);
-                        Ok(())
-                    }
-                    Some(_) => {
-                        push_declared(&mut this.data, &table, &ctx)?;
-                        Ok(())
-                    }
-                    None => Err(plan_error(format!(
-                        "config '{name}': field 'add_document' must be a confit.document value or rc entry"
-                    ))),
-                },
-                _ => Err(plan_error(format!(
-                    "config '{name}': field 'add_document' must be a confit.document value or rc entry"
-                ))),
-            }
+            this.add_document(value)
         });
-        methods.add_method_mut("add_patch", |_, this, value: Value| {
-            let name = this.data.name.clone();
-            match value {
-                Value::UserData(handle) => match handle.borrow::<LuaPatch>() {
-                    Ok(patch) => {
-                        let owned = patch.clone();
-                        this.data.patches.push(StoredPatch {
-                            target: owned.target,
-                            format: owned.format,
-                            callback: owned.callback,
-                            priority: owned.priority,
-                            owner: name,
-                        });
-                        Ok(())
-                    }
-                    Err(_) => Err(plan_error(format!(
-                        "config '{name}': field 'add_patch' must be a confit.patch value"
-                    ))),
-                },
-                _ => Err(plan_error(format!(
-                    "config '{name}': field 'add_patch' must be a confit.patch value"
-                ))),
-            }
-        });
+        methods.add_method_mut("add_patch", |_, this, value: Value| this.add_patch(value));
     }
 }
 
@@ -95,7 +126,15 @@ fn push_declared(data: &mut ConfigData, table: &Table, ctx: &str) -> mlua::Resul
         Declared::Structured(decl) => data.structured.push(decl),
         Declared::Text(decl) => data.texts.push(decl),
         Declared::Link(decl) => data.links.push(decl),
-        Declared::RcEntries(entries) => data.rc.extend(entries),
+        Declared::Opaque(decl) => data.opaques.push(decl),
+        Declared::Rc(entries) => {
+            if data.rc_base.is_some() {
+                return Err(plan_error(format!(
+                    "{ctx} declares the rc base more than once"
+                )));
+            }
+            data.rc_base = Some(entries);
+        }
     }
     Ok(())
 }
@@ -110,14 +149,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 
 /// Builds one config userdata value.
 fn config_callback(lua: &Lua, name: Value) -> mlua::Result<AnyUserData> {
-    let name = match name {
-        Value::String(text) => text.to_string_lossy(),
-        _ => {
-            return Err(plan_error(
-                "confit.config: field 'name' must be a string".to_string(),
-            ));
-        }
-    };
+    let name = name.req_str("confit.config", "name")?;
     claim_name(lua, &name)?;
     lua.create_userdata(ConfigBuilder::new(name))
 }
@@ -133,13 +165,11 @@ fn claim_name(lua: &Lua, name: &str) -> mlua::Result<()> {
         }
     };
     let taken: Value = seen.get(name)?;
-    match taken {
-        Value::Nil => {
-            seen.set(name, true)?;
-            Ok(())
-        }
-        _ => Err(plan_error(format!(
-            "confit.config: config '{name}' is already defined"
-        ))),
+    if taken.is_nil() {
+        seen.set(name, true)?;
+        return Ok(());
     }
+    Err(plan_error(format!(
+        "confit.config: config '{name}' is already defined"
+    )))
 }

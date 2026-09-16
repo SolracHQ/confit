@@ -1,10 +1,18 @@
 use clap::Parser;
 
 use confit_cli::cli::{Cli, Command};
+use confit_cli::presentation::spinner::Live;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("confit: {error}");
+        match error {
+            confit_core::error::Error::Plan(message) => {
+                eprintln!("confit: plan error: {message}");
+            }
+            other => {
+                eprintln!("confit: {other}");
+            }
+        }
         std::process::exit(1);
     }
 }
@@ -12,31 +20,134 @@ fn main() {
 /// Runs the selected subcommand to completion.
 ///
 /// Collision lines land in the log file. The path prints after
-/// the summary. Warnings ride with success, so exit stays 0
-/// while warnings exist.
+/// the summary. Drift notes lead with success, so exit stays 0
+/// while drift exists.
 fn run() -> confit_core::error::Result<()> {
-    let cli = Cli::parse();
-    let (shared, output, payload_to_stdout) = match &cli.command {
-        Command::Plan(args) => (&args.shared, args.output.as_deref(), args.output.is_none()),
-        Command::Status(args) => (&args.shared, None, false),
-    };
-    let log_path = logging_init(shared)?;
-    let outcome = confit_cli::actions::run(shared, output)?;
-    if payload_to_stdout {
-        let text = confit_cli::presentation::payload(&outcome.built)?;
-        println!("{text}");
+    let mut cli = Cli::parse();
+    confit_cli::cli::expand_command(&mut cli.command);
+    if let Some(path) = cli.log_file.as_mut() {
+        *path = confit_cli::cli::expand_tilde(path);
     }
-    let summary = confit_cli::presentation::render(&outcome.built, &outcome.previous);
-    anstream::eprintln!("{summary}");
+    let log_path = match cli.log_file.as_deref() {
+        Some(path) => path.to_path_buf(),
+        None => std::env::temp_dir().join(format!("confit-{}.log", std::process::id())),
+    };
+    let dispatch = fern::Dispatch::new()
+        .format(|out, message, _record| out.finish(format_args!("{message}")))
+        .level(cli.log_level)
+        .chain(
+            fern::log_file(&log_path)
+                .map_err(|error| confit_core::error::Error::Plan(format!("log file: {error}")))?,
+        );
+    // Repeat installs keep the first sink; init runs once per process.
+    let _ = dispatch.apply();
+    match &cli.command {
+        Command::Plan(args) => {
+            let store = args.output.is_none();
+            run_plan_like(args, store, &log_path)
+        }
+        Command::Apply(args) => run_apply(args, &log_path),
+        Command::Recover(args) => run_recover(args, &log_path),
+        Command::Init(args) => run_init(args),
+    }
+}
+
+/// Runs plan with summary output.
+///
+/// Plan without a destination stores the payload under tmp and
+/// prints the path for later `--plan` plus `--state` reuse.
+fn run_plan_like(
+    args: &confit_cli::cli::PlanArgs,
+    store_tmp: bool,
+    log_path: &std::path::Path,
+) -> confit_core::error::Result<()> {
+    let live = Live::new();
+    let outcome = confit_cli::actions::plan::PlanRunner {
+        args,
+        store_tmp,
+        progress: live.sink(),
+    }
+    .execute()?;
+    live.finish();
+    let summary = confit_cli::presentation::summary::Summary {
+        built: &outcome.built,
+        previous: &outcome.previous,
+        drift: &outcome.drift,
+    };
+    anstream::println!("{}", summary.render());
+    if let Some(stored) = outcome.stored {
+        anstream::println!("plan: {}", stored.display());
+    }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())
 }
 
-/// Initializes file logging for one run.
-fn logging_init(
-    shared: &confit_cli::cli::SharedArgs,
-) -> confit_core::error::Result<std::path::PathBuf> {
-    confit_cli::logging::init(shared.log_file.as_deref())
-        .map_err(|error| confit_core::error::Error::Plan(format!("log file: {error}")))
+/// Runs apply with preview plus prompts on host seams.
+fn run_apply(
+    args: &confit_cli::cli::ApplyArgs,
+    log_path: &std::path::Path,
+) -> confit_core::error::Result<()> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut output = stderr.lock();
+    let live = Live::new();
+    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    seams.progress = live.sink();
+    let report = confit_cli::actions::apply::ApplyRunner::run(args, seams)?;
+    live.finish();
+    anstream::println!(
+        "applied: {} files, {} removed",
+        report.written,
+        report.removed
+    );
+    anstream::println!("previous: {}", report.stored.display());
+    anstream::eprintln!("log: {}", log_path.display());
+    log::logger().flush();
+    Ok(())
+}
+
+/// Runs recover listing or re-apply on host seams.
+fn run_recover(
+    args: &confit_cli::cli::RecoverArgs,
+    log_path: &std::path::Path,
+) -> confit_core::error::Result<()> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut output = stderr.lock();
+    let live = Live::new();
+    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    seams.progress = live.sink();
+    let runner = confit_cli::actions::recover::RecoverRunner { args, seams };
+    if let Some(report) = runner.execute()? {
+        live.finish();
+        anstream::println!(
+            "applied: {} files, {} removed",
+            report.written,
+            report.removed
+        );
+        anstream::println!("previous: {}", report.stored.display());
+    } else {
+        live.finish();
+    }
+    anstream::eprintln!("log: {}", log_path.display());
+    log::logger().flush();
+    Ok(())
+}
+
+/// Runs init with project scaffolding on host seams.
+fn run_init(args: &confit_cli::cli::InitArgs) -> confit_core::error::Result<()> {
+    let report = confit_cli::actions::init::InitRunner {
+        args,
+        fs: &confit_core::fs::OsFs,
+    }
+    .execute()?;
+    anstream::println!(
+        "init: {} ({} files)",
+        report.profile.display(),
+        report.written
+    );
+    Ok(())
 }

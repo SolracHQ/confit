@@ -1,37 +1,38 @@
 # ConfIt
 
-Successor to a dotfiles setup that installs languages and tools, fonts,
-a prompt, and a few configs. Same job, declarative, with a preview
-before anything gets touched.
+Configure It. CaC (Configuration as Code) scoped in the user
+space. One static binary to bootstrap machines and maintain
+user-space files. Same job as a dotfiles setup, declarative,
+with a preview before anything gets touched.
 
 ## Objectives
 
 - Idempotent changes: applying twice gives the same result.
 - Readable diffs before anything lands.
 - Configs shaped per machine from Lua.
-- Profiles sharing one config without redoing it.
+- Profiles sharing one config pool without redoing it.
 - Editor-checked key names, configs landing where loaders read them.
-- A preview loop borrowed from Terraform: desired vs previous vs actual
+- A preview loop: desired vs previous vs actual
   files, with hand edits reported before they get overwritten.
 
 ## State
 
-One Rust binary, Lua 5.4 vendored inside, plan before apply. Two commands
-work today. `plan` writes a JSON plan of the desired state. `status`
-diffs desired vs previous vs the actual files on disk, in memory. Absent
-paths read as absence. Failing reads warn and continue with exit 0.
-Hand edits get named warnings. `apply` and `explain` do not exist yet.
+One Rust binary, Lua 5.4 vendored inside, plan before apply.
+Four commands work today. `plan` previews the change and
+writes a JSON plan of the desired state. `apply` previews,
+prompts, and writes the files. `recover` re-applies a stored
+state. `init` scaffolds a project.
 
 Profiles declare documents plus configs. Configs hold documents plus
 patches. Documents cover shell entries plus structured configs plus
-literal files plus symlinks. Patches tweak documents through callbacks
+literal files plus binaries plus symlinks. Patches tweak documents through callbacks
 in pipeline order. The mise plugin ships package configs plus shell
 activation entries.
 
 ## Scope
 
-User-space files plus the post commands triggered after they land.
-Escalating permissions is not planned.
+User-space files. Everything runs without privilege steps.
+External tools handle system software.
 
 ## Show
 
@@ -44,14 +45,14 @@ local mise = confit.plugin.solrachq.mise
 local bat = mise.package("bat", function(rc)
 	rc:alias("cat", "bat")
 end)
-bat:add_document(mise.activate())
+bat:add_patch(mise.activate())
 return bat
 ```
 
-A plan run previews the change without touching anything:
+A plan run previews the change:
 
 ```sh
-$ confit plan --profile examples/0-basic_tool/profile.lua --root examples/0-basic_tool
+$ confit plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool
 Plan: 2 to add, 0 to change, 0 to destroy.
 ```
 
@@ -63,13 +64,18 @@ Plan: 2 to add, 0 to change, 0 to destroy.
 | `0-basic_tool` | mise package plus alias plus init |
 | `1-structured_resource` | starship config declared plus patched |
 | `2-templated_resource` | starship config rendered from a template with profile vars |
+| `3-dotfiles-tools` | multi-config profile plus fetch plus unpack plus rc patch |
 
 | Command | Does |
 |---|---|
-| `plan` | writes the JSON plan, warnings on stderr |
-| `status` | same diff, in memory, nothing written |
+| `plan PROFILE` | writes the JSON plan, warnings on stderr |
+| `apply PROFILE` | previews, prompts on literal `yes`, writes files |
+| `apply --plan FILE` | writes a reviewed plan, skips preview |
+| `recover [INDEX]` | lists stored states, re-applies the picked one |
+| `init [DIR]` | scaffolds a profile plus stubs, default `.` |
 
 `--root` defaults to the profile file parent directory.
+`--state` selects the state file, defaulting to the shared slot.
 `just plan-example` smokes the basic fixture and writes only to
 `./target`.
 
@@ -81,7 +87,7 @@ just check   # fmt + clippy (-D warnings) + test
 ```
 
 Spec: `docs/spec.md` (living record of what is implemented).
-Intent per version: `docs/design/`. Changes: `docs/changelog.md`.
+Manual: `docs/manual/` (user guide). Intent per version: `docs/design/`. Changes: `docs/changelog.md`.
 
 Old setup for reference: [SolracHQ/dotfiles](https://github.com/SolracHQ/dotfiles).
 

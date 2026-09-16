@@ -6,6 +6,4 @@
 
 pub mod actions;
 pub mod cli;
-pub mod fs;
-pub mod logging;
 pub mod presentation;

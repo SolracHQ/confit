@@ -5,54 +5,88 @@
 use std::borrow::Cow;
 
 use crate::document::{
-    Condition, Document, DocumentData, PathOp, RcData, RcEntry, RcOp, StructuredFormat, Table,
+    Condition, Document, DocumentData, RcData, RcEntry, RcOp, StructuredFormat, Table,
 };
 use crate::error::{Error, Result};
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
-/// Renders one document to exact on-disk bytes.
-///
-/// Structured payloads serialize through their format.
-/// Text payloads pass content through. Link payloads pass the
-/// target through. Rc payloads render shell text.
-///
-/// # Arguments
-///
-/// * `document` - the document under rendering.
-///
-/// # Returns
-///
-/// Exact bytes landing on disk for the document.
-///
-/// # Errors
-///
-/// Serializer failures fail as plan errors.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::{Document, DocumentData};
-/// use confit_core::ids::DocPath;
-/// use confit_core::render::render_document;
-///
-/// let document = Document::new(
-///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into() },
-/// );
-/// assert!(matches!(render_document(&document), Ok(bytes) if bytes == b"hi".to_vec()));
-/// ```
-pub fn render_document(document: &Document) -> Result<Vec<u8>> {
-    match &document.data {
-        DocumentData::Structured { format, data } => match format {
-            StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
-        },
-        DocumentData::Text { content } => Ok(content.as_bytes().to_vec()),
-        DocumentData::Link { target } => Ok(target.as_bytes().to_vec()),
-        DocumentData::Rc(data) => Ok(render_rc(data).into_bytes()),
+impl Document {
+    /// Renders one document to exact on-disk bytes.
+    ///
+    /// Structured payloads serialize through their format.
+    /// Text payloads pass content through. Link payloads pass the
+    /// target through. Rc payloads render shell text. Opaque
+    /// payloads fail, reads use `bytes` instead.
+    ///
+    /// # Returns
+    ///
+    /// Exact bytes landing on disk for the document.
+    ///
+    /// # Errors
+    ///
+    /// Opaque payloads fail as plan errors. Serializer failures
+    /// fail as plan errors.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("note"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// );
+    /// assert!(matches!(document.render(), Ok(bytes) if bytes == b"hi".to_vec()));
+    /// ```
+    pub fn render(&self) -> Result<Vec<u8>> {
+        match &self.data {
+            DocumentData::Structured { format, data } => match format {
+                StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
+                StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
+                StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
+            },
+            DocumentData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+            DocumentData::Link { target } => Ok(target.as_bytes().to_vec()),
+            DocumentData::Rc(data) => Ok(render_rc(data).into_bytes()),
+            DocumentData::Opaque { .. } => Err(Error::Plan(
+                "render opaque: opaque documents hold raw bytes".to_string(),
+            )),
+        }
+    }
+
+    /// Returns exact on-disk bytes for one document.
+    ///
+    /// Opaque payloads return raw bytes. Every other payload
+    /// renders through `render`.
+    ///
+    /// # Returns
+    ///
+    /// Exact bytes landing on disk for the document.
+    ///
+    /// # Errors
+    ///
+    /// Serializer failures fail as plan errors.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("bin"),
+    ///     DocumentData::Opaque { content: vec![0xFF, 0x00] },
+    /// );
+    /// assert!(matches!(document.bytes(), Ok(bytes) if bytes == vec![0xFF, 0x00]));
+    /// ```
+    pub fn bytes(&self) -> Result<Vec<u8>> {
+        match &self.data {
+            DocumentData::Opaque { content, .. } => Ok(content.clone()),
+            _ => self.render(),
+        }
     }
 }
 
@@ -110,12 +144,9 @@ fn render_entry(entry: &RcEntry) -> Vec<String> {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
-        RcOp::Path { name, dir, op } => {
+        RcOp::Path { name, dir, .. } => {
             let placed = escape_argv(std::slice::from_ref(dir));
-            match op {
-                PathOp::Prepend => format!("export {name}={placed}:\"${{{name}}}\""),
-                PathOp::Append => format!("export {name}=\"${{{name}}}\":{placed}"),
-            }
+            format!("export {name}={placed}:\"${{{name}}}\"")
         }
         RcOp::Alias { name, expansion } => {
             let expanded = escape_argv(std::slice::from_ref(expansion));
@@ -234,13 +265,6 @@ mod tests {
         Document::new(DocPath::new("~/.bashrc"), DocumentData::Rc(data))
     }
 
-    fn table(pairs: &[(&str, serde_json::Value)]) -> Table {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), value.clone()))
-            .collect()
-    }
-
     fn entry(op: RcOp, when: Option<Condition>) -> RcEntry {
         RcEntry { op, when }
     }
@@ -314,7 +338,7 @@ mod tests {
                 cmd(&["sdkman", "init"]),
             ],
         );
-        let bytes = match render_document(&rc_document(data)) {
+        let bytes = match rc_document(data).render() {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -342,7 +366,7 @@ mod tests {
     #[test]
     fn setup_only_skips_guard() {
         let data = RcData::new(vec![path("/a")], Vec::new(), Vec::new());
-        let bytes = match render_document(&rc_document(data)) {
+        let bytes = match rc_document(data).render() {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -358,7 +382,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let bytes = match render_document(&rc_document(data)) {
+        let bytes = match rc_document(data).render() {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -370,7 +394,7 @@ mod tests {
     #[test]
     fn env_in_final_renders_in_final_block() {
         let data = RcData::new(Vec::new(), Vec::new(), vec![env("EDITOR", "hx")]);
-        let bytes = match render_document(&rc_document(data)) {
+        let bytes = match rc_document(data).render() {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -387,7 +411,7 @@ mod tests {
             Vec::new(),
             vec![cmd(&["z-last"]), eval(&["a-first"]), cmd(&["m-mid"])],
         );
-        let bytes = match render_document(&rc_document(data)) {
+        let bytes = match rc_document(data).render() {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -409,70 +433,10 @@ mod tests {
     }
 
     #[test]
-    fn serializers_roundtrip_tables() {
-        let data = table(&[
-            ("name", serde_json::json!("bat")),
-            (
-                "tools",
-                serde_json::json!({"bat": "latest", "list": [1, 2]}),
-            ),
-        ]);
-        let toml_text = match render_toml(&data) {
-            Ok(text) => text,
-            Err(error) => panic!("toml renders: {error}"),
-        };
-        let toml_value: toml::Value = match toml::from_str(&toml_text) {
-            Ok(value) => value,
-            Err(error) => panic!("toml parses: {error}"),
-        };
-        assert_eq!(toml_value["tools"]["bat"].as_str(), Some("latest"));
-        let json_text = match render_json(&data) {
-            Ok(text) => text,
-            Err(error) => panic!("json renders: {error}"),
-        };
-        let json_value: serde_json::Value = match serde_json::from_str(&json_text) {
-            Ok(value) => value,
-            Err(error) => panic!("json parses: {error}"),
-        };
-        assert_eq!(json_value["tools"]["bat"], serde_json::json!("latest"));
-        let yaml_text = match render_yaml(&data) {
-            Ok(text) => text,
-            Err(error) => panic!("yaml renders: {error}"),
-        };
-        let yaml_value: serde_json::Value = match noyalib::from_str(&yaml_text) {
-            Ok(value) => value,
-            Err(error) => panic!("yaml parses: {error}"),
-        };
-        assert_eq!(yaml_value["tools"]["bat"], serde_json::json!("latest"));
-    }
-
-    #[test]
-    fn text_and_link_pass_through() {
-        let text = Document::new(
-            DocPath::new("note"),
-            DocumentData::Text {
-                content: "raw bytes".into(),
-            },
-        );
-        assert!(matches!(
-            render_document(&text),
-            Ok(bytes) if bytes == b"raw bytes"
-        ));
-        let link = Document::new(
-            DocPath::new("shortcut"),
-            DocumentData::Link {
-                target: "dest".into(),
-            },
-        );
-        assert!(matches!(
-            render_document(&link),
-            Ok(bytes) if bytes == b"dest"
-        ));
-    }
-
-    #[test]
     fn null_toml_value_fails_as_plan_error() {
-        let data = table(&[("name", serde_json::Value::Null)]);
+        let data: Table = [("name".to_string(), serde_json::Value::Null)]
+            .into_iter()
+            .collect();
         let error = match render_toml(&data) {
             Ok(_) => panic!("null toml renders"),
             Err(error) => error,

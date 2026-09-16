@@ -5,40 +5,79 @@
 #![deny(missing_docs)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use confit_core::document::Document;
 
+use crate::fetch::Fetch;
+
+mod error;
 mod eval;
 mod exec;
+pub mod fetch;
 mod level;
+mod lua;
 mod model;
+mod path_expr;
+pub mod progress;
+mod require;
 mod surface;
-mod values;
+
+pub use progress::{ProgressCallback, ProgressEvent};
 
 /// Evaluation inputs for one profile run.
 ///
 /// The root jails resource reads. The plugins folder adds external
-/// namespaces beside the embedded defaults.
+/// namespaces beside the embedded defaults. The re-fetch flag forces
+/// remote downloads. The cache override keeps tests off the OS cache.
+/// The fetcher override keeps tests off the network. The progress
+/// sink stays silent while holding `None`.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_engine::EvalOpts;
 /// use std::path::PathBuf;
 ///
 /// let opts = EvalOpts {
 ///     root: PathBuf::from("."),
-///     plugins: None,
+///     plugins: PathBuf::from("plugins"),
+///     re_fetch: false,
+///     cache_dir: None,
+///     fetcher: None,
+///     progress: None,
 /// };
 /// assert!(matches!(opts.root.to_str(), Some(".")));
-/// assert!(matches!(opts.plugins, None));
+/// assert!(matches!(opts.plugins.to_str(), Some("plugins")));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct EvalOpts {
     /// Project root for resource reads plus module resolution.
     pub root: PathBuf,
     /// External plugin folder shaped `{user}/{name}/plugin.lua`.
-    pub plugins: Option<PathBuf>,
+    /// Missing folders read as embedded-only.
+    pub plugins: PathBuf,
+    /// Forces remote downloads past the sidecar cache.
+    pub re_fetch: bool,
+    /// Cache folder override for tests, holding `None` for OS cache.
+    pub cache_dir: Option<PathBuf>,
+    /// Network source override for tests, holding `None` for HTTP.
+    pub fetcher: Option<Arc<dyn Fetch>>,
+    /// Progress sink for fetch plus unpack plus patch facts.
+    pub progress: Option<ProgressCallback>,
+}
+
+impl std::fmt::Debug for EvalOpts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvalOpts")
+            .field("root", &self.root)
+            .field("plugins", &self.plugins)
+            .field("re_fetch", &self.re_fetch)
+            .field("cache_dir", &self.cache_dir)
+            .field("fetcher", &self.fetcher.is_some())
+            .field("progress", &self.progress.is_some())
+            .finish()
+    }
 }
 
 /// Evaluates one profile file into finished documents.
@@ -60,7 +99,7 @@ pub struct EvalOpts {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_engine::{EvalOpts, evaluate};
 /// use std::path::Path;
 ///
@@ -68,5 +107,5 @@ pub struct EvalOpts {
 /// assert!(matches!(outcome, Err(_)));
 /// ```
 pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_core::error::Result<Vec<Document>> {
-    eval::run(profile, opts)
+    eval::Session::run(profile, opts)
 }

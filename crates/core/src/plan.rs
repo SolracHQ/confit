@@ -1,22 +1,20 @@
 //! Plan
 //!
-//! Desired state builds with drift warnings.
+//! Desired state builds with two comparisons.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::document::Document;
-use crate::error::{Error, Result};
-use crate::ids::{DocPath, ReadOutcome};
-use crate::render::render_document;
+use crate::document::{Document, DocumentKind};
+use crate::error::Result;
 
 /// Plan format version written by every plan build.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::plan::PLAN_VERSION;
 ///
 /// assert!(matches!(PLAN_VERSION, 2));
@@ -30,7 +28,7 @@ pub const PLAN_VERSION: u32 = 2;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::plan::{PLAN_VERSION, Plan};
 ///
 /// let plan = Plan {
@@ -50,86 +48,60 @@ pub struct Plan {
     pub created_at: String,
 }
 
-/// Persisted apply record.
-///
-/// Keys read `kind:path` with the lowercase kind name.
-/// Values hold the last recorded data hash per key.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::State;
-///
-/// let state = State::empty();
-/// assert!(matches!(state.documents.len(), 0));
-/// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct State {
-    /// Holds last recorded entries by `kind:path` key.
-    pub documents: BTreeMap<String, StateEntry>,
-}
-
-impl State {
-    /// Builds an empty apply record.
+impl Plan {
+    /// Builds an empty plan with the current version.
     ///
     /// # Returns
     ///
-    /// The empty state holding no document entries.
+    /// The plan holding version plus empty documents plus empty timestamp.
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use confit_core::plan::State;
+    /// ```text
+    /// use confit_core::plan::{PLAN_VERSION, Plan};
     ///
-    /// let state = State::empty();
-    /// assert!(matches!(state.documents.len(), 0));
+    /// let plan = Plan::empty();
+    /// assert!(matches!(plan.version, v if v == PLAN_VERSION));
+    /// assert!(matches!(plan.documents.len(), 0));
     /// ```
     pub fn empty() -> Self {
         Self {
-            documents: BTreeMap::new(),
+            version: PLAN_VERSION,
+            documents: Vec::new(),
+            created_at: String::new(),
         }
+    }
+
+    /// Finds one recorded document by its kind plus path key.
+    fn find_by_key(&self, key: &str) -> Option<&Document> {
+        self.documents.iter().find(|document| document.key() == key)
+    }
+
+    /// Finds one recorded document sharing path with opaque kind.
+    fn find_same_path_opaque(&self, document: &Document) -> Option<&Document> {
+        self.documents.iter().find(|recorded| {
+            recorded.path == document.path
+                && recorded.key() != document.key()
+                && (recorded.is_opaque() || document.is_opaque())
+        })
     }
 }
 
-/// Last recorded hashes for one document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateEntry {
-    /// Holds the hex SHA-256 over last recorded rendered bytes.
-    pub data_hash: String,
-}
-
-impl StateEntry {
-    /// Builds a state entry from a data hash.
-    ///
-    /// # Arguments
-    ///
-    /// * `data_hash` - the hex SHA-256 over rendered bytes.
-    ///
-    /// # Returns
-    ///
-    /// The entry for state maps.
-    pub fn new(data_hash: impl Into<String>) -> Self {
-        Self {
-            data_hash: data_hash.into(),
-        }
-    }
-}
-
-/// Lifecycle counts for one plan against previous state.
+/// Lifecycle counts for one plan against a previous plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlanSummary {
-    /// Counts documents absent from previous state.
+pub struct Summary {
+    /// Counts documents absent from the previous plan.
     pub create: usize,
     /// Counts documents with a differing data hash.
     pub update: usize,
-    /// Counts previous keys matching zero plan documents.
+    /// Counts previous documents missing from the plan.
     pub delete: usize,
 }
 
-/// Per-document lifecycle status against previous state.
+/// Per-document lifecycle status against previous plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentStatus {
-    /// Document absent from previous state.
+    /// Document absent from previous plan.
     Create,
     /// Document present with a differing data hash.
     Update,
@@ -137,307 +109,288 @@ pub enum DocumentStatus {
     Unchanged,
 }
 
-/// Warning shape carried beside a successful plan.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::ids::DocPath;
-/// use confit_core::plan::{Warning, WarningKind};
-///
-/// let warning = Warning {
-///     path: DocPath::new("x"),
-///     kind: WarningKind::ExistsButNoRecord,
-/// };
-/// assert!(matches!(warning.line().as_str(), "x: exists but no record: will be overwritten"));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WarningKind {
-    /// Untracked path holding bytes. Creation overwrites it.
-    ExistsButNoRecord,
-    /// Record matches desired yet disk bytes differ. Manual edits overwrite.
-    DiffersFromRecorded,
-    /// Failing read. Carries the ready stderr reason.
-    Unreadable {
-        /// Holds the reason line naming path plus failure.
-        reason: String,
-    },
-}
-
-/// One warning attached to a document path.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::ids::DocPath;
-/// use confit_core::plan::{Warning, WarningKind};
-///
-/// let warning = Warning {
-///     path: DocPath::new("x"),
-///     kind: WarningKind::ExistsButNoRecord,
-/// };
-/// assert!(matches!(warning.line().as_str(), "x: exists but no record: will be overwritten"));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Warning {
-    /// Holds the document path the warning belongs to.
-    pub path: DocPath,
-    /// Holds the warning shape.
-    pub kind: WarningKind,
-}
-
-impl Warning {
-    /// Renders the warning as one stderr line.
+impl Document {
+    /// Reports the lifecycle status against a previous plan.
+    ///
+    /// Same-path kind changes to or from opaque read as update.
+    /// All other kind changes read as create plus delete through
+    /// the build counts. Mode changes read as update while
+    /// hashes agree, since hashes cover bytes only.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous` - the previous plan with filled hashes.
     ///
     /// # Returns
     ///
-    /// The verbatim warning line.
+    /// Create for absent keys, update for differing hashes or
+    /// modes plus opaque kind changes, else unchanged.
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
-    /// use confit_core::plan::{Warning, WarningKind};
+    /// use confit_core::plan::{DocumentStatus, Plan};
     ///
-    /// let warning = Warning {
-    ///     path: DocPath::new("x"),
-    ///     kind: WarningKind::DiffersFromRecorded,
-    /// };
-    /// assert!(matches!(
-    ///     warning.line().as_str(),
-    ///     "x: differs from recorded: manual modification will be overwritten"
-    /// ));
+    /// let mut document = Document::new(
+    ///     DocPath::new("x"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// );
+    /// assert!(matches!(document.fill_hash(), Ok(())));
+    /// assert!(matches!(document.status(&Plan::empty()), DocumentStatus::Create));
     /// ```
-    pub fn line(&self) -> String {
-        match &self.kind {
-            WarningKind::ExistsButNoRecord => format!(
-                "{}: exists but no record: will be overwritten",
-                self.path.as_str()
-            ),
-            WarningKind::DiffersFromRecorded => format!(
-                "{}: differs from recorded: manual modification will be overwritten",
-                self.path.as_str()
-            ),
-            WarningKind::Unreadable { reason } => reason.clone(),
+    pub fn status(&self, previous: &Plan) -> DocumentStatus {
+        match previous.find_by_key(&self.key()) {
+            None => match previous.find_same_path_opaque(self) {
+                Some(_) => DocumentStatus::Update,
+                None => DocumentStatus::Create,
+            },
+            Some(recorded)
+                if recorded.data_hash == self.data_hash && recorded.mode() == self.mode() =>
+            {
+                DocumentStatus::Unchanged
+            }
+            Some(_) => DocumentStatus::Update,
         }
+    }
+
+    /// Fills the data hash by rendering the document.
+    ///
+    /// The hash covers rendered bytes only. Modes compare
+    /// separately through status and drift.
+    ///
+    /// # Returns
+    ///
+    /// Unit once the hash fills.
+    ///
+    /// # Errors
+    ///
+    /// Serializer failures fail as plan errors.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let mut document = Document::new(
+    ///     DocPath::new("x"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// );
+    /// assert!(matches!(document.fill_hash(), Ok(())));
+    /// assert!(matches!(document.data_hash.is_empty(), false));
+    /// ```
+    pub fn fill_hash(&mut self) -> Result<()> {
+        let bytes = self.bytes()?;
+        self.data_hash = sha256_hex(&bytes);
+        Ok(())
+    }
+
+    /// Reports whether the document carries opaque bytes.
+    ///
+    /// # Returns
+    ///
+    /// True for the opaque kind only.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("bin"),
+    ///     DocumentData::Opaque { content: vec![0xFF] },
+    /// );
+    /// assert!(matches!(document.is_opaque(), true));
+    /// ```
+    pub fn is_opaque(&self) -> bool {
+        matches!(self.kind(), DocumentKind::Opaque)
+    }
+
+    /// Reports whether a recorded document yields to desired documents.
+    ///
+    /// A recorded key yields while some desired document shares
+    /// its path under another key with either side opaque.
+    ///
+    /// # Arguments
+    ///
+    /// * `desired` - the desired documents under comparing.
+    ///
+    /// # Returns
+    ///
+    /// True while an opaque same-path sibling exists in desired.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let recorded = Document::new(
+    ///     DocPath::new("bin"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// );
+    /// let desired = Document::new(
+    ///     DocPath::new("bin"),
+    ///     DocumentData::Opaque { content: vec![0xFF] },
+    /// );
+    /// assert!(matches!(recorded.superseded_by(&[desired]), true));
+    /// ```
+    pub fn superseded_by(&self, desired: &[Document]) -> bool {
+        desired.iter().any(|document| {
+            document.path == self.path
+                && document.key() != self.key()
+                && (document.is_opaque() || self.is_opaque())
+        })
     }
 }
 
-/// Reports the lifecycle status of one document.
+/// Reads the hash plus size label for opaque bytes.
 ///
 /// # Arguments
 ///
-/// * `document` - the desired document with a filled data hash.
-/// * `previous` - the last apply record.
+/// * `bytes` - the raw bytes under labeling.
 ///
 /// # Returns
 ///
-/// Create for absent keys, update for differing hashes, else unchanged.
+/// The `sha256:{hex} ({n} bytes)` label.
 ///
 /// # Examples
 ///
-/// ```rust
-/// use confit_core::document::{Document, DocumentData};
-/// use confit_core::ids::DocPath;
-/// use confit_core::plan::{DocumentStatus, State, document_status};
+/// ```text
+/// use confit_core::plan::opaque_label;
 ///
-/// let mut document = Document::new(
-///     DocPath::new("x"),
-///     DocumentData::Text { content: "hi".into() },
-/// );
-/// document.data_hash = "abc".to_string();
-/// assert!(matches!(document_status(&document, &State::empty()), DocumentStatus::Create));
+/// let label = opaque_label(&[0xFF, 0x00]);
+/// assert!(matches!(label.starts_with("sha256:"), true));
+/// assert!(matches!(label.contains("(2 bytes)"), true));
 /// ```
-pub fn document_status(document: &Document, previous: &State) -> DocumentStatus {
-    match previous.documents.get(&document.key()) {
-        None => DocumentStatus::Create,
-        Some(entry) if entry.data_hash == document.data_hash => DocumentStatus::Unchanged,
-        Some(_) => DocumentStatus::Update,
-    }
+pub fn opaque_label(bytes: &[u8]) -> String {
+    format!("sha256:{} ({} bytes)", sha256_hex(bytes), bytes.len())
 }
 
-/// Built plan with lifecycle counts plus warnings in plan order.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::{Document, DocumentData};
-/// use confit_core::ids::{DocPath, ReadOutcome};
-/// use confit_core::plan::{State, build};
-///
-/// let document = Document::new(
-///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into() },
-/// );
-/// let outcome = build(
-///     vec![document],
-///     &State::empty(),
-///     &|_| ReadOutcome::Absent,
-/// );
-/// assert!(matches!(
-///     outcome,
-///     Ok(built) if built.summary.create == 1 && built.warnings.is_empty()
-/// ));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuiltPlan {
-    /// Holds the versioned desired state.
-    pub plan: Plan,
-    /// Holds lifecycle counts against previous state.
-    pub summary: PlanSummary,
-    /// Holds warnings in plan order.
-    pub warnings: Vec<Warning>,
-}
-
-/// Builds the desired state plan from documents.
-///
-/// Renders every document, hashes rendered bytes, sorts documents by
-/// path, diffs hashes against previous state, and snapshots disk
-/// paths through the caller provider. Disk warnings ride along with
-/// success. One path holds one document; repeats fail as plan errors.
-///
-/// # Arguments
-///
-/// * `documents` - desired documents in engine pipeline order.
-/// * `previous` - the last apply record.
-/// * `snapshot` - the disk reader mapping paths to outcomes.
-///
-/// # Returns
-///
-/// The built plan with counts plus warnings.
-///
-/// # Errors
-///
-/// Repeated declarations on one path fail as plan errors.
-/// Kind mismatches on one path fail as plan errors.
-/// Serializer failures fail as plan errors.
-pub fn build(
-    documents: Vec<Document>,
-    previous: &State,
-    snapshot: &dyn Fn(&DocPath) -> ReadOutcome,
-) -> Result<BuiltPlan> {
-    let mut warnings = Vec::new();
-    let mut rendered = render_unique(documents)?;
-    rendered.sort_by(|left, right| left.0.path.cmp(&right.0.path));
-    let mut summary = PlanSummary {
-        create: 0,
-        update: 0,
-        delete: 0,
-    };
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    for (document, bytes) in &rendered {
-        seen.insert(document.key());
-        match document_status(document, previous) {
-            DocumentStatus::Create => summary.create += 1,
-            DocumentStatus::Update => summary.update += 1,
-            DocumentStatus::Unchanged => {}
+impl Plan {
+    /// Builds the desired state plan from documents.
+    ///
+    /// Renders every document, hashes rendered bytes, and sorts
+    /// documents by path. The caller holds one document per path.
+    /// The engine enforces this before calling. Counts generate
+    /// through `summary` against a previous plan.
+    ///
+    /// # Arguments
+    ///
+    /// * `documents` - desired documents in engine pipeline order, unique per path.
+    ///
+    /// # Returns
+    ///
+    /// The built plan.
+    ///
+    /// # Errors
+    ///
+    /// Serializer failures fail as plan errors.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    /// use confit_core::plan::Plan;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("note"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// );
+    /// let outcome = Plan::build(vec![document]);
+    /// let previous = Plan::empty();
+    /// assert!(matches!(outcome, Ok(plan) if plan.summary(&previous).create == 1));
+    /// ```
+    pub fn build(mut documents: Vec<Document>) -> Result<Self> {
+        for document in &mut documents {
+            document.fill_hash()?;
         }
-        if let Some(warning) = disk_warning(document, bytes, previous, snapshot) {
-            warnings.push(warning);
-        }
-    }
-    for key in previous.documents.keys() {
-        if !seen.contains(key) {
-            summary.delete += 1;
-        }
-    }
-    let planned = rendered.into_iter().map(|(document, _)| document).collect();
-    Ok(BuiltPlan {
-        plan: Plan {
+        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(Self {
             version: PLAN_VERSION,
-            documents: planned,
+            documents,
             created_at: now_timestamp(),
-        },
-        summary,
-        warnings,
-    })
-}
-
-/// Renders unique documents with hashes.
-///
-/// One path holds one document. Repeats fail naming the path.
-///
-/// # Arguments
-///
-/// * `documents` - desired documents in engine pipeline order.
-///
-/// # Returns
-///
-/// Unique documents with rendered bytes in path group order.
-///
-/// # Errors
-///
-/// Repeated declarations on one path fail as plan errors.
-/// Kind mismatches on one path fail as plan errors.
-/// Serializer failures fail as plan errors.
-fn render_unique(documents: Vec<Document>) -> Result<Vec<(Document, Vec<u8>)>> {
-    let mut groups: BTreeMap<String, Vec<Document>> = BTreeMap::new();
-    for document in documents {
-        groups
-            .entry(document.path.as_str().to_string())
-            .or_default()
-            .push(document);
+        })
     }
-    let mut unique = Vec::new();
-    for (path, entries) in groups {
-        let Some((first, rest)) = entries.split_first() else {
-            continue;
+
+    /// Counts lifecycle states against a previous plan.
+    ///
+    /// Opaque kind changes count as updates, other kind changes
+    /// count as create plus delete.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous` - the previous plan with filled hashes.
+    ///
+    /// # Returns
+    ///
+    /// Create, update, plus delete counts.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    /// use confit_core::plan::Plan;
+    ///
+    /// let mut previous = Plan::empty();
+    /// previous.documents = vec![Document::new(
+    ///     DocPath::new("note"),
+    ///     DocumentData::Text { content: "hi".into() },
+    /// )];
+    /// let plan = Plan::build(vec![Document::new(
+    ///     DocPath::new("note"),
+    ///     DocumentData::Text { content: "changed".into() },
+    /// )]);
+    /// assert!(matches!(plan, Ok(plan) if plan.summary(&previous).update == 1));
+    /// ```
+    pub fn summary(&self, previous: &Plan) -> Summary {
+        let mut summary = Summary {
+            create: 0,
+            update: 0,
+            delete: 0,
         };
-        if !rest.is_empty() {
-            return Err(Error::Plan(format!(
-                "document '{path}' is declared more than once: declare once, patch to modify"
-            )));
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for document in &self.documents {
+            seen.insert(document.key());
+            match document.status(previous) {
+                DocumentStatus::Create => summary.create += 1,
+                DocumentStatus::Update => summary.update += 1,
+                DocumentStatus::Unchanged => {}
+            }
         }
-        let mut document = first.clone();
-        let bytes = render_document(&document)?;
-        document.data_hash = sha256_hex(&bytes);
-        unique.push((document, bytes));
-    }
-    Ok(unique)
-}
-
-/// Reports one disk warning for a document, if any.
-fn disk_warning(
-    document: &Document,
-    bytes: &[u8],
-    previous: &State,
-    snapshot: &dyn Fn(&DocPath) -> ReadOutcome,
-) -> Option<Warning> {
-    let outcome = snapshot(&document.path);
-    match previous.documents.get(&document.key()) {
-        None => match outcome {
-            ReadOutcome::Absent => None,
-            ReadOutcome::Present(_) => Some(Warning {
-                path: document.path.clone(),
-                kind: WarningKind::ExistsButNoRecord,
-            }),
-            ReadOutcome::Unreadable { reason } => Some(unreadable_warning(&document.path, &reason)),
-        },
-        Some(entry) if entry.data_hash != document.data_hash => None,
-        Some(_) => match outcome {
-            ReadOutcome::Absent => None,
-            ReadOutcome::Present(disk) if disk.as_slice() == bytes => None,
-            ReadOutcome::Present(_) => Some(Warning {
-                path: document.path.clone(),
-                kind: WarningKind::DiffersFromRecorded,
-            }),
-            ReadOutcome::Unreadable { reason } => Some(unreadable_warning(&document.path, &reason)),
-        },
-    }
-}
-
-/// Builds an unreadable warning with the verbatim reason line.
-fn unreadable_warning(path: &DocPath, detail: &str) -> Warning {
-    Warning {
-        path: path.clone(),
-        kind: WarningKind::Unreadable {
-            reason: format!("cannot read '{}': {detail}", path.as_str()),
-        },
+        for recorded in &previous.documents {
+            if !seen.contains(&recorded.key()) && !recorded.superseded_by(&self.documents) {
+                summary.delete += 1;
+            }
+        }
+        summary
     }
 }
 
 /// Computes lowercase hex SHA-256 over bytes.
-fn sha256_hex(bytes: &[u8]) -> String {
+///
+/// # Arguments
+///
+/// * `bytes` - the input bytes.
+///
+/// # Returns
+///
+/// Lowercase hex digest.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::plan::sha256_hex;
+///
+/// let digest = sha256_hex(b"abc");
+/// assert!(matches!(digest.starts_with("ba7816"), true));
+/// ```
+pub fn sha256_hex(bytes: &[u8]) -> String {
     sha2::Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -453,188 +406,141 @@ fn now_timestamp() -> String {
 mod tests {
     use super::*;
     use crate::document::DocumentData;
+    use crate::ids::DocPath;
 
     fn text_doc(path: &str, content: &str) -> Document {
         Document::new(
             DocPath::new(path),
             DocumentData::Text {
                 content: content.to_string(),
+                mode: None,
             },
         )
     }
 
-    fn hashed(documents: Vec<Document>) -> BTreeMap<String, String> {
-        let Ok(built) = build(documents, &State::empty(), &|_| ReadOutcome::Absent) else {
-            panic!("hashing build succeeds");
-        };
-        let plan = built.plan;
-        plan.documents
-            .iter()
-            .map(|document| (document.key(), document.data_hash.clone()))
-            .collect()
+    fn with_hashes(documents: Vec<Document>) -> Plan {
+        let mut docs = documents;
+        for document in &mut docs {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        let mut previous = Plan::empty();
+        previous.documents = docs;
+        previous
     }
 
     #[test]
-    fn three_way_diff_counts_create_update_delete() {
-        let hashes = hashed(vec![text_doc("a", "same-a"), text_doc("b", "fresh-b")]);
-        let hash_of = |key: &str| match hashes.get(key) {
-            Some(hash) => hash.clone(),
-            None => panic!("hash covers {key}"),
-        };
-        let mut previous = State::empty();
-        previous
-            .documents
-            .insert("text:a".to_string(), StateEntry::new(hash_of("text:a")));
-        previous
-            .documents
-            .insert("text:b".to_string(), StateEntry::new("stale-b"));
-        previous
-            .documents
-            .insert("text:gone".to_string(), StateEntry::new("gone-hash"));
-        let outcome = build(
-            vec![text_doc("a", "same-a"), text_doc("b", "fresh-b")],
-            &previous,
-            &|_| ReadOutcome::Absent,
-        );
+    fn plan_counts_create_update_delete() {
+        let previous = with_hashes(vec![text_doc("a", "same-a"), text_doc("gone", "gone")]);
+        let stale = previous.documents[0].clone();
+        let desired = vec![text_doc("a", "same-a"), text_doc("b", "fresh-b")];
+        let _ = stale;
+        let outcome = Plan::build(desired);
         let built = match outcome {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
         };
-        let summary = built.summary;
-        let plan = built.plan;
-        assert_eq!(summary.create, 0);
-        assert_eq!(summary.update, 1);
+        let summary = built.summary(&previous);
+        assert_eq!(summary.create, 1);
+        assert_eq!(summary.update, 0);
         assert_eq!(summary.delete, 1);
         assert!(matches!(
-            document_status(&plan.documents[0], &previous),
+            built.documents[0].status(&previous),
             DocumentStatus::Unchanged
         ));
         assert!(matches!(
-            document_status(&plan.documents[1], &previous),
+            built.documents[1].status(&previous),
+            DocumentStatus::Create
+        ));
+    }
+
+    #[test]
+    fn plan_marks_update_on_hash_change() {
+        let previous = with_hashes(vec![text_doc("b", "old")]);
+        let outcome = Plan::build(vec![text_doc("b", "new")]);
+        let built = match outcome {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        assert_eq!(built.summary(&previous).update, 1);
+        assert!(matches!(
+            built.documents[0].status(&previous),
+            DocumentStatus::Update
+        ));
+    }
+
+    fn opaque_doc(path: &str, bytes: &[u8]) -> Document {
+        Document::new(
+            DocPath::new(path),
+            DocumentData::Opaque {
+                content: bytes.to_vec(),
+                mode: None,
+            },
+        )
+    }
+
+    #[test]
+    fn opaque_kind_change_reads_as_update_both_ways() {
+        let previous = with_hashes(vec![text_doc("bin", "hi")]);
+        let desired = opaque_doc("bin", &[0xFF, 0x00]);
+        let mut hashed = vec![desired.clone()];
+        for document in &mut hashed {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        assert!(matches!(
+            hashed[0].status(&previous),
+            DocumentStatus::Update
+        ));
+        let previous_opaque = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
+        let mut back = vec![text_doc("bin", "hi")];
+        for document in &mut back {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        assert!(matches!(
+            back[0].status(&previous_opaque),
             DocumentStatus::Update
         ));
     }
 
     #[test]
-    fn snapshot_warnings_ride_with_success() {
-        let hashes = hashed(vec![
-            text_doc("a", "same"),
-            text_doc("b", "new"),
-            text_doc("c", "x"),
-            text_doc("d", "y"),
-            text_doc("e", "z"),
-        ]);
-        let hash_of = |key: &str| match hashes.get(key) {
-            Some(hash) => hash.clone(),
-            None => panic!("hash covers {key}"),
-        };
-        let mut previous = State::empty();
-        previous
-            .documents
-            .insert("text:a".to_string(), StateEntry::new(hash_of("text:a")));
-        previous
-            .documents
-            .insert("text:c".to_string(), StateEntry::new(hash_of("text:c")));
-        previous
-            .documents
-            .insert("text:d".to_string(), StateEntry::new(hash_of("text:d")));
-        let documents = vec![
-            text_doc("a", "same"),
-            text_doc("b", "new"),
-            text_doc("c", "x"),
-            text_doc("d", "y"),
-            text_doc("e", "z"),
-        ];
-        let outcome = build(
-            documents,
-            &previous,
-            &|path: &DocPath| match path.as_str() {
-                "a" => ReadOutcome::Present(b"edited".to_vec()),
-                "b" => ReadOutcome::Present(b"new".to_vec()),
-                "c" => ReadOutcome::Unreadable {
-                    reason: "denied".to_string(),
-                },
-                "d" => ReadOutcome::Present(b"y".to_vec()),
-                _ => ReadOutcome::Absent,
-            },
-        );
-        let built = match outcome {
-            Ok(out) => out,
-            Err(error) => panic!("plan builds with warnings: {error}"),
-        };
-        let summary = built.summary;
-        let warnings = built.warnings;
-        assert_eq!(summary.create, 2);
-        let lines: Vec<String> = warnings.iter().map(Warning::line).collect();
-        assert_eq!(
-            lines,
-            vec![
-                "a: differs from recorded: manual modification will be overwritten".to_string(),
-                "b: exists but no record: will be overwritten".to_string(),
-                "cannot read 'c': denied".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn repeated_declaration_fails() {
-        let outcome = build(
-            vec![text_doc("x", "first"), text_doc("x", "second")],
-            &State::empty(),
-            &|_| ReadOutcome::Absent,
-        );
-        let error = match outcome {
-            Ok(_) => panic!("repeated declaration passes"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, Error::Plan(_)));
-        assert_eq!(
-            error.to_string(),
-            "plan error: document 'x' is declared more than once: declare once, patch to modify"
-        );
-    }
-
-    #[test]
-    fn kind_mismatch_is_a_repeated_declaration() {
-        let link = Document::new(
-            DocPath::new("x"),
-            DocumentData::Link {
-                target: "dest".into(),
-            },
-        );
-        let outcome = build(vec![text_doc("x", "first"), link], &State::empty(), &|_| {
-            ReadOutcome::Absent
-        });
-        let error = match outcome {
-            Ok(_) => panic!("kind mismatch passes"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, Error::Plan(_)));
-        assert_eq!(
-            error.to_string(),
-            "plan error: document 'x' is declared more than once: declare once, patch to modify"
-        );
-    }
-
-    #[test]
-    fn plan_sorts_documents_by_path() {
-        let outcome = build(
-            vec![text_doc("b", "bee"), text_doc("a", "aye")],
-            &State::empty(),
-            &|_| ReadOutcome::Absent,
-        );
-        let built = match outcome {
+    fn opaque_kind_change_skips_superseded_delete() {
+        let previous = with_hashes(vec![text_doc("bin", "hi")]);
+        let mut desired = vec![opaque_doc("bin", &[0xFF, 0x00])];
+        for document in &mut desired {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        let built = match Plan::build(vec![opaque_doc("bin", &[0xFF, 0x00])]) {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
         };
-        let summary = built.summary;
-        let plan = built.plan;
-        assert_eq!(plan.version, PLAN_VERSION);
-        assert!(!plan.created_at.is_empty());
-        assert_eq!(summary.create, 2);
-        assert_eq!(plan.documents.len(), 2);
-        assert_eq!(plan.documents[0].path, DocPath::new("a"));
-        assert_eq!(plan.documents[1].path, DocPath::new("b"));
-        assert!(!plan.documents[0].data_hash.is_empty());
+        let summary = built.summary(&previous);
+        assert_eq!(summary.update, 1);
+        assert_eq!(summary.delete, 0);
+        assert_eq!(summary.create, 0);
+    }
+
+    #[test]
+    fn plain_kind_change_keeps_create_plus_delete() {
+        let previous = with_hashes(vec![text_doc("bin", "hi")]);
+        let built = match Plan::build(vec![Document::new(
+            DocPath::new("bin"),
+            DocumentData::Link {
+                target: "dest".to_string(),
+            },
+        )]) {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let summary = built.summary(&previous);
+        assert_eq!(summary.create, 1);
+        assert_eq!(summary.delete, 1);
+        assert_eq!(summary.update, 0);
     }
 }

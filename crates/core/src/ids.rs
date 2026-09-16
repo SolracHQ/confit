@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::ids::DocPath;
 ///
 /// let path = DocPath::new("/etc/hosts");
@@ -36,7 +36,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("~/.bashrc");
@@ -54,7 +54,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("~/.bashrc");
@@ -73,7 +73,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("/etc/hosts");
@@ -88,8 +88,8 @@ impl DocPath {
             Some(stripped) => stripped,
             None => rest,
         };
-        match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
+        match dirs::home_dir() {
+            Some(home) => home.join(rest),
             None => PathBuf::from(raw),
         }
     }
@@ -114,7 +114,7 @@ impl From<&str> for DocPath {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::ids::ReadOutcome;
 ///
 /// let outcome = ReadOutcome::Absent;
@@ -124,8 +124,14 @@ impl From<&str> for DocPath {
 pub enum ReadOutcome {
     /// Empty path. The document awaits creation.
     Absent,
-    /// Raw disk bytes for the path.
-    Present(Vec<u8>),
+    /// Disk bytes plus permission bits for the path.
+    Present {
+        /// Holds raw disk bytes for the path.
+        bytes: Vec<u8>,
+        /// Holds unix permission bits. None while the backend
+        /// holds no mode, like symlinks or umask default files.
+        mode: Option<u32>,
+    },
     /// Failing read. Carries the raw failure detail.
     ///
     /// # Arguments

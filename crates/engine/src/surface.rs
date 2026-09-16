@@ -2,8 +2,6 @@
 //!
 //! Lua namespaces behind the confit global.
 
-use std::path::Path;
-
 use mlua::{Lua, Table};
 
 pub(crate) mod config;
@@ -13,7 +11,7 @@ pub(crate) mod paths;
 pub(crate) mod plugin;
 pub(crate) mod resources;
 pub(crate) mod shell;
-pub(crate) mod text;
+pub(crate) mod utils;
 
 /// Fetches the confit global table for namespace setup.
 pub(crate) fn confit_table(lua: &Lua) -> mlua::Result<Table> {
@@ -28,26 +26,23 @@ pub(crate) fn confit_table(lua: &Lua) -> mlua::Result<Table> {
     }
 }
 
-/// Installs the confit global plus every namespace on a state.
-pub(crate) fn install(
-    lua: &Lua,
-    root: &Path,
-    plugins: Option<&Path>,
-) -> confit_core::error::Result<()> {
+/// Installs the confit global plus every namespace on a session.
+pub(crate) fn install(session: &crate::eval::Session) -> confit_core::error::Result<()> {
+    let lua = &session.lua;
     let fresh = lua.create_table().map_err(plan)?;
     lua.globals().set("confit", fresh).map_err(plan)?;
     config::install(lua).map_err(plan)?;
-    document::install(lua).map_err(plan)?;
+    document::install(session).map_err(plan)?;
     patch::install(lua).map_err(plan)?;
     shell::install(lua).map_err(plan)?;
-    paths::install(lua, root).map_err(plan)?;
-    resources::install(lua, root).map_err(plan)?;
-    text::install(lua).map_err(plan)?;
-    plugin::install(lua, plugins).map_err(plan)?;
+    paths::install(session).map_err(plan)?;
+    resources::install(session).map_err(plan)?;
+    utils::install(lua).map_err(plan)?;
+    plugin::install(session).map_err(plan)?;
     Ok(())
 }
 
 /// Maps an install-time Lua failure onto a plan error.
 fn plan(error: mlua::Error) -> confit_core::error::Error {
-    confit_core::error::Error::Plan(error.to_string())
+    crate::error::plan(error.to_string())
 }

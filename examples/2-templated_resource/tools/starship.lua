@@ -5,7 +5,7 @@ local starship = mise.package("starship", function(rc)
 	rc:alias("s", "starship")
 	rc:eval({ "starship", "init", "bash" })
 end)
-starship:add_document(mise.activate())
+starship:add_patch(mise.activate())
 
 return function(user_config)
 	local document = template(confit.path.config("starship.toml"), {

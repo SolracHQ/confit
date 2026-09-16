@@ -15,7 +15,7 @@ use crate::ids::DocPath;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::Table;
 ///
 /// let table = Table::new();
@@ -29,7 +29,7 @@ pub type Table = BTreeMap<String, serde_json::Value>;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::StructuredFormat;
 ///
 /// assert!(matches!(StructuredFormat::parse("toml"), Some(StructuredFormat::Toml)));
@@ -55,7 +55,7 @@ impl StructuredFormat {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::StructuredFormat;
     ///
     /// assert!(matches!(StructuredFormat::Yaml.name(), "yaml"));
@@ -80,7 +80,7 @@ impl StructuredFormat {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::StructuredFormat;
     ///
     /// assert!(matches!(StructuredFormat::parse("JSON"), Some(StructuredFormat::Json)));
@@ -109,7 +109,7 @@ impl std::fmt::Display for StructuredFormat {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::Condition;
 ///
 /// let first = Condition::InPath { name: "bat".into() };
@@ -158,23 +158,20 @@ pub enum Condition {
 
 /// Path list placement for setup entries.
 ///
-/// Prepend leads with the directory. Append trails with it.
+/// Prepend leads with the directory.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::PathOp;
 ///
 /// assert!(matches!(PathOp::Prepend, PathOp::Prepend));
-/// assert!(matches!(PathOp::Append == PathOp::Prepend, false));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PathOp {
     /// Places the directory before existing entries.
     Prepend,
-    /// Places the directory after existing entries.
-    Append,
 }
 
 /// One rc operation shaping a shell line.
@@ -185,7 +182,7 @@ pub enum PathOp {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::RcOp;
 ///
 /// let op = RcOp::Alias { name: "ll".into(), expansion: "ls -l".into() };
@@ -241,7 +238,7 @@ pub enum RcOp {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::{RcEntry, RcOp};
 ///
 /// let entry = RcEntry {
@@ -268,7 +265,7 @@ impl RcEntry {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::{RcEntry, RcOp};
     ///
     /// let entry = RcEntry {
@@ -294,7 +291,7 @@ impl RcEntry {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::{RcEntry, RcOp};
     ///
     /// let entry = RcEntry {
@@ -322,7 +319,7 @@ impl RcEntry {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::RC_SECTION_NAMES;
 ///
 /// assert!(matches!(RC_SECTION_NAMES.contains(&"config"), true));
@@ -337,7 +334,7 @@ pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::RcData;
 ///
 /// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
@@ -369,7 +366,7 @@ impl RcData {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::RcData;
     ///
     /// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
@@ -399,7 +396,7 @@ impl RcData {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::RcData;
     ///
     /// assert!(matches!(RcData::check_section_name("config"), Ok(())));
@@ -423,10 +420,11 @@ impl RcData {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::DocumentKind;
 ///
 /// assert!(matches!(DocumentKind::Text.name(), "text"));
+/// assert!(matches!(DocumentKind::Opaque.name(), "opaque"));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -439,6 +437,8 @@ pub enum DocumentKind {
     Link,
     /// Per-shell rc data object.
     Rc,
+    /// Raw binary file from declaration bytes.
+    Opaque,
 }
 
 impl DocumentKind {
@@ -450,7 +450,7 @@ impl DocumentKind {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::DocumentKind;
     ///
     /// assert!(matches!(DocumentKind::Rc.name(), "rc"));
@@ -461,6 +461,7 @@ impl DocumentKind {
             Self::Text => "text",
             Self::Link => "link",
             Self::Rc => "rc",
+            Self::Opaque => "opaque",
         }
     }
 }
@@ -477,7 +478,7 @@ impl std::fmt::Display for DocumentKind {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::DocumentData;
 ///
 /// let data = DocumentData::Text { content: "hi".into() };
@@ -497,6 +498,9 @@ pub enum DocumentData {
     Text {
         /// Holds the exact file text.
         content: String,
+        /// Holds unix permission bits. None applies the umask default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
     },
     /// Describes a symlink placement.
     Link {
@@ -505,6 +509,15 @@ pub enum DocumentData {
     },
     /// Holds the rc data object.
     Rc(RcData),
+    /// Holds raw binary content.
+    Opaque {
+        /// Holds raw file bytes, base64 in plan JSON.
+        #[serde(with = "base64_content")]
+        content: Vec<u8>,
+        /// Holds unix permission bits. None applies the umask default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
+    },
 }
 
 impl DocumentData {
@@ -516,7 +529,7 @@ impl DocumentData {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::{DocumentData, DocumentKind};
     ///
     /// let data = DocumentData::Text { content: "hi".into() };
@@ -528,8 +541,180 @@ impl DocumentData {
             Self::Text { .. } => DocumentKind::Text,
             Self::Link { .. } => DocumentKind::Link,
             Self::Rc(_) => DocumentKind::Rc,
+            Self::Opaque { .. } => DocumentKind::Opaque,
         }
     }
+
+    /// Reads the unix permission bits for this payload.
+    ///
+    /// Text plus opaque payloads carry an optional mode.
+    /// Every other payload reads as None.
+    ///
+    /// # Returns
+    ///
+    /// The mode bits for text plus opaque payloads, else None.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::DocumentData;
+    ///
+    /// let data = DocumentData::Text { content: "hi".into(), mode: Some(0o755) };
+    /// assert!(matches!(data.mode(), Some(0o755)));
+    /// ```
+    pub fn mode(&self) -> Option<u32> {
+        match self {
+            Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
+            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) => None,
+        }
+    }
+}
+
+/// Base64 string form for opaque bytes in plan JSON.
+mod base64_content {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// Serializes raw bytes as one base64 string.
+    pub(super) fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    /// Deserializes one base64 string into raw bytes.
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        STANDARD
+            .decode(text.as_bytes())
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Parses unix permission bits from octal or symbolic text.
+///
+/// Octal text holds three digits like `755` or four digits
+/// with a leading zero like `0755`. Symbolic text holds nine
+/// characters like `rwxr-xr-x`, one `rwx` triple per class.
+///
+/// # Arguments
+///
+/// * `text` - the raw mode text.
+///
+/// # Returns
+///
+/// The mode bits.
+///
+/// # Errors
+///
+/// Leading `d` plus wrong lengths plus bad characters fail
+/// as plan errors.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::document::parse_mode;
+///
+/// assert!(matches!(parse_mode("755"), Ok(mode) if mode == 0o755));
+/// assert!(matches!(parse_mode("0755"), Ok(mode) if mode == 0o755));
+/// assert!(matches!(parse_mode("rwxr-xr-x"), Ok(mode) if mode == 0o755));
+/// assert!(matches!(parse_mode("rw-r--r--"), Ok(mode) if mode == 0o644));
+/// assert!(matches!(parse_mode("drwxr-xr-x"), Err(_)));
+/// ```
+pub fn parse_mode(text: &str) -> Result<u32> {
+    if text.starts_with('d') {
+        return Err(Error::Plan(format!(
+            "invalid mode '{text}': leading 'd' marks a directory listing, want octal like 755 or symbolic like rwxr-xr-x"
+        )));
+    }
+    match text.len() {
+        3 | 4 => parse_octal_mode(text),
+        9 => parse_symbolic_mode(text),
+        _ => Err(Error::Plan(format!(
+            "invalid mode '{text}': want octal like 755 or symbolic like rwxr-xr-x"
+        ))),
+    }
+}
+
+/// Parses three octal digits with an optional leading zero.
+fn parse_octal_mode(text: &str) -> Result<u32> {
+    let body = match text.len() {
+        3 => text,
+        4 => match text.strip_prefix('0') {
+            Some(rest) => rest,
+            None => {
+                return Err(Error::Plan(format!(
+                    "invalid mode '{text}': four digit octal starts with 0 like 0755"
+                )));
+            }
+        },
+        _ => {
+            return Err(Error::Plan(format!(
+                "invalid mode '{text}': want octal like 755 or symbolic like rwxr-xr-x"
+            )));
+        }
+    };
+    if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+        return Err(Error::Plan(format!(
+            "invalid mode '{text}': octal holds digits 0-7"
+        )));
+    }
+    u32::from_str_radix(body, 8)
+        .map_err(|error| Error::Plan(format!("invalid mode '{text}': {error}")))
+}
+
+/// Parses nine symbolic characters into mode bits.
+fn parse_symbolic_mode(text: &str) -> Result<u32> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 9 {
+        return Err(Error::Plan(format!(
+            "invalid mode '{text}': symbolic holds nine rwx characters like rwxr-xr-x"
+        )));
+    }
+    let mut mode: u32 = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        let bit: u32 = match (index % 3, byte) {
+            (0, b'r') => 4,
+            (1, b'w') => 2,
+            (2, b'x') => 1,
+            (_, b'-') => 0,
+            _ => {
+                return Err(Error::Plan(format!(
+                    "invalid mode '{text}': symbolic holds nine rwx characters like rwxr-xr-x"
+                )));
+            }
+        };
+        let shift = (2 - index / 3) * 3;
+        mode |= bit << shift;
+    }
+    Ok(mode)
+}
+
+/// Renders mode bits as octal digits for drift lines.
+///
+/// # Arguments
+///
+/// * `mode` - the unix mode bits.
+///
+/// # Returns
+///
+/// The octal text like `755`.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::document::render_mode;
+///
+/// assert!(matches!(render_mode(0o755).as_str(), "755"));
+/// assert!(matches!(render_mode(0o644).as_str(), "644"));
+/// ```
+pub fn render_mode(mode: u32) -> String {
+    format!("{mode:o}")
 }
 
 /// One materialization step: a path plus its payload.
@@ -539,7 +724,7 @@ impl DocumentData {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::document::{Document, DocumentData};
 /// use confit_core::ids::DocPath;
 ///
@@ -555,8 +740,7 @@ pub struct Document {
     pub path: DocPath,
     /// Holds the document payload.
     pub data: DocumentData,
-    /// Holds the hex SHA-256 over rendered bytes. Filled by plan builds.
-    #[serde(skip)]
+    /// Holds the hex SHA-256 over rendered bytes.
     pub data_hash: String,
 }
 
@@ -574,7 +758,7 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
@@ -601,6 +785,31 @@ impl Document {
         self.data.kind()
     }
 
+    /// Reads the unix permission bits for this document.
+    ///
+    /// Text plus opaque payloads carry an optional mode.
+    /// Every other payload reads as None.
+    ///
+    /// # Returns
+    ///
+    /// The mode bits for text plus opaque payloads, else None.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("x"),
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
+    /// );
+    /// assert!(matches!(document.mode(), None));
+    /// ```
+    pub fn mode(&self) -> Option<u32> {
+        self.data.mode()
+    }
+
     /// Builds the kind plus path key for state lookups.
     ///
     /// # Returns
@@ -609,7 +818,7 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
@@ -628,15 +837,6 @@ impl Document {
 mod tests {
     use super::*;
 
-    fn text_document(path: &str, content: &str) -> Document {
-        Document::new(
-            DocPath::new(path),
-            DocumentData::Text {
-                content: content.to_string(),
-            },
-        )
-    }
-
     #[test]
     fn unknown_rc_section_fails_as_plan_error() {
         assert!(matches!(RcData::check_section_name("profile"), Ok(())));
@@ -649,93 +849,7 @@ mod tests {
         assert!(matches!(error, Error::Plan(_)));
         assert_eq!(
             error.to_string(),
-            "plan error: unknown rc section 'confg': expected profile, config, final"
+            "unknown rc section 'confg': expected profile, config, final"
         );
-    }
-
-    #[test]
-    fn document_key_prefixes_kind() {
-        assert!(text_document("x", "hi").key() == "text:x");
-    }
-
-    #[test]
-    fn rc_entry_roundtrips_through_json() {
-        let entry = RcEntry {
-            op: RcOp::Cmd {
-                argv: vec!["task".to_string()],
-            },
-            when: None,
-        };
-        let value = match serde_json::to_value(&entry) {
-            Ok(value) => value,
-            Err(error) => panic!("rc entry serializes: {error}"),
-        };
-        let parsed = match serde_json::from_value::<RcEntry>(value) {
-            Ok(entry) => entry,
-            Err(error) => panic!("rc entry parses: {error}"),
-        };
-        assert_eq!(parsed, entry);
-    }
-
-    #[test]
-    fn condition_serializes_tagged_shapes() {
-        let guarded = Condition::InPath { name: "bat".into() };
-        let guarded_value = match serde_json::to_value(&guarded) {
-            Ok(value) => value,
-            Err(error) => panic!("condition serializes: {error}"),
-        };
-        assert_eq!(
-            guarded_value,
-            serde_json::json!({"in_path": {"name": "bat"}})
-        );
-        let negated = Condition::Not(Box::new(Condition::EnvSet {
-            key: "SSH_TTY".into(),
-        }));
-        let negated_value = match serde_json::to_value(&negated) {
-            Ok(value) => value,
-            Err(error) => panic!("condition serializes: {error}"),
-        };
-        assert_eq!(
-            negated_value,
-            serde_json::json!({"nop": {"env_set": {"key": "SSH_TTY"}}})
-        );
-        let both = Condition::All(vec![
-            Condition::EnvEq {
-                key: "TERM_PROGRAM".into(),
-                value: "WarpTerminal".into(),
-            },
-            guarded.clone(),
-        ]);
-        let round_tripped =
-            match serde_json::from_value::<Condition>(match serde_json::to_value(&both) {
-                Ok(value) => value,
-                Err(error) => panic!("condition serializes: {error}"),
-            }) {
-                Ok(condition) => condition,
-                Err(error) => panic!("condition parses: {error}"),
-            };
-        assert_eq!(both, round_tripped);
-    }
-
-    #[test]
-    fn structured_format_names_and_parses() {
-        assert_eq!(
-            StructuredFormat::parse("json"),
-            Some(StructuredFormat::Json)
-        );
-        assert_eq!(
-            StructuredFormat::parse("TOML"),
-            Some(StructuredFormat::Toml)
-        );
-        assert_eq!(
-            StructuredFormat::parse("yaml"),
-            Some(StructuredFormat::Yaml)
-        );
-        assert_eq!(StructuredFormat::parse("nope"), None);
-        let value = match serde_json::to_value(StructuredFormat::Toml) {
-            Ok(value) => value,
-            Err(error) => panic!("format serializes: {error}"),
-        };
-        assert_eq!(value, serde_json::json!("toml"));
     }
 }

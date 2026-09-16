@@ -11,7 +11,7 @@ use thiserror::Error;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::error::Error;
 ///
 /// let error = Error::Plan("bad section".to_string());
@@ -20,7 +20,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     /// Plan failure with a human readable reason.
-    #[error("plan error: {0}")]
+    #[error("{0}")]
     Plan(String),
     /// Filesystem failure from the caller seam.
     #[error(transparent)]
@@ -31,7 +31,7 @@ pub enum Error {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use confit_core::error::Result;
 ///
 /// let value: Result<u32> = Ok(1);

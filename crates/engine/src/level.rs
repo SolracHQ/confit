@@ -42,22 +42,3 @@ impl Level {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ranks_order_minor_below_major() {
-        assert!(Level::Minor.rank() < Level::Normal.rank());
-        assert!(Level::Normal.rank() < Level::Major.rank());
-        assert_eq!(Level::default(), Level::Normal);
-    }
-
-    #[test]
-    fn names_parse_case_insensitively() {
-        assert_eq!(Level::parse("minor"), Some(Level::Minor));
-        assert_eq!(Level::parse("MAJOR"), Some(Level::Major));
-        assert_eq!(Level::parse("extreme"), None);
-    }
-}

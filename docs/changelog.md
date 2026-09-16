@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.5] - 2026-09-16
+
+Design spec: `docs/design/v0.5.md`.
+
+### Added
+
+- `init` scaffolds a project: `confit init [DIR]` (default `.`)
+  writes plugin plus namespace stubs and one profile holding one
+  rc document with manual pointers. Stubs copy as files.
+- `apply` over files with preview-then-prompt: literal `yes`
+  proceeds, a plan file flag skips the preview, a force flag
+  skips the prompt, drift re-prompts always.
+- Previous-states rotation plus `recover`: one fixed live slot
+  under the OS config folder, `--state` override per run, five
+  kept plans, `recover` lists `index @ created_at` and re-applies
+  the picked one.
+- `fetch_text` plus `fetch_file` with optional sha guarantee.
+  `fetch_file` streams into the OS cache folder beside a sha
+  sidecar owned by the `Cache` type; re-download runs on missing
+  file or sidecar, sidecar mismatch, or `--re-fetch`.
+- `confit.document.compressed` unpacks gzip, tar, plus zip through
+  a per-member callback returning a document, nil skipping the
+  member. Filters read path plus meta plus data.
+- Opaque document kind for binaries: base64 payloads in the plan,
+  raw bytes on apply, hash plus size drift.
+- `confit.utils` namespace: `render` (moved from `confit.text`),
+  `holds_cycle`, `is_array`.
+- Rc api: `rc.prepend` constructor plus the `add` verb on patch
+  handles, with `RcPatch`/`StructuredPatch` split types behind
+  the callbacks.
+
+### Changed
+
+- Engine cleanup: `values.rs` splits into `error`, `lua`
+  (`ValueExt`/`TableExt` `req_*` extractors), and `path_expr`;
+  surface impls thin out onto the extractors.
+- Error prefix fix: core `Display` shapes stay bare, the CLI owns
+  the `confit:` plus `plan error:` prefixes at the edge.
+- Spec at 0.5.0.
+
+### Removed
+
+- Dead `PathOp::Append` variant.
+- Purged stale tests around the old shapes.
+
 ## [Unreleased]
 
 ## [0.4] - 2026-09-14

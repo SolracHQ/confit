@@ -1,14 +1,19 @@
 [package]
 name = "confit-core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [lints]
 workspace = true
 
 [dependencies]
+base64 = "0.23.1"
 chrono = "0.4.45"
+diffy = "0.5.2"
+dirs = "7.0.0"
+log = "0.4"
 noyalib.workspace = true
+rayon = "1.12"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

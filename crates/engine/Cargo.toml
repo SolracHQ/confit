@@ -1,6 +1,6 @@
 [package]
 name = "confit-engine"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [lints]
@@ -9,13 +9,19 @@ workspace = true
 [dependencies]
 confit-core = { path = "../core" }
 directories.workspace = true
+dirs = "7.0.0"
+flate2 = "1.1.10"
 log.workspace = true
 minijinja.workspace = true
 mlua = { workspace = true, features = ["lua54", "vendored"] }
 noyalib.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
+tar = "0.4.46"
 toml.workspace = true
+ureq = "3.4.2"
+zip = "8.6.0"
 
 [dev-dependencies]
 tempfile.workspace = true

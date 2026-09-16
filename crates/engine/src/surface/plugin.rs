@@ -2,19 +2,21 @@
 //!
 //! Lazy user plugin namespaces plus embedded defaults.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Lua, Table, Value};
 
 use super::confit_table;
-use crate::values::plan_error;
+use crate::error::plan_error;
+use crate::lua::ValueExt;
+use crate::require::{Requirer, chunk_env};
 
 /// Registry key holding loaded plugins by `user/name`.
 const LOADED_KEY: &str = "confit.plugin.loaded";
 /// Registry key holding user namespace tables.
 const USERS_KEY: &str = "confit.plugin.users";
 /// Registry key holding scoped require results by file.
-const REQUIRE_CACHE_KEY: &str = "confit.plugin.require_cache";
+const REQUIRE_CACHE_KEY: &str = "confit.require_cache";
 
 /// Embedded default plugin sources in external shape.
 const EMBEDDED: &[(&str, &str, &str)] = &[
@@ -36,7 +38,11 @@ const EMBEDDED: &[(&str, &str, &str)] = &[
 ];
 
 /// Installs the plugin namespace on a state.
-pub(crate) fn install(lua: &Lua, plugins: Option<&Path>) -> mlua::Result<()> {
+///
+/// Missing folders read as embedded-only; the loader skips paths
+/// holding no `plugin.lua`.
+pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
+    let lua = &session.lua;
     let confit = confit_table(lua)?;
     let namespace = lua.create_table()?;
     let helpers = lua.create_table()?;
@@ -48,7 +54,7 @@ pub(crate) fn install(lua: &Lua, plugins: Option<&Path>) -> mlua::Result<()> {
     lua.set_named_registry_value(LOADED_KEY, lua.create_table()?)?;
     lua.set_named_registry_value(USERS_KEY, lua.create_table()?)?;
     lua.set_named_registry_value(REQUIRE_CACHE_KEY, lua.create_table()?)?;
-    let root = plugins.map(Path::to_path_buf);
+    let root = session.plugins.clone();
     let meta = lua.create_table()?;
     meta.set(
         "__index",
@@ -62,14 +68,14 @@ pub(crate) fn install(lua: &Lua, plugins: Option<&Path>) -> mlua::Result<()> {
 }
 
 /// Resolves one username into a lazy user namespace.
-fn users_index(lua: &Lua, key: Value, root: Option<PathBuf>) -> mlua::Result<Value> {
-    let user = match key {
-        Value::String(text) => text.to_string_lossy(),
-        _ => return Ok(Value::Nil),
+fn users_index(lua: &Lua, key: Value, root: PathBuf) -> mlua::Result<Value> {
+    let Some(user) = key.opt_str() else {
+        return Ok(Value::Nil);
     };
     let users: Table = lua.named_registry_value(USERS_KEY)?;
-    if let Value::Table(cached) = users.get::<Value>(user.as_str())? {
-        return Ok(Value::Table(cached));
+    let cached: Value = users.get(user.as_str())?;
+    if let Some(table) = cached.opt_table() {
+        return Ok(Value::Table(table));
     }
     let table = lua.create_table()?;
     let meta = lua.create_table()?;
@@ -86,26 +92,26 @@ fn users_index(lua: &Lua, key: Value, root: Option<PathBuf>) -> mlua::Result<Val
 }
 
 /// Resolves one plugin name into its loaded return value.
-fn names_index(lua: &Lua, user: &str, key: Value, root: Option<PathBuf>) -> mlua::Result<Value> {
-    let name = match key {
-        Value::String(text) => text.to_string_lossy(),
-        _ => return Ok(Value::Nil),
+fn names_index(lua: &Lua, user: &str, key: Value, root: PathBuf) -> mlua::Result<Value> {
+    let Some(name) = key.opt_str() else {
+        return Ok(Value::Nil);
     };
     let loaded: Table = lua.named_registry_value(LOADED_KEY)?;
     let slot = format!("{user}/{name}");
-    if let value @ (Value::Table(_) | Value::Function(_) | Value::String(_)) =
-        loaded.get::<Value>(slot.as_str())?
+    let stored: Value = loaded.get(slot.as_str())?;
+    if !stored.is_nil()
+        && (stored.as_table().is_some()
+            || stored.as_function().is_some()
+            || stored.as_string().is_some())
     {
-        return Ok(value);
+        return Ok(stored);
     }
     let embedded = EMBEDDED
         .iter()
         .find(|(owner, plugin, _)| *owner == user && *plugin == name)
         .map(|(_, _, source)| *source);
-    let external = root
-        .as_ref()
-        .map(|folder| folder.join(user).join(&name).join("plugin.lua"))
-        .filter(|file| file.is_file());
+    let external = root.join(user).join(&name).join("plugin.lua");
+    let external = external.is_file().then_some(external);
     if embedded.is_some() && external.is_some() {
         eprintln!("confit.plugin.{user}.{name}: embedded default wins, external plugin skipped");
     }
@@ -144,7 +150,12 @@ fn load_external(lua: &Lua, user: &str, name: &str, file: &Path) -> mlua::Result
             "confit.plugin.{user}.{name}: cannot read 'plugin.lua': {error}"
         ))
     })?;
-    let requirer = make_require(lua, folder.clone(), folder.clone())?;
+    let requirer = Requirer {
+        current: folder.clone(),
+        folder: folder.clone(),
+        scope: "plugin",
+    }
+    .make(lua)?;
     let env = chunk_env(lua, requirer)?;
     let chunk = lua
         .load(&source)
@@ -155,109 +166,33 @@ fn load_external(lua: &Lua, user: &str, name: &str, file: &Path) -> mlua::Result
         .map_err(|error| plan_error(format!("confit.plugin.{user}.{name}: {error}")))
 }
 
-/// Builds one chunk environment holding a scoped require.
-fn chunk_env(lua: &Lua, requirer: Function) -> mlua::Result<Table> {
-    let env = lua.create_table()?;
-    env.set("require", requirer)?;
-    let fallback = lua.create_table()?;
-    fallback.set("__index", lua.globals())?;
-    env.set_metatable(Some(fallback))?;
-    Ok(env)
-}
-
-/// Builds one scoped require resolving inside a plugin folder.
-fn make_require(lua: &Lua, current: PathBuf, folder: PathBuf) -> mlua::Result<Function> {
-    lua.create_function(move |lua, request: Value| {
-        let request = match request {
-            Value::String(text) => text.to_string_lossy(),
-            _ => {
-                return Err(plan_error(
-                    "plugin.require: field 'module' must be a string".to_string(),
-                ));
-            }
-        };
-        require_impl(lua, &current, &folder, &request)
-    })
-}
-
-/// Resolves one scoped require request into a cached value.
-fn require_impl(lua: &Lua, current: &Path, folder: &Path, request: &str) -> mlua::Result<Value> {
-    const CALLER: &str = "plugin.require";
-    let file = resolve_require(current, folder, request)?;
-    let cache: Table = lua.named_registry_value(REQUIRE_CACHE_KEY)?;
-    let slot = file.display().to_string();
-    if let value @ (Value::Table(_) | Value::Function(_) | Value::String(_)) =
-        cache.get::<Value>(slot.as_str())?
-    {
-        return Ok(value);
-    }
-    let source = std::fs::read_to_string(&file)
-        .map_err(|error| plan_error(format!("{CALLER}: cannot read '{request}': {error}")))?;
-    let parent = file
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| folder.to_path_buf());
-    let requirer = make_require(lua, parent, folder.to_path_buf())?;
-    let env = chunk_env(lua, requirer)?;
-    let value: Value = lua
-        .load(&source)
-        .set_name(format!("@{}", file.display()))
-        .set_environment(env)
-        .call(())?;
-    cache.set(slot.as_str(), value.clone())?;
-    Ok(value)
-}
-
-/// Resolves one scoped require request inside the plugin folder.
-fn resolve_require(current: &Path, folder: &Path, request: &str) -> mlua::Result<PathBuf> {
-    const CALLER: &str = "plugin.require";
-    if request.is_empty() {
-        return Err(plan_error(format!(
-            "{CALLER}: field 'module' must not be empty"
-        )));
-    }
-    let mut stack: Vec<String> = Vec::new();
-    for part in request.split('.') {
-        if part.is_empty() {
-            return Err(plan_error(format!("{CALLER}: bad module '{request}'")));
-        }
-        stack.push(part.to_string());
-    }
-    let mut base = current.to_path_buf();
-    for part in &stack {
-        base.push(part);
-    }
-    base.set_extension("lua");
-    let mut normalized = PathBuf::new();
-    for component in base.components() {
-        match component {
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(plan_error(format!(
-                        "{CALLER}: module '{request}' escapes the plugin folder"
-                    )));
-                }
-            }
-            Component::CurDir => {}
-            other => normalized.push(other),
-        }
-    }
-    let root = folder.components().collect::<PathBuf>();
-    if !normalized.starts_with(&root) {
-        return Err(plan_error(format!(
-            "{CALLER}: module '{request}' escapes the plugin folder"
-        )));
-    }
-    Ok(normalized)
-}
-
 /// Raises one plan error with plugin attribution.
 fn helpers_error_impl(message: Value) -> mlua::Result<Value> {
     const CALLER: &str = "confit.plugin.helpers.error";
-    match message {
-        Value::String(text) => Err(plan_error(format!("{CALLER}: {}", text.to_string_lossy()))),
-        _ => Err(plan_error(format!(
-            "{CALLER}: field 'message' must be a string"
-        ))),
+    let message = message.req_str(CALLER, "message")?;
+    PluginHelpers::error(CALLER, message)
+}
+
+/// Plugin helper errors holding attribution.
+struct PluginHelpers;
+
+impl PluginHelpers {
+    /// Raises one plan error with plugin attribution.
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` - error prefix naming the constructor.
+    /// * `message` - message under reporting.
+    ///
+    /// # Returns
+    ///
+    /// Never returns a value.
+    ///
+    /// # Errors
+    ///
+    /// Always fails as a plan error carrying the message.
+    ///
+    fn error(caller: &str, message: String) -> mlua::Result<Value> {
+        Err(plan_error(format!("{caller}: {message}")))
     }
 }

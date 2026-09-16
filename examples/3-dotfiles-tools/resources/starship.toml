@@ -1,0 +1,32 @@
+command_timeout = 5000
+
+[[battery.display]]
+threshold = 30
+style = "bold red"
+
+[time]
+disabled = true
+utc_time_offset = "-5"
+use_12hr = true
+
+[username]
+style_user = "green bold"
+disabled = false
+show_always = true
+
+[git_branch]
+symbol = " "
+format = '\[[$symbol$branch]($style)\]'
+[git_status]
+format = '([\[$all_status$ahead_behind\]]($style))'
+
+[rust]
+format = '\[[$symbol($version)]($style)\]'
+symbol = " "
+
+[nodejs]
+format = '\[[$symbol($version)]($style)\]'
+
+[java]
+format = '\[[$symbol($version)]($style)\]'
+symbol = " "

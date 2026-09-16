@@ -5,8 +5,9 @@
 use mlua::{Function, Lua, UserData, UserDataMethods, Value};
 
 use super::confit_table;
+use crate::error::plan_error;
 use crate::level::Level;
-use crate::values::plan_error;
+use crate::lua::ValueExt;
 use confit_core::document::StructuredFormat;
 
 /// Patch handle built by the constructors.
@@ -22,6 +23,56 @@ pub(crate) struct LuaPatch {
     pub(crate) priority: Level,
 }
 
+impl LuaPatch {
+    /// Builds one rc patch handle carrying the callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - callback receiving the live rc wrapper.
+    ///
+    /// # Returns
+    ///
+    /// Patch handle targeting the rc document at normal priority.
+    ///
+    fn rc(callback: Function) -> Self {
+        Self {
+            target: "rc".to_string(),
+            format: None,
+            callback,
+            priority: Level::Normal,
+        }
+    }
+
+    /// Builds one structured patch handle carrying the callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `format_name` - raw format name under parsing.
+    /// * `path` - target document path.
+    /// * `callback` - callback receiving the live wrapper.
+    ///
+    /// # Returns
+    ///
+    /// Patch handle targeting the document path at normal priority.
+    ///
+    /// # Errors
+    ///
+    /// Unknown format names fail as plan errors.
+    ///
+    fn structured(format_name: String, path: String, callback: Function) -> mlua::Result<Self> {
+        const CTOR: &str = "confit.patch.structured";
+        const KNOWN: &str = "'json', 'toml', or 'yaml'";
+        let format = StructuredFormat::parse(&format_name)
+            .ok_or_else(|| plan_error(format!("{CTOR}: field 'format' must be one of {KNOWN}")))?;
+        Ok(Self {
+            target: path,
+            format: Some(format),
+            callback,
+            priority: Level::Normal,
+        })
+    }
+}
+
 impl UserData for LuaPatch {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method_mut("priority", |_, this, level: Value| {
@@ -35,14 +86,8 @@ impl UserData for LuaPatch {
 fn parse_level(value: Value) -> mlua::Result<Level> {
     const CTOR: &str = "confit.patch";
     const KNOWN: &str = "'MINOR', 'LOW', 'NORMAL', 'HIGH', or 'MAJOR'";
-    let name = match value {
-        Value::String(text) => text.to_string_lossy().to_ascii_uppercase(),
-        _ => {
-            return Err(plan_error(format!(
-                "{CTOR}: field 'priority' must be one of {KNOWN}"
-            )));
-        }
-    };
+    let raw = value.req_str(CTOR, "priority")?;
+    let name = raw.to_ascii_uppercase();
     Level::parse(&name).ok_or_else(|| {
         plan_error(format!(
             "{CTOR}: field 'priority' unknown level '{name}' (expected {KNOWN})"
@@ -74,53 +119,16 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 /// Builds one rc patch handle carrying the callback.
 fn rc_impl(callback: Value) -> mlua::Result<LuaPatch> {
     const CTOR: &str = "confit.patch.rc";
-    let callback = match callback {
-        Value::Function(callback) => callback,
-        _ => {
-            return Err(plan_error(format!(
-                "{CTOR}: field 'callback' must be a function"
-            )));
-        }
-    };
-    Ok(LuaPatch {
-        target: "rc".to_string(),
-        format: None,
-        callback,
-        priority: Level::Normal,
-    })
+    let callback = callback.req_func(CTOR, "callback")?;
+    Ok(LuaPatch::rc(callback))
 }
 
 /// Builds one structured patch handle carrying the callback.
 fn structured_impl(args: (Value, Value, Value)) -> mlua::Result<LuaPatch> {
     const CTOR: &str = "confit.patch.structured";
-    const KNOWN: &str = "'json', 'toml', or 'yaml'";
     let (format_value, path_value, callback_value) = args;
-    let format_name = match format_value {
-        Value::String(text) => text.to_string_lossy(),
-        _ => {
-            return Err(plan_error(format!(
-                "{CTOR}: field 'format' must be one of {KNOWN}"
-            )));
-        }
-    };
-    let format = StructuredFormat::parse(&format_name)
-        .ok_or_else(|| plan_error(format!("{CTOR}: field 'format' must be one of {KNOWN}")))?;
-    let path = match path_value {
-        Value::String(text) => text.to_string_lossy(),
-        _ => return Err(plan_error(format!("{CTOR}: field 'path' must be a string"))),
-    };
-    let callback = match callback_value {
-        Value::Function(callback) => callback,
-        _ => {
-            return Err(plan_error(format!(
-                "{CTOR}: field 'callback' must be a function"
-            )));
-        }
-    };
-    Ok(LuaPatch {
-        target: path,
-        format: Some(format),
-        callback,
-        priority: Level::Normal,
-    })
+    let format_name = format_value.req_str(CTOR, "format")?;
+    let path = path_value.req_str(CTOR, "path")?;
+    let callback = callback_value.req_func(CTOR, "callback")?;
+    LuaPatch::structured(format_name, path, callback)
 }

@@ -27,6 +27,8 @@ pub(crate) struct TextDecl {
     pub(crate) path: String,
     /// Exact file text.
     pub(crate) content: String,
+    /// Unix permission bits, holding `None` for default handling.
+    pub(crate) mode: Option<u32>,
 }
 
 /// Declared symlink document.
@@ -36,6 +38,17 @@ pub(crate) struct LinkDecl {
     pub(crate) path: String,
     /// Link target.
     pub(crate) target: String,
+}
+
+/// Declared opaque document holding raw bytes.
+#[derive(Debug, Clone)]
+pub(crate) struct OpaqueDecl {
+    /// Destination path.
+    pub(crate) path: String,
+    /// Raw file bytes.
+    pub(crate) content: Vec<u8>,
+    /// Unix permission bits, holding `None` for default handling.
+    pub(crate) mode: Option<u32>,
 }
 
 /// Declared rc entry with its section plus canonical JSON form.
@@ -73,8 +86,10 @@ pub(crate) struct ConfigData {
     pub(crate) texts: Vec<TextDecl>,
     /// Declared link documents.
     pub(crate) links: Vec<LinkDecl>,
-    /// Declared rc entries.
-    pub(crate) rc: Vec<RcEntryDecl>,
+    /// Declared opaque documents.
+    pub(crate) opaques: Vec<OpaqueDecl>,
+    /// Optional rc base holding section buckets.
+    pub(crate) rc_base: Option<Vec<RcEntryDecl>>,
     /// Patch handles in declaration order.
     pub(crate) patches: Vec<StoredPatch>,
 }
