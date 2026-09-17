@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- CI runs on pull requests alone, so tag pushes run only
+  the CD workflow.
+- `write_documents` uses `?` over a manual `Ok`/`Err` match
+  for the rendered bytes. Newer clippy demands it.
+
 ## [0.6.1] - 2026-09-17
 
 ### Added

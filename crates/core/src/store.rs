@@ -225,10 +225,10 @@ pub fn write_documents(
         let outcome = match &document.data {
             DocumentData::Link { target } => fs.symlink(&expanded, Path::new(target)),
             DocumentData::Tree { members } => write_tree_members(&expanded, members, fs),
-            _ => match document.bytes() {
-                Ok(bytes) => fs.write(&expanded, &bytes),
-                Err(error) => return Err(error),
-            },
+            _ => {
+                let bytes = document.bytes()?;
+                fs.write(&expanded, &bytes)
+            }
         };
         if let Err(error) = outcome {
             return Err(Error::Plan(format!(
