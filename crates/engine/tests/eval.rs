@@ -1993,13 +1993,13 @@ fn mise_init_resolves_latest_tag() {
         Err(error) => panic!("cache builds: {error}"),
     };
     let archive = tar_gz_bytes(&[("mise/bin/mise", b"mise-binary".as_slice(), 0o755)]);
-    let tags = r#"[{"name": "vfox-v2026.9.12", "commit": {"sha": "9caff4"}}]"#;
+    let releases = r#"[{"tag_name": "v2026.9.10", "name": "v2026.9.10"}]"#;
     let fake = stubbed(
-        "https://api.github.com/repos/jdx/mise/tags",
-        tags.as_bytes(),
+        "https://api.github.com/repos/jdx/mise/releases",
+        releases.as_bytes(),
     );
     fake.insert(
-        "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-x64.tar.gz",
+        "https://github.com/jdx/mise/releases/download/v2026.9.10/mise-v2026.9.10-linux-x64.tar.gz",
         &archive,
     );
     let profile = r#"
@@ -2048,7 +2048,7 @@ return { shells = { "bash" }, configs = { installer } }
 }
 
 #[test]
-fn mise_init_empty_tag_feed_fails_as_plan_error() {
+fn mise_init_empty_releases_feed_fails_as_plan_error() {
     let cache = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(error) => panic!("cache builds: {error}"),
@@ -2060,7 +2060,7 @@ return { shells = { "bash" }, configs = { installer } }
     let outcome = run_fetch(
         profile,
         cache.path(),
-        stubbed("https://api.github.com/repos/jdx/mise/tags", b"[]"),
+        stubbed("https://api.github.com/repos/jdx/mise/releases", b"[]"),
         false,
     );
     let error = match outcome {

@@ -4,6 +4,10 @@
 
 ### Changed
 
+- `mise.init` without a version resolves the latest release
+  from the releases feed. The tags feed heads with `vfox-*`
+  registry tags holding no release assets, so latest
+  resolution 404'd on a ghost version.
 - CI runs on pull requests alone, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match

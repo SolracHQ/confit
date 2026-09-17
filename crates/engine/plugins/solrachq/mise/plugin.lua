@@ -15,8 +15,8 @@
 -- tarball, unpack `mise/bin/mise`, place it under `~/.local/bin`
 -- with mode `755`. It also carries the activation patch, PATH
 -- prepend plus eval entry with the `{{shell}}` slot. An explicit
--- version wins; an omitted one resolves
--- the latest upstream tag through the tags API.
+-- version wins; an omitted one resolves the latest release
+-- from the releases feed.
 --
 -- Per-shell activation choice: the plugin runs during profile evaluation,
 -- before the profile declares its shells, so it cannot name a shell here.
@@ -44,8 +44,9 @@ local INSTALL_CONFIG = "plugin:solrachq/mise:install"
 -- Hint rendered beside the missing installer config name.
 local REQUIRE_HINT = "Add mise.init() to the profile configs."
 
--- Tags feed backing latest-version resolution for `init()`.
-local MISE_TAGS_URL = "https://api.github.com/repos/jdx/mise/tags"
+-- Releases feed backing latest-version resolution for `init()`.
+-- Latest release reads first, so the first tag wins.
+local MISE_RELEASES_URL = "https://api.github.com/repos/jdx/mise/releases"
 
 -- Splits caller opts into patch section plus entry opts.
 --
@@ -140,19 +141,19 @@ end
 
 -- Resolves the mise release backing the installer tarball.
 --
--- An explicit version wins as is. An omitted one reads the latest tag
--- from the tags feed and strips the `vfox-` style prefix plus the `v`
--- to reach the version number. Anything else fails as a plan error.
+-- An explicit version wins as is. An omitted one reads the latest
+-- release tag from the releases feed and strips the `v` to reach
+-- the version number. Anything else fails as a plan error.
 local function resolve_version(version)
 	if version ~= nil then
 		return version
 	end
-	local body = confit.resources.fetch_text(MISE_TAGS_URL)
-	local tag = body:match('"name"%s*:%s*"([^"]+)"')
+	local body = confit.resources.fetch_text(MISE_RELEASES_URL)
+	local tag = body:match('"tag_name"%s*:%s*"([^"]+)"')
 	if tag == nil then
-		confit.plugin.helpers.error("mise: cannot resolve the latest release from the tags feed")
+		confit.plugin.helpers.error("mise: cannot resolve the latest release from the releases feed")
 	end
-	local stripped = tag:gsub("^vfox%-", ""):gsub("^v", "")
+	local stripped = tag:gsub("^v", "")
 	if stripped:match("^%d+%.%d+") == nil then
 		confit.plugin.helpers.error("mise: tag '" .. tag .. "' holds no version number")
 	end
