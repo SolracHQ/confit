@@ -81,18 +81,16 @@ tool:add_document(page)
 
 `solrachq.nerd_fonts` installs nerd fonts plus refreshes the
 font cache. `font` takes the font name plus an optional
-version, omitted resolves the latest tag. Each font builds
-one tree document flattened under the managed fonts folder,
-declares the shared `fc-cache -f` hook, and requires the
-installer config. The hook carries no checks, a cache rebuild
-holds no stable disk proof, so it fires every apply while
-`fc-cache` resolves. `init` returns
-that installer holding the shared hook. Profiles list the
-installer once beside the fonts.
+version, omitted resolves the latest release. Each font builds
+one tree document flattened under its own `fonts/{name}`
+folder, then declares the `fc-cache -f` hook scoped to that
+folder. Each font carries its own hook argv, so every font
+refresh runs on its own. The hook carries no checks, a cache
+rebuild holds no stable disk proof, so it fires every apply
+while `fc-cache` resolves.
 
 ```lua
 local nerd_fonts = confit.plugin.solrachq.nerd_fonts
-local fonts_install = nerd_fonts.init()
 local fonts = nerd_fonts.font("JetBrainsMono", "3.5.1")
 ```
 

@@ -73,9 +73,9 @@ return nerd_fonts.font("JetBrainsMono", "3.5.1")
 
 ```sh
 $ confit plan examples/3-dotfiles-tools/profile.lua --root examples/3-dotfiles-tools
-~/.local/share/fonts/confit: tree
+~/.local/share/fonts/JetBrainsMono: tree
   + tree (96 files)
-! run: /usr/bin/fc-cache -f
+! run: /usr/bin/fc-cache -f ~/.local/share/fonts/JetBrainsMono
 Plan: 5 to add, 0 to change, 0 to destroy.
 ```
 

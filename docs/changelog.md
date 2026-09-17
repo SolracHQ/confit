@@ -8,6 +8,10 @@
   from the releases feed. The tags feed heads with `vfox-*`
   registry tags holding no release assets, so latest
   resolution 404'd on a ghost version.
+- `nerd_fonts.font` lands each font under its own
+  `fonts/{name}` folder with its own `fc-cache -f` hook
+  scoped to that folder. The shared installer config plus
+  `nerd_fonts.init` disappear with it.
 - CI runs on pull requests alone, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match

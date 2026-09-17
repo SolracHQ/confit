@@ -89,7 +89,7 @@ config:require("plugin:solrachq/mise:install", "Add mise.init() to the profile c
 confit.utils.render(template, vars)
 confit.utils.holds_cycle(value)  confit.utils.is_array(value)
 confit.plugin.solrachq.mise.package({ name, version?, bin?, aliases?, rc_builder? })  .init(version?)
-confit.plugin.solrachq.nerd_fonts.font(name, version?)  .init()
+confit.plugin.solrachq.nerd_fonts.font(name, version?)
 confit.plugin.solrachq.merge(base, overlay, { shallow, list_append }?)
 confit.plugin.solrachq.template(path, { src, vars })
 ```

@@ -5,10 +5,9 @@ local ripgrep = require("tools.ripgrep")
 local zoxide = require("tools.zoxide")
 local starship = require("tools.starship")
 local shell = require("tools.shell")
-local fonts_install = require("tools.fonts_install")
 local fonts = require("tools.fonts")
 
 return {
 	shells = { "bash" },
-	configs = { installer, bat, eza, ripgrep, zoxide, starship, shell, fonts_install, fonts },
+	configs = { installer, bat, eza, ripgrep, zoxide, starship, shell, fonts },
 }
