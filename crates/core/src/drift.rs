@@ -122,6 +122,18 @@ impl Drift {
     }
 }
 
+/// One drift side order selecting old/new assignment.
+///
+/// RecordedFirst keeps recorded bytes as old, disk as new.
+/// DiskFirst keeps disk bytes as old, recorded as new.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriftOrder {
+    /// Recorded bytes read as old, disk as new.
+    RecordedFirst,
+    /// Disk bytes read as old, recorded as new.
+    DiskFirst,
+}
+
 impl Plan {
     /// Reports manual edits between recorded documents and disk.
     ///
@@ -139,6 +151,7 @@ impl Plan {
     /// * `snapshot` - the disk reader mapping paths to outcomes.
     /// * `snapshot_tree` - the disk walker mapping destination
     ///   folders to relative member reads.
+    /// * `order` - the side order under assigning old and new
     ///
     /// # Returns
     ///
@@ -148,6 +161,7 @@ impl Plan {
     ///
     /// ```rust
     /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::drift::DriftOrder;
     /// use confit_core::ids::{DocPath, ReadOutcome};
     /// use confit_core::plan::Plan;
     /// use std::collections::BTreeMap;
@@ -157,18 +171,19 @@ impl Plan {
     ///     DocPath::new("note"),
     ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// )];
-    /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new());
+    /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst);
     /// assert!(matches!(drifts.len(), 1));
     /// ```
     pub fn drift(
         &self,
         snapshot: &dyn Fn(&DocPath) -> ReadOutcome,
         snapshot_tree: &dyn Fn(&DocPath) -> BTreeMap<String, TreeMemberRead>,
+        order: DriftOrder,
     ) -> Vec<Drift> {
         let mut out = Vec::new();
         for document in &self.documents {
             if let Some(members) = document.data.tree_members() {
-                out.extend(document.tree_drift(members, &snapshot_tree(&document.path)));
+                out.extend(document.tree_drift(members, &snapshot_tree(&document.path), order));
                 continue;
             }
             let recorded_bytes = match document.bytes() {
@@ -184,7 +199,7 @@ impl Plan {
                     reason,
                 }),
                 ReadOutcome::Present { bytes: disk, mode } => {
-                    out.extend(document.disk_drift(&recorded_bytes, &disk, mode));
+                    out.extend(document.disk_drift(&recorded_bytes, &disk, mode, order));
                 }
             }
         }
@@ -205,6 +220,7 @@ impl Document {
     /// * `disk` - the disk bytes under comparing.
     /// * `disk_mode` - the disk permission bits, holding None
     ///   while the backend holds no mode.
+    /// * `order` - the side order under assigning old and new
     ///
     /// # Returns
     ///
@@ -215,20 +231,28 @@ impl Document {
         recorded: &[u8],
         disk: &[u8],
         disk_mode: Option<u32>,
+        order: DriftOrder,
     ) -> Vec<Drift> {
         use crate::document::{DocumentData, render_mode};
 
+        let (first, second) = match order {
+            DriftOrder::RecordedFirst => (recorded, disk),
+            DriftOrder::DiskFirst => (disk, recorded),
+        };
         let mut out = match &self.data {
             DocumentData::Structured { format, data } => {
                 if let Some(disk_table) = parse_disk_table(*format, disk) {
-                    structured_keys(&self.path, data, &disk_table)
+                    match order {
+                        DriftOrder::RecordedFirst => structured_keys(&self.path, data, &disk_table),
+                        DriftOrder::DiskFirst => structured_keys(&self.path, &disk_table, data),
+                    }
                 } else {
-                    push_hunk(&self.path, recorded, disk)
+                    push_hunk(&self.path, first, second, order)
                 }
             }
             DocumentData::Text { .. } | DocumentData::Rc(_) => {
                 if recorded != disk {
-                    push_hunk(&self.path, recorded, disk)
+                    push_hunk(&self.path, first, second, order)
                 } else {
                     Vec::new()
                 }
@@ -236,11 +260,21 @@ impl Document {
             DocumentData::Link { target } => {
                 let disk_target = String::from_utf8_lossy(disk);
                 if disk_target.as_ref() != target {
+                    let (old, new) = match order {
+                        DriftOrder::RecordedFirst => (
+                            serde_json::Value::String(target.clone()),
+                            serde_json::Value::String(disk_target.into_owned()),
+                        ),
+                        DriftOrder::DiskFirst => (
+                            serde_json::Value::String(disk_target.into_owned()),
+                            serde_json::Value::String(target.clone()),
+                        ),
+                    };
                     vec![Drift::Key {
                         path: self.path.clone(),
                         key: "target".to_string(),
-                        old: serde_json::Value::String(target.clone()),
-                        new: serde_json::Value::String(disk_target.into_owned()),
+                        old,
+                        new,
                     }]
                 } else {
                     Vec::new()
@@ -248,11 +282,21 @@ impl Document {
             }
             DocumentData::Opaque { .. } => {
                 if recorded != disk {
+                    let (old, new) = match order {
+                        DriftOrder::RecordedFirst => (
+                            serde_json::Value::String(opaque_label(recorded)),
+                            serde_json::Value::String(opaque_label(disk)),
+                        ),
+                        DriftOrder::DiskFirst => (
+                            serde_json::Value::String(opaque_label(disk)),
+                            serde_json::Value::String(opaque_label(recorded)),
+                        ),
+                    };
                     vec![Drift::Key {
                         path: self.path.clone(),
                         key: "content".to_string(),
-                        old: serde_json::Value::String(opaque_label(recorded)),
-                        new: serde_json::Value::String(opaque_label(disk)),
+                        old,
+                        new,
                     }]
                 } else {
                     Vec::new()
@@ -264,11 +308,21 @@ impl Document {
             && let Some(seen) = disk_mode
             && wanted != seen
         {
+            let (old, new) = match order {
+                DriftOrder::RecordedFirst => (
+                    serde_json::Value::String(render_mode(wanted)),
+                    serde_json::Value::String(render_mode(seen)),
+                ),
+                DriftOrder::DiskFirst => (
+                    serde_json::Value::String(render_mode(seen)),
+                    serde_json::Value::String(render_mode(wanted)),
+                ),
+            };
             out.push(Drift::Key {
                 path: self.path.clone(),
                 key: "mode".to_string(),
-                old: serde_json::Value::String(render_mode(wanted)),
-                new: serde_json::Value::String(render_mode(seen)),
+                old,
+                new,
             });
         }
         out
@@ -287,6 +341,7 @@ impl Document {
     ///
     /// * `members` - the recorded tree members under comparing.
     /// * `disk` - the relative disk reads under comparing.
+    /// * `order` - the side order under assigning old and new
     ///
     /// # Returns
     ///
@@ -295,6 +350,7 @@ impl Document {
         &self,
         members: &[TreeMember],
         disk: &BTreeMap<String, TreeMemberRead>,
+        order: DriftOrder,
     ) -> Vec<Drift> {
         use crate::document::render_mode;
 
@@ -309,21 +365,41 @@ impl Document {
                 }),
                 Some(TreeMemberRead::Present { bytes, mode }) => {
                     if *bytes != member.content {
+                        let (old, new) = match order {
+                            DriftOrder::RecordedFirst => (
+                                serde_json::Value::String(opaque_label(&member.content)),
+                                serde_json::Value::String(opaque_label(bytes)),
+                            ),
+                            DriftOrder::DiskFirst => (
+                                serde_json::Value::String(opaque_label(bytes)),
+                                serde_json::Value::String(opaque_label(&member.content)),
+                            ),
+                        };
                         out.push(Drift::Key {
                             path: self.path.clone(),
                             key: member.rel.clone(),
-                            old: serde_json::Value::String(opaque_label(&member.content)),
-                            new: serde_json::Value::String(opaque_label(bytes)),
+                            old,
+                            new,
                         });
                     }
                     if let Some(seen) = mode
                         && *seen != member.mode
                     {
+                        let (old, new) = match order {
+                            DriftOrder::RecordedFirst => (
+                                serde_json::Value::String(render_mode(member.mode)),
+                                serde_json::Value::String(render_mode(*seen)),
+                            ),
+                            DriftOrder::DiskFirst => (
+                                serde_json::Value::String(render_mode(*seen)),
+                                serde_json::Value::String(render_mode(member.mode)),
+                            ),
+                        };
                         out.push(Drift::Key {
                             path: self.path.clone(),
                             key: format!("{}:mode", member.rel),
-                            old: serde_json::Value::String(render_mode(member.mode)),
-                            new: serde_json::Value::String(render_mode(*seen)),
+                            old,
+                            new,
                         });
                     }
                 }
@@ -345,14 +421,23 @@ fn leaf_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Builds one unified hunk from recorded bytes to disk bytes.
-fn push_hunk(path: &DocPath, recorded: &[u8], disk: &[u8]) -> Vec<Drift> {
-    let old = String::from_utf8_lossy(recorded);
-    let new = String::from_utf8_lossy(disk);
-    let patch = diffy::create_patch(&old, &new);
+/// Builds one unified hunk from first bytes to second bytes.
+fn push_hunk(path: &DocPath, first: &[u8], second: &[u8], order: DriftOrder) -> Vec<Drift> {
+    let old = String::from_utf8_lossy(first);
+    let new = String::from_utf8_lossy(second);
+    let patch = diffy::create_patch(&old, &new).to_string();
+    let (old_name, new_name) = match order {
+        DriftOrder::RecordedFirst => ("recorded", "disk"),
+        DriftOrder::DiskFirst => ("disk", "desired"),
+    };
+    let hunks = patch.replacen(
+        "--- original\n+++ modified\n",
+        &format!("--- {old_name}\n+++ {new_name}\n"),
+        1,
+    );
     vec![Drift::Hunk {
         path: path.clone(),
-        hunks: patch.to_string(),
+        hunks,
     }]
 }
 
@@ -500,6 +585,7 @@ mod tests {
                 mode: None,
             },
             &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
         );
         let mut keys: Vec<String> = drifts
             .iter()
@@ -532,6 +618,7 @@ mod tests {
                 mode: None,
             },
             &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -564,6 +651,7 @@ mod tests {
                 mode: None,
             },
             &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -585,6 +673,7 @@ mod tests {
                 mode: None,
             },
             &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -620,6 +709,7 @@ mod tests {
                 mode: None,
             },
             &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
         );
         assert!(drifts.is_empty());
     }
@@ -700,7 +790,11 @@ mod tests {
     #[test]
     fn tree_drift_reports_missing_changed_mode() {
         let recorded = with_hashes(vec![tree_doc()]);
-        let drifts = recorded.drift(&|_| ReadOutcome::Absent, &|_| tree_disk());
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Absent,
+            &|_| tree_disk(),
+            DriftOrder::RecordedFirst,
+        );
         assert_eq!(drifts.len(), 3);
         assert!(matches!(&drifts[0], Drift::Key { key, .. } if key == "changed.ttf"));
         assert!(matches!(&drifts[1], Drift::Missing { path } if path.as_str() == "fonts/gone.ttf"));
@@ -739,7 +833,89 @@ mod tests {
                 },
             ),
         ]);
-        let drifts = recorded.drift(&|_| ReadOutcome::Absent, &|_| disk.clone());
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Absent,
+            &|_| disk.clone(),
+            DriftOrder::RecordedFirst,
+        );
         assert!(drifts.is_empty());
+    }
+
+    #[test]
+    fn drift_order_swaps_key_sides() {
+        let recorded = with_hashes(vec![structured_doc(
+            "app.toml",
+            &[("name", serde_json::json!("desired"))],
+        )]);
+        let disk = b"name = \"disk\"\n";
+        let disk_first = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: disk.to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::DiskFirst,
+        );
+        assert_eq!(disk_first.len(), 1);
+        match &disk_first[0] {
+            Drift::Key { old, new, .. } => {
+                assert_eq!(old, &serde_json::json!("disk"));
+                assert_eq!(new, &serde_json::json!("desired"));
+            }
+            _ => panic!("disk first swaps key sides"),
+        }
+        let recorded_first = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: disk.to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert_eq!(recorded_first.len(), 1);
+        match &recorded_first[0] {
+            Drift::Key { old, new, .. } => {
+                assert_eq!(old, &serde_json::json!("desired"));
+                assert_eq!(new, &serde_json::json!("disk"));
+            }
+            _ => panic!("recorded first keeps key sides"),
+        }
+    }
+
+    #[test]
+    fn drift_order_directs_hunks() {
+        let recorded = with_hashes(vec![text_doc("note", "desired\n")]);
+        let disk_first = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"disk\n".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::DiskFirst,
+        );
+        assert_eq!(disk_first.len(), 1);
+        match &disk_first[0] {
+            Drift::Hunk { hunks, .. } => {
+                assert!(hunks.contains("-disk"));
+                assert!(hunks.contains("+desired"));
+            }
+            _ => panic!("disk first directs hunks"),
+        }
+        let recorded_first = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"disk\n".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert_eq!(recorded_first.len(), 1);
+        match &recorded_first[0] {
+            Drift::Hunk { hunks, .. } => {
+                assert!(hunks.contains("-desired"));
+                assert!(hunks.contains("+disk"));
+            }
+            _ => panic!("recorded first directs hunks"),
+        }
     }
 }

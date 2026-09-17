@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- First-run impact: a missing state slot diffs desired
+  documents against disk bytes through `DriftOrder::DiskFirst`,
+  rendering one lifecycle block per document holding drift
+  entries. Whole disk-absent documents read as creates,
+  remaining groups read as updates with disk values first,
+  text hunks render verbatim disk-first, trees collapse to
+  one changed member count, documents holding no entries read
+  no lines outside the add count. The apply preview renders
+  the same form. Past the first run the steady behavior
+  returns unchanged.
+
 ### Changed
 
 - `mise.init` without a version resolves the latest release
@@ -12,6 +25,9 @@
   `fonts/{name}` folder with its own `fc-cache -f` hook
   scoped to that folder. The shared installer config plus
   `nerd_fonts.init` disappear with it.
+
+### Changed
+
 - CI runs on pull requests alone, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match

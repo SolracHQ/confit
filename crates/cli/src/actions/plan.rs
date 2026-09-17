@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_core::drift::Drift;
+use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::Result;
-use confit_core::fs::{snapshot, snapshot_tree};
+use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
 
 use crate::fs::OsFs;
 use confit_core::ids::DocPath;
@@ -27,8 +27,11 @@ pub struct PlanOutcome {
     pub built: Plan,
     /// Holds the previous plan backing lifecycle marks.
     pub previous: Plan,
-    /// Holds plan versus disk edits leading the summary.
+    /// Holds disk edits leading the summary, desired versus
+    /// disk on first runs.
     pub drift: Vec<Drift>,
+    /// Holds true while the state slot file reads absent.
+    pub first_run: bool,
     /// Holds hook preview lines beside the summary.
     pub hook_lines: Vec<String>,
     /// Holds the tmp plan path while no output destination passes.
@@ -107,14 +110,26 @@ impl PlanRunner<'_> {
         let documents = evaluation.documents;
         let state_file = confit_core::store::default_state_path()?;
         self.emit_reading_plan(&state_file);
+        let first_run = !OsFs.exists(&state_file);
         let previous = load_state(Some(&state_file), &OsFs)?;
         let fs = OsFs;
         let snapshot = |path: &DocPath| snapshot(path, &fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), &fs);
-        let drifts = timed("drift", || previous.drift(&snapshot, &snapshot_tree));
         self.emit_hashing();
         let built = timed("hash", || Plan::build(documents, evaluation.hooks))?;
         log_processed(&built, &previous);
+        let order = if first_run {
+            DriftOrder::DiskFirst
+        } else {
+            DriftOrder::RecordedFirst
+        };
+        let drifts = timed("drift", || {
+            if first_run {
+                built.drift(&snapshot, &snapshot_tree, order)
+            } else {
+                previous.drift(&snapshot, &snapshot_tree, order)
+            }
+        });
         let hook_lines = built.hook_preview(&Runtime::current(), &OsFs)?;
         if self.args.output.is_some() || self.store_tmp {
             self.emit_writing_plan(built.documents.len());
@@ -136,6 +151,7 @@ impl PlanRunner<'_> {
             built,
             previous,
             drift: drifts,
+            first_run,
             hook_lines,
             stored,
         })

@@ -36,15 +36,16 @@ plus hooks together.
 
 ### Plan and drift
 
-Two comparisons drive `plan`.
+Two comparisons drive `plan` once the state slot exists.
 
 Comparison 1 is state versus disk. Each recorded document renders
 then snapshots its path (`~` expands via the home folder). Absent
 paths read as manually deleted. Unreadable paths report path plus
 reason. Structured documents parse disk bytes by format then diff
-dotted leaves. Text documents diff with unified hunks from recorded
-to disk. Link documents compare target strings. Opaque documents
-compare raw bytes, changed bytes surfacing as hash plus size labels.
+dotted leaves. Text plus rc documents diff with unified hunks from
+recorded to disk. Link documents compare target strings. Opaque
+documents compare raw bytes, changed bytes surfacing as hash plus
+size labels.
 Text plus opaque documents carrying a recorded mode compare it
 against the disk mode, mismatches surfacing as `mode` key lines.
 
@@ -57,7 +58,8 @@ under the `content` key.
 Drift notes lead the summary. Key edits read
 `~ {path}: {key} = {old} -> {new}` with `null` for absent sides.
 Link edits use `target` as the key. Hunks land verbatim as unified
-diffs from recorded to disk. Missing lines read
+diffs from recorded to disk under `--- recorded` plus `+++ disk`
+headers. Missing lines read
 `{path}: manually deleted. changed outside config: add to config
 or the next apply loses them`. Unreadable lines read
 `cannot read '{path}': {reason}. changed outside config: add to
@@ -65,6 +67,19 @@ config or the next apply loses them`.
 
 Invariant: drift rides along with a successful run. Exit stays 0
 while drift exists.
+
+A missing state slot means the first run. The plan diffs
+desired documents against disk bytes instead, rendering one
+lifecycle block per document holding drift entries. Whole
+disk-absent documents read as creates. Remaining groups read
+as updates with disk values first: structured plus link plus
+opaque leaves read `~ {key} = {disk} -> {desired}`, text
+plus rc hunks render verbatim disk-first under `--- disk`
+plus `+++ desired` headers, trees
+collapse to `~ tree ({changed} of {total} files changed)`. Documents
+holding no entries read no lines and leave the add count.
+The counts line reads
+`Plan: {add} to add, {in_place} already in place.`
 
 ### Plans on disk
 
@@ -342,19 +357,20 @@ One call generates the config under the package name, declares the
 install hook, requires the installer config, and sets `when` on every callback entry against the binary.
 `mise.init(version?)` returns the installer config holding the
 mise binary plus the activation patch; an explicit version wins, omitted resolves the
-latest tag.
+latest release.
 
 ```lua
 local nerd_fonts = confit.plugin.solrachq.nerd_fonts
 
-local fonts_install = nerd_fonts.init()
 local fonts = nerd_fonts.font("JetBrainsMono", "3.5.1")
 ```
 
 One call generates the config under the font name, builds the
-tree document under the managed fonts folder, declares the shared
-`fc-cache` hook, and requires the installer config. Omitted
-versions resolve the latest tag. Raw bags stay available:
+tree document under the managed `fonts/{name}` folder, and
+declares the `fc-cache -f` hook scoped to that folder. Each
+font carries its own hook argv, so every font refresh runs on
+its own with no shared installer config. Omitted
+versions resolve the latest release. Raw bags stay available:
 
 ```lua
 local c = confit.config("bat")

@@ -73,6 +73,7 @@ fn run_plan_like(
         built: &outcome.built,
         previous: &outcome.previous,
         drift: &outcome.drift,
+        first_run: outcome.first_run,
     };
     anstream::println!("{}", summary.render());
     for line in &outcome.hook_lines {

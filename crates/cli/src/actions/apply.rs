@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use confit_core::drift::Drift;
+use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::{Error, Result};
 use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
 use confit_core::hook::{describe_condition, resolve_hook};
@@ -252,13 +252,24 @@ impl<'a> ApplyRunner<'a> {
         log_processed(&built, &self.previous);
         let snapshot = |path: &DocPath| snapshot(path, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
-        let baseline = self.previous.drift(&snapshot, &snapshot_tree);
+        let first_run = match self.state.as_deref() {
+            Some(slot) => !fs.exists(slot),
+            None => false,
+        };
+        let reference = if first_run { &built } else { &self.previous };
+        let order = if first_run {
+            DriftOrder::DiskFirst
+        } else {
+            DriftOrder::RecordedFirst
+        };
+        let baseline = reference.drift(&snapshot, &snapshot_tree, order);
         let rt = Runtime::current();
         if self.preview {
             let report = Summary {
                 built: &built,
                 previous: &self.previous,
                 drift: &baseline,
+                first_run,
             };
             let text = report.render();
             self.seams
@@ -279,7 +290,7 @@ impl<'a> ApplyRunner<'a> {
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = self.previous.drift(&snapshot, &snapshot_tree);
+        let fresh = reference.drift(&snapshot, &snapshot_tree, order);
         if fresh != baseline {
             for line in Drift::lines(&fresh) {
                 self.seams

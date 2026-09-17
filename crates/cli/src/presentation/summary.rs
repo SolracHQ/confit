@@ -102,6 +102,8 @@ impl Default for Painter {
 /// Drift notes lead verbatim, so plan versus disk edits
 /// precede the plan half. Moving documents follow with
 /// headers plus entry lines. The counts line closes the text.
+/// First runs frame the same drift as desired versus disk,
+/// with already in place counts closing.
 ///
 /// # Examples
 ///
@@ -118,7 +120,7 @@ impl Default for Painter {
 /// let built = Plan::build(vec![document], Vec::new());
 /// let previous = Plan::empty();
 /// let summary = match built {
-///     Ok(ref built) => Summary { built, previous: &previous, drift: &[] },
+///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false },
 ///     Err(error) => panic!("plan builds: {error}"),
 /// };
 /// assert!(matches!(summary.render().len(), _));
@@ -131,15 +133,24 @@ pub struct Summary<'a> {
     pub previous: &'a Plan,
     /// Holds the plan versus disk edits leading the text.
     pub drift: &'a [Drift],
+    /// Holds true while the state slot reads absent.
+    pub first_run: bool,
 }
 
 impl Summary<'_> {
     /// Renders the full stderr summary with color.
     ///
+    /// First runs render impact lines plus already in place
+    /// counts. Steady runs render drift plus lifecycle marks
+    /// exactly as before.
+    ///
     /// # Returns
     ///
     /// The stderr summary text.
     pub fn render(&self) -> String {
+        if self.first_run {
+            return self.render_first_run();
+        }
         let painter = Painter::new();
         let mut lines: Vec<String> = Vec::new();
         for line in Drift::lines(self.drift) {
@@ -169,9 +180,12 @@ impl Summary<'_> {
 
     /// Renders the closing counts line.
     ///
+    /// First runs close with already in place counts.
+    /// Steady runs close with lifecycle counts.
+    ///
     /// # Returns
     ///
-    /// The `Plan: {create} to add` closing line.
+    /// The closing counts line.
     ///
     /// # Examples
     ///
@@ -186,12 +200,16 @@ impl Summary<'_> {
     /// let built = Plan::build(vec![first, second], Vec::new());
     /// let previous = Plan::empty();
     /// let summary = match built {
-    ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[] },
+    ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false },
     ///     Err(error) => panic!("plan builds: {error}"),
     /// };
     /// assert!(matches!(summary.summary_line().as_str(), "Plan: 2 to add, 0 to change, 0 to destroy."));
     /// ```
     pub fn summary_line(&self) -> String {
+        if self.first_run {
+            let (adds, in_place) = self.first_run_counts();
+            return format!("Plan: {adds} to add, {in_place} already in place.");
+        }
         let summary = self.built.summary(self.previous);
         format!(
             "Plan: {} to add, {} to change, {} to destroy.",
@@ -199,8 +217,64 @@ impl Summary<'_> {
         )
     }
 
-    /// Renders entry lines for one document under its own status.
+    /// Counts first-run adds plus already in place documents.
     ///
+    /// Documents holding drift entries count as adds,
+    /// documents holding none count as already in place.
+    ///
+    /// # Returns
+    ///
+    /// The add count plus the already in place count.
+    fn first_run_counts(&self) -> (usize, usize) {
+        let mut adds = 0;
+        let mut in_place = 0;
+        for document in &self.built.documents {
+            if first_run_entries(self.drift, document).is_empty() {
+                in_place += 1;
+            } else {
+                adds += 1;
+            }
+        }
+        (adds, in_place)
+    }
+
+    /// Renders the first-run form over desired versus disk drift.
+    ///
+    /// One block renders per document holding drift entries:
+    /// whole creates read as create bodies, remaining groups
+    /// read as update bodies with disk values first. Text plus
+    /// rc overwrites read as headers alone. Documents holding
+    /// no entries read no lines and count as already in place.
+    ///
+    /// # Returns
+    ///
+    /// Document blocks plus the already in place counts line.
+    fn render_first_run(&self) -> String {
+        let painter = Painter::new();
+        let mut lines = Vec::new();
+        for document in &self.built.documents {
+            let entries = first_run_entries(self.drift, document);
+            if entries.is_empty() {
+                continue;
+            }
+            lines.push(painter.paint(Sigil::Header, &header_line(document)));
+            if first_run_creates(document, &entries) {
+                for body in entry_bodies(document) {
+                    lines.push(painter.paint(Sigil::Add, &format!("  + {body}")));
+                }
+            } else {
+                lines.extend(first_run_updates(&painter, document, &entries));
+            }
+        }
+        let (adds, in_place) = self.first_run_counts();
+        lines.push(painter.paint(
+            Sigil::Header,
+            &format!("Plan: {adds} to add, {in_place} already in place."),
+        ));
+        lines.join("\n")
+    }
+
+    /// Renders entry lines for one document under its own status.
     /// Status plus the recorded document derive from the report,
     /// so callers pass the document alone.
     fn document_lines(&self, document: &Document) -> Vec<String> {
@@ -276,6 +350,124 @@ fn doc_label(document: &Document) -> Cow<'_, str> {
 /// Reads the header line for one document.
 fn header_line(document: &Document) -> String {
     format!("{}: {}", document.path.as_str(), doc_label(document))
+}
+
+/// Collects one document's drift entries for first runs.
+///
+/// Tree member entries group under their destination path.
+/// Every other entry groups under its own path.
+fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Drift> {
+    let dest = document.path.as_str();
+    let is_tree = document.data.tree_members().is_some();
+    drift
+        .iter()
+        .filter(|entry| {
+            let path = match entry {
+                Drift::Key { path, .. }
+                | Drift::Hunk { path, .. }
+                | Drift::Missing { path }
+                | Drift::Unreadable { path, .. } => path.as_str(),
+            };
+            if path == dest {
+                return true;
+            }
+            is_tree
+                && path
+                    .strip_prefix(dest)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .collect()
+}
+
+/// Reports whether one first-run group lands whole.
+///
+/// Whole-file missing entries always land whole. Whole trees
+/// holding missing entries alone land whole.
+fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
+    if entries
+        .iter()
+        .any(|entry| matches!(entry, Drift::Missing { path } if path == &document.path))
+    {
+        return true;
+    }
+    if document.data.tree_members().is_some() {
+        return entries
+            .iter()
+            .all(|entry| matches!(entry, Drift::Missing { .. }));
+    }
+    false
+}
+
+/// Renders one first-run update group with disk values first.
+///
+/// Structured plus link plus opaque keys read disk to desired.
+/// Text plus rc hunks render verbatim with per-line paint.
+/// Trees collapse to one changed member count.
+/// Unreadable paths name the replacement.
+fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift]) -> Vec<String> {
+    if let Some(members) = document.data.tree_members() {
+        let mut rels = BTreeSet::new();
+        for entry in entries {
+            rels.insert(member_rel(document, entry));
+        }
+        return vec![painter.paint(
+            Sigil::Update,
+            &format!(
+                "  ~ tree ({} of {} files changed)",
+                rels.len(),
+                members.len()
+            ),
+        )];
+    }
+    let mut out = Vec::new();
+    for entry in entries {
+        match entry {
+            Drift::Key { key, old, new, .. } => out.push(painter.paint(
+                Sigil::Update,
+                &format!("  ~ {key} = {} -> {}", leaf_text(old), leaf_text(new)),
+            )),
+            Drift::Hunk { hunks, .. } => {
+                for line in hunks.lines() {
+                    out.push(paint_hunk_line(painter, line));
+                }
+            }
+            Drift::Unreadable { reason, .. } => out.push(painter.paint(
+                Sigil::Update,
+                &format!("  ~ unreadable ({reason}), apply will write desired content"),
+            )),
+            Drift::Missing { .. } => {}
+        }
+    }
+    out
+}
+
+/// Paints one hunk line by its leading symbol.
+///
+/// Markers plus context stay plain, removals read red,
+/// additions read green.
+fn paint_hunk_line(painter: &Painter, line: &str) -> String {
+    if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") {
+        line.to_string()
+    } else if line.starts_with('+') {
+        painter.paint(Sigil::Add, line)
+    } else if line.starts_with('-') {
+        painter.paint(Sigil::Remove, line)
+    } else {
+        line.to_string()
+    }
+}
+
+/// Reads one entry's tree member rel under its destination.
+fn member_rel<'a>(document: &'a Document, entry: &'a Drift) -> &'a str {
+    let dest = document.path.as_str();
+    match entry {
+        Drift::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key),
+        Drift::Hunk { path, .. } | Drift::Missing { path } | Drift::Unreadable { path, .. } => path
+            .as_str()
+            .strip_prefix(dest)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(path.as_str()),
+    }
 }
 
 /// Renders one scalar leaf value as display text.
@@ -545,6 +737,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         let want = format!(
@@ -586,6 +779,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("  ~ kind = text -> opaque"));
@@ -629,6 +823,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &drift,
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("manually deleted"));
@@ -685,6 +880,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("moving: text"));
@@ -731,6 +927,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("fonts: tree"));
@@ -755,6 +952,7 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("  ~ tree (1 of 2 files changed)"));
@@ -772,9 +970,144 @@ mod tests {
             built: &built,
             previous: &previous,
             drift: &[],
+            first_run: false,
         };
         let text = report.render();
         assert!(text.contains("fonts: tree (1 files)"));
         assert!(text.contains("Plan: 0 to add, 0 to change, 1 to destroy."));
+    }
+
+    #[test]
+    fn first_run_renders_compact_doc_lines() {
+        use confit_core::drift::Drift;
+        use confit_core::ids::DocPath;
+
+        let built = match confit_core::plan::Plan::build(
+            vec![
+                Document::new(
+                    DocPath::new("same"),
+                    DocumentData::Text {
+                        content: "kept".to_string(),
+                        mode: None,
+                    },
+                ),
+                Document::new(
+                    DocPath::new("gone"),
+                    DocumentData::Text {
+                        content: "fresh".to_string(),
+                        mode: None,
+                    },
+                ),
+                Document::new(
+                    DocPath::new("app.toml"),
+                    DocumentData::Structured {
+                        format: confit_core::document::StructuredFormat::Toml,
+                        data: [("name".to_string(), serde_json::json!("desired"))]
+                            .into_iter()
+                            .collect(),
+                    },
+                ),
+                Document::new(
+                    DocPath::new("fonts"),
+                    DocumentData::Tree {
+                        members: vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)],
+                    },
+                ),
+                Document::new(
+                    DocPath::new("clash"),
+                    DocumentData::Text {
+                        content: "desired\n".to_string(),
+                        mode: None,
+                    },
+                ),
+            ],
+            Vec::new(),
+        ) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let previous = Plan::empty();
+        let drift = vec![
+            Drift::Missing {
+                path: DocPath::new("gone"),
+            },
+            Drift::Key {
+                path: DocPath::new("app.toml"),
+                key: "name".to_string(),
+                old: serde_json::json!("disk"),
+                new: serde_json::json!("desired"),
+            },
+            Drift::Key {
+                path: DocPath::new("fonts"),
+                key: "b.ttf".to_string(),
+                old: serde_json::json!("new"),
+                new: serde_json::json!("old"),
+            },
+            Drift::Missing {
+                path: DocPath::new("fonts/a.ttf"),
+            },
+            Drift::Hunk {
+                path: DocPath::new("clash"),
+                hunks: "--- disk\n+++ desired\n@@ -1 +1 @@\n-disk\n+desired".to_string(),
+            },
+        ];
+        let report = Summary {
+            built: &built,
+            previous: &previous,
+            drift: &drift,
+            first_run: true,
+        };
+        let text = report.render();
+        assert!(text.contains("gone: text"), "create header shows: {text}");
+        assert!(text.contains("  + fresh"), "create body shows: {text}");
+        assert!(
+            text.contains("app.toml: toml"),
+            "overwrite header shows: {text}"
+        );
+        assert!(
+            text.contains("  ~ name = disk -> desired"),
+            "key swaps to disk first: {text}"
+        );
+        assert!(
+            text.contains("  ~ tree (2 of 2 files changed)"),
+            "tree collapses to one line: {text}"
+        );
+        assert!(
+            !text.contains("same"),
+            "in place stays out of lines: {text}"
+        );
+        assert!(
+            text.contains("clash: text"),
+            "text overwrite header shows: {text}"
+        );
+        assert!(text.contains("-disk"), "hunk shows disk line: {text}");
+        assert!(text.contains("+desired"), "hunk shows desired line: {text}");
+        assert!(text.contains("Plan: 4 to add, 1 already in place."));
+        assert!(!text.contains("changed outside config"));
+    }
+
+    #[test]
+    fn hunk_lines_paint_by_symbol() {
+        let painter = Painter { color: true };
+        assert!(
+            paint_hunk_line(&painter, "-disk").starts_with("\x1b[31m"),
+            "removals read red"
+        );
+        assert!(
+            paint_hunk_line(&painter, "+desired").starts_with("\x1b[32m"),
+            "additions read green"
+        );
+        for plain in [
+            "--- disk",
+            "+++ desired",
+            "@@ -1 +1 @@",
+            " context",
+            "\\ No newline at end of file",
+        ] {
+            assert!(
+                !paint_hunk_line(&painter, plain).starts_with("\x1b["),
+                "markers plus context stay plain: {plain}"
+            );
+        }
     }
 }

@@ -9,24 +9,28 @@ flowchart TD
     A["Parse flags, expand tildes"] --> B["Require positional profile"]
     B --> C["Evaluate profile with Lua"]
     C --> D["Load fixed slot state"]
-    D --> E["Missing slot reads empty"]
+    D --> E["Missing slot reads empty, marks first run"]
     E --> F["Snapshot disk, diff drift"]
-    F --> G["Build: render, hash, count"]
-    G --> H{"-o given?"}
-    H -- yes --> I["Write plan file"]
-    H -- no --> J["Write tmp plan, print path"]
-    I --> K["Render summary: moving docs, drift, counts"]
-    J --> K
-    K --> L["Print log path"]
+    F --> G["First run: impact desired versus disk"]
+    G --> H["Build: render, hash, count"]
+    H --> I{"-o given?"}
+    I -- yes --> J["Write plan file"]
+    I -- no --> K["Write tmp plan, print path"]
+    J --> L["Render summary: impact or drift, moving docs, counts"]
+    K --> L
+    L --> M["Print log path"]
 ```
 
 Evaluate runs the profile through the engine. State reads the
 fixed slot at `state.json`. Missing state
-reads empty, so first runs show everything as add. Drift compares
-recorded documents against disk bytes. Build renders plus hashes
+reads empty and marks the first run, so the plan diffs desired
+documents against disk bytes: disk-identical paths read as
+already in place, disk-differing paths read as overwrites the
+apply will replace. Drift compares recorded documents against
+disk bytes past the first run. Build renders plus hashes
 every document and counts create, update, delete against previous.
-The summary prints creates, updates, deletes, drift notes, plus
-counts. The tmp path serves
+The summary prints creates, updates, deletes, drift or impact
+notes, plus counts. The tmp path serves
 later `--plan` reuse.
 
 Stdout carries the summary plus the `plan:` path through

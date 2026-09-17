@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use confit_core::document::{Document, DocumentData};
+use confit_core::drift::DriftOrder;
 use confit_core::error::Error;
 use confit_core::fs::MemoryFs;
 use confit_core::ids::{DocPath, ReadOutcome};
@@ -982,9 +983,11 @@ fn apply_then_drift_stays_quiet() {
     fill_hashes(&mut recorded);
     let mut previous = Plan::empty();
     previous.documents = recorded;
-    let drifts = previous.drift(&|path| snapshot(path, &fs), &|path| {
-        snapshot_tree(&path.expand(), &fs)
-    });
+    let drifts = previous.drift(
+        &|path| snapshot(path, &fs),
+        &|path| snapshot_tree(&path.expand(), &fs),
+        DriftOrder::RecordedFirst,
+    );
     assert!(drifts.is_empty(), "fresh apply shows no drift: {drifts:?}");
 }
 
@@ -1200,9 +1203,11 @@ fn drift_reports_manual_edits_on_memory_fs() {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
-    let drifts = previous.drift(&|path| snapshot(path, &fs), &|path| {
-        snapshot_tree(&path.expand(), &fs)
-    });
+    let drifts = previous.drift(
+        &|path| snapshot(path, &fs),
+        &|path| snapshot_tree(&path.expand(), &fs),
+        DriftOrder::RecordedFirst,
+    );
     let built = confit_core::plan::Plan {
         version: confit_core::plan::PLAN_VERSION,
         documents: Vec::new(),
@@ -1213,6 +1218,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
         built: &built,
         previous: &previous,
         drift: &drifts,
+        first_run: false,
     };
     let text = report.render();
     assert!(
@@ -1263,6 +1269,7 @@ fn plan_shows_old_to_new_on_updates() {
         built: &built,
         previous: &previous,
         drift: &[],
+        first_run: false,
     };
     let text = report.render();
     assert!(
@@ -1971,4 +1978,117 @@ fn explicit_plan_path_passes_through() {
         Err(error) => panic!("explicit path resolves: {error}"),
     };
     assert_eq!(path, PathBuf::from("plan.json"));
+}
+
+#[test]
+fn first_run_preview_shows_impact_plus_in_place() {
+    use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+
+    pin_home();
+    let fs = MemoryFs::new();
+    match fs.write(Path::new("same"), b"kept\n") {
+        Ok(()) => {}
+        Err(error) => panic!("same seeds: {error}"),
+    }
+    match fs.write(Path::new("clash"), b"disk\n") {
+        Ok(()) => {}
+        Err(error) => panic!("clash seeds: {error}"),
+    }
+    let desired = vec![
+        Document::new(
+            DocPath::new("same"),
+            DocumentData::Text {
+                content: "kept\n".to_string(),
+                mode: None,
+            },
+        ),
+        Document::new(
+            DocPath::new("clash"),
+            DocumentData::Text {
+                content: "desired\n".to_string(),
+                mode: None,
+            },
+        ),
+        Document::new(
+            DocPath::new("gone"),
+            DocumentData::Text {
+                content: "fresh\n".to_string(),
+                mode: None,
+            },
+        ),
+    ];
+    let built = match Plan::build(desired.clone(), Vec::new()) {
+        Ok(built) => built,
+        Err(error) => panic!("plan builds: {error}"),
+    };
+    let drift = built.drift(
+        &|path| snapshot(path, &fs),
+        &|path| snapshot_tree(&path.expand(), &fs),
+        DriftOrder::DiskFirst,
+    );
+    let empty = Plan::empty();
+    let steady = confit_cli::presentation::summary::Summary {
+        built: &built,
+        previous: &empty,
+        drift: &[],
+        first_run: false,
+    };
+    let first = confit_cli::presentation::summary::Summary {
+        built: &built,
+        previous: &empty,
+        drift: &drift,
+        first_run: true,
+    };
+    assert!(steady.render().contains("to change"));
+    assert_eq!(first.summary_line(), "Plan: 2 to add, 1 already in place.");
+    let text = first.render();
+    assert!(text.contains("2 to add, 1 already in place"), "{text}");
+    assert!(text.contains("gone: text"), "create header shows: {text}");
+    assert!(
+        !text.contains("changed outside config"),
+        "outside wording stays out: {text}"
+    );
+
+    let slot = PathBuf::from("state.json");
+    assert!(!fs.exists(&slot), "slot reads absent for first run");
+    let mut input = Cursor::new("yes\n");
+    let mut output = Vec::new();
+    let runner = apply_runner(
+        desired,
+        Plan::empty(),
+        Some(slot),
+        false,
+        true,
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+    );
+    match runner.execute() {
+        Ok(_) => {}
+        Err(error) => panic!("first apply runs: {error}"),
+    }
+    let preview = String::from_utf8_lossy(&output);
+    assert!(
+        preview.contains("already in place"),
+        "preview counts in place: {preview}"
+    );
+    assert!(
+        preview.contains("clash: text"),
+        "preview shows the overwrite header: {preview}"
+    );
+    assert!(
+        preview.contains("-disk"),
+        "preview shows disk first hunk: {preview}"
+    );
+    assert!(
+        preview.contains("+desired"),
+        "preview shows desired lines: {preview}"
+    );
+    assert!(
+        !preview.contains("changed outside config"),
+        "outside wording stays out of preview: {preview}"
+    );
+    assert!(
+        preview.contains("2 to add, 1 already in place"),
+        "preview counts impact: {preview}"
+    );
+    assert_eq!(memory_bytes(&fs, Path::new("clash")), b"desired\n");
 }

@@ -10,10 +10,11 @@ flowchart TD
     A["Parse flags, expand tildes"] --> B["Require positional profile"]
     B --> C["Evaluate profile with Lua engine"]
     C --> D["Load fixed slot state"]
-    D --> E["Missing slot reads empty"]
+    D --> E["Missing slot reads empty, marks first run"]
     E --> F["Build: render, hash, count"]
     F --> G["Drift baseline against disk"]
-    G --> H["Render preview"]
+    G --> H["First run: preview impact desired versus disk"]
+    H --> I["Render preview"]
     H --> I{"--force?"}
     I -- no --> J["Prompt, literal yes continues"]
     I -- yes --> K["Fresh drift check"]
