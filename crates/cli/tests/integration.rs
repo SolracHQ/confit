@@ -15,6 +15,7 @@ fn examples_root() -> PathBuf {
 /// Pins HOME to a shared temp folder so engine path joins stay hermetic.
 ///
 /// Every test pins the same value, so parallel runs cannot diverge.
+/// XDG vars pin under it too, since `dirs` honors them over HOME.
 fn pin_home() -> PathBuf {
     let home = std::env::temp_dir().join("confit-cli-test-home");
     match std::fs::create_dir_all(&home) {
@@ -23,6 +24,10 @@ fn pin_home() -> PathBuf {
     }
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+        std::env::set_var("XDG_DATA_HOME", home.join(".local").join("share"));
+        std::env::set_var("XDG_CACHE_HOME", home.join(".cache"));
+        std::env::set_var("XDG_STATE_HOME", home.join(".local").join("state"));
     }
     home
 }
