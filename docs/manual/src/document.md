@@ -93,3 +93,25 @@ local fonts = confit.document.compressed(archive, function(path, _, content)
   end
 end)
 ```
+
+## Tree
+
+A document source holding many files, not a file. It unpacks
+an archive into one document under one destination folder.
+The callback keeps the compressed shape and returns a
+relative path per kept member instead of a document.
+Returning nil skips the member.
+
+```lua
+local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(path, _, content)
+  if not path:match("%.ttf$") then
+    return nil
+  end
+  return path:match("([^/]+)$")
+end)
+```
+
+The plan reads as one line either way: one add with the file
+count, silence on repeat runs, one update with the changed
+count. Member modes inherit the archive executable bit. An
+empty pick fails naming the filter.

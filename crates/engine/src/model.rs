@@ -8,6 +8,7 @@ use serde_json::Value as Json;
 
 use crate::level::Level;
 use confit_core::document::StructuredFormat;
+use confit_core::hook::Hook;
 
 /// Declared structured document from profile plus configs.
 #[derive(Debug, Clone)]
@@ -51,6 +52,26 @@ pub(crate) struct OpaqueDecl {
     pub(crate) mode: Option<u32>,
 }
 
+/// Declared tree member holding destination slot plus bytes.
+#[derive(Debug, Clone)]
+pub(crate) struct TreeMemberDecl {
+    /// Destination-relative member path.
+    pub(crate) rel: String,
+    /// Raw member bytes.
+    pub(crate) content: Vec<u8>,
+    /// Unix permission bits from the archive member.
+    pub(crate) mode: u32,
+}
+
+/// Declared tree document holding one managed file set.
+#[derive(Debug, Clone)]
+pub(crate) struct TreeDecl {
+    /// Destination folder.
+    pub(crate) path: String,
+    /// Members in relative path order.
+    pub(crate) members: Vec<TreeMemberDecl>,
+}
+
 /// Declared rc entry with its section plus canonical JSON form.
 #[derive(Debug, Clone)]
 pub(crate) struct RcEntryDecl {
@@ -71,8 +92,19 @@ pub(crate) struct StoredPatch {
     pub(crate) callback: mlua::Function,
     /// Merge priority for ordering.
     pub(crate) priority: Level,
+    /// Declaration index across the profile in config order.
+    pub(crate) order: usize,
     /// Contributing config name.
     pub(crate) owner: String,
+}
+
+/// Declared require edge with its target plus optional hint.
+#[derive(Debug, Clone)]
+pub(crate) struct RequireDecl {
+    /// Required sibling config name.
+    pub(crate) target: String,
+    /// Hint text rendered on its own line while present.
+    pub(crate) hint: Option<String>,
 }
 
 /// Accumulated per-config contribution.
@@ -80,6 +112,8 @@ pub(crate) struct StoredPatch {
 pub(crate) struct ConfigData {
     /// Config name stamping ownership.
     pub(crate) name: String,
+    /// Required sibling config names in declaration order.
+    pub(crate) requires: Vec<RequireDecl>,
     /// Declared structured documents.
     pub(crate) structured: Vec<StructuredDecl>,
     /// Declared text documents.
@@ -88,8 +122,12 @@ pub(crate) struct ConfigData {
     pub(crate) links: Vec<LinkDecl>,
     /// Declared opaque documents.
     pub(crate) opaques: Vec<OpaqueDecl>,
+    /// Declared tree documents.
+    pub(crate) trees: Vec<TreeDecl>,
     /// Optional rc base holding section buckets.
     pub(crate) rc_base: Option<Vec<RcEntryDecl>>,
     /// Patch handles in declaration order.
     pub(crate) patches: Vec<StoredPatch>,
+    /// Declared hooks in declaration order.
+    pub(crate) hooks: Vec<Hook>,
 }

@@ -3,7 +3,7 @@
 -- Shared shapes live in stubs/confit.d.lua.
 
 ---@class RcOpts
----@field when? table|fun(shell: ShellNs): table # Guard condition table, or a builder function receiving confit.shell.
+---@field when? table|fun(runtime: RuntimeNs): table # Guard condition table, or a builder function receiving confit.runtime.
 -- Options for confit.document.rc entry builders.
 local RcOpts = {}
 
@@ -30,6 +30,20 @@ local DocumentModeOpts = {}
 ---@field executable boolean # Executable bit from the tar mode. Map with `{mode = info.executable and "755" or "644"}`.
 -- Member meta for confit.document.compressed callbacks. Use info.executable to pick the mode opt.
 local CompressedInfo = {}
+
+---@class TreeMember
+---@field rel string # Destination-relative member path in manifest order.
+---@field mode integer # Unix permission bits inherited from the archive member.
+---@field content string # Raw member bytes.
+-- Kept member for confit.document.tree documents. Profiles read
+-- members to name tree files, e.g. members[1].rel.
+local TreeMember = {}
+
+---@class TreeDocument
+---@field path string # Destination folder holding the members.
+---@field members TreeMember[] # Kept members in relative path order.
+-- Single tree document table from confit.document.tree.
+local TreeDocument = {}
 
 ---@class DocumentNs
 ---@field rc RcNs # Rc entry table constructors namespace.
@@ -71,6 +85,13 @@ function DocumentNs.opaque(path, content, opts) end
 ---@param callback fun(member: string, info: CompressedInfo, content: string): Document? # Keeps with a document, skips with nil.
 ---@return Document[] # Kept documents in archive order.
 function DocumentNs.compressed(path, callback) end
+
+-- Builds one tree document from an archive through a path picker.
+---@param archive string # Archive path, project-relative or fetched.
+---@param dest string # Destination folder holding the members.
+---@param callback fun(member: string, info: CompressedInfo, content: string): string? # Keeps with a relative path, skips with nil.
+---@return TreeDocument # Single tree document holding the manifest.
+function DocumentNs.tree(archive, dest, callback) end
 
 -- Builds the single rc document table from section lists.
 ---@param sections RcSections # Optional profile/config/final entry-table lists.

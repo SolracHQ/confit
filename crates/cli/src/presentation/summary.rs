@@ -115,7 +115,7 @@ impl Default for Painter {
 ///     DocPath::new("note"),
 ///     DocumentData::Text { content: "hi".into() },
 /// );
-/// let built = Plan::build(vec![document]);
+/// let built = Plan::build(vec![document], Vec::new());
 /// let previous = Plan::empty();
 /// let summary = match built {
 ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[] },
@@ -183,7 +183,7 @@ impl Summary<'_> {
     ///
     /// let first = Document::new(DocPath::new("a"), DocumentData::Text { content: "a".into() });
     /// let second = Document::new(DocPath::new("b"), DocumentData::Text { content: "b".into() });
-    /// let built = Plan::build(vec![first, second]);
+    /// let built = Plan::build(vec![first, second], Vec::new());
     /// let previous = Plan::empty();
     /// let summary = match built {
     ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[] },
@@ -237,7 +237,12 @@ impl Summary<'_> {
             .map(|recorded| {
                 let key = recorded.key();
                 let (kind, path) = split_key(&key);
-                format!("{path}: {kind}")
+                match &recorded.data {
+                    DocumentData::Tree { members } => {
+                        format!("{path}: {kind} ({} files)", members.len())
+                    }
+                    _ => format!("{path}: {kind}"),
+                }
             })
             .collect()
     }
@@ -358,6 +363,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
         }
         DocumentData::Link { target } => vec![target.clone()],
         DocumentData::Opaque { content, .. } => vec![format!("opaque ({} bytes)", content.len())],
+        DocumentData::Tree { members } => vec![format!("tree ({} files)", members.len())],
         DocumentData::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {
@@ -466,6 +472,13 @@ fn update_lines(document: &Document, recorded: &Document) -> Vec<String> {
                 )]
             }
         }
+        (DocumentData::Tree { members: new }, DocumentData::Tree { members: old }) => {
+            let changed = confit_core::document::tree_changed(old, new);
+            vec![format!(
+                "  ~ tree ({changed} of {} files changed)",
+                new.len()
+            )]
+        }
         _ if touches_opaque(document, recorded) => {
             let mut out = vec![format!(
                 "  ~ kind = {} -> {}",
@@ -524,7 +537,7 @@ mod tests {
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired]) {
+        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -565,7 +578,7 @@ mod tests {
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired]) {
+        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -605,7 +618,7 @@ mod tests {
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired]) {
+        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -664,7 +677,7 @@ mod tests {
                 },
             ),
         ];
-        let built = match confit_core::plan::Plan::build(desired) {
+        let built = match confit_core::plan::Plan::build(desired, Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -676,5 +689,92 @@ mod tests {
         let text = report.render();
         assert!(text.contains("moving: text"));
         assert!(!text.contains("same: text"));
+    }
+
+    fn tree_member(rel: &str, byte: u8) -> confit_core::document::TreeMember {
+        confit_core::document::TreeMember {
+            rel: rel.to_string(),
+            content: vec![byte],
+            mode: 0o644,
+        }
+    }
+
+    fn tree_previous(members: Vec<confit_core::document::TreeMember>) -> Plan {
+        let mut docs = vec![Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree { members },
+        )];
+        for document in &mut docs {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        let mut previous = Plan::empty();
+        previous.documents = docs;
+        previous
+    }
+
+    #[test]
+    fn tree_create_collapses_to_one_counted_line() {
+        let previous = Plan::empty();
+        let desired = Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree {
+                members: vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)],
+            },
+        );
+        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let report = Summary {
+            built: &built,
+            previous: &previous,
+            drift: &[],
+        };
+        let text = report.render();
+        assert!(text.contains("fonts: tree"));
+        assert!(text.contains("  + tree (2 files)"));
+        assert!(text.contains("Plan: 1 to add, 0 to change, 0 to destroy."));
+    }
+
+    #[test]
+    fn tree_update_counts_changed_members() {
+        let previous = tree_previous(vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)]);
+        let desired = Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree {
+                members: vec![tree_member("a.ttf", 9), tree_member("b.ttf", 2)],
+            },
+        );
+        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let report = Summary {
+            built: &built,
+            previous: &previous,
+            drift: &[],
+        };
+        let text = report.render();
+        assert!(text.contains("  ~ tree (1 of 2 files changed)"));
+        assert!(text.contains("Plan: 0 to add, 1 to change, 0 to destroy."));
+    }
+
+    #[test]
+    fn tree_delete_names_counted_kind() {
+        let previous = tree_previous(vec![tree_member("a.ttf", 1)]);
+        let built = match confit_core::plan::Plan::build(Vec::new(), Vec::new()) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let report = Summary {
+            built: &built,
+            previous: &previous,
+            drift: &[],
+        };
+        let text = report.render();
+        assert!(text.contains("fonts: tree (1 files)"));
+        assert!(text.contains("Plan: 0 to add, 0 to change, 1 to destroy."));
     }
 }

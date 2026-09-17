@@ -9,6 +9,9 @@ use sha2::Digest;
 
 use crate::document::{Document, DocumentKind};
 use crate::error::Result;
+use crate::fs::Filesystem;
+use crate::hook::{Hook, preview_hook};
+use crate::runtime::Runtime;
 
 /// Plan format version written by every plan build.
 ///
@@ -17,13 +20,14 @@ use crate::error::Result;
 /// ```text
 /// use confit_core::plan::PLAN_VERSION;
 ///
-/// assert!(matches!(PLAN_VERSION, 2));
+/// assert!(matches!(PLAN_VERSION, 4));
 /// ```
-pub const PLAN_VERSION: u32 = 2;
+pub const PLAN_VERSION: u32 = 4;
 
 /// Versioned desired state written by plan builds.
 ///
 /// Documents hold path order plus filled data hashes.
+/// Hooks hold merged post-config steps in first-seen order.
 /// Created at holds an RFC3339 timestamp outside hash input.
 ///
 /// # Examples
@@ -35,6 +39,7 @@ pub const PLAN_VERSION: u32 = 2;
 ///     version: PLAN_VERSION,
 ///     documents: Vec::new(),
 ///     created_at: String::new(),
+///     hooks: Vec::new(),
 /// };
 /// assert!(matches!(plan.documents.len(), 0));
 /// ```
@@ -46,6 +51,9 @@ pub struct Plan {
     pub documents: Vec<Document>,
     /// Holds the RFC3339 creation timestamp.
     pub created_at: String,
+    /// Holds merged hooks in first-seen order.
+    #[serde(default)]
+    pub hooks: Vec<Hook>,
 }
 
 impl Plan {
@@ -69,6 +77,7 @@ impl Plan {
             version: PLAN_VERSION,
             documents: Vec::new(),
             created_at: String::new(),
+            hooks: Vec::new(),
         }
     }
 
@@ -281,6 +290,7 @@ impl Plan {
     /// # Arguments
     ///
     /// * `documents` - desired documents in engine pipeline order, unique per path.
+    /// * `hooks` - desired hooks in declaration order, merged downstream.
     ///
     /// # Returns
     ///
@@ -301,11 +311,11 @@ impl Plan {
     ///     DocPath::new("note"),
     ///     DocumentData::Text { content: "hi".into() },
     /// );
-    /// let outcome = Plan::build(vec![document]);
+    /// let outcome = Plan::build(vec![document], Vec::new());
     /// let previous = Plan::empty();
     /// assert!(matches!(outcome, Ok(plan) if plan.summary(&previous).create == 1));
     /// ```
-    pub fn build(mut documents: Vec<Document>) -> Result<Self> {
+    pub fn build(mut documents: Vec<Document>, hooks: Vec<Hook>) -> Result<Self> {
         for document in &mut documents {
             document.fill_hash()?;
         }
@@ -314,6 +324,7 @@ impl Plan {
             version: PLAN_VERSION,
             documents,
             created_at: now_timestamp(),
+            hooks,
         })
     }
 
@@ -328,8 +339,7 @@ impl Plan {
     ///
     /// # Returns
     ///
-    /// Create, update, plus delete counts.
-    ///
+    /// Create, update, plus delete counts.    ///
     /// # Examples
     ///
     /// ```text
@@ -342,10 +352,13 @@ impl Plan {
     ///     DocPath::new("note"),
     ///     DocumentData::Text { content: "hi".into() },
     /// )];
-    /// let plan = Plan::build(vec![Document::new(
-    ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "changed".into() },
-    /// )]);
+    /// let plan = Plan::build(
+    ///     vec![Document::new(
+    ///         DocPath::new("note"),
+    ///         DocumentData::Text { content: "changed".into() },
+    ///     )],
+    ///     Vec::new(),
+    /// );
     /// assert!(matches!(plan, Ok(plan) if plan.summary(&previous).update == 1));
     /// ```
     pub fn summary(&self, previous: &Plan) -> Summary {
@@ -369,6 +382,48 @@ impl Plan {
             }
         }
         summary
+    }
+
+    /// Renders one preview line per hook in plan order.
+    ///
+    /// Resolution runs first: `argv[0]` searches hook path
+    /// dirs plus runtime dirs, first hit wins. Runnable hooks
+    /// read `! run:` with the resolved binary. Satisfied
+    /// checks read `skipped:`. Closed gates read `warn:` with
+    /// the gate named. Recorded hooks drift through the same
+    /// lines: previous hooks re-evaluate checks each plan, so
+    /// a failed check reads as not applied beside drift lines.
+    ///
+    /// # Arguments
+    ///
+    /// * `rt` - the runtime facts under reading.
+    /// * `fs` - the backend under stating.
+    ///
+    /// # Returns
+    ///
+    /// The preview lines in plan order.
+    ///
+    /// # Errors
+    ///
+    /// Unresolvable binaries fail as plan errors naming the hook.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::plan::Plan;
+    /// use confit_core::fs::MemoryFs;
+    /// use confit_core::runtime::Runtime;
+    ///
+    /// let rt = Runtime { vars: Default::default(), path_dirs: Vec::new() };
+    /// let lines = Plan::empty().hook_preview(&rt, &MemoryFs::new());
+    /// assert!(matches!(lines, Ok(lines) if lines.is_empty()));
+    /// ```
+    pub fn hook_preview(&self, rt: &Runtime, fs: &dyn Filesystem) -> Result<Vec<String>> {
+        let mut lines = Vec::with_capacity(self.hooks.len());
+        for hook in &self.hooks {
+            lines.push(preview_hook(hook, rt, fs)?);
+        }
+        Ok(lines)
     }
 }
 
@@ -436,7 +491,7 @@ mod tests {
         let stale = previous.documents[0].clone();
         let desired = vec![text_doc("a", "same-a"), text_doc("b", "fresh-b")];
         let _ = stale;
-        let outcome = Plan::build(desired);
+        let outcome = Plan::build(desired, Vec::new());
         let built = match outcome {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
@@ -458,7 +513,7 @@ mod tests {
     #[test]
     fn plan_marks_update_on_hash_change() {
         let previous = with_hashes(vec![text_doc("b", "old")]);
-        let outcome = Plan::build(vec![text_doc("b", "new")]);
+        let outcome = Plan::build(vec![text_doc("b", "new")], Vec::new());
         let built = match outcome {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
@@ -516,7 +571,7 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let built = match Plan::build(vec![opaque_doc("bin", &[0xFF, 0x00])]) {
+        let built = match Plan::build(vec![opaque_doc("bin", &[0xFF, 0x00])], Vec::new()) {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -525,16 +580,18 @@ mod tests {
         assert_eq!(summary.delete, 0);
         assert_eq!(summary.create, 0);
     }
-
     #[test]
     fn plain_kind_change_keeps_create_plus_delete() {
         let previous = with_hashes(vec![text_doc("bin", "hi")]);
-        let built = match Plan::build(vec![Document::new(
-            DocPath::new("bin"),
-            DocumentData::Link {
-                target: "dest".to_string(),
-            },
-        )]) {
+        let built = match Plan::build(
+            vec![Document::new(
+                DocPath::new("bin"),
+                DocumentData::Link {
+                    target: "dest".to_string(),
+                },
+            )],
+            Vec::new(),
+        ) {
             Ok(out) => out,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -542,5 +599,116 @@ mod tests {
         assert_eq!(summary.create, 1);
         assert_eq!(summary.delete, 1);
         assert_eq!(summary.update, 0);
+    }
+    #[test]
+    fn build_carries_hooks_through() {
+        use crate::hook::Hook;
+
+        let hooks = vec![Hook {
+            argv: vec!["mise".to_string()],
+            path: Vec::new(),
+            when: None,
+            checks: Vec::new(),
+            timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+        }];
+        let built = match Plan::build(Vec::new(), hooks) {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        assert_eq!(built.version, PLAN_VERSION);
+        assert_eq!(built.hooks.len(), 1);
+        assert_eq!(built.hooks[0].argv, vec!["mise".to_string()]);
+    }
+
+    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::MemoryFs) {
+        use crate::fs::Filesystem;
+
+        let fs = crate::fs::MemoryFs::new();
+        let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
+        let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
+        let _ = fs.write(std::path::Path::new("/opt/probe"), b"run");
+        let rt = crate::runtime::Runtime {
+            vars: std::collections::BTreeMap::new(),
+            path_dirs: vec![std::path::PathBuf::from("/opt")],
+        };
+        (rt, fs)
+    }
+
+    fn preview_hook(argv: &[&str]) -> crate::hook::Hook {
+        crate::hook::Hook {
+            argv: argv.iter().map(|item| item.to_string()).collect(),
+            path: Vec::new(),
+            when: None,
+            checks: Vec::new(),
+            timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+        }
+    }
+
+    #[test]
+    fn hook_preview_renders_run_skip_warn_lines() {
+        use crate::document::Condition;
+
+        let (rt, fs) = preview_runtime();
+        let mut plan = Plan::empty();
+        plan.hooks = vec![
+            preview_hook(&["tool", "--flag"]),
+            crate::hook::Hook {
+                checks: vec![Condition::Exists {
+                    path: "/opt/probe".into(),
+                }],
+                ..preview_hook(&["tool"])
+            },
+            crate::hook::Hook {
+                when: Some(Condition::InPath {
+                    name: "absent".into(),
+                }),
+                ..preview_hook(&["tool"])
+            },
+        ];
+        let lines = match plan.hook_preview(&rt, &fs) {
+            Ok(lines) => lines,
+            Err(error) => panic!("preview renders: {error}"),
+        };
+        assert_eq!(
+            lines,
+            vec![
+                "! run: /opt/tool --flag".to_string(),
+                "skipped: tool (checks pass)".to_string(),
+                "warn: tool cannot run (in_path(absent))".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn hook_preview_runs_on_failing_checks() {
+        use crate::document::Condition;
+
+        let (rt, fs) = preview_runtime();
+        let mut plan = Plan::empty();
+        plan.hooks = vec![crate::hook::Hook {
+            checks: vec![Condition::Exists {
+                path: "/opt/absent".into(),
+            }],
+            ..preview_hook(&["tool"])
+        }];
+        let lines = match plan.hook_preview(&rt, &fs) {
+            Ok(lines) => lines,
+            Err(error) => panic!("preview renders: {error}"),
+        };
+        assert_eq!(lines, vec!["! run: /opt/tool".to_string()]);
+    }
+
+    #[test]
+    fn hook_preview_miss_fails_naming_hook() {
+        let (rt, fs) = preview_runtime();
+        let mut plan = Plan::empty();
+        plan.hooks = vec![preview_hook(&["absent", "install"])];
+        match plan.hook_preview(&rt, &fs) {
+            Ok(_) => panic!("missing binary passes"),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "hook 'absent install' cannot resolve 'absent'"
+            ),
+        }
     }
 }

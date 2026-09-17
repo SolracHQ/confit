@@ -3,12 +3,16 @@
 ## Commands
 
 ```sh
-confit plan PROFILE [--state F] [-o FILE]     # preview
-confit apply PROFILE [--state F] [--plan F] [--force]
-confit apply --plan FILE
-confit recover [--state F] [INDEX]
-confit init [DIR]                             # scaffold, default .
+confit plan PROFILE [-o FILE|@NAME]         # preview
+confit apply PROFILE [--plan FILE|@NAME] [--force]
+confit apply --plan FILE|@NAME
+confit recover [INDEX]
+confit init [DIR]                           # scaffold, default .
 ```
+
+`@NAME` stores or loads a named plan under the user config
+folder as `plans/{NAME}.json`. Empty names plus separators
+fail.
 
 ## Documents
 
@@ -18,6 +22,7 @@ confit.document.text(path, content)
 confit.document.link(path, target)
 confit.document.opaque(path, content)
 confit.document.compressed(path_or_url, fn)   -- fn returns Document or nil
+confit.document.tree(archive, dest, fn)       -- fn returns relative path or nil
 confit.document.rc.new({ profile = {}, config = {}, final = {} })
 ```
 
@@ -58,11 +63,24 @@ confit.path.home(...)  confit.path.config(...)  confit.path.data(...)  confit.pa
 ## Guards
 
 ```lua
-confit.shell.env_eq({ key = "X", value = "y" })
-confit.shell.env_set({ key = "X" })
-confit.shell.in_path("bat")
-confit.shell.exists("~/.secrets")
-confit.shell.all({ ... })  any({ ... })
+confit.runtime.env_eq({ key = "X", value = "y" })
+confit.runtime.env_set({ key = "X" })
+confit.runtime.in_path("bat")
+confit.runtime.exists("~/.secrets")
+confit.runtime.all({ ... })  any({ ... })
+```
+
+## Hooks
+
+```lua
+confit.hook.run({ "mise", "install" }, {
+  path = { "/home/ada/.local/bin" },          -- extra PATH dirs for the run alone
+  when = confit.runtime.in_path("mise"),      -- closed gate warns and excuses
+  checks = { confit.runtime.in_path("bat") }, -- pass skips, fail runs, still-fail aborts
+  timeout = "10m",                             -- h m s shapes, default 10m
+})
+config:add_hook(hook)
+config:require("plugin:solrachq/mise:install", "Add mise.init() to the profile configs.")
 ```
 
 ## Utils and plugins
@@ -70,7 +88,8 @@ confit.shell.all({ ... })  any({ ... })
 ```lua
 confit.utils.render(template, vars)
 confit.utils.holds_cycle(value)  confit.utils.is_array(value)
-confit.plugin.solrachq.mise.package(name, fn?)  .activate()
+confit.plugin.solrachq.mise.package({ name, version?, bin?, aliases?, rc_builder? })  .init(version?)
+confit.plugin.solrachq.nerd_fonts.font(name, version?)  .init()
 confit.plugin.solrachq.merge(base, overlay, { shallow, list_append }?)
 confit.plugin.solrachq.template(path, { src, vars })
 ```

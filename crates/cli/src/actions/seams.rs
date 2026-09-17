@@ -3,15 +3,17 @@
 //! Injected effects shared by command runners.
 
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use confit_core::document::Document;
 use confit_core::error::{Error, Result};
-use confit_core::fs::{Filesystem, OsFs};
+use confit_core::fs::Filesystem;
+
+use crate::fs::OsFs;
 use confit_core::plan::{DocumentStatus, Plan};
 
 use confit_engine::{ProgressCallback, ProgressEvent};
 
+use crate::actions::hooks::HookRunner;
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
 
 /// Host filesystem under sharing by host seams.
@@ -43,6 +45,10 @@ pub struct Seams<'a> {
     pub output: &'a mut dyn Write,
     /// Gains engine facts, holding `None` for silence.
     pub progress: Option<ProgressCallback>,
+    /// Runs hook subprocesses, holding `None` for the host runner.
+    pub hook_runner: Option<&'a dyn HookRunner>,
+    /// Gains hook output bytes, holding `None` for no log.
+    pub log_file: Option<PathBuf>,
 }
 
 impl<'a> Seams<'a> {
@@ -75,6 +81,8 @@ impl<'a> Seams<'a> {
             input,
             output,
             progress: None,
+            hook_runner: None,
+            log_file: None,
         }
     }
 
@@ -113,6 +121,8 @@ impl<'a> Seams<'a> {
             input,
             output,
             progress: None,
+            hook_runner: None,
+            log_file: None,
         }
     }
 
@@ -240,7 +250,7 @@ pub fn evaluate_shared(
     shared: &SharedArgs,
     profile: &Path,
     progress: Option<ProgressCallback>,
-) -> Result<Vec<Document>> {
+) -> Result<confit_engine::Evaluation> {
     let root = resolve_root(&shared.root, Some(profile));
     let plugins = resolve_plugins(&root, &shared.plugins);
     confit_engine::evaluate(

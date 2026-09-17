@@ -18,7 +18,7 @@ impl Document {
     /// Structured payloads serialize through their format.
     /// Text payloads pass content through. Link payloads pass the
     /// target through. Rc payloads render shell text. Opaque
-    /// payloads fail, reads use `bytes` instead.
+    /// plus tree payloads fail, reads use `bytes` instead.
     ///
     /// # Returns
     ///
@@ -54,13 +54,17 @@ impl Document {
             DocumentData::Opaque { .. } => Err(Error::Plan(
                 "render opaque: opaque documents hold raw bytes".to_string(),
             )),
+            DocumentData::Tree { .. } => Err(Error::Plan(
+                "render tree: tree documents hold member bytes".to_string(),
+            )),
         }
     }
 
     /// Returns exact on-disk bytes for one document.
     ///
-    /// Opaque payloads return raw bytes. Every other payload
-    /// renders through `render`.
+    /// Opaque payloads return raw bytes. Tree payloads return
+    /// canonical manifest bytes for hashing, never disk bytes.
+    /// Every other payload renders through `render`.
     ///
     /// # Returns
     ///
@@ -85,6 +89,7 @@ impl Document {
     pub fn bytes(&self) -> Result<Vec<u8>> {
         match &self.data {
             DocumentData::Opaque { content, .. } => Ok(content.clone()),
+            DocumentData::Tree { members } => Ok(crate::document::tree_manifest_bytes(members)),
             _ => self.render(),
         }
     }

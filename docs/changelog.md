@@ -1,5 +1,95 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.6] - 2026-09-17
+
+Design spec: `docs/design/v0.6.md`.
+
+### Added
+
+- Hooks: configs carry post-config steps through
+  `confit.hook.run(argv, opts)` plus `config:add_hook`. Argv
+  lists execute directly with no shell in between. Opts hold
+  `path` (subprocess PATH dirs alone), `when` (run gate),
+  `checks` (prove the run before plus after), `timeout`
+  (Lua-shaped durations, default `10m`). Plan previews each
+  hook as a `! run:` line with the resolved absolute binary.
+  Apply runs hooks after documents land with `hook n of m`
+  plus a spinner, output streaming into the run log file.
+  Passing checks skip, closed gates warn and excuse,
+  failures abort the rest with exit 1.
+- Hook merge: identical argv plus path collapse into one run
+  in first-declaration order. Gates join with OR, checks
+  concatenate, timeout takes the max. Each check binds to its
+  own gate on the merged run.
+- Condition evaluator in Rust over path, file, plus
+  environment shapes: `in_path`, `exists`, `env_eq`,
+  `env_set`, `all`, `any`, `nop`.
+- Plan format version 3 carrying `hooks`. Hooks persist into
+  state as pure data and re-evaluate each plan: failed checks
+  read as drift, passing checks read as applied.
+- Named plans: `-o @work` stores under the user config
+  folder as `plans/work.json`, `--plan @work` replays it.
+  Empty names plus separators fail as plan errors.
+- `config:require(name, hint?)`: missing siblings fail the
+  plan naming both configs, hint on its own line. Existence
+  alone, cycles resolve fine. The
+  `plugin:{user}/{name}:{capability}` shape stays pure
+  convention.
+- `mise.init(version?)` returns the installer config: the
+  mise binary composed from fetch plus unpack plus an opaque
+  document, plus the activation patch. Explicit version wins,
+  omitted resolves the
+  latest tag. No `activate` call lives on the public contract;
+  profiles list the installer once and gain activation with
+  it.
+- Tree documents: `confit.document.tree(archive, dest, fn)`
+  builds one document holding many files under one folder.
+  The callback keeps the `(name, info, content)` shape and
+  returns a relative path per kept member, nil per skip.
+  Manifests sort by relative path, modes inherit the archive
+  executable bit, empty picks fail naming the filter. Plans
+  read one line either way: `tree (n files)` adds,
+  `tree (changed of total files changed)` updates. Drift
+  walks members, apply rewrites changed members plus removes
+  dropped ones while hand-placed files stay untouched.
+- `solrachq.nerd_fonts` embedded plugin:
+  `font(name, version?)` builds one font config holding a
+  tree document flattened under the managed fonts folder,
+  the shared `fc-cache -f` hook, plus an implicit require
+  on the installer. The hook carries no checks and fires
+  every apply while `fc-cache` resolves.
+  `init()` returns that installer holding the shared hook.
+  Omitted versions resolve the latest tag.
+
+### Changed
+
+- Plan format version 4 carrying the tree kind. State files
+  at version 3 read as unsupported.
+- Crates version 0.6.0 across core, engine, plus cli.
+- `mise.package` takes a table: `name` required, `version`
+  defaulting to `latest`, `bin` defaulting to the name for the
+  shim proof, `aliases` mapping alias names to expansions with
+  the binary guard, `rc_builder` optional. Each package
+  folds its version into the shared TOML, declares the shared
+  `mise install` hook, and requires the installer config.
+  The old positional shape breaks outright.
+- `confit.shell` renames to `confit.runtime`. `{{shell}}`
+  template slots stay.
+- The built binary names `confit` again through a `[[bin]]`
+  section, so the test harness mounts the real name.
+- Patch collisions settle by config declaration order
+  instead of owner name. Rc plus structured patches share the
+  one sort.
+- Spec at 0.6.0.
+
+### Removed
+
+- The `--state` flag. Every run reads plus writes the fixed
+  slot. Experiments point `--plan` at a rendered file,
+  backups copy a plan file, sharing sends a plan file.
+
 ## [0.5] - 2026-09-16
 
 Design spec: `docs/design/v0.5.md`.
@@ -44,8 +134,6 @@ Design spec: `docs/design/v0.5.md`.
 
 - Dead `PathOp::Append` variant.
 - Purged stale tests around the old shapes.
-
-## [Unreleased]
 
 ## [0.4] - 2026-09-14
 

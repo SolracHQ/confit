@@ -439,6 +439,8 @@ pub enum DocumentKind {
     Rc,
     /// Raw binary file from declaration bytes.
     Opaque,
+    /// Managed file set from one archive under one folder.
+    Tree,
 }
 
 impl DocumentKind {
@@ -462,6 +464,7 @@ impl DocumentKind {
             Self::Link => "link",
             Self::Rc => "rc",
             Self::Opaque => "opaque",
+            Self::Tree => "tree",
         }
     }
 }
@@ -518,6 +521,36 @@ pub enum DocumentData {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
     },
+    /// Holds one managed file set under a destination folder.
+    Tree {
+        /// Holds members in destination-relative order.
+        members: Vec<TreeMember>,
+    },
+}
+
+/// One managed file inside a tree document.
+///
+/// The relative path lands under the tree destination.
+/// Modes always carry explicit bits inherited from the
+/// archive member, so trees never depend on the umask.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::document::TreeMember;
+///
+/// let member = TreeMember { rel: "font.ttf".into(), content: vec![0x41], mode: 0o644 };
+/// assert!(matches!(member.rel.as_str(), "font.ttf"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeMember {
+    /// Holds the destination-relative member path.
+    pub rel: String,
+    /// Holds raw member bytes, base64 in plan JSON.
+    #[serde(with = "base64_content")]
+    pub content: Vec<u8>,
+    /// Holds unix permission bits for the member file.
+    pub mode: u32,
 }
 
 impl DocumentData {
@@ -542,6 +575,7 @@ impl DocumentData {
             Self::Link { .. } => DocumentKind::Link,
             Self::Rc(_) => DocumentKind::Rc,
             Self::Opaque { .. } => DocumentKind::Opaque,
+            Self::Tree { .. } => DocumentKind::Tree,
         }
     }
 
@@ -565,9 +599,117 @@ impl DocumentData {
     pub fn mode(&self) -> Option<u32> {
         match self {
             Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
-            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) => None,
+            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
         }
     }
+
+    /// Reads the tree members for this payload.
+    ///
+    /// # Returns
+    ///
+    /// The member list for tree payloads, else None.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use confit_core::document::DocumentData;
+    ///
+    /// let data = DocumentData::Tree { members: Vec::new() };
+    /// assert!(matches!(data.tree_members(), Some(_)));
+    /// ```
+    pub fn tree_members(&self) -> Option<&[TreeMember]> {
+        match self {
+            Self::Tree { members } => Some(members),
+            _ => None,
+        }
+    }
+}
+
+/// Counts changed members between two tree manifests.
+///
+/// Added plus removed plus content-or-mode modified
+/// members count. Order never counts, manifests sort
+/// by relative path before comparing.
+///
+/// # Arguments
+///
+/// * `old` - the recorded members under comparing.
+/// * `new` - the desired members under comparing.
+///
+/// # Returns
+///
+/// The changed member count.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::document::{TreeMember, tree_changed};
+///
+/// let old = vec![TreeMember { rel: "a".into(), content: vec![1], mode: 0o644 }];
+/// let new = vec![
+///     TreeMember { rel: "a".into(), content: vec![2], mode: 0o644 },
+///     TreeMember { rel: "b".into(), content: vec![3], mode: 0o644 },
+/// ];
+/// assert!(matches!(tree_changed(&old, &new), 2));
+/// ```
+pub fn tree_changed(old: &[TreeMember], new: &[TreeMember]) -> usize {
+    use std::collections::BTreeMap;
+    let old_map: BTreeMap<&str, &TreeMember> = old
+        .iter()
+        .map(|member| (member.rel.as_str(), member))
+        .collect();
+    let new_map: BTreeMap<&str, &TreeMember> = new
+        .iter()
+        .map(|member| (member.rel.as_str(), member))
+        .collect();
+    let mut changed = 0;
+    for (rel, member) in &new_map {
+        match old_map.get(rel) {
+            Some(previous)
+                if previous.content == member.content && previous.mode == member.mode =>
+            {
+                continue;
+            }
+            _ => changed += 1,
+        }
+    }
+    for rel in old_map.keys() {
+        if !new_map.contains_key(rel) {
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// Renders the canonical manifest bytes for tree hashing.
+///
+/// Members sort by relative path, so declaration order
+/// never leaks into plan hashes. Each line holds the
+/// octal mode, the relative path, plus the member sha.
+///
+/// # Arguments
+///
+/// * `members` - the tree members under encoding.
+///
+/// # Returns
+///
+/// The canonical manifest bytes.
+pub(crate) fn tree_manifest_bytes(members: &[TreeMember]) -> Vec<u8> {
+    let mut sorted: Vec<&TreeMember> = members.iter().collect();
+    sorted.sort_by(|left, right| left.rel.cmp(&right.rel));
+    let mut out = Vec::new();
+    for member in sorted {
+        out.extend_from_slice(
+            format!(
+                "{:o} {} {}\n",
+                member.mode,
+                member.rel,
+                crate::plan::sha256_hex(&member.content)
+            )
+            .as_bytes(),
+        );
+    }
+    out
 }
 
 /// Base64 string form for opaque bytes in plan JSON.

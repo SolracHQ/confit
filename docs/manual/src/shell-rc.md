@@ -43,12 +43,12 @@ condition at startup:
 
 ```lua
 confit.document.rc.alias("ll", "ls -l", {
-  when = confit.shell.in_path("eza"),
+  when = confit.runtime.in_path("eza"),
 })
 confit.document.rc.env("EDITOR", "hx", {
-  when = confit.shell.all({
-    confit.shell.env_set({ key = "SSH_CONNECTION" }),
-    confit.shell.exists("~/.config/hx"),
+  when = confit.runtime.all({
+    confit.runtime.env_set({ key = "SSH_CONNECTION" }),
+    confit.runtime.exists("~/.config/hx"),
   }),
 })
 ```

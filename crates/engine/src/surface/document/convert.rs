@@ -8,8 +8,10 @@ use serde_json::Value as Json;
 use super::Declared;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, read_marker};
-use crate::model::{LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl};
-use crate::surface::shell::condition_from_json;
+use crate::model::{
+    LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
+};
+use crate::surface::runtime::condition_from_json;
 use confit_core::document::{PathOp, RcEntry, RcOp, StructuredFormat};
 
 /// Converts one document table into registration form.
@@ -63,6 +65,33 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                 content,
                 mode,
             }))
+        }
+        "tree" => {
+            let path = table.req_str(ctx, "path")?;
+            let members_table = table.req_table(ctx, "members")?;
+            let len = members_table.raw_len();
+            let mut members = Vec::with_capacity(len);
+            for index in 1..=len {
+                let item: Value = members_table.get(index)?;
+                let member = item.req_table(ctx, "members").map_err(|_| {
+                    plan_error(format!("{ctx}: field 'members' must hold member tables"))
+                })?;
+                let rel = member.req_str(ctx, "rel")?;
+                let content = member.req_bytes(ctx, "content")?;
+                let mode_value: Value = member.get("mode")?;
+                let mode = mode_value.req_int(ctx, "mode")?;
+                if !(0..=0o777).contains(&mode) {
+                    return Err(plan_error(format!(
+                        "{ctx}: field 'mode' must hold permission bits"
+                    )));
+                }
+                members.push(TreeMemberDecl {
+                    rel,
+                    content,
+                    mode: mode as u32,
+                });
+            }
+            Ok(Declared::Tree(TreeDecl { path, members }))
         }
         "rc" => {
             let mut entries = Vec::new();

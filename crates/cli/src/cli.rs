@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// CaC: configuration as code for one machine, with plan-before-apply.
+/// CaC: configuration as code for one user, with plan-before-apply.
 ///
 /// # Examples
 ///
@@ -18,7 +18,7 @@ use clap::{Args, Parser, Subcommand};
 /// assert!(matches!(cli, Ok(_)));
 /// ```
 #[derive(Debug, Parser)]
-#[command(name = "confit", version, about = "CaC: configuration as code for one machine", long_about = None)]
+#[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
 pub struct Cli {
     /// Subcommand selecting the run shape.
     #[command(subcommand)]
@@ -63,9 +63,6 @@ pub struct SharedArgs {
     /// Require resolution base. Defaults to the profile parent.
     #[arg(long)]
     pub root: Option<PathBuf>,
-    /// Previous state file. Omitted means the profile slot while a profile passes, else empty previous.
-    #[arg(long)]
-    pub state: Option<PathBuf>,
     /// Plugin folder shaped `{user}/{name}/plugin.lua`. Omitted means `{root}/plugins`.
     #[arg(long)]
     pub plugins: Option<PathBuf>,
@@ -142,9 +139,6 @@ pub struct RecoverArgs {
     /// Skips the confirmation prompt. Drift still re-prompts.
     #[arg(long)]
     pub force: bool,
-    /// State file gaining the re-applied plan. Omitted means the fixed slot.
-    #[arg(long)]
-    pub state: Option<PathBuf>,
 }
 
 /// Arguments for `confit init`.
@@ -216,7 +210,6 @@ pub fn expand_command(command: &mut Command) {
     }
     fn shared(shared: &mut SharedArgs) {
         opt(&mut shared.root);
-        opt(&mut shared.state);
         opt(&mut shared.plugins);
     }
     match command {
@@ -230,9 +223,7 @@ pub fn expand_command(command: &mut Command) {
             shared(&mut args.shared);
             opt(&mut args.plan);
         }
-        Command::Recover(args) => {
-            opt(&mut args.state);
-        }
+        Command::Recover(_) => {}
         Command::Init(args) => {
             args.dir = expand_tilde(&args.dir);
         }
@@ -296,4 +287,41 @@ pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -
 /// ```
 pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> PathBuf {
     plugins.clone().unwrap_or_else(|| root.join("plugins"))
+}
+
+/// Resolves one plan file path with `@` sugar.
+///
+/// Values starting with `@` strip the sigil and resolve under
+/// the plans folder. Explicit paths pass through unchanged.
+///
+/// # Arguments
+///
+/// * `raw` - the output or plan value under resolving.
+///
+/// # Returns
+///
+/// The named plan path for `@` values, else the input unchanged.
+///
+/// # Errors
+///
+/// Empty names plus separator carriers plus dot segments fail
+/// as plan errors.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_cli::cli::resolve_plan_file;
+/// use std::path::Path;
+///
+/// assert!(matches!(resolve_plan_file(Path::new("plan.json")), Ok(_)));
+/// assert!(matches!(resolve_plan_file(Path::new("@work")), Ok(_)));
+/// ```
+pub fn resolve_plan_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::error::Error> {
+    let Some(text) = raw.to_str() else {
+        return Ok(raw.to_path_buf());
+    };
+    let Some(name) = text.strip_prefix('@') else {
+        return Ok(raw.to_path_buf());
+    };
+    confit_core::store::resolve_named_plan(name)
 }

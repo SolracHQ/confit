@@ -6,9 +6,12 @@ use std::path::{Path, PathBuf};
 
 use confit_core::drift::Drift;
 use confit_core::error::Result;
-use confit_core::fs::{OsFs, snapshot};
+use confit_core::fs::{snapshot, snapshot_tree};
+
+use crate::fs::OsFs;
 use confit_core::ids::DocPath;
 use confit_core::plan::Plan;
+use confit_core::runtime::Runtime;
 use confit_core::store::{load_state, write_plan};
 
 use crate::cli::PlanArgs;
@@ -26,6 +29,8 @@ pub struct PlanOutcome {
     pub previous: Plan,
     /// Holds plan versus disk edits leading the summary.
     pub drift: Vec<Drift>,
+    /// Holds hook preview lines beside the summary.
+    pub hook_lines: Vec<String>,
     /// Holds the tmp plan path while no output destination passes.
     pub stored: Option<PathBuf>,
 }
@@ -43,7 +48,6 @@ pub struct PlanOutcome {
 ///     profile: PathBuf::from("profile.lua"),
 ///     shared: SharedArgs {
 ///         root: None,
-///         state: None,
 ///         plugins: None,
 ///         re_fetch: false,
 ///     },
@@ -98,23 +102,29 @@ impl PlanRunner<'_> {
     /// Evaluation plus plan plus build plus write failures surface
     /// as plan or io errors.
     pub fn execute(self) -> Result<PlanOutcome> {
-        let documents =
+        let evaluation =
             evaluate_shared(&self.args.shared, &self.args.profile, self.progress.clone())?;
-        let state_file = confit_core::store::resolve_state_file(self.args.shared.state.as_deref())?;
+        let documents = evaluation.documents;
+        let state_file = confit_core::store::default_state_path()?;
         self.emit_reading_plan(&state_file);
         let previous = load_state(Some(&state_file), &OsFs)?;
         let fs = OsFs;
         let snapshot = |path: &DocPath| snapshot(path, &fs);
-        let drifts = timed("drift", || previous.drift(&snapshot));
+        let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), &fs);
+        let drifts = timed("drift", || previous.drift(&snapshot, &snapshot_tree));
         self.emit_hashing();
-        let built = timed("hash", || Plan::build(documents))?;
+        let built = timed("hash", || Plan::build(documents, evaluation.hooks))?;
         log_processed(&built, &previous);
+        let hook_lines = built.hook_preview(&Runtime::current(), &OsFs)?;
         if self.args.output.is_some() || self.store_tmp {
             self.emit_writing_plan(built.documents.len());
         }
         let stored = timed("write", || {
             match (self.args.output.as_deref(), self.store_tmp) {
-                (Some(dest), _) => write_plan(&built, Some(dest), &OsFs).map(|()| None),
+                (Some(dest), _) => {
+                    let resolved = crate::cli::resolve_plan_file(dest)?;
+                    write_plan(&built, Some(&resolved), &OsFs).map(|()| None)
+                }
                 (None, true) => {
                     let tmp = tmp_plan_path();
                     write_plan(&built, Some(&tmp), &OsFs).map(|()| Some(tmp))
@@ -126,6 +136,7 @@ impl PlanRunner<'_> {
             built,
             previous,
             drift: drifts,
+            hook_lines,
             stored,
         })
     }

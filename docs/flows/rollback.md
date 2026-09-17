@@ -10,8 +10,8 @@ flowchart TD
     B -- no --> C["List index plus timestamp lines"]
     B -- yes --> D["Load stored plan by index"]
     D --> E["Unknown index fails"]
-    D --> F["Load previous: --state, else slot"]
-    F --> G["Build: render, hash, count"]
+    D --> F["Load fixed slot state"]
+    F --> G["Trust stored hashes, no render"]
     G --> H["Drift baseline against disk"]
     H --> I["Render preview"]
     I --> J{"--force?"}
@@ -24,10 +24,11 @@ flowchart TD
     M -- no --> O["Write documents"]
     N -- abort --> Z
     N -- yes --> O
-    O --> P["Remove recorded orphans"]
-    P --> Q["Write state file"]
+    O --> P["Remove recorded orphans plus dropped tree members"]
+    P --> Q["Write fixed slot state"]
     Q --> R["Archive rotation entry"]
-    R --> S["Report written, removed, stored"]
+    R --> S["Run hooks in order"]
+    S --> T["Report written, removed, stored"]
 ```
 
 The listing shows `index @ timestamp` lines, oldest first.

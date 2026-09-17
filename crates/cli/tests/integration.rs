@@ -41,11 +41,69 @@ fn evaluate(profile: &Path, root: &Path) -> Result<Vec<Document>, Error> {
             progress: None,
         },
     )
+    .map(|evaluation| evaluation.documents)
+}
+
+/// Builds one memory fetcher serving the fixture mise installer.
+fn fixture_fetch() -> std::sync::Arc<confit_engine::fetch::MemoryFetch> {
+    let fake = std::sync::Arc::new(confit_engine::fetch::MemoryFetch::new());
+    let archive = tar_gz_bytes(&[("mise/bin/mise", b"fixture-mise".as_slice(), 0o755)]);
+    fake.insert(
+        "https://github.com/jdx/mise/releases/download/v2026.9.10/mise-v2026.9.10-linux-x64.tar.gz",
+        &archive,
+    );
+    fake
+}
+
+/// Builds tar.gz bytes from member triples in memory.
+fn tar_gz_bytes(members: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    {
+        let mut builder = tar::Builder::new(&mut encoder);
+        for (name, bytes, mode) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(*mode);
+            header.set_cksum();
+            if builder.append_data(&mut header, *name, *bytes).is_err() {
+                panic!("archive member writes");
+            }
+        }
+        if builder.finish().is_err() {
+            panic!("archive finishes");
+        }
+    }
+    match encoder.finish() {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("gzip finishes: {error}"),
+    }
+}
+
+/// Evaluates one profile file against stubbed fetches in an isolated cache.
+fn evaluate_fetch(
+    profile: &Path,
+    root: &Path,
+    cache: &Path,
+    fetcher: std::sync::Arc<confit_engine::fetch::MemoryFetch>,
+) -> Result<Vec<Document>, Error> {
+    pin_home();
+    confit_engine::evaluate(
+        profile,
+        confit_engine::EvalOpts {
+            root: root.to_path_buf(),
+            plugins: root.join("plugins"),
+            re_fetch: false,
+            cache_dir: Some(cache.to_path_buf()),
+            fetcher: Some(fetcher),
+            progress: None,
+        },
+    )
+    .map(|evaluation| evaluation.documents)
 }
 
 /// Builds a plan off disk with an empty previous state.
 fn build(documents: Vec<Document>) -> Result<confit_core::plan::Plan, Error> {
-    confit_core::plan::Plan::build(documents)
+    confit_core::plan::Plan::build(documents, Vec::new())
 }
 
 /// Fills data hashes or panics with context.
@@ -138,8 +196,12 @@ fn apply_runner<'a>(
     preview: bool,
     seams: confit_cli::actions::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
+    let plan = match Plan::build(desired, Vec::new()) {
+        Ok(plan) => plan,
+        Err(error) => panic!("plan builds: {error}"),
+    };
     confit_cli::actions::apply::ApplyRunner {
-        desired,
+        plan,
         previous,
         state,
         force,
@@ -191,6 +253,290 @@ impl std::io::BufRead for DriftInjector<'_> {
 
     fn consume(&mut self, amount: usize) {
         self.inner.consume(amount);
+    }
+}
+
+/// Builds one hook for apply tests.
+fn hook_for(
+    argv: &[&str],
+    path: &[&str],
+    when: Option<confit_core::document::Condition>,
+    checks: Vec<confit_core::document::Condition>,
+) -> confit_core::hook::Hook {
+    confit_core::hook::Hook {
+        argv: argv.iter().map(|item| item.to_string()).collect(),
+        path: path.iter().map(|item| item.to_string()).collect(),
+        when,
+        checks,
+        timeout_secs: 600,
+    }
+}
+
+/// Seeds one executable binary plus probe on a memory backend.
+fn hook_fs() -> MemoryFs {
+    use confit_core::fs::Filesystem;
+
+    let fs = MemoryFs::new();
+    match fs.write(Path::new("/fakebin/tool"), b"run") {
+        Ok(()) => {}
+        Err(error) => panic!("tool seeds: {error}"),
+    }
+    match fs.set_mode(Path::new("/fakebin/tool"), 0o755) {
+        Ok(()) => {}
+        Err(error) => panic!("tool mode seeds: {error}"),
+    }
+    match fs.write(Path::new("/fakebin/probe"), b"done") {
+        Ok(()) => {}
+        Err(error) => panic!("probe seeds: {error}"),
+    }
+    fs
+}
+
+/// Builds an apply runner carrying hooks plus a fake hook runner.
+fn hook_runner<'a>(
+    fs: &'a MemoryFs,
+    input: &'a mut Cursor<Vec<u8>>,
+    output: &'a mut Vec<u8>,
+    fake: &'a confit_cli::actions::hooks::FakeRunner,
+    log: Option<PathBuf>,
+    hooks: Vec<confit_core::hook::Hook>,
+) -> confit_cli::actions::apply::ApplyRunner<'a> {
+    let mut seams = confit_cli::actions::seams::Seams::memory(fs, input, output);
+    seams.hook_runner = Some(fake);
+    seams.log_file = log;
+    let mut runner = apply_runner(Vec::new(), Plan::empty(), None, true, false, seams);
+    runner.plan = match Plan::build(Vec::new(), hooks) {
+        Ok(plan) => plan,
+        Err(error) => panic!("plan builds: {error}"),
+    };
+    runner
+}
+
+#[test]
+fn hooks_run_spawn_resolve_and_log() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Ok(
+        confit_cli::actions::hooks::HookRun {
+            code: 0,
+            output: b"did\n".to_vec(),
+        },
+    )]));
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        Some(PathBuf::from("run.log")),
+        vec![hook_for(&["tool", "--flag"], &["/fakebin"], None, vec![])],
+    );
+    match runner.execute() {
+        Ok(_) => {}
+        Err(error) => panic!("apply runs: {error}"),
+    }
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].argv,
+        vec!["/fakebin/tool".to_string(), "--flag".to_string()]
+    );
+    assert_eq!(calls[0].path_dirs, vec![PathBuf::from("/fakebin")]);
+    assert_eq!(calls[0].timeout_secs, 600);
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("hook 1 of 1: tool --flag"),
+        "terminal line shows: {text}"
+    );
+    let log = memory_bytes(&fs, Path::new("run.log"));
+    let log_text = match String::from_utf8(log) {
+        Ok(text) => text,
+        Err(error) => panic!("log parses: {error}"),
+    };
+    assert!(
+        log_text.contains("hook 1 of 1: tool --flag"),
+        "log holds header: {log_text}"
+    );
+    assert!(log_text.contains("did"), "log holds bytes: {log_text}");
+}
+
+#[test]
+fn hooks_skip_on_passing_checks_without_spawning() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::new());
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        None,
+        vec![hook_for(
+            &["tool"],
+            &["/fakebin"],
+            None,
+            vec![confit_core::document::Condition::Exists {
+                path: "/fakebin/probe".to_string(),
+            }],
+        )],
+    );
+    match runner.execute() {
+        Ok(_) => {}
+        Err(error) => panic!("apply runs: {error}"),
+    }
+    assert!(fake.calls().is_empty());
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("skipped: tool (checks pass)"),
+        "skip line shows: {text}"
+    );
+}
+
+#[test]
+fn hooks_warn_on_closed_gates_without_spawning() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::new());
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        None,
+        vec![hook_for(
+            &["tool"],
+            &["/fakebin"],
+            Some(confit_core::document::Condition::InPath {
+                name: "definitely-missing-confit-binary".to_string(),
+            }),
+            vec![],
+        )],
+    );
+    match runner.execute() {
+        Ok(_) => {}
+        Err(error) => panic!("apply runs: {error}"),
+    }
+    assert!(fake.calls().is_empty());
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("warn: tool cannot run (in_path(definitely-missing-confit-binary))"),
+        "warn line shows: {text}"
+    );
+}
+
+#[test]
+fn hooks_abort_on_first_failure() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([
+        Ok(confit_cli::actions::hooks::HookRun {
+            code: 1,
+            output: b"boom\n".to_vec(),
+        }),
+        Ok(confit_cli::actions::hooks::HookRun {
+            code: 0,
+            output: Vec::new(),
+        }),
+    ]));
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        Some(PathBuf::from("run.log")),
+        vec![
+            hook_for(&["tool", "first"], &["/fakebin"], None, vec![]),
+            hook_for(&["tool", "second"], &["/fakebin"], None, vec![]),
+        ],
+    );
+    match runner.execute() {
+        Ok(_) => panic!("failing hook passes"),
+        Err(error) => assert!(
+            error.to_string().contains("failed with code 1"),
+            "failure aborts: {error}"
+        ),
+    }
+    assert_eq!(fake.calls().len(), 1);
+}
+
+#[test]
+fn hooks_timeout_aborts_as_own_error() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Err(
+        confit_core::error::Error::Plan("hook 'tool' timed out after 600s".to_string()),
+    )]));
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        None,
+        vec![hook_for(&["tool"], &["/fakebin"], None, vec![])],
+    );
+    match runner.execute() {
+        Ok(_) => panic!("timed out hook passes"),
+        Err(error) => assert!(
+            error.to_string().contains("timed out"),
+            "timeout reads own: {error}"
+        ),
+    }
+}
+
+#[test]
+fn hooks_post_checks_fail_after_run() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let mut output = Vec::new();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Ok(
+        confit_cli::actions::hooks::HookRun {
+            code: 0,
+            output: Vec::new(),
+        },
+    )]));
+    let runner = hook_runner(
+        &fs,
+        &mut input,
+        &mut output,
+        &fake,
+        None,
+        vec![hook_for(
+            &["tool"],
+            &["/fakebin"],
+            None,
+            vec![confit_core::document::Condition::Exists {
+                path: "/fakebin/absent".to_string(),
+            }],
+        )],
+    );
+    match runner.execute() {
+        Ok(_) => panic!("unproven hook passes"),
+        Err(error) => assert!(
+            error.to_string().contains("failed checks after run"),
+            "post checks verify: {error}"
+        ),
     }
 }
 
@@ -319,7 +665,6 @@ fn apply_plan_file_skips_preview() {
         profile: Some(PathBuf::from("profile.lua")),
         shared: confit_cli::cli::SharedArgs {
             root: None,
-            state: None,
             plugins: None,
             re_fetch: false,
         },
@@ -476,7 +821,6 @@ fn recover_roundtrips() {
     let listing = confit_cli::cli::RecoverArgs {
         index: None,
         force: false,
-        state: None,
     };
     let mut output = Vec::new();
     let mut listing_input = Cursor::new(String::new());
@@ -502,7 +846,6 @@ fn recover_roundtrips() {
     let pick = confit_cli::cli::RecoverArgs {
         index: Some(0),
         force: false,
-        state: Some(PathBuf::from("state.json")),
     };
     let mut input = Cursor::new("yes\n");
     let mut output = Vec::new();
@@ -516,7 +859,11 @@ fn recover_roundtrips() {
         Err(error) => panic!("recover applies: {error}"),
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"hello\n");
-    assert!(fs.exists(Path::new("state.json")));
+    let slot = match confit_core::store::default_state_path() {
+        Ok(slot) => slot,
+        Err(error) => panic!("slot resolves: {error}"),
+    };
+    assert!(fs.exists(&slot));
 }
 
 #[test]
@@ -526,7 +873,6 @@ fn recover_unknown_index_fails() {
     let pick = confit_cli::cli::RecoverArgs {
         index: Some(3),
         force: true,
-        state: None,
     };
     let mut unknown_input = Cursor::new(String::new());
     let mut unknown_output = Vec::new();
@@ -609,7 +955,7 @@ fn apply_link_lands_as_symlink() {
 
 #[test]
 fn apply_then_drift_stays_quiet() {
-    use confit_core::fs::snapshot;
+    use confit_core::fs::{snapshot, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -631,7 +977,9 @@ fn apply_then_drift_stays_quiet() {
     fill_hashes(&mut recorded);
     let mut previous = Plan::empty();
     previous.documents = recorded;
-    let drifts = previous.drift(&|path| snapshot(path, &fs));
+    let drifts = previous.drift(&|path| snapshot(path, &fs), &|path| {
+        snapshot_tree(&path.expand(), &fs)
+    });
     assert!(drifts.is_empty(), "fresh apply shows no drift: {drifts:?}");
 }
 
@@ -642,16 +990,20 @@ fn fixture_plans_stay_deterministic() {
         "1-structured_resource",
         "2-templated_resource",
     ] {
+        let cache = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("cache builds: {error}"),
+        };
         let root = examples_root().join(fixture);
         let profile = root.join("profile.lua");
-        let first = match evaluate(&profile, &root) {
+        let first = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
             Ok(documents) => match build(documents) {
                 Ok(built) => built,
                 Err(error) => panic!("{fixture} first plan builds: {error}"),
             },
             Err(error) => panic!("{fixture} first evaluation runs: {error}"),
         };
-        let second = match evaluate(&profile, &root) {
+        let second = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
             Ok(documents) => match build(documents) {
                 Ok(built) => built,
                 Err(error) => panic!("{fixture} second plan builds: {error}"),
@@ -795,7 +1147,7 @@ fn memory_snapshot_covers_present_absent_unreadable() {
 #[test]
 fn drift_reports_manual_edits_on_memory_fs() {
     use confit_core::document::{StructuredFormat, Table};
-    use confit_core::fs::{Filesystem, MemoryFs, snapshot};
+    use confit_core::fs::{Filesystem, MemoryFs, snapshot, snapshot_tree};
 
     pin_home();
     let mut recorded_docs = vec![
@@ -829,6 +1181,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
         version: PLAN_VERSION,
         documents: recorded_docs,
         created_at: String::new(),
+        hooks: Vec::new(),
     };
     let fs = MemoryFs::new();
     match fs.write(
@@ -842,11 +1195,14 @@ fn drift_reports_manual_edits_on_memory_fs() {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
-    let drifts = previous.drift(&|path| snapshot(path, &fs));
+    let drifts = previous.drift(&|path| snapshot(path, &fs), &|path| {
+        snapshot_tree(&path.expand(), &fs)
+    });
     let built = confit_core::plan::Plan {
         version: confit_core::plan::PLAN_VERSION,
         documents: Vec::new(),
         created_at: String::new(),
+        hooks: Vec::new(),
     };
     let report = confit_cli::presentation::summary::Summary {
         built: &built,
@@ -884,6 +1240,7 @@ fn plan_shows_old_to_new_on_updates() {
         version: PLAN_VERSION,
         documents: old_docs,
         created_at: String::new(),
+        hooks: Vec::new(),
     };
     let desired = vec![Document::new(
         DocPath::new("app.toml"),
@@ -892,7 +1249,7 @@ fn plan_shows_old_to_new_on_updates() {
             data: Table::from([("name".to_string(), serde_json::json!("new"))]),
         },
     )];
-    let built = match confit_core::plan::Plan::build(desired) {
+    let built = match confit_core::plan::Plan::build(desired, Vec::new()) {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -943,13 +1300,16 @@ fn plan_file_feeds_state_roundtrip() {
     assert_eq!(state.documents.len(), 1);
     assert_eq!(state.version, PLAN_VERSION);
     assert!(!state.documents[0].data_hash.is_empty());
-    let rebuilt = match confit_core::plan::Plan::build(vec![Document::new(
-        DocPath::new("note"),
-        DocumentData::Text {
-            content: "hi".to_string(),
-            mode: None,
-        },
-    )]) {
+    let rebuilt = match confit_core::plan::Plan::build(
+        vec![Document::new(
+            DocPath::new("note"),
+            DocumentData::Text {
+                content: "hi".to_string(),
+                mode: None,
+            },
+        )],
+        Vec::new(),
+    ) {
         Ok(built) => built,
         Err(error) => panic!("plan rebuilds: {error}"),
     };
@@ -998,16 +1358,17 @@ fn init_scaffold_evaluates_to_one_rc() {
         Err(error) => panic!("init runs: {error}"),
     };
     assert_eq!(report.profile, PathBuf::from("project/profile.lua"));
-    assert_eq!(report.written, 13);
+    assert_eq!(report.written, 14);
     let stubs = [
         "project/stubs/confit.d.lua",
         "project/stubs/namespaces/config.d.lua",
         "project/stubs/namespaces/document.d.lua",
+        "project/stubs/namespaces/hook.d.lua",
         "project/stubs/namespaces/patch.d.lua",
         "project/stubs/namespaces/paths.d.lua",
         "project/stubs/namespaces/plugin.d.lua",
         "project/stubs/namespaces/resources.d.lua",
-        "project/stubs/namespaces/shell.d.lua",
+        "project/stubs/namespaces/runtime.d.lua",
         "project/stubs/namespaces/utils.d.lua",
         "project/plugins/solrachq/mise/plugin.d.lua",
         "project/plugins/solrachq/merge/plugin.d.lua",
@@ -1236,7 +1597,6 @@ return { shells = { "bash" }, configs = { tool } }
         profile,
         shared: confit_cli::cli::SharedArgs {
             root: Some(dir.path().to_path_buf()),
-            state: None,
             plugins: None,
             re_fetch: false,
         },
@@ -1273,53 +1633,6 @@ return { shells = { "bash" }, configs = { tool } }
     match std::fs::remove_file(&stored) {
         Ok(()) => {}
         Err(error) => panic!("tmp plan cleans: {error}"),
-    }
-}
-
-#[test]
-fn plan_state_tilde_expands_under_home() {
-    pin_home();
-    let dir = match tempfile::tempdir() {
-        Ok(dir) => dir,
-        Err(error) => panic!("tempdir builds: {error}"),
-    };
-    let body = r#"
-local tool = confit.config("tool")
-tool:add_document(confit.document.text("tmp-tilde-note", "probe\n"))
-return { shells = { "bash" }, configs = { tool } }
-"#;
-    let profile = write_profile(dir.path(), "profile.lua", body);
-    let mut command = confit_cli::cli::Command::Plan(confit_cli::cli::PlanArgs {
-        profile,
-        shared: confit_cli::cli::SharedArgs {
-            root: Some(dir.path().to_path_buf()),
-            state: Some(std::path::PathBuf::from(
-                "~/.config/confit-tilde-probe.json",
-            )),
-            plugins: None,
-            re_fetch: false,
-        },
-        output: None,
-    });
-    confit_cli::cli::expand_command(&mut command);
-    let tilde_args = match command {
-        confit_cli::cli::Command::Plan(args) => args,
-        _ => panic!("plan command keeps shape"),
-    };
-    let home = match dirs::home_dir() {
-        Some(home) => home,
-        None => panic!("home resolves"),
-    };
-    let want = home.join(".config/confit-tilde-probe.json");
-    assert_eq!(tilde_args.shared.state, Some(want));
-    let tilde_runner = confit_cli::actions::plan::PlanRunner {
-        args: &tilde_args,
-        store_tmp: true,
-        progress: None,
-    };
-    match tilde_runner.execute() {
-        Ok(_) => {}
-        Err(error) => panic!("plan runs: {error}"),
     }
 }
 
@@ -1368,7 +1681,6 @@ return { shells = { "bash" }, configs = { tool } }
         profile,
         shared: confit_cli::cli::SharedArgs {
             root: Some(dir.path().to_path_buf()),
-            state: None,
             plugins: None,
             re_fetch: false,
         },
@@ -1456,7 +1768,6 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
         profile: None,
         shared: confit_cli::cli::SharedArgs {
             root: None,
-            state: None,
             plugins: None,
 
             re_fetch: false,
@@ -1474,78 +1785,17 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
     assert_eq!(report.written, 4);
     assert_eq!(report.removed, 0);
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"hello\n");
-    assert!(
-        !fs.exists(Path::new("state.json")),
-        "bare plan writes explicit state only"
-    );
+    let slot = match confit_core::store::default_state_path() {
+        Ok(slot) => slot,
+        Err(error) => panic!("slot resolves: {error}"),
+    };
+    assert!(fs.exists(&slot), "plan file apply writes fixed slot only");
     let entries = match confit_core::store::list_previous(&fs) {
         Ok(entries) => entries,
         Err(error) => panic!("previous lists: {error}"),
     };
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].created_at.is_empty());
-}
-
-#[test]
-fn apply_plan_file_uses_explicit_state_for_previous_and_write() {
-    use confit_core::fs::Filesystem;
-    use std::io::Cursor;
-
-    pin_home();
-    let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
-        Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
-    };
-    match confit_core::store::write_plan(&built, Some(Path::new("plan.json")), &fs) {
-        Ok(()) => {}
-        Err(error) => panic!("plan writes: {error}"),
-    }
-    let mut seeded = sample_documents();
-    fill_hashes(&mut seeded);
-    seeded.push(Document::new(
-        DocPath::new("gone"),
-        DocumentData::Text {
-            content: "old\n".to_string(),
-            mode: None,
-        },
-    ));
-    let mut previous = Plan::empty();
-    previous.documents = seeded;
-    let text = match serde_json::to_string(&previous) {
-        Ok(text) => text,
-        Err(error) => panic!("state serializes: {error}"),
-    };
-    match fs.write(Path::new("state.json"), text.as_bytes()) {
-        Ok(()) => {}
-        Err(error) => panic!("state seeds: {error}"),
-    }
-    match fs.write(Path::new("gone"), b"old\n") {
-        Ok(()) => {}
-        Err(error) => panic!("orphan seeds: {error}"),
-    }
-    let args = confit_cli::cli::ApplyArgs {
-        profile: None,
-        shared: confit_cli::cli::SharedArgs {
-            root: None,
-            state: Some(PathBuf::from("state.json")),
-            plugins: None,
-
-            re_fetch: false,
-        },
-        plan: Some(PathBuf::from("plan.json")),
-        force: true,
-    };
-    let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
-    let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
-        Ok(report) => report,
-        Err(error) => panic!("plan-file apply runs: {error}"),
-    };
-    assert_eq!(report.removed, 1);
-    assert!(!fs.exists(Path::new("gone")));
-    assert!(fs.exists(Path::new("state.json")));
 }
 
 #[test]
@@ -1558,7 +1808,6 @@ fn apply_without_plan_nor_profile_fails() {
         profile: None,
         shared: confit_cli::cli::SharedArgs {
             root: None,
-            state: None,
             plugins: None,
 
             re_fetch: false,
@@ -1645,4 +1894,76 @@ fn two_profiles_share_one_slot_last_applied_wins() {
     };
     assert_eq!(slot_plan.documents.len(), 1);
     assert_eq!(slot_plan.documents[0].path, DocPath::new("second"));
+}
+
+#[test]
+fn named_plan_output_roundtrips_through_apply() {
+    use confit_core::fs::Filesystem;
+    use std::io::Cursor;
+
+    pin_home();
+    let fs = MemoryFs::new();
+    let built = match build(sample_documents()) {
+        Ok(built) => built,
+        Err(error) => panic!("plan builds: {error}"),
+    };
+    let dest = match confit_cli::cli::resolve_plan_file(Path::new("@work")) {
+        Ok(dest) => dest,
+        Err(error) => panic!("named output resolves: {error}"),
+    };
+    assert!(dest.ends_with("confit/plans/work.json"));
+    match confit_core::store::write_plan(&built, Some(&dest), &fs) {
+        Ok(()) => {}
+        Err(error) => panic!("named plan writes: {error}"),
+    }
+    let reloaded = match confit_core::store::load_state(Some(&dest), &fs) {
+        Ok(reloaded) => reloaded,
+        Err(error) => panic!("named plan loads: {error}"),
+    };
+    assert_eq!(reloaded.documents.len(), 4);
+    let args = confit_cli::cli::ApplyArgs {
+        profile: None,
+        shared: confit_cli::cli::SharedArgs {
+            root: None,
+            plugins: None,
+            re_fetch: false,
+        },
+        plan: Some(PathBuf::from("@work")),
+        force: true,
+    };
+    let mut input = Cursor::new(String::new());
+    let mut output = Vec::new();
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
+        Ok(report) => report,
+        Err(error) => panic!("named plan applies: {error}"),
+    };
+    assert_eq!(report.written, 4);
+    assert_eq!(memory_bytes(&fs, Path::new("note")), b"hello\n");
+    let slot = match confit_core::store::default_state_path() {
+        Ok(slot) => slot,
+        Err(error) => panic!("slot resolves: {error}"),
+    };
+    assert!(fs.exists(&slot), "named apply writes fixed slot");
+}
+
+#[test]
+fn named_plan_rejects_bare_separator_and_parent() {
+    pin_home();
+    for raw in ["@", "@a/b", "@.."] {
+        match confit_cli::cli::resolve_plan_file(Path::new(raw)) {
+            Ok(_) => panic!("{raw:?} passes"),
+            Err(error) => assert!(!error.to_string().is_empty()),
+        }
+    }
+}
+
+#[test]
+fn explicit_plan_path_passes_through() {
+    pin_home();
+    let path = match confit_cli::cli::resolve_plan_file(Path::new("plan.json")) {
+        Ok(path) => path,
+        Err(error) => panic!("explicit path resolves: {error}"),
+    };
+    assert_eq!(path, PathBuf::from("plan.json"));
 }

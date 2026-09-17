@@ -149,7 +149,7 @@ return {
     let (second_dir, second_profile) = project(&[], profile);
     let (sink, store) = recorder();
     let empty = Arc::new(confit_engine::fetch::MemoryFetch::new());
-    let second: Result<Vec<confit_core::document::Document>> = evaluate(
+    let second: Result<confit_engine::Evaluation> = evaluate(
         &second_profile,
         EvalOpts {
             root: second_dir.path().to_path_buf(),

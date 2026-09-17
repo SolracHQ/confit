@@ -27,6 +27,11 @@ const EMBEDDED: &[(&str, &str, &str)] = &[
     ),
     (
         "solrachq",
+        "nerd_fonts",
+        include_str!("../../plugins/solrachq/nerd_fonts/plugin.lua"),
+    ),
+    (
+        "solrachq",
         "merge",
         include_str!("../../plugins/solrachq/merge/plugin.lua"),
     ),

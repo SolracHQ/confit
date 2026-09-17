@@ -1,11 +1,13 @@
 local mise = confit.plugin.solrachq.mise
 local template = confit.plugin.solrachq.template
 
-local starship = mise.package("starship", function(rc)
-	rc:alias("s", "starship")
-	rc:eval({ "starship", "init", "bash" })
-end)
-starship:add_patch(mise.activate())
+local starship = mise.package({
+	name = "starship",
+	rc_builder = function(rc)
+		rc:alias("s", "starship")
+		rc:eval({ "starship", "init", "bash" })
+	end,
+})
 
 return function(user_config)
 	local document = template(confit.path.config("starship.toml"), {

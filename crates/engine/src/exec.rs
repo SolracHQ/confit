@@ -57,11 +57,11 @@ pub(crate) struct Executor<'a> {
 }
 
 impl Executor<'_> {
-    /// Sorts patches by priority desc plus owner asc.
+    /// Sorts patches by priority desc plus declaration order asc.
     ///
     /// # Arguments
     ///
-    /// * `items` - patch handles in registration order.
+    /// * `items` - patch handles in declaration order.
     ///
     /// # Returns
     ///
@@ -73,7 +73,7 @@ impl Executor<'_> {
                 .priority
                 .rank()
                 .cmp(&left.priority.rank())
-                .then_with(|| left.owner.cmp(&right.owner))
+                .then_with(|| left.order.cmp(&right.order))
         });
     }
 
@@ -871,7 +871,7 @@ mod tests {
         Lua::new()
     }
 
-    fn patch(lua: &Lua, owner: &str, priority: Level, target: &str) -> StoredPatch {
+    fn patch(lua: &Lua, owner: &str, priority: Level, target: &str, order: usize) -> StoredPatch {
         let callback: Function = match lua.load("return function(_) end").eval() {
             Ok(callback) => callback,
             Err(error) => panic!("callback loads: {error}"),
@@ -881,24 +881,25 @@ mod tests {
             format: None,
             callback,
             priority,
+            order,
             owner: owner.to_string(),
         }
     }
 
     #[test]
-    fn sort_orders_priority_desc_plus_owner_asc() {
+    fn sort_orders_priority_desc_plus_declaration_order() {
         let lua = state();
-        let low = patch(&lua, "zebra", Level::Low, "rc");
-        let major = patch(&lua, "zebra", Level::Major, "rc");
-        let normal_beta = patch(&lua, "beta", Level::Normal, "rc");
-        let normal_alpha = patch(&lua, "alpha", Level::Normal, "rc");
-        let mut items: Vec<&StoredPatch> = vec![&low, &normal_beta, &major, &normal_alpha];
+        let low = patch(&lua, "aaa", Level::Low, "rc", 3);
+        let major = patch(&lua, "zebra", Level::Major, "rc", 2);
+        let normal_beta = patch(&lua, "beta", Level::Normal, "rc", 0);
+        let normal_alpha = patch(&lua, "alpha", Level::Normal, "rc", 1);
+        let mut items: Vec<&StoredPatch> = vec![&low, &normal_alpha, &major, &normal_beta];
         Executor::sort_patches(&mut items);
         let owners = items
             .iter()
             .map(|item| item.owner.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(owners, vec!["zebra", "alpha", "beta", "zebra"]);
+        assert_eq!(owners, vec!["zebra", "beta", "alpha", "aaa"]);
         assert_eq!(items[0].priority, Level::Major);
         assert_eq!(items[3].priority, Level::Low);
     }

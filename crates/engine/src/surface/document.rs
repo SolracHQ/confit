@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use super::confit_table;
-use super::shell::check_condition_json;
+use super::runtime::check_condition_json;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, read_marker, set_marker};
-use crate::model::{LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl};
+use crate::model::{LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl};
 use crate::progress::{ProgressCallback, ProgressEvent};
 use confit_core::document::{RcData, StructuredFormat};
 
@@ -29,6 +29,8 @@ pub(crate) enum Declared {
     Link(LinkDecl),
     /// Opaque declaration holding raw bytes.
     Opaque(OpaqueDecl),
+    /// Tree declaration holding one managed file set.
+    Tree(TreeDecl),
     /// Rc base holding section buckets.
     Rc(Vec<RcEntryDecl>),
 }
@@ -61,6 +63,15 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
         "compressed",
         lua.create_function(move |lua, args: (Value, Value)| {
             compressed_impl(lua, &comp_root, &comp_cache, args, comp_progress.clone())
+        })?,
+    )?;
+    let tree_root: PathBuf = session.root.clone();
+    let tree_cache: PathBuf = session.cache.clone();
+    let tree_progress = session.progress.clone();
+    namespace.set(
+        "tree",
+        lua.create_function(move |lua, args: (Value, Value, Value)| {
+            tree_impl(lua, &tree_root, &tree_cache, args, tree_progress.clone())
         })?,
     )?;
     install_rc(lua, &namespace)?;
@@ -409,6 +420,161 @@ impl CompressedDocs {
     }
 }
 
+/// Builds one tree document from an archive through a path picker.
+fn tree_impl(
+    lua: &Lua,
+    root: &Path,
+    cache: &Path,
+    args: (Value, Value, Value),
+    progress: Option<ProgressCallback>,
+) -> mlua::Result<Table> {
+    const CTOR: &str = "confit.document.tree";
+    let (archive_value, dest_value, callback_value) = args;
+    let rel = archive_value.req_str(CTOR, "archive")?;
+    let dest = dest_value.req_str(CTOR, "dest")?;
+    let callback = callback_value.req_func(CTOR, "callback")?;
+    TreeDocs::build(lua, root, cache, CTOR, rel, dest, callback, progress)
+}
+
+/// Tree builder holding domain validation.
+struct TreeDocs;
+
+impl TreeDocs {
+    /// Builds one tree document from an archive through a path picker.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - state owning the output table.
+    /// * `root` - project root for archive reads.
+    /// * `cache` - cache folder for cache-absolute reads.
+    /// * `ctor` - error prefix naming the constructor.
+    /// * `rel` - archive path under reading.
+    /// * `dest` - destination folder holding the members.
+    /// * `callback` - per-member destination picker.
+    /// * `progress` - progress sink holding `None` for silence.
+    ///
+    /// # Returns
+    ///
+    /// One tree document table holding the manifest in
+    /// relative path order.
+    ///
+    /// # Errors
+    ///
+    /// Empty archive paths plus empty destinations fail as plan
+    /// errors. Unreadable archives fail as plan errors.
+    /// Non-string callback returns fail as plan errors. Empty,
+    /// absolute, plus dot-dot relative paths fail as plan
+    /// errors. Repeated relative paths fail as plan errors.
+    /// Empty picks fail as plan errors naming the filter.
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        lua: &Lua,
+        root: &Path,
+        cache: &Path,
+        ctor: &str,
+        rel: String,
+        dest: String,
+        callback: Function,
+        progress: Option<ProgressCallback>,
+    ) -> mlua::Result<Table> {
+        if rel.is_empty() {
+            return Err(plan_error(format!(
+                "{ctor}: field 'archive' must not be empty"
+            )));
+        }
+        if dest.is_empty() {
+            return Err(plan_error(format!(
+                "{ctor}: field 'dest' must not be empty"
+            )));
+        }
+        let full = super::resources::resolve_under_root(root, cache, &rel, ctor)?;
+        let start = std::time::Instant::now();
+        let bytes = std::fs::read(&full)
+            .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
+        let members = read_members(&bytes, &rel, ctor)?;
+        let mut kept: Vec<(String, u32, Vec<u8>)> = Vec::new();
+        for member in &members {
+            let info = lua.create_table()?;
+            let size = member.size.min(i64::MAX as u64) as i64;
+            info.set("size", size)?;
+            info.set("executable", member.executable)?;
+            let content = lua.create_string(&member.content)?;
+            let returned: Value = callback.call((member.name.as_str(), info, content))?;
+            if returned.is_nil() {
+                continue;
+            }
+            let Some(relpath) = returned.opt_str() else {
+                return Err(plan_error(format!(
+                    "{ctor}: callback must return a destination path or nil"
+                )));
+            };
+            check_rel(ctor, &relpath)?;
+            if kept.iter().any(|(kept_rel, _, _)| kept_rel == &relpath) {
+                return Err(plan_error(format!(
+                    "{ctor}: tree keeps '{relpath}' more than once"
+                )));
+            }
+            let mode = if member.executable { 0o755 } else { 0o644 };
+            kept.push((relpath, mode, member.content.clone()));
+        }
+        if kept.is_empty() {
+            return Err(plan_error(format!(
+                "{ctor}: tree kept no members from '{rel}': check the pick filter"
+            )));
+        }
+        kept.sort_by(|left, right| left.0.cmp(&right.0));
+        let list = lua.create_table()?;
+        for (index, (relpath, mode, content)) in kept.iter().enumerate() {
+            let item = lua.create_table()?;
+            item.set("rel", relpath.as_str())?;
+            item.set("mode", i64::from(*mode))?;
+            item.set("content", lua.create_string(content)?)?;
+            list.set(index + 1, item)?;
+        }
+        let out = lua.create_table()?;
+        out.set("path", dest)?;
+        out.set("members", list)?;
+        set_marker(lua, &out, "tree", None)?;
+        log::debug!(
+            "unpack archive={rel} kept={} total={} took {}ms",
+            kept.len(),
+            members.len(),
+            start.elapsed().as_millis()
+        );
+        if let Some(sink) = progress.as_ref() {
+            sink(ProgressEvent::Unpacked {
+                archive: rel.clone(),
+                kept: kept.len(),
+                total: members.len(),
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Rejects destination paths escaping the tree folder.
+fn check_rel(ctor: &str, relpath: &str) -> mlua::Result<()> {
+    if relpath.is_empty() {
+        return Err(plan_error(format!(
+            "{ctor}: callback must not return an empty destination path"
+        )));
+    }
+    if relpath.starts_with('/') {
+        return Err(plan_error(format!(
+            "{ctor}: destination '{relpath}' must stay relative"
+        )));
+    }
+    for segment in relpath.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(plan_error(format!(
+                "{ctor}: destination '{relpath}' must name files under the folder"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Builds the single rc document table from section lists.
 fn rc_new_impl(lua: &Lua, sections: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.new";
@@ -420,7 +586,6 @@ fn rc_new_impl(lua: &Lua, sections: Value) -> mlua::Result<Table> {
 struct RcDocs;
 
 impl RcDocs {
-    /// Builds the single rc document table from section lists.
     ///
     /// # Arguments
     ///
@@ -727,14 +892,18 @@ impl OptsGuard {
     }
 }
 
-/// Calls one `when` builder function with the shell namespace.
+/// Calls one `when` builder function with the runtime namespace.
 fn call_when_function(lua: &Lua, ctor: &str, func: &Function) -> mlua::Result<Table> {
-    let missing = || plan_error(format!("{ctor}: field 'when' needs the confit.shell table"));
+    let missing = || {
+        plan_error(format!(
+            "{ctor}: field 'when' needs the confit.runtime table"
+        ))
+    };
     let confit: Value = lua.globals().get("confit")?;
     let confit = confit.req_table(ctor, "when").map_err(|_| missing())?;
-    let shell: Value = confit.get("shell")?;
-    let shell = shell.req_table(ctor, "when").map_err(|_| missing())?;
-    match func.call::<Table>(shell) {
+    let runtime: Value = confit.get("runtime")?;
+    let runtime = runtime.req_table(ctor, "when").map_err(|_| missing())?;
+    match func.call::<Table>(runtime) {
         Ok(table) => Ok(table),
         Err(error) => {
             if crate::error::find_plan(&error).is_some() {

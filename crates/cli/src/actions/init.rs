@@ -34,6 +34,10 @@ const STUB_FILES: &[(&str, &str)] = &[
         include_str!("../../../../stubs/namespaces/document.d.lua"),
     ),
     (
+        "stubs/namespaces/hook.d.lua",
+        include_str!("../../../../stubs/namespaces/hook.d.lua"),
+    ),
+    (
         "stubs/namespaces/patch.d.lua",
         include_str!("../../../../stubs/namespaces/patch.d.lua"),
     ),
@@ -50,8 +54,8 @@ const STUB_FILES: &[(&str, &str)] = &[
         include_str!("../../../../stubs/namespaces/resources.d.lua"),
     ),
     (
-        "stubs/namespaces/shell.d.lua",
-        include_str!("../../../../stubs/namespaces/shell.d.lua"),
+        "stubs/namespaces/runtime.d.lua",
+        include_str!("../../../../stubs/namespaces/runtime.d.lua"),
     ),
     (
         "stubs/namespaces/utils.d.lua",

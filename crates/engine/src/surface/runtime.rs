@@ -1,6 +1,6 @@
-//! Shell
+//! Runtime
 //!
-//! Condition constructors over shell session facts.
+//! Condition constructors over runtime session facts.
 
 use mlua::{Lua, Table, Value};
 use serde_json::Value as Json;
@@ -9,7 +9,7 @@ use super::confit_table;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt};
 
-/// Installs the shell namespace on a state.
+/// Installs the runtime namespace on a state.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let confit = confit_table(lua)?;
     let namespace = lua.create_table()?;
@@ -21,55 +21,55 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     namespace.set("any", lua.create_function(any_impl)?)?;
     namespace.set("nop", lua.create_function(nop_impl)?)?;
     namespace.set("SHELL", "{{shell}}")?;
-    confit.set("shell", namespace)?;
+    confit.set("runtime", namespace)?;
     Ok(())
 }
 
 /// Builds an `env_eq` condition table.
 fn env_eq_impl(lua: &Lua, opts: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.env_eq";
+    const CTOR: &str = "confit.runtime.env_eq";
     let table = opts.req_table(CTOR, "opts")?;
     LeafConds::env_eq(lua, CTOR, table)
 }
 
 /// Builds an `env_set` condition table.
 fn env_set_impl(lua: &Lua, opts: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.env_set";
+    const CTOR: &str = "confit.runtime.env_set";
     let table = opts.req_table(CTOR, "opts")?;
     LeafConds::env_set(lua, CTOR, table)
 }
 
 /// Builds an `in_path` condition table.
 fn in_path_impl(lua: &Lua, name: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.in_path";
+    const CTOR: &str = "confit.runtime.in_path";
     let name = name.req_str(CTOR, "name")?;
     CondTables::leaf(lua, "in_path", "name", name)
 }
 
 /// Builds an `exists` condition table.
 fn exists_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.exists";
+    const CTOR: &str = "confit.runtime.exists";
     let path = path.req_str(CTOR, "path")?;
     CondTables::leaf(lua, "exists", "path", path)
 }
 
 /// Builds an `all` condition table.
 fn all_impl(lua: &Lua, conds: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.all";
+    const CTOR: &str = "confit.runtime.all";
     let table = conds.req_table(CTOR, "conds")?;
     CondTables::all(lua, CTOR, table)
 }
 
 /// Builds an `any` condition table.
 fn any_impl(lua: &Lua, conds: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.any";
+    const CTOR: &str = "confit.runtime.any";
     let table = conds.req_table(CTOR, "conds")?;
     CondTables::any(lua, CTOR, table)
 }
 
 /// Builds a `nop` condition table.
 fn nop_impl(lua: &Lua, cond: Value) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.shell.nop";
+    const CTOR: &str = "confit.runtime.nop";
     CondTables::nop(lua, CTOR, cond)
 }
 

@@ -3,15 +3,12 @@
 # Built with: docker build -f Containerfile.test -t confit-test:latest .
 FROM quay.io/fedora/fedora-minimal:44
 
-RUN microdnf install -y shadow-utils bash coreutils findutils curl ca-certificates tar gzip && microdnf clean all
+RUN microdnf install -y shadow-utils bash coreutils findutils curl ca-certificates tar gzip fontconfig && microdnf clean all
 
 # Test user with its own HOME.
 RUN useradd -m -s /bin/bash tester
 USER tester
 
-# Mise installer lands in ~/.local/bin for the test user.
-RUN curl -fsSL https://mise.run | sh
-ENV PATH="/home/tester/.local/bin:${PATH}"
 
 WORKDIR /home/tester
 

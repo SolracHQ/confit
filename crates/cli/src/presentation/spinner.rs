@@ -144,6 +144,14 @@ impl Spinner {
                 let next = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
                 self.bar.set_message(format!("writing {next}: {path}"));
             }
+            confit_engine::ProgressEvent::HookRunning {
+                position,
+                total,
+                argv,
+            } => {
+                self.bar
+                    .set_message(format!("hook {position} of {total}: {argv}"));
+            }
         }
         self.bar.tick();
     }

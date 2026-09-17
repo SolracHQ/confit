@@ -34,7 +34,7 @@ test-nuke:
 
 # Plan the basic_tool fixture (host smoke; writes only ./target).
 plan-example:
-  cargo run -- plan --profile examples/0-basic_tool/profile.lua --root examples/0-basic_tool -o ./target/plan-example.json
+  cargo run -- plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool -o ./target/plan-example.json
 
 # Show the living spec as of a sealed tag.
 show-spec VERSION="0.1":

@@ -33,17 +33,30 @@ local theme = confit.plugin.solrac.theme
 
 ## Embedded plugins
 
-Three plugins ship embedded.
+Four plugins ship embedded.
 
 `solrachq.mise` installs tools plus wires their shell lines.
-`mise.package` names the tool and collects rc calls. `activate`
-adds the PATH prepend plus the init eval.
+`mise.package` takes a table. `name` stays required, omitted
+`version` writes `latest`, omitted `bin` proves the shim under
+the package name, `aliases` maps alias names to expansions, sorted by name,
+each guarded on the binary, `rc_builder` optional. Each package folds its version into the shared TOML,
+declares the shared `mise install` hook, and requires the
+installer config. `mise.init` returns that installer: the
+mise binary composed from fetch plus unpack plus an opaque
+document, plus the activation patch with the PATH prepend
+plus the init eval. An explicit version wins, omitted resolves the
+latest tag. Profiles list the installer once beside the
+packages.
 
 ```lua
-local bat = mise.package("bat", function(rc)
-  rc:alias("cat", "bat")
-end)
-bat:add_patch(mise.activate())
+local bat = mise.package({
+  name = "bat",
+  version = "2024.1.0",
+  aliases = { cat = "bat" },
+  rc_builder = function(rc)
+    rc:env("BAT_THEME", "ansi")
+  end,
+})
 ```
 
 `solrachq.merge` deep-merges tables. Tables recurse,
@@ -65,3 +78,36 @@ local page = confit.plugin.solrachq.template(path, {
 })
 tool:add_document(page)
 ```
+
+`solrachq.nerd_fonts` installs nerd fonts plus refreshes the
+font cache. `font` takes the font name plus an optional
+version, omitted resolves the latest tag. Each font builds
+one tree document flattened under the managed fonts folder,
+declares the shared `fc-cache -f` hook, and requires the
+installer config. The hook carries no checks, a cache rebuild
+holds no stable disk proof, so it fires every apply while
+`fc-cache` resolves. `init` returns
+that installer holding the shared hook. Profiles list the
+installer once beside the fonts.
+
+```lua
+local nerd_fonts = confit.plugin.solrachq.nerd_fonts
+local fonts_install = nerd_fonts.init()
+local fonts = nerd_fonts.font("JetBrainsMono", "3.5.1")
+```
+
+## Naming internal configs
+
+Plugin authors name internal configs
+`plugin:{user}/{name}:{capability}`. The shape reads as
+plugin scope, author plus plugin, capability. Internal
+configs never collide with user configs, and require errors
+point at a name the author owns.
+
+```lua
+-- inside mise.package, before returning the config
+config:require("plugin:solrachq/mise:install", "Add mise.init() to the profile configs.")
+```
+
+User code never calls require. The plugin injects it, and a
+profile missing the installer fails the plan with the hint.

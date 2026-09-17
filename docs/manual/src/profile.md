@@ -1,14 +1,14 @@
 # Profile
 
-A profile composes a shared pool of configs into one machine.
+A profile composes a shared pool of configs into one user.
 I keep few computers, each with its own specs and purpose. I
-reinstall from scratch each 6 months to work on clean machines.
-One pool plus one profile per machine makes that neat.
+reinstall from scratch each 6 months to work on clean
+systems. One pool plus one profile per user makes that neat.
 
 ## Parts
 
 Three fields compose a profile. `shells` lists the startup
-files to render. `documents` holds machine-owned base files.
+files to render. `documents` holds user-owned base files.
 `configs` holds the tool contributions.
 
 ```lua
@@ -31,23 +31,28 @@ Every command takes the profile first:
 
 ```sh
 confit plan laptop.lua --root .            # preview
-confit plan laptop.lua -o plan.json        # preview into a file
+confit plan laptop.lua -o @laptop          # preview into a named plan
 confit apply laptop.lua                    # preview, prompt, write
-confit apply --plan plan.json --force      # reviewed plan, no prompt
-confit apply laptop.lua --state laptop.json
+confit apply --plan @laptop --force        # reviewed plan, no prompt
 confit recover                             # list stored states
 confit recover 0                           # re-apply one
 confit init myproject                      # scaffold, default .
 ```
 
-`--state` selects the state file. Omitted means the shared
-slot. One state per profile keeps drift honest across
-machines:
+`@name` stores the rendered plan under the user config
+folder as `plans/{name}.json`, pretty printed like any plan.
+`--plan @name` replays it. Empty names plus separators fail.
+Switching profiles runs on named plans. Render each profile
+into its own name and replay with `apply --plan`:
 
 ```sh
-confit plan laptop.lua --state laptop.json
-confit apply server.lua --state server.json
+confit plan laptop.lua -o @laptop
+confit plan server.lua -o @server
+confit apply --plan @laptop
 ```
+
+One shared slot keeps drift honest. Every switch diffs
+against the same applied result.
 
 ## Experiments
 

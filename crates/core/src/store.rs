@@ -52,11 +52,11 @@ pub struct PreviousEntry {
 /// # Examples
 ///
 /// ```text
-/// use confit_core::fs::OsFs;
+/// use confit_core::fs::MemoryFs;
 /// use confit_core::plan::PLAN_VERSION;
 /// use confit_core::store::load_state;
 ///
-/// let outcome = load_state(None, &OsFs);
+/// let outcome = load_state(None, &MemoryFs::new());
 /// assert!(matches!(outcome, Ok(plan) if plan.documents.is_empty() && plan.version == PLAN_VERSION));
 /// ```
 pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
@@ -106,18 +106,19 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
 /// # Examples
 ///
 /// ```text
-/// use confit_core::fs::OsFs;
+/// use confit_core::fs::MemoryFs;
 /// use confit_core::plan::{PLAN_VERSION, Plan};
 /// use confit_core::store::write_plan;
 ///
-/// let plan = Plan { version: PLAN_VERSION, documents: Vec::new(), created_at: String::new() };
-/// assert!(matches!(write_plan(&plan, None, &OsFs), Ok(())));
+/// let plan = Plan { version: PLAN_VERSION, documents: Vec::new(), created_at: String::new(), hooks: Vec::new() };
+/// assert!(matches!(write_plan(&plan, None, &MemoryFs::new()), Ok(())));
 /// ```
 /// Serializes one plan with per-document parallelism.
 ///
 /// Documents serialize independently across rayon threads,
-/// then join in path order. Output bytes match sequential
-/// serde exactly, keeping every reader unchanged.
+/// then join in path order. Hooks serialize sequentially.
+/// Output bytes match sequential serde exactly, keeping
+/// every reader unchanged.
 ///
 /// # Arguments
 ///
@@ -150,11 +151,14 @@ pub fn plan_json(plan: &Plan) -> Result<String> {
         .map_err(|error| Error::Plan(format!("render plan: {error}")))?;
     let created = serde_json::to_string(&plan.created_at)
         .map_err(|error| Error::Plan(format!("render plan: {error}")))?;
+    let hooks = serde_json::to_string(&plan.hooks)
+        .map_err(|error| Error::Plan(format!("render plan: {error}")))?;
     Ok(format!(
-        "{{\"version\":{},\"documents\":[{}],\"created_at\":{}}}",
+        "{{\"version\":{},\"documents\":[{}],\"created_at\":{},\"hooks\":{}}}",
         plan.version,
         bodies.join(","),
-        created
+        created,
+        hooks
     ))
 }
 
@@ -220,6 +224,7 @@ pub fn write_documents(
         let expanded = document.path.expand();
         let outcome = match &document.data {
             DocumentData::Link { target } => fs.symlink(&expanded, Path::new(target)),
+            DocumentData::Tree { members } => write_tree_members(&expanded, members, fs),
             _ => match document.bytes() {
                 Ok(bytes) => fs.write(&expanded, &bytes),
                 Err(error) => return Err(error),
@@ -246,9 +251,54 @@ pub fn write_documents(
     Ok(())
 }
 
+/// Writes one tree destination member by member.
+///
+/// Only the members land, never the destination folder
+/// itself. Parent folders create as needed, modes land
+/// per member from the manifest.
+///
+/// # Arguments
+///
+/// * `dest` - the expanded destination folder.
+/// * `members` - the desired members under writing.
+/// * `fs` - the backend under writing.
+///
+/// # Returns
+///
+/// Unit once every member lands.
+///
+/// # Errors
+///
+/// Write plus mode failures surface as io errors carrying
+/// the member path.
+fn write_tree_members(
+    dest: &std::path::Path,
+    members: &[crate::document::TreeMember],
+    fs: &dyn Filesystem,
+) -> std::io::Result<()> {
+    for member in members {
+        let path = dest.join(&member.rel);
+        fs.write(&path, &member.content).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot write '{}': {error}", path.display()),
+            )
+        })?;
+        fs.set_mode(&path, member.mode).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot set mode '{}': {error}", path.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Removes recorded paths absent from desired documents.
 ///
 /// Only state-recorded paths delete, never anything else.
+/// Tree destinations never delete as paths, members
+/// reconcile through `remove_tree_members` instead.
 /// Already-absent paths stay quiet, matching desired state.
 ///
 /// # Arguments
@@ -287,6 +337,9 @@ pub fn remove_orphans(
 ) -> Result<usize> {
     let mut removed = 0;
     for old in recorded {
+        if old.data.tree_members().is_some() {
+            continue;
+        }
         let kept = desired.iter().any(|document| document.path == old.path);
         if kept {
             continue;
@@ -301,9 +354,77 @@ pub fn remove_orphans(
     Ok(removed)
 }
 
+/// Removes dropped tree members between recorded and desired plans.
+///
+/// The removal set holds recorded manifest members absent
+/// from the desired manifest at the same destination, so
+/// files the tree dropped delete while hand-placed files
+/// stay untouched. Whole dropped trees remove every
+/// recorded member. Destinations never delete.
+///
+/// # Arguments
+///
+/// * `recorded` - the last recorded documents.
+/// * `desired` - the desired documents holding new manifests.
+/// * `fs` - the backend under removal.
+///
+/// # Returns
+///
+/// The removed member count.
+///
+/// # Errors
+///
+/// Removal failures surface as io errors.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::document::{Document, DocumentData, TreeMember};
+/// use confit_core::fs::MemoryFs;
+/// use confit_core::ids::DocPath;
+/// use confit_core::store::remove_tree_members;
+///
+/// let fs = MemoryFs::new();
+/// let recorded = vec![Document::new(
+///     DocPath::new("fonts"),
+///     DocumentData::Tree { members: vec![TreeMember { rel: "gone.ttf".into(), content: vec![1], mode: 0o644 }] },
+/// }];
+/// assert!(matches!(remove_tree_members(&recorded, &[], &fs), Ok(0)));
+/// ```
+pub fn remove_tree_members(
+    recorded: &[Document],
+    desired: &[Document],
+    fs: &dyn Filesystem,
+) -> Result<usize> {
+    let mut removed = 0;
+    for old in recorded {
+        let Some(old_members) = old.data.tree_members() else {
+            continue;
+        };
+        let new_rels: std::collections::BTreeSet<&str> = desired
+            .iter()
+            .filter(|document| document.path == old.path)
+            .filter_map(|document| document.data.tree_members())
+            .flat_map(|members| members.iter().map(|member| member.rel.as_str()))
+            .collect();
+        let dest = old.path.expand();
+        for member in old_members {
+            if new_rels.contains(member.rel.as_str()) {
+                continue;
+            }
+            let path = dest.join(&member.rel);
+            if !fs.exists(&path) {
+                continue;
+            }
+            fs.remove(&path).map_err(Error::from)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// Stored plans kept before rotation drops the oldest.
 const PREVIOUS_KEPT: usize = 5;
-
 /// Lists stored plans oldest first with recover indices.
 ///
 /// # Arguments
@@ -476,6 +597,74 @@ pub fn resolve_previous_dir() -> Result<PathBuf> {
     Ok(resolve_base_dir()?.join("previous"))
 }
 
+/// Resolves the named plans folder under the base.
+///
+/// # Returns
+///
+/// The folder holding named plans.
+///
+/// # Errors
+///
+/// Missing OS config folders fail as plan errors.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::store::resolve_plans_dir;
+///
+/// let dir = resolve_plans_dir();
+/// assert!(matches!(dir, Ok(dir) if dir.ends_with("confit/plans")));
+/// ```
+pub fn resolve_plans_dir() -> Result<PathBuf> {
+    Ok(resolve_base_dir()?.join("plans"))
+}
+
+/// Resolves one named plan file under the plans folder.
+///
+/// Names hold one file stem with no separators. Empty names,
+/// separator carriers, plus dot segments fail as plan errors.
+///
+/// # Arguments
+///
+/// * `name` - the plan name without the `@` sigil.
+///
+/// # Returns
+///
+/// The `{base}/plans/{name}.json` path.
+///
+/// # Errors
+///
+/// Empty names plus separator carriers plus dot segments
+/// fail as plan errors. Folder resolution failures surface
+/// as plan errors.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_core::store::resolve_named_plan;
+///
+/// let path = resolve_named_plan("work");
+/// assert!(matches!(path, Ok(path) if path.ends_with("confit/plans/work.json")));
+/// ```
+pub fn resolve_named_plan(name: &str) -> Result<PathBuf> {
+    if name.is_empty() {
+        return Err(Error::Plan("plan name reads empty".to_string()));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(Error::Plan(format!("plan name '{name}' holds separators")));
+    }
+    if name == "." || name == ".." || name.contains('\0') {
+        return Err(Error::Plan(format!("plan name '{name}' reads unsupported")));
+    }
+    if std::path::Path::new(name)
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(Error::Plan(format!("plan name '{name}' reads unsupported")));
+    }
+    Ok(resolve_plans_dir()?.join(format!("{name}.json")))
+}
+
 /// Builds the fixed live state slot.
 ///
 /// The slot holds the last applied plan. History files
@@ -499,38 +688,6 @@ pub fn resolve_previous_dir() -> Result<PathBuf> {
 /// ```
 pub fn default_state_path() -> Result<PathBuf> {
     Ok(resolve_base_dir()?.join("state.json"))
-}
-
-/// Resolves the effective state file for one run.
-///
-/// Explicit flags win. Omitted flags fall back to the fixed slot.
-///
-/// # Arguments
-///
-/// * `state` - the explicit state file, holding `None` for the fixed slot.
-///
-/// # Returns
-///
-/// The state file gaining the new plan.
-///
-/// # Errors
-///
-/// Folder resolution failures surface as plan errors.
-///
-/// # Examples
-///
-/// ```text
-/// use confit_core::store::resolve_state_file;
-/// use std::path::Path;
-///
-/// let path = resolve_state_file(Some(Path::new("custom.json")));
-/// assert!(matches!(path, Ok(path) if path == std::path::PathBuf::from("custom.json")));
-/// ```
-pub fn resolve_state_file(state: Option<&Path>) -> Result<PathBuf> {
-    match state {
-        Some(file) => Ok(file.to_path_buf()),
-        None => default_state_path(),
-    }
 }
 
 /// Stores one applied plan, rotating past the kept count.
@@ -611,6 +768,13 @@ mod tests {
                 ),
             ],
             created_at: "now".to_string(),
+            hooks: vec![crate::hook::Hook {
+                argv: vec!["mise".to_string(), "install".to_string()],
+                path: Vec::new(),
+                when: None,
+                checks: Vec::new(),
+                timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+            }],
         };
         let parallel = match plan_json(&plan) {
             Ok(text) => text,
@@ -621,5 +785,204 @@ mod tests {
             Err(error) => panic!("sequential serializes: {error}"),
         };
         assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn named_plan_resolves_under_plans_dir() {
+        let path = match resolve_named_plan("work") {
+            Ok(path) => path,
+            Err(error) => panic!("named plan resolves: {error}"),
+        };
+        assert!(path.ends_with("confit/plans/work.json"));
+    }
+
+    #[test]
+    fn named_plan_rejects_empty_separators_and_parent() {
+        for name in ["", "a/b", "a\\b", ".", ".."] {
+            match resolve_named_plan(name) {
+                Ok(_) => panic!("{name:?} passes"),
+                Err(error) => assert!(!error.to_string().is_empty()),
+            }
+        }
+    }
+
+    #[test]
+    fn named_plan_roundtrips_through_memory_fs() {
+        use crate::fs::MemoryFs;
+
+        let fs = MemoryFs::new();
+        let built = match Plan::build(
+            vec![crate::document::Document::new(
+                crate::ids::DocPath::new("note"),
+                crate::document::DocumentData::Text {
+                    content: "hi".to_string(),
+                    mode: None,
+                },
+            )],
+            Vec::new(),
+        ) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let dest = match resolve_named_plan("work") {
+            Ok(dest) => dest,
+            Err(error) => panic!("named plan resolves: {error}"),
+        };
+        match write_plan(&built, Some(&dest), &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("named plan writes: {error}"),
+        }
+        let loaded = match load_state(Some(&dest), &fs) {
+            Ok(loaded) => loaded,
+            Err(error) => panic!("named plan loads: {error}"),
+        };
+        assert_eq!(loaded.documents.len(), 1);
+    }
+
+    #[test]
+    fn hooks_roundtrip_through_memory_fs() {
+        use crate::fs::MemoryFs;
+
+        let fs = MemoryFs::new();
+        let hooks = vec![crate::hook::Hook {
+            argv: vec!["mise".to_string(), "install".to_string()],
+            path: vec!["/home/tester/.local/bin".to_string()],
+            when: Some(crate::document::Condition::InPath {
+                name: "mise".to_string(),
+            }),
+            checks: vec![crate::document::Condition::InPath {
+                name: "bat".to_string(),
+            }],
+            timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+        }];
+        let built = match Plan::build(Vec::new(), hooks) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let dest = std::path::Path::new("plan.json");
+        match write_plan(&built, Some(dest), &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("plan writes: {error}"),
+        }
+        let loaded = match load_state(Some(dest), &fs) {
+            Ok(loaded) => loaded,
+            Err(error) => panic!("plan loads: {error}"),
+        };
+        assert_eq!(loaded, built);
+        assert_eq!(loaded.hooks.len(), 1);
+    }
+
+    #[test]
+    fn version_two_state_fails_as_unsupported() {
+        use crate::fs::MemoryFs;
+
+        let fs = MemoryFs::new();
+        match fs.write(
+            std::path::Path::new("state.json"),
+            b"{\"version\":2,\"documents\":[],\"created_at\":\"\",\"hooks\":[]}",
+        ) {
+            Ok(()) => {}
+            Err(error) => panic!("memory writes: {error}"),
+        }
+        match load_state(Some(std::path::Path::new("state.json")), &fs) {
+            Ok(_) => panic!("stale version passes"),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                format!("state version 2 reads unsupported, want {PLAN_VERSION}")
+            ),
+        }
+    }
+
+    fn tree_recorded() -> Vec<Document> {
+        use crate::document::TreeMember;
+        use crate::ids::DocPath;
+
+        vec![Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree {
+                members: vec![
+                    TreeMember {
+                        rel: "kept.ttf".into(),
+                        content: vec![1],
+                        mode: 0o644,
+                    },
+                    TreeMember {
+                        rel: "gone.ttf".into(),
+                        content: vec![2],
+                        mode: 0o644,
+                    },
+                ],
+            },
+        )]
+    }
+
+    #[test]
+    fn write_tree_members_land_with_modes() {
+        use crate::fs::{Filesystem, MemoryFs};
+
+        let fs = MemoryFs::new();
+        match write_documents(&tree_recorded(), &fs, None) {
+            Ok(()) => {}
+            Err(error) => panic!("tree writes: {error}"),
+        }
+        let dest = std::path::Path::new("fonts");
+        match fs.read(&dest.join("kept.ttf")) {
+            Ok(bytes) => assert_eq!(bytes, vec![1]),
+            Err(error) => panic!("member reads: {error}"),
+        }
+        assert_eq!(fs.file_mode(&dest.join("kept.ttf")), Some(0o644));
+        assert!(fs.exists(&dest.join("gone.ttf")));
+    }
+
+    #[test]
+    fn remove_tree_members_drops_only_dropped() {
+        use crate::document::TreeMember;
+        use crate::fs::{Filesystem, MemoryFs};
+        use crate::ids::DocPath;
+
+        let fs = MemoryFs::new();
+        match write_documents(&tree_recorded(), &fs, None) {
+            Ok(()) => {}
+            Err(error) => panic!("tree writes: {error}"),
+        }
+        let dest = std::path::Path::new("fonts");
+        match fs.write(&dest.join("hand.ttf"), b"mine") {
+            Ok(()) => {}
+            Err(error) => panic!("hand writes: {error}"),
+        }
+        let desired = vec![Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree {
+                members: vec![TreeMember {
+                    rel: "kept.ttf".into(),
+                    content: vec![1],
+                    mode: 0o644,
+                }],
+            },
+        )];
+        match remove_tree_members(&tree_recorded(), &desired, &fs) {
+            Ok(removed) => assert_eq!(removed, 1),
+            Err(error) => panic!("members remove: {error}"),
+        }
+        assert!(fs.exists(&dest.join("kept.ttf")));
+        assert!(!fs.exists(&dest.join("gone.ttf")));
+        assert!(fs.exists(&dest.join("hand.ttf")));
+    }
+
+    #[test]
+    fn remove_orphans_skips_tree_destinations() {
+        use crate::fs::MemoryFs;
+
+        let fs = MemoryFs::new();
+        match write_documents(&tree_recorded(), &fs, None) {
+            Ok(()) => {}
+            Err(error) => panic!("tree writes: {error}"),
+        }
+        match remove_orphans(&tree_recorded(), &[], &fs) {
+            Ok(removed) => assert_eq!(removed, 0),
+            Err(error) => panic!("orphans remove: {error}"),
+        }
+        let dest = std::path::Path::new("fonts");
+        assert!(fs.exists(&dest.join("kept.ttf")));
     }
 }

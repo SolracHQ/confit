@@ -3,7 +3,7 @@
 //! Stored plan listing plus re-apply.
 
 use confit_core::error::{Error, Result};
-use confit_core::store::{load_state, resolve_previous_dir, resolve_state_file, stored_entries};
+use confit_core::store::{default_state_path, load_state, resolve_previous_dir, stored_entries};
 
 use crate::cli::RecoverArgs;
 
@@ -24,7 +24,7 @@ use super::seams::Seams;
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new(String::new());
 /// let mut output = Vec::new();
-/// let args = RecoverArgs { index: None, force: false, state: None };
+/// let args = RecoverArgs { index: None, force: false };
 /// let runner = RecoverRunner { args: &args, seams: Seams::memory(&fs, &mut input, &mut output) };
 /// assert!(matches!(runner.execute(), Ok(None)));
 /// ```
@@ -70,11 +70,11 @@ impl RecoverRunner<'_> {
             ))
         })?;
         log::debug!("recover index={index}");
-        let state_file = resolve_state_file(self.args.state.as_deref())?;
+        let state_file = default_state_path()?;
         self.seams.emit_reading_plan(&state_file);
-        let previous = load_state(Some(&state_file), self.seams.fs)?;
+        let previous = load_state(Some(state_file.as_path()), self.seams.fs)?;
         let report = ApplyRunner {
-            desired: stored.documents,
+            plan: stored,
             previous,
             state: Some(state_file),
             force: self.args.force,

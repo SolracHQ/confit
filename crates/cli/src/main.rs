@@ -55,7 +55,7 @@ fn run() -> confit_core::error::Result<()> {
 /// Runs plan with summary output.
 ///
 /// Plan without a destination stores the payload under tmp and
-/// prints the path for later `--plan` plus `--state` reuse.
+/// prints the path for later `--plan` reuse.
 fn run_plan_like(
     args: &confit_cli::cli::PlanArgs,
     store_tmp: bool,
@@ -75,6 +75,9 @@ fn run_plan_like(
         drift: &outcome.drift,
     };
     anstream::println!("{}", summary.render());
+    for line in &outcome.hook_lines {
+        anstream::println!("{line}");
+    }
     if let Some(stored) = outcome.stored {
         anstream::println!("plan: {}", stored.display());
     }
@@ -95,7 +98,16 @@ fn run_apply(
     let live = Live::new();
     let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
     seams.progress = live.sink();
-    let report = confit_cli::actions::apply::ApplyRunner::run(args, seams)?;
+    seams.log_file = Some(log_path.to_path_buf());
+    let report = match confit_cli::actions::apply::ApplyRunner::run(args, seams) {
+        Ok(report) => report,
+        Err(error) => {
+            live.finish();
+            anstream::eprintln!("log: {}", log_path.display());
+            log::logger().flush();
+            return Err(error);
+        }
+    };
     live.finish();
     anstream::println!(
         "applied: {} files, {} removed",
@@ -120,8 +132,18 @@ fn run_recover(
     let live = Live::new();
     let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
     seams.progress = live.sink();
+    seams.log_file = Some(log_path.to_path_buf());
     let runner = confit_cli::actions::recover::RecoverRunner { args, seams };
-    if let Some(report) = runner.execute()? {
+    let report = match runner.execute() {
+        Ok(report) => report,
+        Err(error) => {
+            live.finish();
+            anstream::eprintln!("log: {}", log_path.display());
+            log::logger().flush();
+            return Err(error);
+        }
+    };
+    if let Some(report) = report {
         live.finish();
         anstream::println!(
             "applied: {} files, {} removed",
@@ -141,7 +163,7 @@ fn run_recover(
 fn run_init(args: &confit_cli::cli::InitArgs) -> confit_core::error::Result<()> {
     let report = confit_cli::actions::init::InitRunner {
         args,
-        fs: &confit_core::fs::OsFs,
+        fs: &confit_cli::fs::OsFs,
     }
     .execute()?;
     anstream::println!(

@@ -88,4 +88,13 @@ pub enum ProgressEvent {
         /// Destination path under writing.
         path: String,
     },
+    /// One hook started on the CLI side.
+    HookRunning {
+        /// One-based hook position.
+        position: usize,
+        /// Total hooks under running.
+        total: usize,
+        /// Hook argv text under running.
+        argv: String,
+    },
 }

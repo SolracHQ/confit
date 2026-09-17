@@ -82,9 +82,10 @@ local Patch = {}
 ---@class Confit
 ---@field config fun(name: string): Config
 ---@field document DocumentNs
+---@field hook HookNs
 ---@field patch PatchNs
 ---@field priority Priority
----@field shell ShellNs
+---@field runtime RuntimeNs
 ---@field resources Resources
 ---@field utils UtilsNs
 ---@field path PathLib

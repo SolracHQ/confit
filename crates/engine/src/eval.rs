@@ -24,6 +24,7 @@ use crate::surface::utils;
 use confit_core::document::Document;
 use confit_core::document::{DocumentData, RcData, RcEntry, RcOp, StructuredFormat};
 use confit_core::error::{Error, Result};
+use confit_core::hook::{Hook, merge_hooks};
 use confit_core::ids::DocPath;
 
 /// One evaluation holding the Lua state plus its context.
@@ -49,8 +50,8 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    /// Runs one profile file into finished documents.
-    pub(crate) fn run(profile: &Path, opts: EvalOpts) -> Result<Vec<Document>> {
+    /// Runs one profile file into finished documents plus hooks.
+    pub(crate) fn run(profile: &Path, opts: EvalOpts) -> Result<crate::Evaluation> {
         let start = std::time::Instant::now();
         let root = resolve_root(profile, &opts.root);
         let cache = crate::fetch::resolve_cache_dir(opts.cache_dir.as_deref())?;
@@ -111,7 +112,15 @@ impl Session {
             start.elapsed().as_millis(),
             out.len()
         );
-        Ok(out)
+        let mut declared: Vec<Hook> = Vec::new();
+        for config in &profile.configs {
+            declared.extend(config.hooks.iter().cloned());
+        }
+        let hooks = merge_hooks(declared);
+        Ok(crate::Evaluation {
+            documents: out,
+            hooks,
+        })
     }
 }
 
@@ -299,6 +308,8 @@ struct ProfileDeclared {
     links: Vec<crate::model::LinkDecl>,
     /// Opaque declarations in profile order.
     opaques: Vec<crate::model::OpaqueDecl>,
+    /// Tree declarations in profile order.
+    trees: Vec<crate::model::TreeDecl>,
     /// Optional rc base from one rc.new table.
     rc_base: Option<Vec<crate::model::RcEntryDecl>>,
 }
@@ -312,6 +323,7 @@ impl ProfileDeclared {
             Declared::Text(decl) => self.texts.push(decl),
             Declared::Link(decl) => self.links.push(decl),
             Declared::Opaque(decl) => self.opaques.push(decl),
+            Declared::Tree(decl) => self.trees.push(decl),
             Declared::Rc(entries) => {
                 if self.rc_base.is_some() {
                     return Err(crate::error::plan_error(format!(
@@ -333,6 +345,34 @@ struct Profile {
     declared: ProfileDeclared,
     /// Config contributions in profile order.
     configs: Vec<ConfigData>,
+}
+
+/// Walks one require closure over present configs.
+fn walk_requires(
+    name: &str,
+    present: &BTreeMap<&str, &ConfigData>,
+    visited: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    if !visited.insert(name.to_string()) {
+        return Ok(());
+    }
+    let Some(config) = present.get(name) else {
+        return Ok(());
+    };
+    for edge in &config.requires {
+        let Some(_) = present.get(edge.target.as_str()) else {
+            let mut message = format!(
+                "config \"{}\" requires \"{}\" config",
+                config.name, edge.target
+            );
+            if let Some(hint) = edge.hint.as_ref() {
+                message.push_str(&format!("\nhint: {hint}"));
+            }
+            return Err(plan(message));
+        };
+        walk_requires(edge.target.as_str(), present, visited)?;
+    }
+    Ok(())
 }
 
 impl Profile {
@@ -383,14 +423,34 @@ impl Profile {
                 }
             }
         }
+        self.check_requires()?;
         Ok(())
     }
 
-    /// Collects patch handles with owners in registration order.
+    /// Rejects require edges naming configs absent from the profile.
+    fn check_requires(&self) -> Result<()> {
+        let mut present: BTreeMap<&str, &ConfigData> = BTreeMap::new();
+        for config in &self.configs {
+            present.insert(config.name.as_str(), config);
+        }
+        let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for config in &self.configs {
+            walk_requires(config.name.as_str(), &present, &mut visited)?;
+        }
+        Ok(())
+    }
+
+    /// Collects patch handles in config declaration order with running declaration indexes.
     fn patches(&self) -> Vec<StoredPatch> {
         let mut out = Vec::new();
+        let mut order = 0;
         for config in &self.configs {
-            out.extend(config.patches.iter().cloned());
+            for patch in &config.patches {
+                let mut stamped = patch.clone();
+                stamped.order = order;
+                order += 1;
+                out.push(stamped);
+            }
         }
         out
     }
@@ -592,6 +652,22 @@ fn assemble_text_link(
             "profile".to_string(),
         ));
     }
+    for item in &declared.trees {
+        grouped.entry(item.path.clone()).or_default().push((
+            DocumentData::Tree {
+                members: item
+                    .members
+                    .iter()
+                    .map(|member| confit_core::document::TreeMember {
+                        rel: member.rel.clone(),
+                        content: member.content.clone(),
+                        mode: member.mode,
+                    })
+                    .collect(),
+            },
+            "profile".to_string(),
+        ));
+    }
     for config in configs {
         for item in &config.texts {
             grouped.entry(item.path.clone()).or_default().push((
@@ -615,6 +691,22 @@ fn assemble_text_link(
                 DocumentData::Opaque {
                     content: item.content.clone(),
                     mode: item.mode,
+                },
+                config.name.clone(),
+            ));
+        }
+        for item in &config.trees {
+            grouped.entry(item.path.clone()).or_default().push((
+                DocumentData::Tree {
+                    members: item
+                        .members
+                        .iter()
+                        .map(|member| confit_core::document::TreeMember {
+                            rel: member.rel.clone(),
+                            content: member.content.clone(),
+                            mode: member.mode,
+                        })
+                        .collect(),
                 },
                 config.name.clone(),
             ));

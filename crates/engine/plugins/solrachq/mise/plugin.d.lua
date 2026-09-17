@@ -13,7 +13,7 @@ local MiseRcOpts = {}
 
 ---@class MiseRc
 -- Scoped collector handed to the callback. Each method guards its entry
--- with `when = confit.shell.in_path(binary)` plus adds it through a
+-- with `when = confit.runtime.in_path(binary)` plus adds it through a
 -- batched into one patch.rc per callback run, in call order.
 local MiseRc = {}
 
@@ -44,21 +44,33 @@ function MiseRc:cmd(argv, opts) end
 ---@param opts MiseRcOpts? # Optional guard.
 function MiseRc:source(path, opts) end
 
+---@class MisePackageOpts
+---@field name string # Package and config name, e.g. "bat".
+---@field version? string # Pinned tool version folded into the shared TOML. Defaults to "latest".
+---@field bin? string # Binary proving the install through its shim. Defaults to name.
+---@field aliases? table<string, string> # Alias map rendered with the binary guard. Sorted by name.
+---@field rc_builder? fun(rc: MiseRc) # Optional builder receiving the collector.
+-- Table shape for one package. Every field stays optional except `name`.
+-- The package folds the version, declares the install hook, requires
+-- the installer config, then runs the builder.
+local MisePackageOpts = {}
+
 ---@class MiseNs
--- Installer dialect namespace. `package` builds the config, `activate`
--- returns the patch adding the eval entry for mise activation.
+-- Installer dialect namespace. `package` builds the config from a table,
+-- `init` returns the installer config holding the binary, the base
+-- document, plus the activation patch.
 local MiseNs = {}
 
--- Declares one mise package plus its callback rc entries.
----@param name string # Package and config name, e.g. "bat".
----@param callback fun(rc: MiseRc)? # Optional callback receiving the collector.
+-- Declares one mise package plus its builder rc entries.
+---@param opts MisePackageOpts # Package table holding name, version, rc_builder.
 ---@return table # Config userdata for the profile configs array.
-function MiseNs.package(name, callback) end
+function MiseNs.package(opts) end
 
--- Returns the patch adding mise activation plus its binary path with the `{{shell}}` slot.
--- The PATH line renders before the activation eval inside one patch.
----@return Patch # Patch handle for config:add_patch.
-function MiseNs.activate() end
+-- Returns the installer config holding the shared base, the mise binary,
+-- plus the activation patch.
+---@param version? string # Pinned mise release, e.g. "2026.9.12". Omitted resolves the latest tag.
+---@return table # Installer config userdata for the profile configs array.
+function MiseNs.init(version) end
 
 ---@class SolrachqNs
 -- Default plugin user table. Each field is one embedded plugin.

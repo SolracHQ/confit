@@ -4,7 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::document::{Document, StructuredFormat, Table};
+use crate::document::{Document, StructuredFormat, Table, TreeMember};
+use crate::fs::TreeMemberRead;
 use crate::ids::{DocPath, ReadOutcome};
 use crate::plan::{Plan, opaque_label};
 
@@ -129,11 +130,15 @@ impl Plan {
     /// the failure detail. Structured documents diff leaf by
     /// leaf. Text documents diff with unified hunks. Link
     /// documents compare target strings. Opaque documents
-    /// compare raw bytes with hash plus size values.
+    /// compare raw bytes with hash plus size values. Tree
+    /// documents walk their destination folder member by
+    /// member, ignoring hand-placed extras.
     ///
     /// # Arguments
     ///
     /// * `snapshot` - the disk reader mapping paths to outcomes.
+    /// * `snapshot_tree` - the disk walker mapping destination
+    ///   folders to relative member reads.
     ///
     /// # Returns
     ///
@@ -145,18 +150,27 @@ impl Plan {
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::{DocPath, ReadOutcome};
     /// use confit_core::plan::Plan;
+    /// use std::collections::BTreeMap;
     ///
     /// let mut previous = Plan::empty();
     /// previous.documents = vec![Document::new(
     ///     DocPath::new("note"),
     ///     DocumentData::Text { content: "hi".into() },
     /// )];
-    /// let drifts = previous.drift(&|_| ReadOutcome::Absent);
+    /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new());
     /// assert!(matches!(drifts.len(), 1));
     /// ```
-    pub fn drift(&self, snapshot: &dyn Fn(&DocPath) -> ReadOutcome) -> Vec<Drift> {
+    pub fn drift(
+        &self,
+        snapshot: &dyn Fn(&DocPath) -> ReadOutcome,
+        snapshot_tree: &dyn Fn(&DocPath) -> BTreeMap<String, TreeMemberRead>,
+    ) -> Vec<Drift> {
         let mut out = Vec::new();
         for document in &self.documents {
+            if let Some(members) = document.data.tree_members() {
+                out.extend(document.tree_drift(members, &snapshot_tree(&document.path)));
+                continue;
+            }
             let recorded_bytes = match document.bytes() {
                 Ok(bytes) => bytes,
                 Err(_) => continue,
@@ -244,6 +258,7 @@ impl Document {
                     Vec::new()
                 }
             }
+            DocumentData::Tree { .. } => Vec::new(),
         };
         if let Some(wanted) = self.mode()
             && let Some(seen) = disk_mode
@@ -255,6 +270,64 @@ impl Document {
                 old: serde_json::Value::String(render_mode(wanted)),
                 new: serde_json::Value::String(render_mode(seen)),
             });
+        }
+        out
+    }
+
+    /// Collects drift entries for one tree destination walk.
+    ///
+    /// Members compare by relative path against the disk
+    /// reads. Missing members report missing under their
+    /// joined path. Changed bytes report hash plus size
+    /// labels under the member key. Changed modes report
+    /// under the member mode key. Disk extras stay quiet,
+    /// hand-placed files never drift.
+    ///
+    /// # Arguments
+    ///
+    /// * `members` - the recorded tree members under comparing.
+    /// * `disk` - the relative disk reads under comparing.
+    ///
+    /// # Returns
+    ///
+    /// Drift entries in manifest order.
+    pub(crate) fn tree_drift(
+        &self,
+        members: &[TreeMember],
+        disk: &BTreeMap<String, TreeMemberRead>,
+    ) -> Vec<Drift> {
+        use crate::document::render_mode;
+
+        let mut out = Vec::new();
+        for member in members {
+            let member_path = DocPath::new(format!("{}/{}", self.path.as_str(), member.rel));
+            match disk.get(&member.rel) {
+                None => out.push(Drift::Missing { path: member_path }),
+                Some(TreeMemberRead::Unreadable { reason }) => out.push(Drift::Unreadable {
+                    path: member_path,
+                    reason: reason.clone(),
+                }),
+                Some(TreeMemberRead::Present { bytes, mode }) => {
+                    if *bytes != member.content {
+                        out.push(Drift::Key {
+                            path: self.path.clone(),
+                            key: member.rel.clone(),
+                            old: serde_json::Value::String(opaque_label(&member.content)),
+                            new: serde_json::Value::String(opaque_label(bytes)),
+                        });
+                    }
+                    if let Some(seen) = mode
+                        && *seen != member.mode
+                    {
+                        out.push(Drift::Key {
+                            path: self.path.clone(),
+                            key: format!("{}:mode", member.rel),
+                            old: serde_json::Value::String(render_mode(member.mode)),
+                            new: serde_json::Value::String(render_mode(*seen)),
+                        });
+                    }
+                }
+            }
         }
         out
     }
@@ -421,10 +494,13 @@ mod tests {
             ],
         )]);
         let disk = b"kept = \"same\"\nchanged = \"new\"\nadded = \"fresh\"\n";
-        let drifts = recorded.drift(&|_| ReadOutcome::Present {
-            bytes: disk.to_vec(),
-            mode: None,
-        });
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: disk.to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+        );
         let mut keys: Vec<String> = drifts
             .iter()
             .map(|entry| match entry {
@@ -450,10 +526,13 @@ mod tests {
     #[test]
     fn drift_emits_hunks_for_text() {
         let recorded = with_hashes(vec![text_doc("note", "hello\n")]);
-        let drifts = recorded.drift(&|_| ReadOutcome::Present {
-            bytes: b"hello world\n".to_vec(),
-            mode: None,
-        });
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"hello world\n".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+        );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
             Drift::Hunk { path, hunks } => {
@@ -479,10 +558,13 @@ mod tests {
         }
         let mut previous = Plan::empty();
         previous.documents = recorded;
-        let drifts = previous.drift(&|_| ReadOutcome::Present {
-            bytes: b"new-dest".to_vec(),
-            mode: None,
-        });
+        let drifts = previous.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"new-dest".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+        );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
             Drift::Key { key, old, new, .. } => {
@@ -497,10 +579,13 @@ mod tests {
     #[test]
     fn opaque_drift_reports_hash_plus_size() {
         let recorded = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
-        let drifts = recorded.drift(&|_| ReadOutcome::Present {
-            bytes: vec![0xFF, 0x01],
-            mode: None,
-        });
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: vec![0xFF, 0x01],
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+        );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
             Drift::Key { key, old, new, .. } => {
@@ -529,10 +614,13 @@ mod tests {
     #[test]
     fn opaque_drift_stays_quiet_on_equal_bytes() {
         let recorded = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
-        let drifts = recorded.drift(&|_| ReadOutcome::Present {
-            bytes: vec![0xFF, 0x00],
-            mode: None,
-        });
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: vec![0xFF, 0x00],
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+        );
         assert!(drifts.is_empty());
     }
 
@@ -552,5 +640,106 @@ mod tests {
         let lines = Drift::lines(&entries);
         assert_eq!(lines[0], "~ app.toml: tools.bat = old -> new");
         assert!(lines[1].contains("manually deleted"));
+    }
+
+    fn tree_doc() -> Document {
+        use crate::document::TreeMember;
+
+        Document::new(
+            DocPath::new("fonts"),
+            DocumentData::Tree {
+                members: vec![
+                    TreeMember {
+                        rel: "changed.ttf".into(),
+                        content: vec![1],
+                        mode: 0o644,
+                    },
+                    TreeMember {
+                        rel: "gone.ttf".into(),
+                        content: vec![2],
+                        mode: 0o644,
+                    },
+                    TreeMember {
+                        rel: "remode.ttf".into(),
+                        content: vec![3],
+                        mode: 0o644,
+                    },
+                ],
+            },
+        )
+    }
+
+    fn tree_disk() -> BTreeMap<String, crate::fs::TreeMemberRead> {
+        use crate::fs::TreeMemberRead;
+
+        BTreeMap::from([
+            (
+                "changed.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![9],
+                    mode: Some(0o644),
+                },
+            ),
+            (
+                "remode.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![3],
+                    mode: Some(0o600),
+                },
+            ),
+            (
+                "hand.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![7],
+                    mode: Some(0o644),
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn tree_drift_reports_missing_changed_mode() {
+        let recorded = with_hashes(vec![tree_doc()]);
+        let drifts = recorded.drift(&|_| ReadOutcome::Absent, &|_| tree_disk());
+        assert_eq!(drifts.len(), 3);
+        assert!(matches!(&drifts[0], Drift::Key { key, .. } if key == "changed.ttf"));
+        assert!(matches!(&drifts[1], Drift::Missing { path } if path.as_str() == "fonts/gone.ttf"));
+        assert!(matches!(&drifts[2], Drift::Key { key, .. } if key == "remode.ttf:mode"));
+        let lines = Drift::lines(&drifts);
+        assert!(lines[0].starts_with("~ fonts: changed.ttf = sha256:"));
+        assert!(lines[1].contains("manually deleted"));
+        assert!(lines[2].starts_with("~ fonts: remode.ttf:mode = "));
+    }
+
+    #[test]
+    fn tree_drift_stays_quiet_on_equal_manifest() {
+        use crate::fs::TreeMemberRead;
+
+        let recorded = with_hashes(vec![tree_doc()]);
+        let disk = BTreeMap::from([
+            (
+                "changed.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![1],
+                    mode: Some(0o644),
+                },
+            ),
+            (
+                "gone.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![2],
+                    mode: Some(0o644),
+                },
+            ),
+            (
+                "remode.ttf".to_string(),
+                TreeMemberRead::Present {
+                    bytes: vec![3],
+                    mode: Some(0o644),
+                },
+            ),
+        ]);
+        let drifts = recorded.drift(&|_| ReadOutcome::Absent, &|_| disk.clone());
+        assert!(drifts.is_empty());
     }
 }

@@ -45,7 +45,7 @@ fn run_profile(files: &[(&str, &str)], profile: &str) -> Result<Vec<Document>> {
         },
     );
     std::mem::drop(dir);
-    outcome
+    outcome.map(|evaluation| evaluation.documents)
 }
 
 /// Evaluates one passing profile string in a temp root.
@@ -53,6 +53,39 @@ fn run_ok(files: &[(&str, &str)], profile: &str) -> Vec<Document> {
     match run_profile(files, profile) {
         Ok(documents) => documents,
         Err(error) => panic!("profile evaluates: {error}"),
+    }
+}
+
+/// Evaluates one passing profile string into its full evaluation.
+fn run_eval_ok(files: &[(&str, &str)], profile: &str) -> confit_engine::Evaluation {
+    let (dir, profile_path) = project(files, profile);
+    let outcome = evaluate(
+        &profile_path,
+        EvalOpts {
+            root: dir.path().to_path_buf(),
+            plugins: dir.path().join("plugins"),
+            re_fetch: false,
+            cache_dir: None,
+            fetcher: None,
+            progress: None,
+        },
+    );
+    std::mem::drop(dir);
+    match outcome {
+        Ok(evaluation) => evaluation,
+        Err(error) => panic!("profile evaluates: {error}"),
+    }
+}
+
+/// Reads one hook by argv head from an evaluation.
+fn hook_by_head(evaluation: &confit_engine::Evaluation, head: &str) -> confit_core::hook::Hook {
+    match evaluation
+        .hooks
+        .iter()
+        .find(|hook| hook.argv.first().is_some_and(|first| first == head))
+    {
+        Some(found) => found.clone(),
+        None => panic!("hook '{head}' missing"),
     }
 }
 
@@ -110,7 +143,7 @@ return { shells = { "bash" }, configs = { alpha, zebra } }
 }
 
 #[test]
-fn tie_break_falls_to_owner_name() {
+fn declaration_order_wins_equal_priority() {
     let profile = r#"
 local beta = confit.config("beta")
 beta:add_patch(confit.patch.structured("json", "app.json", function(data)
@@ -120,10 +153,13 @@ local alpha = confit.config("alpha")
 alpha:add_patch(confit.patch.structured("json", "app.json", function(data)
   data:set("theme", "alpha")
 end))
-return { shells = { "bash" }, configs = { beta, alpha } }
+return { shells = { "bash" }, configs = { %s } }
 "#;
-    let documents = run_ok(&[], profile);
-    let (_, data) = structured(&by_path(&documents, "app.json"));
+    let forward = run_ok(&[], &profile.replace("%s", "beta, alpha"));
+    let (_, data) = structured(&by_path(&forward, "app.json"));
+    assert_eq!(data.get("theme"), Some(&Json::String("beta".to_string())));
+    let swapped = run_ok(&[], &profile.replace("%s", "alpha, beta"));
+    let (_, data) = structured(&by_path(&swapped, "app.json"));
     assert_eq!(data.get("theme"), Some(&Json::String("alpha".to_string())));
 }
 
@@ -347,7 +383,7 @@ fn shell_expansion_substitutes_shell_slot() {
 local c = confit.config("c")
 c:add_document(confit.document.rc.new({
   profile = { confit.document.rc.prepend("/x/bin") },
-  final = { confit.document.rc.eval({ "echo", confit.shell.SHELL }) },
+  final = { confit.document.rc.eval({ "echo", confit.runtime.SHELL }) },
 }))
 return { shells = { "bash", "zsh" }, configs = { c } }
 "#;
@@ -468,11 +504,14 @@ return { shells = { "bash" }, configs = { first, second } }
 fn embedded_mise_plugin_builds_package() {
     let profile = r#"
 local mise = confit.plugin.solrachq.mise
-local bat = mise.package("bat", function(rc)
-  rc:alias("cat", "bat")
-end)
-bat:add_patch(mise.activate())
-return { shells = { "bash" }, configs = { bat } }
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({
+  name = "bat",
+  rc_builder = function(rc)
+    rc:alias("cat", "bat")
+  end,
+})
+return { shells = { "bash" }, configs = { installer, bat } }
 "#;
     let documents = run_ok(&[], profile);
     let mise = by_path(&documents, "~/.config/mise/config.toml");
@@ -490,19 +529,6 @@ return { shells = { "bash" }, configs = { bat } }
                     assert_eq!(name, "cat");
                 }
                 other => panic!("alias expected, got {other:?}"),
-            }
-            assert_eq!(data.profile.len(), 2);
-            match &data.profile[0].op {
-                confit_core::document::RcOp::Path { dir, .. } => {
-                    assert!(dir.ends_with(".local/bin"), "mise bin dir first: {dir}");
-                }
-                other => panic!("path expected, got {other:?}"),
-            }
-            match &data.profile[1].op {
-                confit_core::document::RcOp::Eval { argv } => {
-                    assert_eq!(argv[0], "mise");
-                }
-                other => panic!("eval expected, got {other:?}"),
             }
             assert!(data.final_entries.is_empty());
         }
@@ -775,7 +801,7 @@ return {
         },
     );
     let documents = match outcome {
-        Ok(documents) => documents,
+        Ok(evaluation) => evaluation.documents,
         Err(error) => panic!("profile evaluates: {error}"),
     };
     let found = by_path(&documents, "bin/logo");
@@ -829,7 +855,7 @@ fn run_fetch(
         },
     );
     std::mem::drop(dir);
-    outcome
+    outcome.map(|evaluation| evaluation.documents)
 }
 
 /// Reads text content from one document path.
@@ -1075,7 +1101,7 @@ fn run_with_archive(archive_name: &str, archive: &[u8], profile: &str) -> Result
         },
     );
     std::mem::drop(dir);
-    outcome
+    outcome.map(|evaluation| evaluation.documents)
 }
 
 /// Evaluates one passing archive profile in a temp root.
@@ -1236,16 +1262,138 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
 }
 
 #[test]
+fn tree_pick_returns_one_sorted_document() {
+    let archive = tar_gz_bytes(&[
+        ("pkg/zulu.ttf", b"zulu".as_slice(), 0o644),
+        ("pkg/alpha.ttf", b"alpha".as_slice(), 0o644),
+        ("pkg/readme.txt", b"readme".as_slice(), 0o644),
+    ]);
+    let profile = r#"
+local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, content)
+  if not path:match("%.ttf$") then
+    return nil
+  end
+  return path:match("([^/]+)$")
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let documents = run_archive_ok("fonts.tar.gz", &archive, profile);
+    assert_eq!(documents.len(), 1);
+    let found = by_path(&documents, "/fonts");
+    match &found.data {
+        DocumentData::Tree { members } => {
+            assert_eq!(members.len(), 2);
+            assert_eq!(members[0].rel, "alpha.ttf");
+            assert_eq!(members[0].content, b"alpha");
+            assert_eq!(members[0].mode, 0o644);
+            assert_eq!(members[1].rel, "zulu.ttf");
+        }
+        other => panic!("tree expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn tree_executable_member_reads_the_mode() {
+    let archive = tar_bytes(&[
+        ("bin/run", b"run".as_slice(), 0o755),
+        ("bin/data", b"data".as_slice(), 0o644),
+    ]);
+    let profile = r#"
+local tools = confit.document.tree("tools.tar", "/out", function(path, info, content)
+  return path:match("([^/]+)$")
+end)
+assert(tools.members[1].rel == "data", "members expose rels in order")
+return { shells = { "bash" }, documents = { tools }, configs = { confit.config("tool") } }
+"#;
+    let documents = run_archive_ok("tools.tar", &archive, profile);
+    let found = by_path(&documents, "/out");
+    match &found.data {
+        DocumentData::Tree { members } => {
+            assert_eq!(members[0].mode, 0o644);
+            assert_eq!(members[1].mode, 0o755);
+            assert_eq!(members[1].content, b"run");
+        }
+        other => panic!("tree expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn tree_document_return_fails_as_plan_error() {
+    let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
+    let profile = r#"
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+  return confit.document.opaque("/fonts/a.ttf", content)
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let error = run_archive_err("a.tar.gz", &archive, profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(error.to_string().contains("destination path or nil"));
+}
+
+#[test]
+fn tree_dotdot_rel_fails_as_plan_error() {
+    let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
+    let profile = r#"
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+  return "../escape.ttf"
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let error = run_archive_err("a.tar.gz", &archive, profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(error.to_string().contains("under the folder"));
+}
+
+#[test]
+fn tree_duplicate_rel_fails_as_plan_error() {
+    let archive = tar_gz_bytes(&[
+        ("x/a.ttf", b"a".as_slice(), 0o644),
+        ("y/a.ttf", b"b".as_slice(), 0o644),
+    ]);
+    let profile = r#"
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+  return "same.ttf"
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let error = run_archive_err("a.tar.gz", &archive, profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(error.to_string().contains("more than once"));
+}
+
+#[test]
+fn tree_empty_pick_fails_naming_the_filter() {
+    let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
+    let profile = r#"
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+  return nil
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let error = run_archive_err("a.tar.gz", &archive, profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(error.to_string().contains("check the pick filter"));
+}
+
+#[test]
 fn mise_packages_fold_into_one_shared_document() {
     let profile = r#"
 local mise = confit.plugin.solrachq.mise
-local bat = mise.package("bat", function(rc)
-  rc:alias("cat", "bat")
-end)
-local eza = mise.package("eza", function(rc)
-  rc:alias("ls", "eza")
-end)
-return { shells = { "bash" }, configs = { bat, eza } }
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({
+  name = "bat",
+  rc_builder = function(rc)
+    rc:alias("cat", "bat")
+  end,
+})
+local eza = mise.package({
+  name = "eza",
+  rc_builder = function(rc)
+    rc:alias("ls", "eza")
+  end,
+})
+return { shells = { "bash" }, configs = { installer, bat, eza } }
 "#;
     let documents = run_ok(&[], profile);
     let found = by_path(&documents, "~/.config/mise/config.toml");
@@ -1310,7 +1458,7 @@ fn shell_slot_materializes_outside_final() {
     let profile = r#"
 local tool = confit.config("tool")
 tool:add_patch(confit.patch.rc(function(data)
-  data:add("config", confit.document.rc.eval({ "mise", "activate", confit.shell.SHELL }))
+  data:add("config", confit.document.rc.eval({ "mise", "activate", confit.runtime.SHELL }))
 end))
 return { shells = { "bash" }, configs = { tool } }
 "#;
@@ -1383,4 +1531,545 @@ return { shells = { "bash" }, configs = { low, high } }
         }
         other => panic!("rc expected, got {other:?}"),
     }
+}
+
+#[test]
+fn missing_require_fails_naming_both() {
+    let profile = r#"
+local bat = confit.config("bat")
+bat:require("plugin:solrachq/mise:install")
+return { shells = { "bash" }, configs = { bat } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains(r#"config "bat" requires "plugin:solrachq/mise:install" config"#),
+        "names both: {error}"
+    );
+}
+
+#[test]
+fn require_hint_renders_on_its_own_line() {
+    let profile = r#"
+local bat = confit.config("bat")
+bat:require("plugin:solrachq/mise:install", "Add mise.install() to the profile configs.")
+return { shells = { "bash" }, configs = { bat } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    let message = error.to_string();
+    assert!(
+        message.contains(r#"config "bat" requires "plugin:solrachq/mise:install" config"#),
+        "names both: {message}"
+    );
+    assert!(
+        message.contains("\nhint: Add mise.install() to the profile configs."),
+        "hint on own line: {message}"
+    );
+}
+
+#[test]
+fn transitive_require_checks_required_configs() {
+    let profile = r#"
+local bat = confit.config("bat")
+bat:require("helper")
+local helper = confit.config("helper")
+helper:require("plugin:solrachq/mise:install")
+return { shells = { "bash" }, configs = { bat, helper } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains(r#"config "helper" requires "plugin:solrachq/mise:install" config"#),
+        "names transitive requirer: {error}"
+    );
+}
+
+#[test]
+fn self_require_cycle_resolves_fine() {
+    let profile = r#"
+local tool = confit.config("tool")
+tool:require("tool")
+return { shells = { "bash" }, configs = { tool } }
+"#;
+    let documents = run_ok(&[], profile);
+    assert!(documents.is_empty());
+}
+
+#[test]
+fn pair_require_cycle_resolves_fine() {
+    let profile = r#"
+local first = confit.config("first")
+first:require("second")
+local second = confit.config("second")
+second:require("first")
+return { shells = { "bash" }, configs = { first, second } }
+"#;
+    let documents = run_ok(&[], profile);
+    assert!(documents.is_empty());
+}
+
+#[test]
+fn hooks_collect_in_declaration_order() {
+    let profile = r#"
+local first = confit.config("first")
+first:add_hook(confit.hook.run({ "first-tool" }))
+local second = confit.config("second")
+second:add_hook(confit.hook.run({ "second-tool" }))
+return { shells = { "bash" }, configs = { first, second } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    let heads: Vec<String> = evaluation
+        .hooks
+        .iter()
+        .map(|hook| hook.argv[0].clone())
+        .collect();
+    assert_eq!(
+        heads,
+        vec!["first-tool".to_string(), "second-tool".to_string()]
+    );
+}
+
+#[test]
+fn hooks_merge_across_configs_with_or_gates() {
+    let profile = r#"
+local first = confit.config("first")
+first:add_hook(confit.hook.run({ "mise", "install" }, {
+  path = { "/home/tester/.local/bin" },
+  when = confit.runtime.in_path("mise"),
+  checks = { confit.runtime.in_path("bat") },
+  timeout = "5m",
+}))
+local second = confit.config("second")
+second:add_hook(confit.hook.run({ "mise", "install" }, {
+  path = { "/home/tester/.local/bin" },
+  when = function(runtime) return runtime.in_path("eza") end,
+  checks = { confit.runtime.in_path("eza") },
+  timeout = "10m",
+}))
+return { shells = { "bash" }, configs = { first, second } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    assert_eq!(evaluation.hooks.len(), 1);
+    let hook = hook_by_head(&evaluation, "mise");
+    assert_eq!(hook.argv, vec!["mise".to_string(), "install".to_string()]);
+    assert_eq!(hook.path, vec!["/home/tester/.local/bin".to_string()]);
+    assert_eq!(
+        hook.checks,
+        vec![
+            Condition::InPath {
+                name: "bat".to_string()
+            },
+            Condition::InPath {
+                name: "eza".to_string()
+            },
+        ]
+    );
+    assert_eq!(hook.timeout_secs, 600);
+}
+
+#[test]
+fn hook_empty_argv_fails_as_plan_error() {
+    let error = run_err(
+        &[],
+        r#"
+local c = confit.config("c")
+c:add_hook(confit.hook.run({}))
+return { shells = { "bash" }, configs = { c } }
+"#,
+    );
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("field 'argv'"),
+        "names argv: {error}"
+    );
+}
+
+#[test]
+fn hook_unknown_opts_field_fails_as_plan_error() {
+    let error = run_err(
+        &[],
+        r#"
+local c = confit.config("c")
+c:add_hook(confit.hook.run({ "mise" }, { lane = "first" }))
+return { shells = { "bash" }, configs = { c } }
+"#,
+    );
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("unknown field 'lane'"),
+        "names the field: {error}"
+    );
+}
+
+#[test]
+fn hook_bad_duration_fails_as_plan_error() {
+    let error = run_err(
+        &[],
+        r#"
+local c = confit.config("c")
+c:add_hook(confit.hook.run({ "mise" }, { timeout = "soon" }))
+return { shells = { "bash" }, configs = { c } }
+"#,
+    );
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("field 'timeout'"),
+        "names timeout: {error}"
+    );
+}
+
+#[test]
+fn hook_bad_condition_fails_as_plan_error() {
+    let error = run_err(
+        &[],
+        r#"
+local c = confit.config("c")
+c:add_hook(confit.hook.run({ "mise" }, { when = { bogus = {} } }))
+return { shells = { "bash" }, configs = { c } }
+"#,
+    );
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("field 'when'"),
+        "names when: {error}"
+    );
+}
+
+#[test]
+fn hook_non_hook_value_fails_naming_config() {
+    let error = run_err(
+        &[],
+        r#"
+local c = confit.config("c")
+c:add_hook(confit.document.text("note", "hi"))
+return { shells = { "bash" }, configs = { c } }
+"#,
+    );
+    assert!(matches!(error, Error::Plan(_)));
+    let message = error.to_string();
+    assert!(message.contains("config 'c'"), "names config: {message}");
+    assert!(message.contains("add_hook"), "names field: {message}");
+}
+
+#[test]
+fn mise_package_table_folds_version() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({ name = "bat", version = "1.2.3" })
+return { shells = { "bash" }, configs = { installer, bat } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({"bat": "1.2.3"}))
+    );
+}
+
+#[test]
+fn mise_package_positional_fails_as_plan_error() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local bat = mise.package("bat", function(rc)
+  rc:alias("cat", "bat")
+end)
+return { shells = { "bash" }, configs = { bat } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: package opts must be a table"),
+        "names the table shape: {error}"
+    );
+}
+
+#[test]
+fn mise_package_unknown_field_fails_as_plan_error() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local bat = mise.package({ name = "bat", callback = function(rc) end })
+return { shells = { "bash" }, configs = { bat } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'opts' unknown field 'callback'"),
+        "names the field: {error}"
+    );
+}
+
+#[test]
+fn mise_package_without_installer_fails_naming_both() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local bat = mise.package({ name = "bat" })
+return { shells = { "bash" }, configs = { bat } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    let message = error.to_string();
+    assert!(
+        message.contains(r#"config "bat" requires "plugin:solrachq/mise:install" config"#),
+        "names both: {message}"
+    );
+    assert!(
+        message.contains("\nhint: Add mise.init() to the profile configs."),
+        "hint on own line: {message}"
+    );
+}
+
+#[test]
+fn mise_package_declares_install_hook() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({ name = "bat" })
+return { shells = { "bash" }, configs = { installer, bat } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    assert_eq!(evaluation.hooks.len(), 1);
+    let hook = hook_by_head(&evaluation, "mise");
+    assert_eq!(hook.argv, vec!["mise".to_string(), "install".to_string()]);
+    assert_eq!(hook.path.len(), 1);
+    assert!(
+        hook.path[0].ends_with(".local/bin"),
+        "home binary dir: {:?}",
+        hook.path
+    );
+    assert_eq!(
+        hook.when,
+        Some(Condition::InPath {
+            name: "mise".to_string()
+        })
+    );
+    assert_eq!(hook.checks.len(), 1);
+    match &hook.checks[0] {
+        Condition::Exists { path } => {
+            assert!(path.ends_with("mise/shims/bat"), "shim path: {path}")
+        }
+        other => panic!("shim exists check expected, got {other:?}"),
+    };
+    assert_eq!(hook.timeout_secs, 600);
+}
+
+#[test]
+fn mise_package_bin_proves_custom_binary() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local ripgrep = mise.package({ name = "ripgrep", bin = "rg" })
+return { shells = { "bash" }, configs = { installer, ripgrep } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    let hook = hook_by_head(&evaluation, "mise");
+    assert_eq!(hook.checks.len(), 1);
+    match &hook.checks[0] {
+        Condition::Exists { path } => {
+            assert!(path.ends_with("mise/shims/rg"), "shim path: {path}")
+        }
+        other => panic!("shim exists check expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn mise_package_aliases_render_sorted_with_guard() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({ name = "bat", aliases = { c = "bat", cat = "bat" } })
+return { shells = { "bash" }, configs = { installer, bat } }
+"#;
+    let documents = run_ok(&[], profile);
+    let rc = by_path(&documents, "~/.bashrc");
+    let DocumentData::Rc(data) = &rc.data else {
+        panic!("rc expected");
+    };
+    let names: Vec<&str> = data
+        .config
+        .iter()
+        .filter_map(|entry| match &entry.op {
+            confit_core::document::RcOp::Alias { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["c", "cat"]);
+}
+
+#[test]
+fn mise_package_hooks_merge_across_packages() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local bat = mise.package({ name = "bat" })
+local eza = mise.package({ name = "eza" })
+return { shells = { "bash" }, configs = { installer, bat, eza } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    assert_eq!(evaluation.hooks.len(), 1);
+    let hook = hook_by_head(&evaluation, "mise");
+    assert_eq!(hook.argv, vec!["mise".to_string(), "install".to_string()]);
+    assert_eq!(hook.checks.len(), 2);
+    for (check, name) in hook.checks.iter().zip(["bat", "eza"]) {
+        match check {
+            Condition::Exists { path } => assert!(
+                path.ends_with(&format!("mise/shims/{name}")),
+                "shim path: {path}"
+            ),
+            other => panic!("shim exists check expected, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn mise_init_explicit_version_builds_installer() {
+    let cache = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => panic!("cache builds: {error}"),
+    };
+    let archive = tar_gz_bytes(&[("mise/bin/mise", b"mise-binary".as_slice(), 0o755)]);
+    let url =
+        "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-x64.tar.gz";
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = mise.init("2026.9.12")
+local bat = mise.package({ name = "bat" })
+return { shells = { "bash" }, configs = { installer, bat } }
+"#;
+    let documents = match run_fetch(profile, cache.path(), stubbed(url, &archive), false) {
+        Ok(documents) => documents,
+        Err(error) => panic!("installer builds: {error}"),
+    };
+    let found = documents
+        .iter()
+        .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
+        .unwrap_or_else(|| panic!("installer binary missing"));
+    match &found.data {
+        DocumentData::Opaque { content, mode } => {
+            assert_eq!(content, &b"mise-binary".to_vec());
+            assert_eq!(mode, &Some(0o755));
+        }
+        other => panic!("opaque expected, got {other:?}"),
+    }
+    let folded = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&folded);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({"bat": "latest"}))
+    );
+    let rc = by_path(&documents, "~/.bashrc");
+    let DocumentData::Rc(rc) = &rc.data else {
+        panic!("rc expected");
+    };
+    assert_eq!(rc.profile.len(), 2);
+    match &rc.profile[0].op {
+        confit_core::document::RcOp::Path { dir, .. } => {
+            assert!(dir.ends_with(".local/bin"), "mise bin dir first: {dir}");
+        }
+        other => panic!("path expected, got {other:?}"),
+    }
+    match &rc.profile[1].op {
+        confit_core::document::RcOp::Eval { argv } => {
+            assert_eq!(argv[0], "mise");
+        }
+        other => panic!("eval expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn mise_init_resolves_latest_tag() {
+    let cache = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => panic!("cache builds: {error}"),
+    };
+    let archive = tar_gz_bytes(&[("mise/bin/mise", b"mise-binary".as_slice(), 0o755)]);
+    let tags = r#"[{"name": "vfox-v2026.9.12", "commit": {"sha": "9caff4"}}]"#;
+    let fake = stubbed(
+        "https://api.github.com/repos/jdx/mise/tags",
+        tags.as_bytes(),
+    );
+    fake.insert(
+        "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-x64.tar.gz",
+        &archive,
+    );
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = mise.init()
+local bat = mise.package({ name = "bat" })
+return { shells = { "bash" }, configs = { installer, bat } }
+"#;
+    let documents = match run_fetch(profile, cache.path(), fake, false) {
+        Ok(documents) => documents,
+        Err(error) => panic!("installer resolves: {error}"),
+    };
+    let found = documents
+        .iter()
+        .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
+        .unwrap_or_else(|| panic!("installer binary missing"));
+    match &found.data {
+        DocumentData::Opaque { content, .. } => {
+            assert_eq!(content, &b"mise-binary".to_vec());
+        }
+        other => panic!("opaque expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn mise_init_rejects_bad_version() {
+    for profile in [
+        r#"
+local installer = confit.plugin.solrachq.mise.init("")
+return { shells = { "bash" }, configs = { installer } }
+"#,
+        r#"
+local installer = confit.plugin.solrachq.mise.init(42)
+return { shells = { "bash" }, configs = { installer } }
+"#,
+    ] {
+        let error = run_err(&[], profile);
+        assert!(matches!(error, Error::Plan(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("mise: field 'version' must be a non-empty string or nil"),
+            "names version: {error}"
+        );
+    }
+}
+
+#[test]
+fn mise_init_empty_tag_feed_fails_as_plan_error() {
+    let cache = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => panic!("cache builds: {error}"),
+    };
+    let profile = r#"
+local installer = confit.plugin.solrachq.mise.init()
+return { shells = { "bash" }, configs = { installer } }
+"#;
+    let outcome = run_fetch(
+        profile,
+        cache.path(),
+        stubbed("https://api.github.com/repos/jdx/mise/tags", b"[]"),
+        false,
+    );
+    let error = match outcome {
+        Ok(_) => panic!("empty feed passes"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("mise: cannot resolve"),
+        "names resolution: {error}"
+    );
 }

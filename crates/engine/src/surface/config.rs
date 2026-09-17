@@ -2,15 +2,16 @@
 //!
 //! Config userdata plus per-config contributions.
 
-use mlua::{AnyUserData, Lua, Table, UserData, UserDataMethods, Value};
+use mlua::{AnyUserData, Lua, MultiValue, Table, UserData, UserDataMethods, Value};
 
 use super::confit_table;
 use super::document::Declared;
 use super::document::convert::convert_document;
+use super::hook::convert_hook;
 use super::patch::LuaPatch;
 use crate::error::plan_error;
 use crate::lua::{ValueExt, read_marker};
-use crate::model::{ConfigData, StoredPatch};
+use crate::model::{ConfigData, RequireDecl, StoredPatch};
 
 /// Registry key holding the per-evaluation config name set.
 const SEEN_KEY: &str = "confit.config.names";
@@ -105,8 +106,80 @@ impl ConfigBuilder {
             format: owned.format,
             callback: owned.callback,
             priority: owned.priority,
+            order: 0,
             owner: name,
         });
+        Ok(())
+    }
+    /// Records one hook table in the contribution.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - candidate hook table value.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the hook lands in the contribution.
+    ///
+    /// # Errors
+    ///
+    /// Non-hook values fail as plan errors.
+    ///
+    pub(crate) fn add_hook(&mut self, value: Value) -> mlua::Result<()> {
+        let name = self.data.name.clone();
+        let ctx = format!("config '{name}': field 'add_hook'");
+        let Some(table) = value.opt_table() else {
+            return Err(plan_error(format!(
+                "config '{name}': field 'add_hook' must be a confit.hook value"
+            )));
+        };
+        if read_marker(&table, "__kind").as_deref() != Some("hook") {
+            return Err(plan_error(format!(
+                "config '{name}': field 'add_hook' must be a confit.hook value"
+            )));
+        }
+        let hook = convert_hook(&table, &ctx)?;
+        self.data.hooks.push(hook);
+        Ok(())
+    }
+    /// Records one required sibling config in the contribution.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - positional `(name, hint?)` values from Lua.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the require edge lands in the contribution.
+    ///
+    /// # Errors
+    ///
+    /// Non-string names fail as plan errors. Empty names fail as plan errors.
+    /// Non-string hints fail as plan errors. Unknown extra args fail as plan errors.
+    ///
+    pub(crate) fn require(&mut self, args: MultiValue) -> mlua::Result<()> {
+        let name = self.data.name.clone();
+        let ctx = format!("config '{name}': field 'require'");
+        let collected: Vec<Value> = args.into_iter().collect();
+        let (name_value, hint_value) = match collected.as_slice() {
+            [first] => (first.clone(), Value::Nil),
+            [first, second] => (first.clone(), second.clone()),
+            _ => {
+                return Err(plan_error(format!("{ctx} expects (name, hint?)")));
+            }
+        };
+        let target = name_value.req_str(&ctx, "name")?;
+        if target.is_empty() {
+            return Err(plan_error(format!("{ctx}: field 'name' must not be empty")));
+        }
+        let hint = match hint_value {
+            Value::Nil => None,
+            Value::String(text) => Some(text.to_string_lossy()),
+            _ => {
+                return Err(plan_error(format!("{ctx}: field 'hint' must be a string")));
+            }
+        };
+        self.data.requires.push(RequireDecl { target, hint });
         Ok(())
     }
 }
@@ -117,6 +190,8 @@ impl UserData for ConfigBuilder {
             this.add_document(value)
         });
         methods.add_method_mut("add_patch", |_, this, value: Value| this.add_patch(value));
+        methods.add_method_mut("add_hook", |_, this, value: Value| this.add_hook(value));
+        methods.add_method_mut("require", |_, this, args: MultiValue| this.require(args));
     }
 }
 
@@ -127,6 +202,7 @@ fn push_declared(data: &mut ConfigData, table: &Table, ctx: &str) -> mlua::Resul
         Declared::Text(decl) => data.texts.push(decl),
         Declared::Link(decl) => data.links.push(decl),
         Declared::Opaque(decl) => data.opaques.push(decl),
+        Declared::Tree(decl) => data.trees.push(decl),
         Declared::Rc(entries) => {
             if data.rc_base.is_some() {
                 return Err(plan_error(format!(

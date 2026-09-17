@@ -4,16 +4,19 @@
 
 use std::path::PathBuf;
 
-use confit_core::document::Document;
 use confit_core::drift::Drift;
 use confit_core::error::{Error, Result};
-use confit_core::fs::{Filesystem, snapshot};
+use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+use confit_core::hook::{describe_condition, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Plan;
+use confit_core::runtime::{Runtime, evaluate};
 use confit_core::store::{
-    archive_previous, load_state, remove_orphans, resolve_state_file, write_documents, write_plan,
+    archive_previous, default_state_path, load_state, remove_orphans, remove_tree_members,
+    write_documents, write_plan,
 };
 
+use crate::actions::hooks::{HookRunner, OsRunner, append_hook_log};
 use crate::cli::ApplyArgs;
 use crate::presentation::summary::Summary;
 
@@ -36,7 +39,7 @@ use confit_engine::ProgressEvent;
 pub struct ApplyReport {
     /// Counts documents written to disk.
     pub written: usize,
-    /// Counts recorded orphans removed from disk.
+    /// Counts recorded orphans plus dropped tree members removed from disk.
     pub removed: usize,
     /// Holds the stored plan path backing recover.
     pub stored: PathBuf,
@@ -60,10 +63,13 @@ pub struct ApplyReport {
 /// let mut input = Cursor::new("yes\n");
 /// let mut output = Vec::new();
 /// let runner = ApplyRunner {
-///     desired: vec![Document::new(
-///         DocPath::new("note"),
-///         DocumentData::Text { content: "hi".into() },
-///     )],
+///     plan: Plan::build(
+///         vec![Document::new(
+///             DocPath::new("note"),
+///             DocumentData::Text { content: "hi".into() },
+///         )],
+///         Vec::new(),
+///     ),
 ///     previous: Plan::empty(),
 ///     state: None,
 ///     force: false,
@@ -74,8 +80,8 @@ pub struct ApplyReport {
 /// assert!(fs.exists(Path::new("note")));
 /// ```
 pub struct ApplyRunner<'a> {
-    /// Holds desired documents under writing.
-    pub desired: Vec<Document>,
+    /// Holds the desired plan under writing plus running.
+    pub plan: Plan,
     /// Holds the previous plan backing drift plus counts.
     pub previous: Plan,
     /// Holds the state file gaining the new plan, `None` skips.
@@ -115,7 +121,7 @@ impl<'a> ApplyRunner<'a> {
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::actions::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_core::fs::OsFs;
+    /// use confit_cli::fs::OsFs;
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -123,7 +129,6 @@ impl<'a> ApplyRunner<'a> {
     ///     profile: Some(PathBuf::from("profile.lua")),
     ///     shared: confit_cli::cli::SharedArgs {
     ///         root: None,
-    ///         state: None,
     ///         plugins: None,
     ///         re_fetch: false,
     ///     },
@@ -139,13 +144,16 @@ impl<'a> ApplyRunner<'a> {
     /// ```
     pub fn from_args(args: &ApplyArgs, seams: Seams<'a>) -> Result<Self> {
         if let Some(plan_file) = args.plan.as_deref() {
-            seams.emit_reading_plan(plan_file);
-            let file_plan = timed("apply plan load", || load_state(Some(plan_file), seams.fs))?;
-            let state_file = resolve_state_file(args.shared.state.as_deref())?;
+            let resolved = crate::cli::resolve_plan_file(plan_file)?;
+            seams.emit_reading_plan(&resolved);
+            let file_plan = timed("apply plan load", || {
+                load_state(Some(resolved.as_path()), seams.fs)
+            })?;
+            let state_file = default_state_path()?;
             seams.emit_reading_plan(&state_file);
-            let previous = load_state(Some(&state_file), seams.fs)?;
+            let previous = load_state(Some(state_file.as_path()), seams.fs)?;
             return Ok(Self {
-                desired: file_plan.documents,
+                plan: file_plan,
                 previous,
                 state: Some(state_file),
                 force: args.force,
@@ -157,12 +165,12 @@ impl<'a> ApplyRunner<'a> {
             .profile
             .as_deref()
             .ok_or_else(|| Error::Plan("apply needs --profile while absent".to_string()))?;
-        let desired = evaluate_shared(&args.shared, profile, seams.progress.clone())?;
-        let state_file = resolve_state_file(args.shared.state.as_deref())?;
+        let evaluation = evaluate_shared(&args.shared, profile, seams.progress.clone())?;
+        let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
-        let previous = load_state(Some(&state_file), seams.fs)?;
+        let previous = load_state(Some(state_file.as_path()), seams.fs)?;
         Ok(Self {
-            desired,
+            plan: Plan::build(evaluation.documents, evaluation.hooks)?,
             previous,
             state: Some(state_file),
             force: args.force,
@@ -193,7 +201,7 @@ impl<'a> ApplyRunner<'a> {
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::actions::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_core::fs::OsFs;
+    /// use confit_cli::fs::OsFs;
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -201,7 +209,6 @@ impl<'a> ApplyRunner<'a> {
     ///     profile: Some(PathBuf::from("profile.lua")),
     ///     shared: confit_cli::cli::SharedArgs {
     ///         root: None,
-    ///         state: None,
     ///         plugins: None,
     ///         re_fetch: false,
     ///     },
@@ -237,10 +244,12 @@ impl<'a> ApplyRunner<'a> {
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
         let fs: &dyn Filesystem = self.seams.fs;
-        let built = Plan::build(self.desired)?;
+        let built = std::mem::replace(&mut self.plan, Plan::empty());
         log_processed(&built, &self.previous);
         let snapshot = |path: &DocPath| snapshot(path, fs);
-        let baseline = self.previous.drift(&snapshot);
+        let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
+        let baseline = self.previous.drift(&snapshot, &snapshot_tree);
+        let rt = Runtime::current();
         if self.preview {
             let report = Summary {
                 built: &built,
@@ -253,13 +262,20 @@ impl<'a> ApplyRunner<'a> {
                 .write_all(text.as_bytes())
                 .map_err(Error::from)?;
             self.seams.output.write_all(b"\n").map_err(Error::from)?;
+            for line in built.hook_preview(&rt, fs)? {
+                self.seams
+                    .output
+                    .write_all(line.as_bytes())
+                    .map_err(Error::from)?;
+                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+            }
         }
         if !self.force && !self.seams.confirm()? {
             return Err(Error::Plan(
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = self.previous.drift(&snapshot);
+        let fresh = self.previous.drift(&snapshot, &snapshot_tree);
         if fresh != baseline {
             for line in Drift::lines(&fresh) {
                 self.seams
@@ -287,6 +303,8 @@ impl<'a> ApplyRunner<'a> {
         };
         write_documents(&built.documents, fs, notify)?;
         let removed = remove_orphans(&self.previous.documents, &built.documents, fs)?;
+        let removed =
+            removed + remove_tree_members(&self.previous.documents, &built.documents, fs)?;
         if self.state.is_some() {
             self.seams.emit_writing_plan(built.documents.len());
         }
@@ -295,10 +313,104 @@ impl<'a> ApplyRunner<'a> {
         }
         self.seams.emit_writing_plan(built.documents.len());
         let stored = archive_previous(&built, fs)?;
+        self.run_hooks(&built, &rt, fs)?;
         Ok(ApplyReport {
             written: built.documents.len(),
             removed,
             stored,
         })
+    }
+
+    /// Runs built hooks after files, state, plus history land.
+    ///
+    /// Each hook re-resolves, re-gates, skips on passing
+    /// pre-checks, spawns through the runner, verifies
+    /// post-checks, and appends captured bytes to the run log.
+    /// Failures abort the rest.
+    fn run_hooks(&mut self, built: &Plan, rt: &Runtime, fs: &dyn Filesystem) -> Result<()> {
+        let total = built.hooks.len();
+        let real = OsRunner;
+        let runner: &dyn HookRunner = match self.seams.hook_runner {
+            Some(runner) => runner,
+            None => &real,
+        };
+        for (index, hook) in built.hooks.iter().enumerate() {
+            let position = index + 1;
+            let argv_text = hook.argv.join(" ");
+            if let Some(gate) = hook.when.as_ref()
+                && !evaluate(gate, rt, fs)
+            {
+                let line = format!(
+                    "warn: {argv_text} cannot run ({})",
+                    describe_condition(gate)
+                );
+                self.seams
+                    .output
+                    .write_all(line.as_bytes())
+                    .map_err(Error::from)?;
+                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                continue;
+            }
+            if !hook.checks.is_empty() && hook.checks.iter().all(|check| evaluate(check, rt, fs)) {
+                let line = format!("skipped: {argv_text} (checks pass)");
+                self.seams
+                    .output
+                    .write_all(line.as_bytes())
+                    .map_err(Error::from)?;
+                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                continue;
+            }
+            let binary = resolve_hook(hook, rt, fs).ok_or_else(|| {
+                let head = hook.argv.first().cloned().unwrap_or_default();
+                Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
+            })?;
+            let mut spawn: Vec<String> = vec![binary.display().to_string()];
+            spawn.extend(hook.argv.iter().skip(1).cloned());
+            let line = format!("hook {position} of {total}: {argv_text}");
+            self.seams
+                .output
+                .write_all(line.as_bytes())
+                .map_err(Error::from)?;
+            self.seams.output.write_all(b"\n").map_err(Error::from)?;
+            if let Some(sink) = self.seams.progress.as_ref() {
+                sink(ProgressEvent::HookRunning {
+                    position,
+                    total,
+                    argv: argv_text.clone(),
+                });
+            }
+            let path_dirs: Vec<std::path::PathBuf> =
+                hook.path.iter().map(std::path::PathBuf::from).collect();
+            let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
+            if let Some(log) = self.seams.log_file.clone() {
+                append_hook_log(fs, &log, &line, &outcome.output)?;
+            }
+            if outcome.code != 0 {
+                return Err(Error::Plan(format!(
+                    "hook '{argv_text}' failed with code {}",
+                    outcome.code
+                )));
+            }
+            if !hook.checks.is_empty() {
+                let failed: Vec<String> = hook
+                    .checks
+                    .iter()
+                    .filter(|check| !evaluate(check, rt, fs))
+                    .map(describe_condition)
+                    .collect();
+                if !failed.is_empty() {
+                    log::warn!(
+                        "hook '{argv_text}' failed checks after run: {}",
+                        failed.join(", ")
+                    );
+                    return Err(Error::Plan(format!(
+                        "hook '{argv_text}' failed checks after run: {}",
+                        failed.join(", ")
+                    )));
+                }
+            }
+            log::debug!("hook {position} of {total} ran code={}", outcome.code);
+        }
+        Ok(())
     }
 }

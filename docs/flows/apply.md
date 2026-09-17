@@ -9,8 +9,8 @@ on the spot.
 flowchart TD
     A["Parse flags, expand tildes"] --> B["Require positional profile"]
     B --> C["Evaluate profile with Lua engine"]
-    C --> D["Resolve state: --state, else slot"]
-    D --> E["Load previous, missing reads empty"]
+    C --> D["Load fixed slot state"]
+    D --> E["Missing slot reads empty"]
     E --> F["Build: render, hash, count"]
     F --> G["Drift baseline against disk"]
     G --> H["Render preview"]
@@ -24,22 +24,25 @@ flowchart TD
     L -- no --> N["Write documents"]
     M -- abort --> Z
     M -- yes --> N
-    N --> O["Remove recorded orphans"]
-    O --> P["Write state file"]
+    N --> O["Remove recorded orphans plus dropped tree members"]
+    O --> P["Write fixed slot state"]
     P --> Q["Archive rotation entry"]
-    Q --> R["Report written, removed, stored"]
+    Q --> R["Run hooks in order"]
+    R --> S["Report written, removed, stored"]
 ```
 
 `--plan FILE` runs instead on the file alone with no profile
 and no preview; see apply-plan.md. That branch sets preview
 to false and skips the preview render.
 
-Apply always writes the state file: explicit `--state` wins,
-else the fixed slot records the result. The machine owns the
+Apply always writes the fixed slot state. The user owns the
 result after every apply. The next plan reads the slot and
 shows zero changes while disk matches. Switching profiles
 converges through the same slot: last applied wins, orphans
-from the earlier profile delete.
+from the earlier profile delete. Tree destinations never
+delete, dropped members delete per manifest. Hooks run after
+state plus history land, in plan order with pre-check skips
+plus post-check failure aborts.
 
 Stdout carries `applied:` plus `previous:` through anstream.
 Stderr carries the preview plus prompts plus the spinner plus

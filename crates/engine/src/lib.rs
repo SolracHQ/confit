@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use confit_core::document::Document;
+use confit_core::hook::Hook;
 
 use crate::fetch::Fetch;
 
@@ -80,7 +81,29 @@ impl std::fmt::Debug for EvalOpts {
     }
 }
 
-/// Evaluates one profile file into finished documents.
+/// Finished evaluation holding documents plus hooks.
+///
+/// Documents hold one rc document per shell in deterministic
+/// order. Hooks hold merged post-config steps in first-seen
+/// declaration order.
+///
+/// # Examples
+///
+/// ```text
+/// use confit_engine::Evaluation;
+///
+/// let evaluation = Evaluation { documents: Vec::new(), hooks: Vec::new() };
+/// assert!(matches!(evaluation.documents.len(), 0));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct Evaluation {
+    /// Holds finished documents in deterministic order.
+    pub documents: Vec<Document>,
+    /// Holds merged hooks in first-seen declaration order.
+    pub hooks: Vec<Hook>,
+}
+
+/// Evaluates one profile file into finished documents plus hooks.
 ///
 /// # Arguments
 ///
@@ -90,7 +113,7 @@ impl std::fmt::Debug for EvalOpts {
 /// # Returns
 ///
 /// Structured plus text plus link documents plus one rc document per
-/// shell, in deterministic order.
+/// shell, in deterministic order, plus merged hooks.
 ///
 /// # Errors
 ///
@@ -106,6 +129,6 @@ impl std::fmt::Debug for EvalOpts {
 /// let outcome = evaluate(Path::new("/nonexistent-profile.lua"), EvalOpts::default());
 /// assert!(matches!(outcome, Err(_)));
 /// ```
-pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_core::error::Result<Vec<Document>> {
+pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_core::error::Result<Evaluation> {
     eval::Session::run(profile, opts)
 }

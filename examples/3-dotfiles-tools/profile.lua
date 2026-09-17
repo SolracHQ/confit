@@ -1,17 +1,14 @@
-local tools = require("tools.tools")
-
-local font_url = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/JetBrainsMono.zip"
-local archive = confit.resources.fetch_file(font_url)
-local fonts = confit.document.compressed(archive, function(path, _, content)
-	if path:match("%.ttf$") then
-		local name = path:match("([^/]+)$")
-		local dest = confit.path.data("fonts", name)
-		return confit.document.opaque(dest, content)
-	end
-end)
+local installer = require("tools.mise")
+local bat = require("tools.bat")
+local eza = require("tools.eza")
+local ripgrep = require("tools.ripgrep")
+local zoxide = require("tools.zoxide")
+local starship = require("tools.starship")
+local shell = require("tools.shell")
+local fonts_install = require("tools.fonts_install")
+local fonts = require("tools.fonts")
 
 return {
 	shells = { "bash" },
-	documents = fonts,
-	configs = tools,
+	configs = { installer, bat, eza, ripgrep, zoxide, starship, shell, fonts_install, fonts },
 }

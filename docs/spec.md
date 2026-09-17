@@ -1,6 +1,6 @@
 # ConfIt spec (current)
 
-Spec-Version: 0.5.0
+Spec-Version: 0.6.0
 
 Living description of what confit does today. If you want to know why
 it looks like this, the intent behind each version lives in `../design/`.
@@ -9,27 +9,30 @@ History of this file lives in git tags (`just show-spec`).
 ## What is
 
 ConfIt (Configure It) is a CaC tool: configuration as code for
-one machine. It manages user-space files, never systems,
-never fleets. Profiles declare the desired files in Lua, plans
+one user. It manages that user's files. Profiles declare the desired files in Lua, plans
 preview the diff, apply writes it. Same profile always yields
 the same documents.
 Two-phase workflow: `plan` previews and diffs before `apply` touches
 anything.
 
-Working today: `plan` over Lua configs, JSON plans on disk,
-`apply` with preview plus prompt, `recover` over stored plans, `init`
-scaffolding. Apply removes state-recorded paths absent from desired
-documents.
+Working today: `plan` over Lua configs, JSON plans on disk
+(plus named plans under `@`), `apply` with preview plus
+prompt plus post-config hooks, `recover` over stored plans,
+`init` scaffolding. Apply removes state-recorded paths absent
+from desired documents.
 
 ## Features
 
 ### Plan before apply
 
 `confit plan` loads a Lua entrypoint, evaluates it to documents plus
-patches plus configs, runs patch callbacks in pipeline order, hashes
+patches plus hooks plus configs, runs patch callbacks in pipeline order, merges
+hooks sharing argv plus path, hashes
 the data, loads previous state, and diffs desired vs previous. Output:
-a JSON plan file plus a terminal summary, with zero writes to home
-paths.
+a JSON plan file carrying documents plus hooks plus a terminal summary, with zero writes to home
+paths. The preview lists each hook as a `! run:` line with the
+resolved absolute binary, and the literal `yes` covers files
+plus hooks together.
 
 ### Plan and drift
 
@@ -65,16 +68,20 @@ while drift exists.
 
 ### Plans on disk
 
-- Plan: JSON pretty-printed (`-o ./plan.json`, omitted stores under tmp
+- Plan: JSON pretty-printed (`-o ./plan.json`, `-o @work` stores
+  a named plan under the user config folder as
+  `plans/work.json`, omitted stores under tmp
   and prints the path), diffable, git-storable.
-  Contains document data plus `created_at`
-  metadata (excluded from the SHA).
-- State: JSON file (`--state`; omitted means the fixed slot under the
-  OS config folder, missing files read empty). Holds full recorded
+  Contains document data plus hook declarations plus `created_at`
+  metadata (excluded from the SHA). Plan format version 4.
+- State: JSON file at the fixed slot under the
+  OS config folder, missing files read empty. Holds full recorded
   documents in path order, plan shaped, so a previous `-o` output feeds
-  `--state` directly. Hashes persist in the file and read trusted, so
-  loads skip rendering. Opaque bytes persist base64. Version mismatches
-  fail as unsupported before parsing.
+  back directly. Hashes persist in the file and read trusted, so
+  loads skip rendering. Opaque bytes persist base64, tree members
+  persist base64 per member. Version mismatches
+  fail as unsupported before parsing. Hooks persist as pure
+  data (argv, gates, checks) and re-evaluate each plan.
 
 ### Terminal summary and color
 
@@ -96,6 +103,13 @@ log: /tmp/confit-123.log
 collision on alias "cat": "eza" overwritten, "bat" wins
 ```
 
+Hook lines ride beside the summary. Runnable hooks print
+`! run: {absolute} {args}` in the preview. Passing checks
+print `skipped: {argv} (checks pass)`. Closed gates print
+`warn: {argv} cannot run ({gate})`. Apply runs hooks after
+files land, printing `hook n of m: {argv}` beside a spinner,
+with hook output streaming into the run log file.
+
 Color: terminal runs paint updates yellow, additions green, removals
 red, headers bold. Piped output stays plain text, and `NO_COLOR`
 disables color. Result lines (summary, counts, plan path) go to
@@ -109,8 +123,8 @@ the plan half when disk reads show changes.
 
 A **document** is the unit that touches disk once `apply` exists.
 Every document has a `path`. Plan diffs and hashes happen at document
-level alone. Five kinds cover everything: structured plus plain text
-plus rc plus link plus opaque.
+level alone. Six kinds cover everything: structured plus plain text
+plus rc plus link plus opaque plus tree.
 
 A **patch** modifies documents through callbacks. `confit.patch.rc`
 carries one callback for the rc document.
@@ -119,17 +133,21 @@ callback. The rc callback receives a live wrapper with `add(section,
 entry)` over the three section names. The structured callback receives a live wrapper
 with `set` plus `append`. Paths hold dotted keys plus single indices, one path per
 call (`a.b[0]`). Each patch rides one of five priority levels, default
-`NORMAL`. The engine sorts patches by priority desc plus owner asc and
-runs them in that order. Op order inside one callback stays verbatim.
+`NORMAL`. The engine sorts patches by priority desc plus config
+declaration order and runs them in that order. Op order inside one callback stays verbatim.
 
-A **config** is a named bag holding documents plus patches for fonts,
+A **config** is a named bag holding documents plus patches plus hooks for fonts,
 tool settings, shell entries. The name serves as uid per plan plus
 owner stamp on every patch; repeats are plan errors. One path holds
 one document; repeated declarations fail as plan errors naming the
 path. A patch to an undeclared document creates it. Patches to one
 path agree on one format; mismatches fail as plan errors.
+A config requires siblings through `require(name, hint?)`;
+a missing target fails the plan naming both configs, with the
+hint on its own line while present. Requires check existence
+alone and compose nothing.
 
-A **profile** is the composition root per machine or role. Its return
+A **profile** is the composition root per user or role. Its return
 value is the entire resource graph: a table with `shells` plus
 `configs` plus optional `documents`, or a zero-arg function returning
 that table. The return value serves as the registration:
@@ -142,7 +160,7 @@ return {
 }
 ```
 
-Profiles declare machine-owned bases, configs declare tool-owned
+Profiles declare user-owned bases, configs declare tool-owned
 documents or just contribute.
 
 A **plugin** is Lua framework code under
@@ -150,12 +168,25 @@ A **plugin** is Lua framework code under
 `--plugins` folder. Plugins compose primitives: installers, helpers,
 dialects. Data alone crosses the engine boundary, in both directions.
 
+A **hook** is a post-config step riding a config beside documents
+plus patches. It holds an argv list plus `path` dirs plus a `when`
+gate plus `checks` plus a timeout. Plan resolves `argv[0]` against
+the hook path dirs plus the engine process PATH and prints the
+absolute in the preview. Apply runs hooks after documents
+materialize. A closed gate warns and excuses the hook. Passing
+checks skip it, failing checks run it, still-failing checks fail
+the apply and abort the rest. Hooks sharing argv plus path merge
+into one run: gates join with OR, checks concatenate, timeout
+takes the max. Timeouts read Lua-shaped durations (`1h10m10s`,
+bare digits as seconds), default `10m`.
+
 ### Documents plan produces
 
 `structured` plus `text` plus `rc` plus `link` plus `opaque`
-assembled by the engine from profile documents plus config documents
+plus `tree` assembled by the engine from profile documents plus config documents
 plus patch output. Structured documents merge through live patch
 callbacks. Plain text plus link plus opaque read declaration only.
+Tree documents read one archive plus one destination plus one picker.
 
 | Kind | How it is built | Merge rule |
 | --- | --- | --- |
@@ -163,6 +194,7 @@ callbacks. Plain text plus link plus opaque read declaration only.
 | `text` | `confit.document.text(path, content, opts?)` declarations | one path holds one document; repeats fail as plan errors |
 | `link` | `confit.document.link(path, target)` declarations | same rule as text |
 | `opaque` | `confit.document.opaque(path, content, opts?)` declarations holding raw bytes | same rule as text |
+| `tree` | `confit.document.tree(archive, dest, fn)` declarations holding one managed file set | same rule as text |
 | `rc` | `confit.document.rc.new({ profile, config, final })` base; `confit.patch.rc(fn)` tweaks; one file per declared shell | sections plus slots, first writer wins, see Shell rc |
 
 Formats cover `json`, `toml`, `yaml`. Template rendering lives in the
@@ -184,7 +216,7 @@ through `add(section, entry)` over the three section names; unknown
 sections fail as plan errors.
 
 Entry builders take `when` alone through opts. `when` holds a
-condition table or a builder function over `confit.shell`, evaluated
+condition table or a builder function over `confit.runtime`, evaluated
 by each new shell session. Unknown opts fields fail as plan errors.
 `rc.prepend` takes a dir alone for `PATH` or var plus dir.
 Init strings render a `{{shell}}` slot with
@@ -195,7 +227,7 @@ local rc = confit.document.rc
 return rc.new({
   profile = { rc.prepend(confit.path.home(".local/bin")) },
   config = { rc.alias("ll", "ls -l") },
-  final = { rc.eval({ "starship", "init", confit.shell.SHELL }) },
+  final = { rc.eval({ "starship", "init", confit.runtime.SHELL }) },
 })
 ```
 
@@ -252,38 +284,82 @@ Text plus opaque declarations accept `{ mode = ... }` carrying
 process umask. Apply sets the recorded mode after writing bytes.
 Structured documents never carry modes.
 
+### Trees
+
+`confit.document.tree(archive, dest, fn)` builds one document
+holding many files under one destination folder. The callback
+takes the same `(name, info, content)` shape as `compressed`
+and returns a destination-relative path per kept member, nil
+per skip. Relative paths stay under the folder: empty plus
+absolute plus dot-dot carriers fail as plan errors, repeats
+fail as plan errors, empty picks fail as plan errors naming
+the filter. The manifest sorts by relative path. Member modes
+inherit the archive executable bit (`755` where set, `644`
+otherwise), so trees never depend on the umask.
+
+Tree documents carry member bytes end to end: plan JSON holds
+base64 per member, hashes cover the canonical manifest (octal
+mode plus relative path plus member sha per line). The summary
+lists creates as `tree (n files)` bodies and updates as
+`~ tree (changed of total files changed)` lines; deletes name
+the kind with its count. Drift walks the destination member
+by member: missing members report missing under their joined
+path, changed bytes report hash plus size labels under the
+member key, changed modes report under the member mode key.
+Disk extras stay quiet. Apply writes members to their joined
+paths with per-member modes, then removes recorded members
+absent from the desired manifest. Hand-placed files stay
+untouched, destinations never delete.
+
 ### Hashing
 
 Tables hold fixed order (`BTreeMap`), ordered lists (`env`, `profile`,
 `init`) keep declaration order. Each document hashes with SHA-256 over
-its rendered bytes.
+its rendered bytes. Tree documents hash the canonical manifest
+instead: one `mode rel sha` line per member in relative path order.
 
 ## DSL guide
 
-`confit.config(name)` returns a handle: userdata with two
-methods, `add_document` plus `add_patch`. Everything nice lives in
+`confit.config(name)` returns a handle: userdata with four
+methods, `add_document` plus `add_patch` plus `add_hook` plus
+`require`. Everything nice lives in
 plugins composing these primitives:
 
 ```lua
 local mise = confit.plugin.solrachq.mise
 
-local bat = mise.package("bat", function(rc)
-  rc:alias("cat", "bat --colors=always")
-  rc:alias("c", "bat")
-end)
-bat:add_document(mise.activate())
+local bat = mise.package({
+  name = "bat",
+  rc_builder = function(rc)
+    rc:alias("cat", "bat --colors=always")
+    rc:alias("c", "bat")
+  end,
+})
 return bat
 ```
 
 One call generates the config under the package name, declares the
-install, and sets `when` on every callback entry against the binary.
-`activate()` returns the eval entry for mise activation.
-Raw bags stay available:
+install hook, requires the installer config, and sets `when` on every callback entry against the binary.
+`mise.init(version?)` returns the installer config holding the
+mise binary plus the activation patch; an explicit version wins, omitted resolves the
+latest tag.
+
+```lua
+local nerd_fonts = confit.plugin.solrachq.nerd_fonts
+
+local fonts_install = nerd_fonts.init()
+local fonts = nerd_fonts.font("JetBrainsMono", "3.5.1")
+```
+
+One call generates the config under the font name, builds the
+tree document under the managed fonts folder, declares the shared
+`fc-cache` hook, and requires the installer config. Omitted
+versions resolve the latest tag. Raw bags stay available:
 
 ```lua
 local c = confit.config("bat")
 c:add_document(confit.document.rc.alias("cat", "bat", {
-  when = confit.shell.in_path("bat"),
+  when = confit.runtime.in_path("bat"),
 }))
 c:add_document(confit.document.structured("toml", {
   path = path,
@@ -292,20 +368,29 @@ c:add_document(confit.document.structured("toml", {
 c:add_patch(confit.patch.structured("toml", path, function(data)
   data:set("user.theme", "catppuccin")
 end):priority(confit.priority.HIGH))
+c:add_hook(confit.hook.run({ "mise", "install" }, {
+  path = { confit.path.home(".local/bin") },
+  when = confit.runtime.in_path("mise"),
+  checks = { confit.runtime.in_path("bat") },
+  timeout = "10m",
+}))
+c:require("plugin:solrachq/mise:install", "Add mise.init() to the profile configs.")
 ```
 
 - `confit.document.rc.alias/env/prepend/eval/cmd/source`
   build rc entry tables, each taking `when` through opts.
   `confit.document.structured/text/link/opaque` plus
   `confit.document.rc.new` build document tables for
-  `config:add_document`.
+  `config:add_document`. `confit.document.compressed` unpacks
+  one archive into kept documents, `confit.document.tree`
+  unpacks one archive into one managed file set.
 - `confit.patch.rc(fn)` plus `confit.patch.structured(format, path, fn)`
   build patch handles for `config:add_patch`. The chainable `:priority`
   method sets one of five levels (`MINOR`, `LOW`, `NORMAL`, `HIGH`,
   `MAJOR`), default `NORMAL`.
-- `confit.shell.env_eq/env_set/in_path/exists/all/any/nop` build
+- `confit.runtime.env_eq/env_set/in_path/exists/all/any/nop` build
   conditions as data. `when` takes a shape directly or a builder
-  function over `confit.shell`, run during evaluation.
+  function over `confit.runtime`, run during evaluation.
 - `confit.plugin.helpers.error(msg)` raises plan errors with plugin
   attribution.
 - Tables in document data hold JSON-shaped values alone; `plan`
@@ -347,7 +432,7 @@ end
   hex chars; mismatches fail naming want plus got. Both calls share one
   sidecar cache: the first download writes bytes plus a `.sha` digest,
   later runs reuse passing bytes. `--re-fetch` forces fresh downloads.
-  Cache paths feed `load_bytes` plus `compressed` directly.
+  Cache paths feed `load_bytes` plus `compressed` plus `tree` directly.
 - `confit.utils.render(template, vars)` renders minijinja slots with a
   vars table. Syntax failures are plan errors. `confit.utils.holds_cycle`
   plus `confit.utils.is_array` check table shapes.
@@ -364,25 +449,27 @@ end
 ## CLI guide
 
 ```sh
-confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.json] [--root .] [--state ./state.json] [--plugins ./plugins] [--re-fetch]
-confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.json] [--force] [--root .] [--state ./state.json] [--plugins ./plugins] [--re-fetch]
-confit recover [INDEX] [--force] [--state ./state.json]
+confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.json|@name] [--root .] [--plugins ./plugins] [--re-fetch]
+confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.json|@name] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
+confit recover [INDEX] [--force]
 confit init [DIR]
 ```
 
-- `-o`/`--output` is the explicit output path; omitted stores the payload
+- `-o`/`--output` is the explicit output path, or `@name` for a
+  named plan under the user config folder (`plans/{name}.json`);
+  omitted stores the payload
   under tmp and prints the path. The summary goes to stdout, with zero
   writes to home paths.
 - `--root` (require resolution base) defaults to the profile file's parent.
-- `--state` points at the previous-state file; omitted means the fixed slot
-  under the OS config folder, missing files read empty.
-- `apply --plan FILE` runs on the file alone with no profile flag; PROFILE
-  stays required otherwise. Previous reads the same resolved state file in
-  both shapes, and the new plan writes back to it.
+- `apply --plan FILE` runs on the file alone with no profile flag; `--plan @name`
+  resolves the named plan; PROFILE
+  stays required otherwise. Previous reads the fixed slot in
+  both shapes, and the new plan writes back to it. Experiments
+  point `--plan` at a rendered file, backups copy a plan file,
+  sharing sends a plan file.
 - `recover` with no index lists stored plans as `index @ timestamp` lines;
   with an index it re-applies the picked plan through preview plus prompts.
-  `--force` skips the first prompt while drift still re-prompts. `--state`
-  names the file gaining the re-applied plan.
+  `--force` skips the first prompt while drift still re-prompts.
 - `init [DIR]` writes `profile.lua` plus editor stubs under DIR, omitted
   means the current folder; present files abort the run with zero writes.
 - `--re-fetch` forces remote downloads past the sidecar cache; omitted
