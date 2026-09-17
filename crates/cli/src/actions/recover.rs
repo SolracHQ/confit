@@ -14,7 +14,7 @@ use super::seams::Seams;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::recover::RecoverRunner;
 /// use confit_cli::actions::seams::Seams;
 /// use confit_cli::cli::RecoverArgs;

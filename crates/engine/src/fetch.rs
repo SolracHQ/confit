@@ -20,7 +20,7 @@ const STREAM_BUF_BYTES: usize = 8 * 1024;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::MemoryFetch;
 /// use confit_engine::fetch::Fetch;
 ///
@@ -46,7 +46,7 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::{Fetch, MemoryFetch};
     ///
     /// let fake = MemoryFetch::new();
@@ -72,7 +72,7 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::{Fetch, MemoryFetch};
     ///
     /// let fake = MemoryFetch::new();
@@ -87,7 +87,7 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::HttpFetch;
 ///
 /// let source = HttpFetch;
@@ -126,7 +126,7 @@ impl Fetch for HttpFetch {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::MemoryFetch;
 ///
 /// let fake = MemoryFetch::new();
@@ -157,7 +157,7 @@ impl MemoryFetch {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::MemoryFetch;
     ///
     /// let fake = MemoryFetch::new();
@@ -182,7 +182,7 @@ impl MemoryFetch {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::MemoryFetch;
     ///
     /// let fake = MemoryFetch::new();
@@ -209,7 +209,7 @@ impl MemoryFetch {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::MemoryFetch;
     ///
     /// let fake = MemoryFetch::new();
@@ -259,7 +259,7 @@ impl Fetch for MemoryFetch {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::Cache;
 /// use std::path::PathBuf;
 ///
@@ -285,7 +285,7 @@ impl Cache {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::Cache;
     /// use std::path::PathBuf;
     ///
@@ -308,7 +308,7 @@ impl Cache {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::Cache;
     /// use std::path::PathBuf;
     ///
@@ -344,7 +344,7 @@ impl Cache {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::Cache;
     /// use std::path::PathBuf;
     ///
@@ -381,7 +381,7 @@ impl Cache {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_engine::fetch::Cache;
     /// use std::path::PathBuf;
     ///
@@ -431,7 +431,7 @@ impl Cache {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::cache_path;
 /// use std::path::Path;
 ///
@@ -454,7 +454,7 @@ pub fn cache_path(cache: &Path, url: &str) -> PathBuf {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::sidecar_path;
 /// use std::path::Path;
 ///
@@ -483,7 +483,7 @@ pub fn sidecar_path(cached: &Path) -> PathBuf {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::fetch::resolve_cache_dir;
 /// use std::path::Path;
 ///

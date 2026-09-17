@@ -15,7 +15,7 @@ use crate::ids::DocPath;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::Table;
 ///
 /// let table = Table::new();
@@ -29,7 +29,7 @@ pub type Table = BTreeMap<String, serde_json::Value>;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::StructuredFormat;
 ///
 /// assert!(matches!(StructuredFormat::parse("toml"), Some(StructuredFormat::Toml)));
@@ -55,7 +55,7 @@ impl StructuredFormat {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::StructuredFormat;
     ///
     /// assert!(matches!(StructuredFormat::Yaml.name(), "yaml"));
@@ -80,7 +80,7 @@ impl StructuredFormat {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::StructuredFormat;
     ///
     /// assert!(matches!(StructuredFormat::parse("JSON"), Some(StructuredFormat::Json)));
@@ -109,7 +109,7 @@ impl std::fmt::Display for StructuredFormat {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::Condition;
 ///
 /// let first = Condition::InPath { name: "bat".into() };
@@ -162,7 +162,7 @@ pub enum Condition {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::PathOp;
 ///
 /// assert!(matches!(PathOp::Prepend, PathOp::Prepend));
@@ -182,7 +182,7 @@ pub enum PathOp {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::RcOp;
 ///
 /// let op = RcOp::Alias { name: "ll".into(), expansion: "ls -l".into() };
@@ -238,7 +238,7 @@ pub enum RcOp {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{RcEntry, RcOp};
 ///
 /// let entry = RcEntry {
@@ -265,7 +265,7 @@ impl RcEntry {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{RcEntry, RcOp};
     ///
     /// let entry = RcEntry {
@@ -291,7 +291,7 @@ impl RcEntry {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{RcEntry, RcOp};
     ///
     /// let entry = RcEntry {
@@ -319,7 +319,7 @@ impl RcEntry {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::RC_SECTION_NAMES;
 ///
 /// assert!(matches!(RC_SECTION_NAMES.contains(&"config"), true));
@@ -334,7 +334,7 @@ pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::RcData;
 ///
 /// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
@@ -366,7 +366,7 @@ impl RcData {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::RcData;
     ///
     /// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
@@ -396,7 +396,7 @@ impl RcData {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::RcData;
     ///
     /// assert!(matches!(RcData::check_section_name("config"), Ok(())));
@@ -420,7 +420,7 @@ impl RcData {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::DocumentKind;
 ///
 /// assert!(matches!(DocumentKind::Text.name(), "text"));
@@ -452,7 +452,7 @@ impl DocumentKind {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::DocumentKind;
     ///
     /// assert!(matches!(DocumentKind::Rc.name(), "rc"));
@@ -481,10 +481,10 @@ impl std::fmt::Display for DocumentKind {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::DocumentData;
 ///
-/// let data = DocumentData::Text { content: "hi".into() };
+/// let data = DocumentData::Text { content: "hi".into(), mode: None };
 /// assert!(matches!(data, DocumentData::Text { .. }));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -536,7 +536,7 @@ pub enum DocumentData {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::TreeMember;
 ///
 /// let member = TreeMember { rel: "font.ttf".into(), content: vec![0x41], mode: 0o644 };
@@ -562,10 +562,10 @@ impl DocumentData {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{DocumentData, DocumentKind};
     ///
-    /// let data = DocumentData::Text { content: "hi".into() };
+    /// let data = DocumentData::Text { content: "hi".into(), mode: None };
     /// assert!(matches!(data.kind(), DocumentKind::Text));
     /// ```
     pub fn kind(&self) -> DocumentKind {
@@ -590,7 +590,7 @@ impl DocumentData {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::DocumentData;
     ///
     /// let data = DocumentData::Text { content: "hi".into(), mode: Some(0o755) };
@@ -611,7 +611,7 @@ impl DocumentData {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::DocumentData;
     ///
     /// let data = DocumentData::Tree { members: Vec::new() };
@@ -642,7 +642,7 @@ impl DocumentData {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{TreeMember, tree_changed};
 ///
 /// let old = vec![TreeMember { rel: "a".into(), content: vec![1], mode: 0o644 }];
@@ -759,7 +759,7 @@ mod base64_content {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::parse_mode;
 ///
 /// assert!(matches!(parse_mode("755"), Ok(mode) if mode == 0o755));
@@ -849,7 +849,7 @@ fn parse_symbolic_mode(text: &str) -> Result<u32> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::render_mode;
 ///
 /// assert!(matches!(render_mode(0o755).as_str(), "755"));
@@ -866,13 +866,13 @@ pub fn render_mode(mode: u32) -> String {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{Document, DocumentData};
 /// use confit_core::ids::DocPath;
 ///
 /// let document = Document::new(
 ///     DocPath::new("x"),
-///     DocumentData::Text { content: "hi".into() },
+///     DocumentData::Text { content: "hi".into(), mode: None },
 /// );
 /// assert!(matches!(document.data, DocumentData::Text { .. }));
 /// ```
@@ -900,7 +900,7 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
@@ -938,7 +938,7 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
@@ -960,13 +960,13 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let document = Document::new(
     ///     DocPath::new("x"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// assert!(matches!(document, document if document.key() == "text:x"));
     /// ```

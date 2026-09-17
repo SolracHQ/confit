@@ -8,7 +8,7 @@ use std::sync::Arc;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::ProgressEvent;
 ///
 /// let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -28,7 +28,7 @@ pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::ProgressEvent;
 ///
 /// let event = ProgressEvent::Hashing;

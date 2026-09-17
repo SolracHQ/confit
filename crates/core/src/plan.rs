@@ -17,7 +17,7 @@ use crate::runtime::Runtime;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::plan::PLAN_VERSION;
 ///
 /// assert!(matches!(PLAN_VERSION, 4));
@@ -32,7 +32,7 @@ pub const PLAN_VERSION: u32 = 4;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::plan::{PLAN_VERSION, Plan};
 ///
 /// let plan = Plan {
@@ -65,7 +65,7 @@ impl Plan {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::plan::{PLAN_VERSION, Plan};
     ///
     /// let plan = Plan::empty();
@@ -137,14 +137,14 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     /// use confit_core::plan::{DocumentStatus, Plan};
     ///
     /// let mut document = Document::new(
     ///     DocPath::new("x"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
     /// assert!(matches!(document.status(&Plan::empty()), DocumentStatus::Create));
@@ -179,13 +179,13 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let mut document = Document::new(
     ///     DocPath::new("x"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
     /// assert!(matches!(document.data_hash.is_empty(), false));
@@ -204,13 +204,13 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let document = Document::new(
     ///     DocPath::new("bin"),
-    ///     DocumentData::Opaque { content: vec![0xFF] },
+    ///     DocumentData::Opaque { content: vec![0xFF], mode: None },
     /// );
     /// assert!(matches!(document.is_opaque(), true));
     /// ```
@@ -233,17 +233,17 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let recorded = Document::new(
     ///     DocPath::new("bin"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// let desired = Document::new(
     ///     DocPath::new("bin"),
-    ///     DocumentData::Opaque { content: vec![0xFF] },
+    ///     DocumentData::Opaque { content: vec![0xFF], mode: None },
     /// );
     /// assert!(matches!(recorded.superseded_by(&[desired]), true));
     /// ```
@@ -268,7 +268,7 @@ impl Document {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::plan::opaque_label;
 ///
 /// let label = opaque_label(&[0xFF, 0x00]);
@@ -302,14 +302,14 @@ impl Plan {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     /// use confit_core::plan::Plan;
     ///
     /// let document = Document::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// let outcome = Plan::build(vec![document], Vec::new());
     /// let previous = Plan::empty();
@@ -342,7 +342,7 @@ impl Plan {
     /// Create, update, plus delete counts.    ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     /// use confit_core::plan::Plan;
@@ -350,12 +350,12 @@ impl Plan {
     /// let mut previous = Plan::empty();
     /// previous.documents = vec![Document::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// )];
     /// let plan = Plan::build(
     ///     vec![Document::new(
     ///         DocPath::new("note"),
-    ///         DocumentData::Text { content: "changed".into() },
+    ///         DocumentData::Text { content: "changed".into(), mode: None },
     ///     )],
     ///     Vec::new(),
     /// );
@@ -409,7 +409,7 @@ impl Plan {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::plan::Plan;
     /// use confit_core::fs::MemoryFs;
     /// use confit_core::runtime::Runtime;
@@ -439,7 +439,7 @@ impl Plan {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::plan::sha256_hex;
 ///
 /// let digest = sha256_hex(b"abc");

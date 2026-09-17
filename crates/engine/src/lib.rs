@@ -36,7 +36,7 @@ pub use progress::{ProgressCallback, ProgressEvent};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::EvalOpts;
 /// use std::path::PathBuf;
 ///
@@ -89,7 +89,7 @@ impl std::fmt::Debug for EvalOpts {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::Evaluation;
 ///
 /// let evaluation = Evaluation { documents: Vec::new(), hooks: Vec::new() };
@@ -122,7 +122,7 @@ pub struct Evaluation {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_engine::{EvalOpts, evaluate};
 /// use std::path::Path;
 ///

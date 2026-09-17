@@ -16,7 +16,7 @@ use crate::plan::{Plan, opaque_label};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::drift::Drift;
 /// use confit_core::ids::DocPath;
 ///
@@ -74,7 +74,7 @@ impl Drift {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::drift::Drift;
     /// use confit_core::ids::DocPath;
     ///
@@ -146,7 +146,7 @@ impl Plan {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::{DocPath, ReadOutcome};
     /// use confit_core::plan::Plan;
@@ -155,7 +155,7 @@ impl Plan {
     /// let mut previous = Plan::empty();
     /// previous.documents = vec![Document::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// )];
     /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new());
     /// assert!(matches!(drifts.len(), 1));

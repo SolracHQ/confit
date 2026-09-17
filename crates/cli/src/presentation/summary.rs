@@ -41,7 +41,7 @@ pub enum Sigil {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::presentation::summary::{Painter, Sigil};
 ///
 /// let painter = Painter::new();
@@ -105,7 +105,7 @@ impl Default for Painter {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::presentation::summary::Summary;
 /// use confit_core::ids::DocPath;
 /// use confit_core::document::{Document, DocumentData};
@@ -113,7 +113,7 @@ impl Default for Painter {
 ///
 /// let document = Document::new(
 ///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into() },
+///     DocumentData::Text { content: "hi".into(), mode: None },
 /// );
 /// let built = Plan::build(vec![document], Vec::new());
 /// let previous = Plan::empty();
@@ -175,14 +175,14 @@ impl Summary<'_> {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::presentation::summary::Summary;
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     /// use confit_core::plan::Plan;
     ///
-    /// let first = Document::new(DocPath::new("a"), DocumentData::Text { content: "a".into() });
-    /// let second = Document::new(DocPath::new("b"), DocumentData::Text { content: "b".into() });
+    /// let first = Document::new(DocPath::new("a"), DocumentData::Text { content: "a".into(), mode: None });
+    /// let second = Document::new(DocPath::new("b"), DocumentData::Text { content: "b".into(), mode: None });
     /// let built = Plan::build(vec![first, second], Vec::new());
     /// let previous = Plan::empty();
     /// let summary = match built {

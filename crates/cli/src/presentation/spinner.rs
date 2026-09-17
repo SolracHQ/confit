@@ -6,7 +6,7 @@
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::presentation::spinner::Live;
 ///
 /// let live = Live::new();

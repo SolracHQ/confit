@@ -39,7 +39,7 @@ pub struct PlanOutcome {
 ///
 /// # Examples
 ///
-/// ```text,no_run
+/// ```rust,no_run
 /// use confit_cli::actions::plan::PlanRunner;
 /// use confit_cli::cli::{PlanArgs, SharedArgs};
 /// use std::path::PathBuf;
@@ -153,7 +153,7 @@ impl PlanRunner<'_> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::plan::tmp_plan_path;
 ///
 /// let path = tmp_plan_path();

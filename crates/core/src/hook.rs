@@ -20,7 +20,7 @@ use crate::runtime::{Runtime, evaluate, find_binary};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::hook::Hook;
 ///
 /// let hook = Hook {
@@ -64,7 +64,7 @@ pub struct Hook {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::hook::{Hook, merge_hooks};
 ///
 /// let hook = Hook {
@@ -134,7 +134,7 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::hook::{Hook, resolve_hook};
 /// use confit_core::runtime::Runtime;
@@ -240,7 +240,7 @@ pub fn preview_hook(
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::Condition;
 /// use confit_core::hook::describe_condition;
 ///

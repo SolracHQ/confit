@@ -11,7 +11,7 @@ use thiserror::Error;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::error::Error;
 ///
 /// let error = Error::Plan("bad section".to_string());
@@ -31,7 +31,7 @@ pub enum Error {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::error::Result;
 ///
 /// let value: Result<u32> = Ok(1);

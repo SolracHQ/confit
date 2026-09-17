@@ -1,0 +1,37 @@
+name: cd
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag matches crate versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for crate in core engine cli; do
+            version="$(grep -m1 '^version' "crates/$crate/Cargo.toml" | cut -d'"' -f2)"
+            if [ "$version" != "$tag" ]; then
+              echo "Tag v$tag does not match crates/$crate version $version."
+              exit 1
+            fi
+          done
+      - name: Release build
+        run: cargo build --release
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp target/release/confit confit-linux-x64
+          gh release create "$GITHUB_REF_NAME" confit-linux-x64 \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Details in docs/changelog.md."

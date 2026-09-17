@@ -31,13 +31,13 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let document = Document::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into() },
+    ///     DocumentData::Text { content: "hi".into(), mode: None },
     /// );
     /// assert!(matches!(document.render(), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
@@ -76,13 +76,13 @@ impl Document {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::document::{Document, DocumentData};
     /// use confit_core::ids::DocPath;
     ///
     /// let document = Document::new(
     ///     DocPath::new("bin"),
-    ///     DocumentData::Opaque { content: vec![0xFF, 0x00] },
+    ///     DocumentData::Opaque { content: vec![0xFF, 0x00], mode: None },
     /// );
     /// assert!(matches!(document.bytes(), Ok(bytes) if bytes == vec![0xFF, 0x00]));
     /// ```

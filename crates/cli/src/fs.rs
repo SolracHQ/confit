@@ -11,7 +11,7 @@ use confit_core::fs::Filesystem;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::fs::OsFs;
 /// use confit_core::fs::Filesystem;
 ///
@@ -38,7 +38,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -66,7 +66,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -102,7 +102,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -135,7 +135,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -172,7 +172,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -203,7 +203,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -226,7 +226,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -253,7 +253,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///
@@ -280,7 +280,7 @@ impl Filesystem for OsFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::fs::OsFs;
     /// use confit_core::fs::Filesystem;
     ///

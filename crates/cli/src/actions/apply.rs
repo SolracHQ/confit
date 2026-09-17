@@ -28,7 +28,7 @@ use confit_engine::ProgressEvent;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::apply::ApplyReport;
 /// use std::path::PathBuf;
 ///
@@ -49,7 +49,7 @@ pub struct ApplyReport {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::apply::ApplyRunner;
 /// use confit_cli::actions::seams::Seams;
 /// use confit_core::document::{Document, DocumentData};
@@ -62,14 +62,18 @@ pub struct ApplyReport {
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new("yes\n");
 /// let mut output = Vec::new();
+/// let plan = match Plan::build(
+///     vec![Document::new(
+///         DocPath::new("note"),
+///         DocumentData::Text { content: "hi".into(), mode: None },
+///     )],
+///     Vec::new(),
+/// ) {
+///     Ok(plan) => plan,
+///     Err(error) => panic!("plan builds: {error}"),
+/// };
 /// let runner = ApplyRunner {
-///     plan: Plan::build(
-///         vec![Document::new(
-///             DocPath::new("note"),
-///             DocumentData::Text { content: "hi".into() },
-///         )],
-///         Vec::new(),
-///     ),
+///     plan,
 ///     previous: Plan::empty(),
 ///     state: None,
 ///     force: false,
@@ -117,7 +121,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Examples
     ///
-    /// ```text,no_run
+    /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::actions::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
@@ -197,7 +201,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Examples
     ///
-    /// ```text,no_run
+    /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::actions::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;

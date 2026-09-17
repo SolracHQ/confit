@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::ids::DocPath;
 ///
 /// let path = DocPath::new("/etc/hosts");
@@ -36,7 +36,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("~/.bashrc");
@@ -54,7 +54,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("~/.bashrc");
@@ -73,7 +73,7 @@ impl DocPath {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::ids::DocPath;
     ///
     /// let path = DocPath::new("/etc/hosts");
@@ -114,7 +114,7 @@ impl From<&str> for DocPath {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::ids::ReadOutcome;
 ///
 /// let outcome = ReadOutcome::Absent;

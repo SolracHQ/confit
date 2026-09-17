@@ -25,7 +25,7 @@ static HOST_FS: OsFs = OsFs;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::seams::Seams;
 /// use confit_core::fs::MemoryFs;
 /// use std::io::Cursor;
@@ -65,7 +65,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::actions::seams::Seams;
     ///
     /// let stdin = std::io::stdin();
@@ -100,7 +100,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::actions::seams::Seams;
     /// use confit_core::fs::MemoryFs;
     /// use std::io::Cursor;
@@ -138,7 +138,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::actions::seams::Seams;
     /// use confit_core::fs::MemoryFs;
     /// use std::io::Cursor;
@@ -168,7 +168,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_cli::actions::seams::Seams;
     /// use confit_core::fs::MemoryFs;
     /// use std::io::Cursor;
@@ -232,7 +232,7 @@ impl<'a> Seams<'a> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::seams::timed;
 ///
 /// let total = timed("sum", || 1 + 2);

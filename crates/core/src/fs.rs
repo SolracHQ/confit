@@ -14,7 +14,7 @@ use crate::ids::{DocPath, ReadOutcome};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::{Filesystem, MemoryFs};
 ///
 /// let fs = MemoryFs::new();
@@ -119,7 +119,7 @@ pub enum TreeMemberRead {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::{MemoryFs, snapshot_tree};
 ///
 /// let map = snapshot_tree(std::path::Path::new("/definitely-missing-confit-path"), &MemoryFs::new());
@@ -195,7 +195,7 @@ fn walk_tree(
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::{Filesystem, MemoryFs};
 ///
 /// let fs = MemoryFs::new();
@@ -223,7 +223,7 @@ impl MemoryFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::fs::{Filesystem, MemoryFs};
     ///
     /// let fs = MemoryFs::new();
@@ -395,7 +395,7 @@ impl Filesystem for MemoryFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::fs::{Filesystem, MemoryFs};
     ///
     /// let fs = MemoryFs::new();
@@ -420,7 +420,7 @@ impl Filesystem for MemoryFs {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::fs::{Filesystem, MemoryFs};
     ///
     /// let fs = MemoryFs::new();
@@ -464,7 +464,7 @@ impl Filesystem for MemoryFs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::{MemoryFs, snapshot};
 /// use confit_core::ids::DocPath;
 ///

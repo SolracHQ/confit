@@ -15,7 +15,7 @@ use confit_core::error::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::hooks::HookRun;
 ///
 /// let run = HookRun { code: 0, output: Vec::new() };
@@ -36,7 +36,7 @@ pub struct HookRun {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::hooks::{FakeRunner, HookRunner};
 ///
 /// let runner = FakeRunner::default();
@@ -173,7 +173,7 @@ pub struct FakeCall {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::actions::hooks::{FakeRunner, HookRun};
 /// use std::collections::VecDeque;
 ///

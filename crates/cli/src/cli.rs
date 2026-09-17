@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::Cli;
 /// use clap::Parser;
 ///
@@ -35,7 +35,7 @@ pub struct Cli {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::{Cli, Command};
 /// use clap::Parser;
 ///
@@ -75,7 +75,7 @@ pub struct SharedArgs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::{Cli, Command};
 /// use clap::Parser;
 ///
@@ -98,7 +98,7 @@ pub struct PlanArgs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::{Cli, Command};
 /// use clap::Parser;
 ///
@@ -125,7 +125,7 @@ pub struct ApplyArgs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::{Cli, Command};
 /// use clap::Parser;
 ///
@@ -145,7 +145,7 @@ pub struct RecoverArgs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::{Cli, Command};
 /// use clap::Parser;
 ///
@@ -175,7 +175,7 @@ pub struct InitArgs {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::expand_tilde;
 /// use std::path::Path;
 ///
@@ -243,7 +243,7 @@ pub fn expand_command(command: &mut Command) {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::resolve_root;
 /// use std::path::Path;
 ///
@@ -276,7 +276,7 @@ pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::resolve_plugins;
 /// use std::path::PathBuf;
 ///
@@ -309,7 +309,7 @@ pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> Pat
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_cli::cli::resolve_plan_file;
 /// use std::path::Path;
 ///

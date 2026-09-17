@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.1] - 2026-09-17
+
+### Added
+
+- MIT license in `LICENSE`, copyright SolracHQ 2026.
+- CI workflow running format, lints, plus tests on push and
+  pull requests. CD workflow building the release binary and
+  publishing it as `confit-linux-x64` on version tags after
+  proving the tag matches every crate version.
+
+### Changed
+
+- Doc examples are real doctests. Every `text` fence holding
+  Rust now reads `rust` and runs under `cargo test`. The pass
+  fixed drifted snippets, mostly the `mode` field on document
+  data.
 
 ## [0.6] - 2026-09-17
 

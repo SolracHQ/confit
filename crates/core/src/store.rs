@@ -14,7 +14,7 @@ use crate::plan::{PLAN_VERSION, Plan};
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::PreviousEntry;
 ///
 /// let entry = PreviousEntry { index: 0, created_at: String::new() };
@@ -51,7 +51,7 @@ pub struct PreviousEntry {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::plan::PLAN_VERSION;
 /// use confit_core::store::load_state;
@@ -105,7 +105,7 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::plan::{PLAN_VERSION, Plan};
 /// use confit_core::store::write_plan;
@@ -134,7 +134,7 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::plan::Plan;
 /// use confit_core::store::plan_json;
 ///
@@ -201,7 +201,7 @@ pub fn write_plan(plan: &Plan, out: Option<&Path>, fs: &dyn Filesystem) -> Resul
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{Document, DocumentData};
 /// use confit_core::fs::{Filesystem, MemoryFs};
 /// use confit_core::ids::DocPath;
@@ -210,7 +210,7 @@ pub fn write_plan(plan: &Plan, out: Option<&Path>, fs: &dyn Filesystem) -> Resul
 /// let fs = MemoryFs::new();
 /// let documents = vec![Document::new(
 ///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into() },
+///     DocumentData::Text { content: "hi".into(), mode: None },
 /// )];
 /// assert!(matches!(write_documents(&documents, &fs, None), Ok(())));
 /// assert!(fs.exists(std::path::Path::new("note")));
@@ -317,7 +317,7 @@ fn write_tree_members(
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{Document, DocumentData};
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::ids::DocPath;
@@ -326,7 +326,7 @@ fn write_tree_members(
 /// let fs = MemoryFs::new();
 /// let recorded = vec![Document::new(
 ///     DocPath::new("gone"),
-///     DocumentData::Text { content: "hi".into() },
+///     DocumentData::Text { content: "hi".into(), mode: None },
 /// )];
 /// assert!(matches!(remove_orphans(&recorded, &[], &fs), Ok(0)));
 /// ```
@@ -378,7 +378,7 @@ pub fn remove_orphans(
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::{Document, DocumentData, TreeMember};
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::ids::DocPath;
@@ -388,7 +388,7 @@ pub fn remove_orphans(
 /// let recorded = vec![Document::new(
 ///     DocPath::new("fonts"),
 ///     DocumentData::Tree { members: vec![TreeMember { rel: "gone.ttf".into(), content: vec![1], mode: 0o644 }] },
-/// }];
+/// )];
 /// assert!(matches!(remove_tree_members(&recorded, &[], &fs), Ok(0)));
 /// ```
 pub fn remove_tree_members(
@@ -441,7 +441,7 @@ const PREVIOUS_KEPT: usize = 5;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::store::list_previous;
 ///
@@ -481,7 +481,7 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<PreviousEntry>> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::store::stored_entries;
 /// use std::path::Path;
@@ -560,7 +560,7 @@ fn rotate_previous(dir: &Path, fs: &dyn Filesystem) -> Result<()> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::resolve_base_dir;
 ///
 /// let dir = resolve_base_dir();
@@ -587,7 +587,7 @@ pub fn resolve_base_dir() -> Result<PathBuf> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::resolve_previous_dir;
 ///
 /// let dir = resolve_previous_dir();
@@ -609,7 +609,7 @@ pub fn resolve_previous_dir() -> Result<PathBuf> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::resolve_plans_dir;
 ///
 /// let dir = resolve_plans_dir();
@@ -640,7 +640,7 @@ pub fn resolve_plans_dir() -> Result<PathBuf> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::resolve_named_plan;
 ///
 /// let path = resolve_named_plan("work");
@@ -680,7 +680,7 @@ pub fn resolve_named_plan(name: &str) -> Result<PathBuf> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::store::default_state_path;
 ///
 /// let slot = default_state_path();
@@ -710,7 +710,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::plan::Plan;
 /// use confit_core::store::archive_previous;

@@ -13,7 +13,7 @@ use crate::ids::DocPath;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::runtime::DEFAULT_HOOK_TIMEOUT_SECS;
 ///
 /// assert!(matches!(DEFAULT_HOOK_TIMEOUT_SECS, 600));
@@ -28,7 +28,7 @@ pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::runtime::Runtime;
 ///
 /// let rt = Runtime { vars: Default::default(), path_dirs: Vec::new() };
@@ -53,7 +53,7 @@ impl Runtime {
     ///
     /// # Examples
     ///
-    /// ```text
+    /// ```rust
     /// use confit_core::runtime::Runtime;
     ///
     /// let rt = Runtime::current();
@@ -94,7 +94,7 @@ impl Runtime {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::document::Condition;
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::runtime::{Runtime, evaluate};
@@ -138,7 +138,7 @@ fn path_holds(name: &str, rt: &Runtime, fs: &dyn Filesystem) -> bool {
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::runtime::find_binary;
 /// use std::path::PathBuf;
@@ -186,7 +186,7 @@ pub fn find_binary(name: &str, dirs: &[PathBuf], fs: &dyn Filesystem) -> Option<
 ///
 /// # Examples
 ///
-/// ```text
+/// ```rust
 /// use confit_core::runtime::parse_duration;
 ///
 /// assert!(matches!(parse_duration("10m"), Ok(600)));
