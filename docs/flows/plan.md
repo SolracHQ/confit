@@ -31,7 +31,7 @@ disk bytes past the first run. Build renders plus hashes
 every document and counts create, update, delete against previous.
 The summary prints creates, updates, deletes, drift or impact
 notes, plus counts. The tmp path serves
-later `--plan` reuse. An `-o` path gains `.cb` when missing.
+later apply reuse. An `-o` path gains `.cb` when missing.
 `@name` stores a named slot instead of a file.
 
 Stdout carries the summary plus the `plan:` path through

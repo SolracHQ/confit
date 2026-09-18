@@ -17,7 +17,7 @@ anything.
 
 Working today: `plan` over Lua configs, portable bundle files
 (plus named plans under `@`), `apply` with preview plus
-prompt plus post-config hooks, `recover` over stored plans,
+prompt plus post-config hooks, past slots through `apply`,
 `init` scaffolding. Apply removes state-recorded paths absent
 from desired documents.
 
@@ -485,10 +485,9 @@ end
 
 ```sh
 confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.cb|@name] [--root .] [--plugins ./plugins] [--re-fetch]
-confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.cb|@name] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
+confit [--log-file ./confit.log] [--log-level debug] apply [SOURCE] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
 confit export [PICKER] [-o ./out.cb] [-m]
 confit delete @name
-confit recover [INDEX] [--force]
 confit init [DIR]
 ```
 
@@ -498,15 +497,12 @@ confit init [DIR]
   under tmp and prints the path. The summary goes to stdout, with zero
   writes to home paths.
 - `--root` (require resolution base) defaults to the profile file's parent.
-- `apply --plan FILE` runs on the file alone with no profile flag; bundles
-  plus manifests both run; `--plan @name`
-  resolves the named plan; PROFILE
-  stays required otherwise. Previous reads the fixed slot in
-  both shapes, and the new plan writes back to it. Experiments
-  point `--plan` at a bundle file, backups copy a bundle file,
-  sharing sends a bundle file.
-- `recover` with no index lists stored plans as `index @ timestamp` lines;
-  with an index it re-applies the picked plan through preview plus prompts.
+- `apply` reads its positional by shape: `.lua` plus extensionless
+  paths evaluate a profile, `.cb` runs a bundle file, `@name`
+  runs a named slot, `%N` runs history newest-first from one.
+  Bundle files run on the file alone with no profile and no preview.
+  Previous reads the fixed slot in every shape, and the new plan writes back to it. Experiments
+  apply a bundle file, backups copy a bundle file, sharing sends a bundle file.
 - `export` packs one slot into a portable bundle file and prints
   the path. The picker reads `%N` history newest-first from one,
   `@name` a named slot, nothing the applied slot; other values

@@ -1,14 +1,14 @@
-# Apply without a plan
+# Apply a source
 
-`confit apply [PROFILE]` evaluates first, then follows
-the same guarded write path. The profile rides positionally,
-required unless `--plan` passes. The preview renders for review
-on the spot.
+`confit apply SOURCE` sniffs its shape first, then follows
+the same guarded write path. Profiles evaluate through the
+engine, bundles plus slots load through the pool. The preview
+renders for review on the spot.
 
 ```mermaid
 flowchart TD
-    A["Parse flags, expand tildes"] --> B["Require positional profile"]
-    B --> C["Evaluate profile with Lua engine"]
+    A["Parse flags, expand tildes"] --> B["Sniff positional shape"]
+    B --> C["Evaluate profile or load slot plan"]
     C --> D["Load fixed slot state"]
     D --> E["Missing slot reads empty, marks first run"]
     E --> F["Build: render, hash, count"]
@@ -33,7 +33,7 @@ flowchart TD
     R --> S["Report written, removed, stored"]
 ```
 
-`--plan FILE` runs instead on the file alone with no profile
+A `.cb` source runs on the file alone with no profile
 and no preview; see apply-plan.md. That branch sets preview
 to false and skips the preview render.
 

@@ -27,28 +27,27 @@ under the root. The root defaults to the profile folder.
 
 ## Commands
 
-Every command takes the profile first:
+Apply reads profiles, bundles, and slots through one positional:
 
 ```sh
 confit plan laptop.lua --root .            # preview
 confit plan laptop.lua -o @laptop          # preview into a named plan
 confit apply laptop.lua                    # preview, prompt, write
-confit apply --plan @laptop --force        # reviewed plan, no prompt
-confit recover                             # list stored states
-confit recover 0                           # re-apply one
+confit apply @laptop --force        # reviewed plan, no prompt
+confit apply %1                            # re-apply just-previous
 confit init myproject                      # scaffold, default .
 ```
 
 `@name` stores the rendered plan under the user config
 folder as `plans/{name}.json`, pretty printed like any plan.
-`--plan @name` replays it. Empty names plus separators fail.
+`apply @name` replays it. Empty names plus separators fail.
 Switching profiles runs on named plans. Render each profile
-into its own name and replay with `apply --plan`:
+into its own name and replay by name:
 
 ```sh
 confit plan laptop.lua -o @laptop
 confit plan server.lua -o @server
-confit apply --plan @laptop
+confit apply @laptop
 ```
 
 One shared slot keeps drift honest. Every switch diffs
@@ -61,5 +60,5 @@ same profile always yields the same documents, and the full
 desired state stays reachable from plan alone. So I copy my
 profile into a temporal one, add the neat new tool, test it.
 I like it, it becomes my profile. I dislike it, I delete the
-file, apply the old profile or recover, done. Simpler
+file, apply the old profile or past slot, done. Simpler
 impossible.

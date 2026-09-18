@@ -13,7 +13,8 @@ use confit_core::plan::Plan;
 use confit_core::runtime::{Runtime, evaluate};
 use confit_core::store::{
     archive_previous, default_state_path, load_plan_input, load_state, prune_blobs, remove_orphans,
-    remove_tree_members, write_documents, write_plan,
+    remove_tree_members, resolve_named_plan, resolve_previous_dir, stored_entries, write_documents,
+    write_plan,
 };
 
 use crate::actions::hooks::{HookRunner, OsRunner, append_hook_log};
@@ -41,7 +42,7 @@ pub struct ApplyReport {
     pub written: usize,
     /// Counts recorded orphans plus dropped tree members removed from disk.
     pub removed: usize,
-    /// Holds the stored plan path backing recover.
+    /// Holds the stored plan path backing apply of the past.
     pub stored: PathBuf,
 }
 
@@ -101,9 +102,10 @@ pub struct ApplyRunner<'a> {
 impl<'a> ApplyRunner<'a> {
     /// Reads desired documents from flags on injected seams.
     ///
-    /// A plan file runs on the file alone with no profile
-    /// flag plus no engine. Otherwise the profile evaluates
-    /// through the engine first.
+    /// The positional sniffs its shape: `@name` reads a named
+    /// slot, `%N` reads history newest-first from one, `.cb`
+    /// reads a bundle file, everything else evaluates as
+    /// a profile.
     ///
     /// # Arguments
     ///
@@ -130,13 +132,12 @@ impl<'a> ApplyRunner<'a> {
     /// use std::path::PathBuf;
     ///
     /// let args = ApplyArgs {
-    ///     profile: Some(PathBuf::from("profile.lua")),
+    ///     source: PathBuf::from("profile.lua"),
     ///     shared: confit_cli::cli::SharedArgs {
     ///         root: None,
     ///         plugins: None,
     ///         re_fetch: false,
     ///     },
-    ///     plan: None,
     ///     force: true,
     /// };
     /// let fs = OsFs;
@@ -147,12 +148,23 @@ impl<'a> ApplyRunner<'a> {
     /// assert!(matches!(runner, Ok(_) | Err(_)));
     /// ```
     pub fn from_args(args: &ApplyArgs, seams: Seams<'a>) -> Result<Self> {
-        if let Some(plan_file) = args.plan.as_deref() {
-            let resolved = crate::cli::resolve_plan_file(plan_file)?;
-            seams.emit_reading_plan(&resolved);
-            let file_plan = timed("apply plan load", || {
-                load_plan_input(resolved.as_path(), seams.fs)
-            })?;
+        let positional = args.source.as_path();
+        let raw = positional.to_str().unwrap_or("");
+        if let Some(name) = raw.strip_prefix('@') {
+            let slot_plan = load_named_slot(name, seams.fs)?;
+            return Self::from_slot(slot_plan, args.force, seams);
+        }
+        if let Some(rest) = raw.strip_prefix('%') {
+            let pick = parse_history_pick(raw, rest)?;
+            let slot_plan = load_history_pick(raw, pick, seams.fs)?;
+            return Self::from_slot(slot_plan, args.force, seams);
+        }
+        if positional
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
+        {
+            seams.emit_reading_plan(positional);
+            let file_plan = timed("apply plan load", || load_plan_input(positional, seams.fs))?;
             let state_file = default_state_path()?;
             seams.emit_reading_plan(&state_file);
             let previous = load_state(Some(state_file.as_path()), seams.fs)?;
@@ -165,17 +177,13 @@ impl<'a> ApplyRunner<'a> {
                 seams,
             });
         }
-        let profile = args
-            .profile
-            .as_deref()
-            .ok_or_else(|| Error::Plan("apply needs --profile while absent".to_string()))?;
-        if !seams.fs.exists(profile) {
+        if !seams.fs.exists(positional) {
             return Err(Error::Plan(format!(
                 "apply reads no profile '{}'",
-                profile.display()
+                positional.display()
             )));
         }
-        let evaluation = evaluate_shared(&args.shared, profile, seams.progress.clone())?;
+        let evaluation = evaluate_shared(&args.shared, positional, seams.progress.clone())?;
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
         let previous = load_state(Some(state_file.as_path()), seams.fs)?;
@@ -184,6 +192,21 @@ impl<'a> ApplyRunner<'a> {
             previous,
             state: Some(state_file),
             force: args.force,
+            preview: true,
+            seams,
+        })
+    }
+
+    /// Builds a slot-backed runner with preview plus prompts.
+    fn from_slot(slot_plan: Plan, force: bool, seams: Seams<'a>) -> Result<Self> {
+        let state_file = default_state_path()?;
+        seams.emit_reading_plan(&state_file);
+        let previous = load_state(Some(state_file.as_path()), seams.fs)?;
+        Ok(Self {
+            plan: slot_plan,
+            previous,
+            state: Some(state_file),
+            force,
             preview: true,
             seams,
         })
@@ -216,13 +239,12 @@ impl<'a> ApplyRunner<'a> {
     /// use std::path::PathBuf;
     ///
     /// let args = ApplyArgs {
-    ///     profile: Some(PathBuf::from("profile.lua")),
+    ///     source: PathBuf::from("profile.lua"),
     ///     shared: confit_cli::cli::SharedArgs {
     ///         root: None,
     ///         plugins: None,
     ///         re_fetch: false,
     ///     },
-    ///     plan: None,
     ///     force: true,
     /// };
     /// let fs = OsFs;
@@ -435,4 +457,84 @@ impl<'a> ApplyRunner<'a> {
         }
         Ok(())
     }
+}
+
+/// Parses one `%N` history pick.
+///
+/// # Arguments
+///
+/// * `raw` - the full picker text for error context.
+/// * `rest` - the digits after the `%` sigil.
+///
+/// # Returns
+///
+/// The 1-based pick newest-first from one.
+///
+/// # Errors
+///
+/// Non-numeric picks fail as plan errors.
+fn parse_history_pick(raw: &str, rest: &str) -> Result<usize> {
+    rest.parse().map_err(|_| {
+        Error::Plan(format!(
+            "apply: '{raw}' reads unsupported, want '%N' holding a number from 1"
+        ))
+    })
+}
+
+/// Loads one history entry newest-first from one.
+///
+/// # Arguments
+///
+/// * `raw` - the full picker text for error context.
+/// * `pick` - the 1-based pick newest-first from one.
+/// * `fs` - the backend under reading.
+///
+/// # Returns
+///
+/// The live plan holding binary bytes.
+///
+/// # Errors
+///
+/// Out-of-range picks fail naming the stored count. Load
+/// failures surface as plan or io errors.
+fn load_history_pick(raw: &str, pick: usize, fs: &dyn Filesystem) -> Result<Plan> {
+    let dir = resolve_previous_dir()?;
+    let entries = stored_entries(&dir, fs)?;
+    let total = entries.len();
+    if pick < 1 || pick > total {
+        return Err(Error::Plan(format!(
+            "apply: '{raw}' reads out of range, holding {total} stored plans"
+        )));
+    }
+    entries
+        .into_iter()
+        .nth(pick - 1)
+        .map(|(_, plan)| plan)
+        .ok_or_else(|| {
+            Error::Plan(format!(
+                "apply: '{raw}' reads out of range, holding {total} stored plans"
+            ))
+        })
+}
+
+/// Loads one named slot plan.
+///
+/// # Arguments
+///
+/// * `name` - the slot name without the `@` sigil.
+/// * `fs` - the backend under reading.
+///
+/// # Returns
+///
+/// The live plan holding binary bytes.
+///
+/// # Errors
+///
+/// Absent slots plus load failures surface as plan or io errors.
+fn load_named_slot(name: &str, fs: &dyn Filesystem) -> Result<Plan> {
+    let path = resolve_named_plan(name)?;
+    if !fs.exists(&path) {
+        return Err(Error::Plan(format!("apply: '@{name}' reads absent")));
+    }
+    load_state(Some(path.as_path()), fs)
 }

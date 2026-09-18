@@ -175,7 +175,7 @@ pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Plan, 
                 "export: '{raw}' reads out of range, holding {total} stored plans"
             )));
         }
-        let (_, plan) = entries.into_iter().nth(total - pick).ok_or_else(|| {
+        let (_, plan) = entries.into_iter().nth(pick - 1).ok_or_else(|| {
             Error::Plan(format!(
                 "export: '{raw}' reads out of range, holding {total} stored plans"
             ))

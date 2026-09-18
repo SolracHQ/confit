@@ -48,8 +48,6 @@ pub enum Command {
     Plan(PlanArgs),
     /// Preview the plan, confirm, and create every document in place.
     Apply(ApplyArgs),
-    /// List stored plans, re-apply the picked one by index.
-    Recover(RecoverArgs),
     /// Scaffold one profile plus stubs in the target folder.
     Init(InitArgs),
     /// Pack one slot into a portable bundle file or print its manifest.
@@ -60,8 +58,8 @@ pub enum Command {
 
 /// Shared run flags carried by plan plus apply.
 ///
-/// The profile rides positionally on each command instead,
-/// required by `plan`, required unless `--plan` on `apply`.
+/// Profiles ride positionally: `plan` takes one, `apply`
+/// takes a source in every shape.
 #[derive(Debug, Args)]
 pub struct SharedArgs {
     /// Require resolution base. Defaults to the profile parent.
@@ -100,6 +98,10 @@ pub struct PlanArgs {
 
 /// Arguments for `confit apply`.
 ///
+/// The positional sniffs its shape: `.lua` plus extensionless
+/// paths read a profile, `.cb` reads a bundle file, `@name`
+/// reads a named slot, `%N` reads history newest-first from one.
+///
 /// # Examples
 ///
 /// ```rust
@@ -111,35 +113,11 @@ pub struct PlanArgs {
 /// ```
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// Profile Lua file under evaluation. Omitted while `--plan` passes.
-    #[arg(required_unless_present = "plan")]
-    pub profile: Option<PathBuf>,
+    /// Plan source under applying.
+    pub source: PathBuf,
     /// Shared seam flags.
     #[command(flatten)]
     pub shared: SharedArgs,
-    /// Reviewed plan file. Runs on the file alone with no profile.
-    #[arg(long)]
-    pub plan: Option<PathBuf>,
-    /// Skips the confirmation prompt. Drift still re-prompts.
-    #[arg(long)]
-    pub force: bool,
-}
-
-/// Arguments for `confit recover`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "recover"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Recover(_))));
-/// ```
-#[derive(Debug, Args)]
-pub struct RecoverArgs {
-    /// Stored plan index from the listing. Omitted lists only.
-    pub index: Option<usize>,
     /// Skips the confirmation prompt. Drift still re-prompts.
     #[arg(long)]
     pub force: bool,
@@ -263,11 +241,9 @@ pub fn expand_command(command: &mut Command) {
             opt(&mut args.output);
         }
         Command::Apply(args) => {
-            opt(&mut args.profile);
+            args.source = expand_tilde(&args.source);
             shared(&mut args.shared);
-            opt(&mut args.plan);
         }
-        Command::Recover(_) => {}
         Command::Init(args) => {
             args.dir = expand_tilde(&args.dir);
         }

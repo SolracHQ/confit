@@ -47,7 +47,6 @@ fn run() -> confit_core::error::Result<()> {
             run_plan_like(args, store, &log_path)
         }
         Command::Apply(args) => run_apply(args, &log_path),
-        Command::Recover(args) => run_recover(args, &log_path),
         Command::Init(args) => run_init(args),
         Command::Export(args) => run_export(args),
         Command::Delete(args) => run_delete(args),
@@ -57,7 +56,7 @@ fn run() -> confit_core::error::Result<()> {
 /// Runs plan with summary output.
 ///
 /// Plan without a destination stores the payload under tmp and
-/// prints the path for later `--plan` reuse.
+/// prints the path for later apply reuse.
 fn run_plan_like(
     args: &confit_cli::cli::PlanArgs,
     store_tmp: bool,
@@ -124,45 +123,6 @@ fn run_apply(
         report.removed
     );
     anstream::println!("previous: {}", report.stored.display());
-    anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
-    Ok(())
-}
-
-/// Runs recover listing or re-apply on host seams.
-fn run_recover(
-    args: &confit_cli::cli::RecoverArgs,
-    log_path: &std::path::Path,
-) -> confit_core::error::Result<()> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let stderr = std::io::stderr();
-    let mut output = stderr.lock();
-    let live = Live::new();
-    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
-    seams.progress = live.sink();
-    seams.log_file = Some(log_path.to_path_buf());
-    let runner = confit_cli::actions::recover::RecoverRunner { args, seams };
-    let report = match runner.execute() {
-        Ok(report) => report,
-        Err(error) => {
-            live.finish();
-            anstream::eprintln!("log: {}", log_path.display());
-            log::logger().flush();
-            return Err(error);
-        }
-    };
-    if let Some(report) = report {
-        live.finish();
-        anstream::println!(
-            "applied: {} files, {} removed",
-            report.written,
-            report.removed
-        );
-        anstream::println!("previous: {}", report.stored.display());
-    } else {
-        live.finish();
-    }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())

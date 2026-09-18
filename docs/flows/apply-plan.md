@@ -1,6 +1,6 @@
 # Apply planned changes
 
-`confit apply --plan FILE` runs on the file alone. Desired
+`confit apply backup.cb` runs on the file alone. Desired
 documents come from the file. No preview renders here.
 
 ```mermaid

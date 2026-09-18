@@ -23,9 +23,14 @@
 - `export` packs any slot (`%N` history newest-first, `@name`
   named, nothing applied) into a portable `.cb` bundle and
   prints the path, with `-o` naming the destination and `-m`
-  printing the manifest instead. `delete @name` drops named
+  printing the manifest. `delete @name` drops named
   slots and prunes orphaned pool bytes. Missing apply
   profiles fail naming the path.
+- `apply` reads its positional by shape now: `.lua` plus
+  extensionless paths evaluate a profile, `.cb` runs a bundle,
+  `@name` runs a named slot, `%N` runs history newest-first
+  from one. The `--plan` flag retires, `recover` retires with
+  it, their coverage moves to apply picker tests.
 
 ### Changed
 

@@ -15,19 +15,19 @@ use crate::hook::Hook;
 use crate::ids::DocPath;
 use crate::plan::{PLAN_VERSION, Plan};
 
-/// One stored plan entry for the recover listing.
+/// One stored plan entry for the apply-past listing.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use confit_core::store::PreviousEntry;
 ///
-/// let entry = PreviousEntry { index: 0, created_at: String::new() };
-/// assert!(matches!(entry.index, 0));
+/// let entry = PreviousEntry { index: 1, created_at: String::new() };
+/// assert!(matches!(entry.index, 1));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviousEntry {
-    /// Holds the listing position used as the recover pick.
+    /// Holds the listing position used as the apply `%N` pick.
     pub index: usize,
     /// Holds the stored plan creation timestamp.
     pub created_at: String,
@@ -502,7 +502,7 @@ pub fn remove_tree_members(
 
 /// Stored plans kept before rotation drops the oldest.
 const PREVIOUS_KEPT: usize = 5;
-/// Lists stored plans oldest first with recover indices.
+/// Lists stored plans newest first with apply picks.
 ///
 /// # Arguments
 ///
@@ -530,15 +530,17 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<PreviousEntry>> {
     Ok(stored_entries(&dir, fs)?
         .into_iter()
         .enumerate()
-        .map(|(index, (_, stored))| PreviousEntry {
-            index,
+        .map(|(position, (_, stored))| PreviousEntry {
+            index: position + 1,
             created_at: stored.created_at,
         })
         .collect())
 }
 
-/// Reads stored plans oldest first with their file paths.
+/// Reads stored plans newest first with their file paths.
 ///
+/// Stamp names stay oldest-first on disk while presentation
+/// reverses, so `%1` names the just-previous entry.
 /// Manifests hydrate with the disk short-circuit, so steady
 /// entries skip pool reads. Unreadable files plus bad JSON
 /// plus stale versions plus unresolvable blobs skip quietly.
@@ -575,6 +577,7 @@ pub fn stored_entries(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<(PathBuf, P
         Err(error) => return Err(Error::from(error)),
     };
     files.sort();
+    files.reverse();
     let mut out = Vec::new();
     for file in files {
         let bytes = match fs.read(&file) {
@@ -789,7 +792,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// The stored plan path backing recover.
+/// The stored plan path backing apply of the past.
 ///
 /// # Errors
 ///
