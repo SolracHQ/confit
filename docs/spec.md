@@ -15,7 +15,7 @@ the same documents.
 Two-phase workflow: `plan` previews and diffs before `apply` touches
 anything.
 
-Working today: `plan` over Lua configs, JSON plans on disk
+Working today: `plan` over Lua configs, portable bundle files
 (plus named plans under `@`), `apply` with preview plus
 prompt plus post-config hooks, `recover` over stored plans,
 `init` scaffolding. Apply removes state-recorded paths absent
@@ -53,13 +53,18 @@ Comparison 2 is plan versus state. Desired hashes diff against
 recorded hashes. Absent means create. Different means update. Equal
 means unchanged. Recorded only documents mean delete. Structured
 plus link plus opaque updates show old to new values per key, opaque
-under the `content` key.
+under the `content` key. Text plus rc updates render content
+hunks against recorded documents.
 
-Drift notes lead the summary. Key edits read
-`~ {path}: {key} = {old} -> {new}` with `null` for absent sides.
-Link edits use `target` as the key. Hunks land verbatim as unified
-diffs from recorded to disk under `--- recorded` plus `+++ disk`
-headers. Missing lines read
+Drift notes lead the summary. Changed keys read
+`~ {path}: {key} = {old} -> {new}`. Added keys read
+`+ {path}: {key} = {new}`, removed keys read
+`- {path}: {key} = {old}`. An explicit null value reads as
+`null`, distinct from an absent key.
+Link edits use `target` as the key. Hunks render content lines
+from recorded to disk under the document header. File markers
+never render. Removals read red, additions read green, context
+stays plain. Missing lines read
 `{path}: manually deleted. changed outside config: add to config
 or the next apply loses them`. Unreadable lines read
 `cannot read '{path}': {reason}. changed outside config: add to
@@ -74,8 +79,8 @@ lifecycle block per document holding drift entries. Whole
 disk-absent documents read as creates. Remaining groups read
 as updates with disk values first: structured plus link plus
 opaque leaves read `~ {key} = {disk} -> {desired}`, text
-plus rc hunks render verbatim disk-first under `--- disk`
-plus `+++ desired` headers, trees
+plus rc hunks render content lines disk-first under the
+document header, trees
 collapse to `~ tree ({changed} of {total} files changed)`. Documents
 holding no entries read no lines and leave the add count.
 The counts line reads
@@ -83,20 +88,34 @@ The counts line reads
 
 ### Plans on disk
 
-- Plan: JSON pretty-printed (`-o ./plan.json`, `-o @work` stores
-  a named plan under the user config folder as
-  `plans/work.json`, omitted stores under tmp
-  and prints the path), diffable, git-storable.
-  Contains document data plus hook declarations plus `created_at`
-  metadata (excluded from the SHA). Plan format version 4.
-- State: JSON file at the fixed slot under the
-  OS config folder, missing files read empty. Holds full recorded
+- Plan: one portable bundle per run (`-o ./plan.cb`, omitted
+  stores a bundle under tmp and prints the path), git-storable.
+  `-o` appends `.cb` when the path lacks the extension.
+  `-o @work` stores a named plan under the user config folder
+  as `plans/work.json`. Contains document metadata plus hook
+  declarations plus `created_at` metadata (excluded from the SHA). Plan
+  format version 5. Text, structured, rc, plus link payloads
+  stay inline. Opaque files plus tree members read as `blob`
+  hash refs. Planning writes bundles holding their own blobs
+  and the pool fills on apply alone.
+- State: JSON manifest at the fixed slot under the
+  OS config folder, missing files read empty. Holds recorded
   documents in path order, plan shaped, so a previous `-o` output feeds
   back directly. Hashes persist in the file and read trusted, so
-  loads skip rendering. Opaque bytes persist base64, tree members
-  persist base64 per member. Version mismatches
-  fail as unsupported before parsing. Hooks persist as pure
-  data (argv, gates, checks) and re-evaluate each plan.
+  loads skip rendering. Binary bytes live gzipped once in the
+  shared pool under content hashes (`blobs/<sha>`). Writes store
+  missing blobs and skip present ones, so slots share stored
+  bytes. Loads hydrate lazily: disk bytes matching a hash skip
+  pool reads, and missing blobs fail naming the hash. Version
+  mismatches fail as unsupported before parsing. Hooks persist
+  as pure data (argv, gates, checks) and re-evaluate each plan.
+- History plus named plans: `previous/<stamp>.json` entries plus
+  `plans/<name>.json` slots hold manifests against the same pool.
+  Pruning drops pool entries referenced by no slot, history
+  entry, or named plan. Apply prunes after archiving, so a
+  rotated-out entry releases its bytes at once.
+- Bundle: one portable `.cb` file holding `manifest.json` plus
+  the referenced blobs alone, so any stored state travels by file.
 
 ### Terminal summary and color
 
@@ -288,8 +307,8 @@ documents ride the profile `documents` array or `config:add_document`.
 
 Opaque documents carry raw bytes end to end: `load_bytes` plus
 compressed callbacks plus `fetch_file` bodies supply the bytes,
-`confit.document.opaque(path, content, opts?)` declares them, plan JSON holds
-base64, hashes cover raw bytes, apply writes raw bytes. The summary
+`confit.document.opaque(path, content, opts?)` declares them, plan files hold
+blob refs into the shared pool, hashes cover raw bytes, apply writes raw bytes. The summary
 lists creates as `opaque (n bytes)` bodies and updates as `~ content`
 hash lines; kind changes to or from opaque count as updates with a
 `~ kind` line.
@@ -312,8 +331,8 @@ the filter. The manifest sorts by relative path. Member modes
 inherit the archive executable bit (`755` where set, `644`
 otherwise), so trees never depend on the umask.
 
-Tree documents carry member bytes end to end: plan JSON holds
-base64 per member, hashes cover the canonical manifest (octal
+Tree documents carry member bytes end to end: plan files hold
+blob refs per member, hashes cover the canonical manifest (octal
 mode plus relative path plus member sha per line). The summary
 lists creates as `tree (n files)` bodies and updates as
 `~ tree (changed of total files changed)` lines; deletes name
@@ -465,24 +484,25 @@ end
 ## CLI guide
 
 ```sh
-confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.json|@name] [--root .] [--plugins ./plugins] [--re-fetch]
-confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.json|@name] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
+confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.cb|@name] [--root .] [--plugins ./plugins] [--re-fetch]
+confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.cb|@name] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
 confit recover [INDEX] [--force]
 confit init [DIR]
 ```
 
-- `-o`/`--output` is the explicit output path, or `@name` for a
-  named plan under the user config folder (`plans/{name}.json`);
-  omitted stores the payload
+- `-o`/`--output` is the explicit output path holding a bundle,
+  or `@name` for a named plan under the user config folder
+  (`plans/{name}.json`); omitted stores a bundle
   under tmp and prints the path. The summary goes to stdout, with zero
   writes to home paths.
 - `--root` (require resolution base) defaults to the profile file's parent.
-- `apply --plan FILE` runs on the file alone with no profile flag; `--plan @name`
+- `apply --plan FILE` runs on the file alone with no profile flag; bundles
+  plus manifests both run; `--plan @name`
   resolves the named plan; PROFILE
   stays required otherwise. Previous reads the fixed slot in
   both shapes, and the new plan writes back to it. Experiments
-  point `--plan` at a rendered file, backups copy a plan file,
-  sharing sends a plan file.
+  point `--plan` at a bundle file, backups copy a bundle file,
+  sharing sends a bundle file.
 - `recover` with no index lists stored plans as `index @ timestamp` lines;
   with an index it re-applies the picked plan through preview plus prompts.
   `--force` skips the first prompt while drift still re-prompts.

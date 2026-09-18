@@ -4,6 +4,12 @@
 
 ### Added
 
+- Slots store manifests now, binary bytes live once gzipped
+  in a shared pool under content hashes. `plan -o` writes
+  portable `.cb` bundles holding their own blobs, the pool
+  fills on apply alone, and apply prunes unreferenced bytes
+  after archiving. Hunk markers never render, and rc updates
+  render content hunks against recorded documents.
 - First-run impact: a missing state slot diffs desired
   documents against disk bytes through `DriftOrder::DiskFirst`,
   rendering one lifecycle block per document holding drift

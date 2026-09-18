@@ -20,9 +20,9 @@ use crate::runtime::Runtime;
 /// ```rust
 /// use confit_core::plan::PLAN_VERSION;
 ///
-/// assert!(matches!(PLAN_VERSION, 4));
+/// assert!(matches!(PLAN_VERSION, 5));
 /// ```
-pub const PLAN_VERSION: u32 = 4;
+pub const PLAN_VERSION: u32 = 5;
 
 /// Versioned desired state written by plan builds.
 ///

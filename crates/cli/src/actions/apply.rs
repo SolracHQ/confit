@@ -12,8 +12,8 @@ use confit_core::ids::DocPath;
 use confit_core::plan::Plan;
 use confit_core::runtime::{Runtime, evaluate};
 use confit_core::store::{
-    archive_previous, default_state_path, load_state, remove_orphans, remove_tree_members,
-    write_documents, write_plan,
+    archive_previous, default_state_path, load_plan_input, load_state, prune_blobs, remove_orphans,
+    remove_tree_members, write_documents, write_plan,
 };
 
 use crate::actions::hooks::{HookRunner, OsRunner, append_hook_log};
@@ -151,7 +151,7 @@ impl<'a> ApplyRunner<'a> {
             let resolved = crate::cli::resolve_plan_file(plan_file)?;
             seams.emit_reading_plan(&resolved);
             let file_plan = timed("apply plan load", || {
-                load_state(Some(resolved.as_path()), seams.fs)
+                load_plan_input(resolved.as_path(), seams.fs)
             })?;
             let state_file = default_state_path()?;
             seams.emit_reading_plan(&state_file);
@@ -328,6 +328,7 @@ impl<'a> ApplyRunner<'a> {
         }
         self.seams.emit_writing_plan(built.documents.len());
         let stored = archive_previous(&built, fs)?;
+        prune_blobs(fs)?;
         self.run_hooks(&built, &rt, fs)?;
         Ok(ApplyReport {
             written: built.documents.len(),

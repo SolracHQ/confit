@@ -12,7 +12,8 @@ use crate::plan::{Plan, opaque_label};
 /// Manual edit behind one recorded path.
 ///
 /// Old holds recorded content. New holds disk content.
-/// Null marks a missing leaf side.
+/// Missing sides read as None, so an explicit null value
+/// stays distinct from an absent key.
 ///
 /// # Examples
 ///
@@ -31,10 +32,10 @@ pub enum Drift {
         path: DocPath,
         /// Holds the dotted leaf key, link uses `target`.
         key: String,
-        /// Holds the recorded leaf value, Null when absent.
-        old: serde_json::Value,
-        /// Holds the disk leaf value, Null when absent.
-        new: serde_json::Value,
+        /// Holds the recorded leaf value, None when the key reads absent.
+        old: Option<serde_json::Value>,
+        /// Holds the disk leaf value, None when the key reads absent.
+        new: Option<serde_json::Value>,
     },
     /// Text content differs between recorded and disk.
     Hunk {
@@ -60,9 +61,10 @@ pub enum Drift {
 impl Drift {
     /// Renders drift entries as display lines.
     ///
-    /// Key edits read `~ path: key = old -> new`.
-    /// Hunks land verbatim. Missing and unreadable lines
-    /// carry the outside config framing.
+    /// Key edits read `~ path: key = old -> new`. Added keys
+    /// read `+ path: key = new`, removed keys read
+    /// `- path: key = old`. Hunks land verbatim. Missing and
+    /// unreadable lines carry the outside config framing.
     ///
     /// # Arguments
     ///
@@ -90,17 +92,42 @@ impl Drift {
                     key,
                     old,
                     new,
-                } => {
-                    lines.push(format!(
-                        "~ {}: {} = {} -> {}",
-                        path.as_str(),
-                        key,
-                        leaf_text(old),
-                        leaf_text(new)
-                    ));
-                }
+                } => match (old, new) {
+                    (Some(old_value), Some(new_value)) => {
+                        lines.push(format!(
+                            "~ {}: {} = {} -> {}",
+                            path.as_str(),
+                            key,
+                            leaf_text(old_value),
+                            leaf_text(new_value)
+                        ));
+                    }
+                    (Some(old_value), None) => {
+                        lines.push(format!(
+                            "- {}: {} = {}",
+                            path.as_str(),
+                            key,
+                            leaf_text(old_value)
+                        ));
+                    }
+                    (None, Some(new_value)) => {
+                        lines.push(format!(
+                            "+ {}: {} = {}",
+                            path.as_str(),
+                            key,
+                            leaf_text(new_value)
+                        ));
+                    }
+                    (None, None) => {}
+                },
                 Drift::Hunk { hunks, .. } => {
                     for line in hunks.lines() {
+                        if line.starts_with("---")
+                            || line.starts_with("+++")
+                            || line.starts_with("@@")
+                        {
+                            continue;
+                        }
                         lines.push(line.to_string());
                     }
                 }
@@ -120,6 +147,34 @@ impl Drift {
         }
         lines
     }
+}
+
+/// Builds one recorded-to-desired unified hunk for plan updates.
+///
+/// Headers read `--- recorded` plus `+++ desired`, matching the
+/// order-named headers from hunk drift.
+///
+/// # Arguments
+///
+/// * `old` - the recorded text under display.
+/// * `new` - the desired text under display.
+///
+/// # Returns
+///
+/// Render-ready content lines from recorded to desired.
+/// File markers never leave this function.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::drift::recorded_hunk;
+///
+/// let hunks = recorded_hunk("old\n", "new\n");
+/// assert!(hunks.contains("-old"));
+/// assert!(hunks.contains("+new"));
+/// ```
+pub fn recorded_hunk(old: &str, new: &str) -> String {
+    content_hunk(old, new)
 }
 
 /// One drift side order selecting old/new assignment.
@@ -247,12 +302,12 @@ impl Document {
                         DriftOrder::DiskFirst => structured_keys(&self.path, &disk_table, data),
                     }
                 } else {
-                    push_hunk(&self.path, first, second, order)
+                    push_hunk(&self.path, first, second)
                 }
             }
             DocumentData::Text { .. } | DocumentData::Rc(_) => {
                 if recorded != disk {
-                    push_hunk(&self.path, first, second, order)
+                    push_hunk(&self.path, first, second)
                 } else {
                     Vec::new()
                 }
@@ -273,8 +328,8 @@ impl Document {
                     vec![Drift::Key {
                         path: self.path.clone(),
                         key: "target".to_string(),
-                        old,
-                        new,
+                        old: Some(old),
+                        new: Some(new),
                     }]
                 } else {
                     Vec::new()
@@ -295,8 +350,8 @@ impl Document {
                     vec![Drift::Key {
                         path: self.path.clone(),
                         key: "content".to_string(),
-                        old,
-                        new,
+                        old: Some(old),
+                        new: Some(new),
                     }]
                 } else {
                     Vec::new()
@@ -321,8 +376,8 @@ impl Document {
             out.push(Drift::Key {
                 path: self.path.clone(),
                 key: "mode".to_string(),
-                old,
-                new,
+                old: Some(old),
+                new: Some(new),
             });
         }
         out
@@ -378,8 +433,8 @@ impl Document {
                         out.push(Drift::Key {
                             path: self.path.clone(),
                             key: member.rel.clone(),
-                            old,
-                            new,
+                            old: Some(old),
+                            new: Some(new),
                         });
                     }
                     if let Some(seen) = mode
@@ -398,8 +453,8 @@ impl Document {
                         out.push(Drift::Key {
                             path: self.path.clone(),
                             key: format!("{}:mode", member.rel),
-                            old,
-                            new,
+                            old: Some(old),
+                            new: Some(new),
                         });
                     }
                 }
@@ -421,20 +476,38 @@ fn leaf_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Builds one unified hunk from first bytes to second bytes.
-fn push_hunk(path: &DocPath, first: &[u8], second: &[u8], order: DriftOrder) -> Vec<Drift> {
+/// Builds render-ready hunk content from first text to second text.
+///
+/// File markers never leave this function. The `-` plus `+`
+/// sides carry the direction, so headers add nothing.
+///
+/// # Arguments
+///
+/// * `first` - the old text under diffing.
+/// * `second` - the new text under diffing.
+///
+/// # Returns
+///
+/// Content lines alone, additions plus removals plus context.
+fn content_hunk(first: &str, second: &str) -> String {
+    diffy::create_patch(first, second)
+        .to_string()
+        .lines()
+        .filter(|line| {
+            !(line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Builds one hunk from first bytes to second bytes.
+///
+/// Callers pass sides in display order, so direction rides
+/// the bytes alone.
+fn push_hunk(path: &DocPath, first: &[u8], second: &[u8]) -> Vec<Drift> {
     let old = String::from_utf8_lossy(first);
     let new = String::from_utf8_lossy(second);
-    let patch = diffy::create_patch(&old, &new).to_string();
-    let (old_name, new_name) = match order {
-        DriftOrder::RecordedFirst => ("recorded", "disk"),
-        DriftOrder::DiskFirst => ("disk", "desired"),
-    };
-    let hunks = patch.replacen(
-        "--- original\n+++ modified\n",
-        &format!("--- {old_name}\n+++ {new_name}\n"),
-        1,
-    );
+    let hunks = content_hunk(&old, &new);
     vec![Drift::Hunk {
         path: path.clone(),
         hunks,
@@ -462,14 +535,8 @@ fn structured_keys(path: &DocPath, old: &Table, new: &Table) -> Vec<Drift> {
     keys.extend(new_flat.keys().cloned());
     let mut out = Vec::new();
     for key in keys {
-        let old_value = old_flat
-            .get(&key)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let new_value = new_flat
-            .get(&key)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let old_value = old_flat.get(&key).cloned();
+        let new_value = new_flat.get(&key).cloned();
         if old_value != new_value {
             out.push(Drift::Key {
                 path: path.clone(),
@@ -602,11 +669,74 @@ mod tests {
             .cloned();
         match changed {
             Some(Drift::Key { old, new, .. }) => {
-                assert_eq!(old, serde_json::json!("old"));
-                assert_eq!(new, serde_json::json!("new"));
+                assert_eq!(old, Some(serde_json::json!("old")));
+                assert_eq!(new, Some(serde_json::json!("new")));
             }
             _ => panic!("changed key reports old and new"),
         }
+    }
+
+    #[test]
+    fn drift_separates_null_value_from_missing_key() {
+        let data: Table = [
+            ("kept_null".to_string(), serde_json::Value::Null),
+            ("gone".to_string(), serde_json::json!("x")),
+            ("gone_null".to_string(), serde_json::Value::Null),
+        ]
+        .into_iter()
+        .collect();
+        let recorded = with_hashes(vec![Document::new(
+            DocPath::new("app.json"),
+            DocumentData::Structured {
+                format: StructuredFormat::Json,
+                data,
+            },
+        )]);
+        let disk = b"{\"kept_null\": null, \"fresh\": \"y\", \"fresh_null\": null}";
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: disk.to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        let mut keys: Vec<String> = drifts
+            .iter()
+            .map(|entry| match entry {
+                Drift::Key { key, .. } => key.clone(),
+                _ => panic!("structured drift uses keys"),
+            })
+            .collect();
+        keys.sort();
+        assert_eq!(keys, vec!["fresh", "fresh_null", "gone", "gone_null"]);
+        for entry in &drifts {
+            match entry {
+                Drift::Key { key, old, new, .. } if key == "gone_null" => {
+                    assert_eq!(old, &Some(serde_json::Value::Null));
+                    assert_eq!(new, &None);
+                }
+                Drift::Key { key, old, new, .. } if key == "fresh_null" => {
+                    assert_eq!(old, &None);
+                    assert_eq!(new, &Some(serde_json::Value::Null));
+                }
+                Drift::Key { .. } => {}
+                _ => panic!("structured drift uses keys"),
+            }
+        }
+        let lines = Drift::lines(&drifts);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "- app.json: gone_null = null"),
+            "removed null reads as removal: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "+ app.json: fresh_null = null"),
+            "added null reads as addition: {lines:?}"
+        );
     }
 
     #[test]
@@ -657,8 +787,8 @@ mod tests {
         match &drifts[0] {
             Drift::Key { key, old, new, .. } => {
                 assert_eq!(key, "target");
-                assert_eq!(old, &serde_json::json!("old-dest"));
-                assert_eq!(new, &serde_json::json!("new-dest"));
+                assert_eq!(old, &Some(serde_json::json!("old-dest")));
+                assert_eq!(new, &Some(serde_json::json!("new-dest")));
             }
             _ => panic!("link drift uses target key"),
         }
@@ -680,17 +810,20 @@ mod tests {
             Drift::Key { key, old, new, .. } => {
                 assert_eq!(key, "content");
                 assert!(
-                    old.as_str()
+                    old.as_ref()
+                        .and_then(|value| value.as_str())
                         .map(|item| item.starts_with("sha256:"))
                         .unwrap_or(false)
                 );
                 assert!(
-                    old.as_str()
+                    old.as_ref()
+                        .and_then(|value| value.as_str())
                         .map(|item| item.contains("(2 bytes)"))
                         .unwrap_or(false)
                 );
                 assert!(
-                    new.as_str()
+                    new.as_ref()
+                        .and_then(|value| value.as_str())
                         .map(|item| item.starts_with("sha256:"))
                         .unwrap_or(false)
                 );
@@ -720,8 +853,20 @@ mod tests {
             Drift::Key {
                 path: DocPath::new("app.toml"),
                 key: "tools.bat".to_string(),
-                old: serde_json::json!("old"),
-                new: serde_json::json!("new"),
+                old: Some(serde_json::json!("old")),
+                new: Some(serde_json::json!("new")),
+            },
+            Drift::Key {
+                path: DocPath::new("app.toml"),
+                key: "tools.gone".to_string(),
+                old: Some(serde_json::json!("old")),
+                new: None,
+            },
+            Drift::Key {
+                path: DocPath::new("app.toml"),
+                key: "tools.fresh".to_string(),
+                old: None,
+                new: Some(serde_json::json!("new")),
             },
             Drift::Missing {
                 path: DocPath::new("gone"),
@@ -729,7 +874,9 @@ mod tests {
         ];
         let lines = Drift::lines(&entries);
         assert_eq!(lines[0], "~ app.toml: tools.bat = old -> new");
-        assert!(lines[1].contains("manually deleted"));
+        assert_eq!(lines[1], "- app.toml: tools.gone = old");
+        assert_eq!(lines[2], "+ app.toml: tools.fresh = new");
+        assert!(lines[3].contains("manually deleted"));
     }
 
     fn tree_doc() -> Document {
@@ -859,8 +1006,8 @@ mod tests {
         assert_eq!(disk_first.len(), 1);
         match &disk_first[0] {
             Drift::Key { old, new, .. } => {
-                assert_eq!(old, &serde_json::json!("disk"));
-                assert_eq!(new, &serde_json::json!("desired"));
+                assert_eq!(old, &Some(serde_json::json!("disk")));
+                assert_eq!(new, &Some(serde_json::json!("desired")));
             }
             _ => panic!("disk first swaps key sides"),
         }
@@ -875,8 +1022,8 @@ mod tests {
         assert_eq!(recorded_first.len(), 1);
         match &recorded_first[0] {
             Drift::Key { old, new, .. } => {
-                assert_eq!(old, &serde_json::json!("desired"));
-                assert_eq!(new, &serde_json::json!("disk"));
+                assert_eq!(old, &Some(serde_json::json!("desired")));
+                assert_eq!(new, &Some(serde_json::json!("disk")));
             }
             _ => panic!("recorded first keeps key sides"),
         }
@@ -917,5 +1064,88 @@ mod tests {
             }
             _ => panic!("recorded first directs hunks"),
         }
+    }
+
+    #[test]
+    fn steady_order_directs_recorded_to_disk() {
+        let recorded = with_hashes(vec![text_doc("note", "recorded\n")]);
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"disk\n".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert_eq!(drifts.len(), 1);
+        match &drifts[0] {
+            Drift::Hunk { hunks, .. } => {
+                assert!(
+                    hunks.contains("-recorded"),
+                    "steady hunk removes recorded: {hunks}"
+                );
+                assert!(hunks.contains("+disk"), "steady hunk adds disk: {hunks}");
+                assert!(
+                    !hunks.contains("+recorded"),
+                    "steady hunk never adds recorded: {hunks}"
+                );
+                assert!(
+                    !hunks.contains("-disk"),
+                    "steady hunk never removes disk: {hunks}"
+                );
+            }
+            _ => panic!("steady order directs recorded to disk"),
+        }
+    }
+
+    #[test]
+    fn first_run_order_directs_disk_to_desired() {
+        let recorded = with_hashes(vec![text_doc("note", "desired\n")]);
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"disk\n".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::DiskFirst,
+        );
+        assert_eq!(drifts.len(), 1);
+        match &drifts[0] {
+            Drift::Hunk { hunks, .. } => {
+                assert!(
+                    hunks.contains("-disk"),
+                    "first-run hunk removes disk: {hunks}"
+                );
+                assert!(
+                    hunks.contains("+desired"),
+                    "first-run hunk adds desired: {hunks}"
+                );
+                assert!(
+                    !hunks.contains("+disk"),
+                    "first-run hunk never adds disk: {hunks}"
+                );
+                assert!(
+                    !hunks.contains("-desired"),
+                    "first-run hunk never removes desired: {hunks}"
+                );
+            }
+            _ => panic!("first-run order directs disk to desired"),
+        }
+    }
+
+    #[test]
+    fn recorded_hunk_holds_content_without_markers() {
+        let hunks = recorded_hunk("old\n", "new\n");
+        assert!(
+            hunks.contains("-old"),
+            "rc hunk removes old content: {hunks}"
+        );
+        assert!(hunks.contains("+new"), "rc hunk adds new content: {hunks}");
+        assert!(
+            !hunks.lines().any(|line| {
+                line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
+            }),
+            "rc hunk renders no markers: {hunks}"
+        );
     }
 }

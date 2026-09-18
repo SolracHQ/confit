@@ -623,6 +623,188 @@ impl DocumentData {
             _ => None,
         }
     }
+
+    /// Builds the persisted payload holding blob references.
+    ///
+    /// Text, structured, rc, plus link payloads stay inline.
+    /// Opaque bytes plus tree member bytes become SHA-256
+    /// blob references into the shared pool.
+    ///
+    /// # Returns
+    ///
+    /// The manifest payload for plan files plus bundles.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_core::document::{DocumentData, ManifestData};
+    ///
+    /// let data = DocumentData::Text { content: "hi".into(), mode: None };
+    /// assert!(matches!(data.manifest_data(), ManifestData::Text { .. }));
+    /// ```
+    pub fn manifest_data(&self) -> ManifestData {
+        match self {
+            Self::Structured { format, data } => ManifestData::Structured {
+                format: *format,
+                data: data.clone(),
+            },
+            Self::Text { content, mode } => ManifestData::Text {
+                content: content.clone(),
+                mode: *mode,
+            },
+            Self::Link { target } => ManifestData::Link {
+                target: target.clone(),
+            },
+            Self::Rc(data) => ManifestData::Rc(data.clone()),
+            Self::Opaque { content, mode } => ManifestData::Opaque {
+                blob: crate::plan::sha256_hex(content),
+                mode: *mode,
+            },
+            Self::Tree { members } => ManifestData::Tree {
+                members: members
+                    .iter()
+                    .map(|member| ManifestMember {
+                        rel: member.rel.clone(),
+                        blob: crate::plan::sha256_hex(&member.content),
+                        mode: member.mode,
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+/// One persisted tree member holding a blob reference.
+///
+/// The blob names gzipped member bytes under their SHA-256
+/// hex in the shared pool. The mode stays inline beside the
+/// reference, so manifests read without pool access.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::document::ManifestMember;
+///
+/// let member = ManifestMember { rel: "font.ttf".into(), blob: "abc".into(), mode: 0o644 };
+/// assert!(matches!(member.rel.as_str(), "font.ttf"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestMember {
+    /// Holds the destination-relative member path.
+    pub rel: String,
+    /// Holds the SHA-256 hex over raw member bytes.
+    pub blob: String,
+    /// Holds unix permission bits for the member file.
+    pub mode: u32,
+}
+
+/// Persisted document payload with binary bytes as references.
+///
+/// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
+/// Text, structured, rc, plus link payloads stay inline.
+/// Opaque plus tree payloads hold pool blob references alone.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::document::ManifestData;
+///
+/// let data = ManifestData::Text { content: "hi".into(), mode: None };
+/// assert!(matches!(data, ManifestData::Text { .. }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestData {
+    /// Holds structured data plus its serialization format.
+    Structured {
+        /// Holds the serialization format.
+        format: StructuredFormat,
+        /// Holds the structured data table.
+        data: Table,
+    },
+    /// Holds plain text content.
+    Text {
+        /// Holds the exact file text.
+        content: String,
+        /// Holds unix permission bits. None applies the umask default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
+    },
+    /// Describes a symlink placement.
+    Link {
+        /// Holds the link target.
+        target: String,
+    },
+    /// Holds the rc data object.
+    Rc(RcData),
+    /// Holds one pool blob reference plus its mode.
+    Opaque {
+        /// Holds the SHA-256 hex over raw file bytes.
+        blob: String,
+        /// Holds unix permission bits. None applies the umask default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
+    },
+    /// Holds one managed file set under a destination folder.
+    Tree {
+        /// Holds members in destination-relative order.
+        members: Vec<ManifestMember>,
+    },
+}
+
+impl ManifestData {
+    /// Reads every referenced blob hash in document order.
+    ///
+    /// # Returns
+    ///
+    /// The blob hashes for opaque plus tree payloads, else empty.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_core::document::ManifestData;
+    ///
+    /// let data = ManifestData::Text { content: "hi".into(), mode: None };
+    /// assert!(matches!(data.blob_refs().is_empty(), true));
+    /// ```
+    pub fn blob_refs(&self) -> Vec<&str> {
+        match self {
+            Self::Opaque { blob, .. } => vec![blob.as_str()],
+            Self::Tree { members } => members.iter().map(|member| member.blob.as_str()).collect(),
+            Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// One persisted document holding metadata plus references.
+///
+/// The data hash covers rendered bytes exactly like live
+/// documents, so plan diffs read trusted hashes without
+/// pool access.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::document::{Document, DocumentData, ManifestDocument};
+/// use confit_core::ids::DocPath;
+///
+/// let document = Document::new(
+///     DocPath::new("x"),
+///     DocumentData::Text { content: "hi".into(), mode: None },
+/// );
+/// let stored = document.manifest_document();
+/// assert!(matches!(stored.path.as_str(), "x"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestDocument {
+    /// Holds the destination path.
+    pub path: DocPath,
+    /// Holds the persisted payload.
+    pub data: ManifestData,
+    /// Holds the hex SHA-256 over rendered bytes.
+    pub data_hash: String,
 }
 
 /// Counts changed members between two tree manifests.
@@ -972,6 +1154,35 @@ impl Document {
     /// ```
     pub fn key(&self) -> String {
         format!("{}:{}", self.data.kind().name(), self.path.as_str())
+    }
+
+    /// Builds the persisted document holding blob references.
+    ///
+    /// Binary bytes stay live here and move to the pool on
+    /// manifest writes. The data hash carries over intact.
+    ///
+    /// # Returns
+    ///
+    /// The manifest document for plan files plus bundles.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::ids::DocPath;
+    ///
+    /// let document = Document::new(
+    ///     DocPath::new("bin"),
+    ///     DocumentData::Opaque { content: vec![0xFF], mode: None },
+    /// );
+    /// assert!(matches!(document.manifest_document().data_hash.as_str(), ""));
+    /// ```
+    pub fn manifest_document(&self) -> ManifestDocument {
+        ManifestDocument {
+            path: self.path.clone(),
+            data: self.data.manifest_data(),
+            data_hash: self.data_hash.clone(),
+        }
     }
 }
 

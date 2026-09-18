@@ -28,7 +28,8 @@ flowchart TD
     N --> O["Remove recorded orphans plus dropped tree members"]
     O --> P["Write fixed slot state"]
     P --> Q["Archive rotation entry"]
-    Q --> R["Run hooks in order"]
+    Q --> Q2["Prune unreferenced pool blobs"]
+    Q2 --> R["Run hooks in order"]
     R --> S["Report written, removed, stored"]
 ```
 
@@ -41,7 +42,9 @@ result after every apply. The next plan reads the slot and
 shows zero changes while disk matches. Switching profiles
 converges through the same slot: last applied wins, orphans
 from the earlier profile delete. Tree destinations never
-delete, dropped members delete per manifest. Hooks run after
+delete, dropped members delete per manifest. Prune drops pool
+blobs referenced by no slot after archiving, so rotated-out
+entries release their bytes at once. Hooks run after
 state plus history land, in plan order with pre-check skips
 plus post-check failure aborts.
 

@@ -61,11 +61,17 @@ fn run_plan_like(
     store_tmp: bool,
     log_path: &std::path::Path,
 ) -> confit_core::error::Result<()> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut output = stderr.lock();
     let live = Live::new();
+    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    seams.progress = live.sink();
     let outcome = confit_cli::actions::plan::PlanRunner {
         args,
         store_tmp,
-        progress: live.sink(),
+        seams,
     }
     .execute()?;
     live.finish();

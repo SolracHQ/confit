@@ -31,8 +31,8 @@ Pure data plus render. Every function here runs as a unit test on data alone.
 
 - `document` owns `Document` plus `DocumentData`: structured,
   text, link, rc, opaque. One path holds one document. Paths
-  expand tildes. Opaque payloads ride base64 in JSON, raw
-  bytes everywhere else.
+  expand tildes. Opaque payloads persist as blob refs in
+  manifests, raw bytes everywhere else.
 - `ids` owns `DocPath` plus `ReadOutcome` (present, absent,
   unreadable).
 - `plan` owns versioned `Plan` plus on-demand counts
@@ -91,8 +91,9 @@ Terminal surface over evaluation plus plans.
 
 The profile evaluates to documents. The build diffs desired
 documents against the previous plan plus disk snapshots,
-hashing rendered bytes. The payload writes as compact JSON,
-full bytes always. Apply writes documents per kind, removes
+hashing rendered bytes. The payload writes as pretty JSON,
+metadata always. Binary bytes gzip once into the shared
+pool under content hashes. Apply writes documents per kind, removes
 state-recorded paths absent from desired documents, records
 the fixed state slot, and rotates bare-plan history. Recover
 re-applies stored plans through the same write path.
