@@ -52,6 +52,10 @@ pub enum Command {
     Recover(RecoverArgs),
     /// Scaffold one profile plus stubs in the target folder.
     Init(InitArgs),
+    /// Pack one slot into a portable bundle file or print its manifest.
+    Export(ExportArgs),
+    /// Drop one named slot plus its orphaned pool bytes.
+    Delete(DeleteArgs),
 }
 
 /// Shared run flags carried by plan plus apply.
@@ -159,6 +163,46 @@ pub struct InitArgs {
     pub dir: PathBuf,
 }
 
+/// Arguments for `confit export`.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_cli::cli::{Cli, Command};
+/// use clap::Parser;
+///
+/// let cli = Cli::try_parse_from(["confit", "export", "@personal", "-o", "backup.cb"]);
+/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Export(_))));
+/// ```
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// Slot picker: `%N` history newest-first from one, `@name` named slot. Omitted means the applied slot.
+    pub picker: Option<String>,
+    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb` unless present.
+    #[arg(short, long, conflicts_with = "manifest")]
+    pub output: Option<PathBuf>,
+    /// Prints pretty manifest JSON to stdout instead of writing a bundle file.
+    #[arg(short, long)]
+    pub manifest: bool,
+}
+
+/// Arguments for `confit delete`.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_cli::cli::{Cli, Command};
+/// use clap::Parser;
+///
+/// let cli = Cli::try_parse_from(["confit", "delete", "@personal"]);
+/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Delete(_))));
+/// ```
+#[derive(Debug, Args)]
+pub struct DeleteArgs {
+    /// Named slot under deleting, shaped `@name`.
+    pub name: String,
+}
+
 /// Expands one leading `~` against the OS home folder.
 ///
 /// Bare `~` plus `~/` prefixes resolve, everything else passes
@@ -227,6 +271,10 @@ pub fn expand_command(command: &mut Command) {
         Command::Init(args) => {
             args.dir = expand_tilde(&args.dir);
         }
+        Command::Export(args) => {
+            opt(&mut args.output);
+        }
+        Command::Delete(_) => {}
     }
 }
 

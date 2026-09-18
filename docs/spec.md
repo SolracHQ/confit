@@ -486,6 +486,8 @@ end
 ```sh
 confit [--log-file ./confit.log] [--log-level debug] plan profiles/desktop.lua [-o ./plan.cb|@name] [--root .] [--plugins ./plugins] [--re-fetch]
 confit [--log-file ./confit.log] [--log-level debug] apply [PROFILE] [--plan ./plan.cb|@name] [--force] [--root .] [--plugins ./plugins] [--re-fetch]
+confit export [PICKER] [-o ./out.cb] [-m]
+confit delete @name
 confit recover [INDEX] [--force]
 confit init [DIR]
 ```
@@ -505,7 +507,17 @@ confit init [DIR]
   sharing sends a bundle file.
 - `recover` with no index lists stored plans as `index @ timestamp` lines;
   with an index it re-applies the picked plan through preview plus prompts.
-  `--force` skips the first prompt while drift still re-prompts.
+- `export` packs one slot into a portable bundle file and prints
+  the path. The picker reads `%N` history newest-first from one,
+  `@name` a named slot, nothing the applied slot; other values
+  refuse as unsupported pickers. `-o` names the destination and
+  gains `.cb` unless present, omitted derives the name from the
+  slot (`applied.cb`, `personal.cb`, `prev-2.cb`). `-m`/`--manifest`
+  prints pretty manifest JSON to stdout, holding blob references
+  with zero inline bytes. `-o` plus `--manifest` together refuse.
+- `delete` takes one `@name` slot. It drops the named manifest
+  and prunes pool blobs orphaned by the removal, keeping bytes
+  shared with remaining slots.
 - `init [DIR]` writes `profile.lua` plus editor stubs under DIR, omitted
   means the current folder; present files abort the run with zero writes.
 - `--re-fetch` forces remote downloads past the sidecar cache; omitted

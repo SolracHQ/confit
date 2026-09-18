@@ -6,13 +6,19 @@
 confit plan PROFILE [-o FILE|@NAME]         # preview
 confit apply PROFILE [--plan FILE|@NAME] [--force]
 confit apply --plan FILE|@NAME
+confit export [PICKER] [-o FILE] [-m]        # pack a slot, default applied
+confit delete @NAME                          # drop a named slot
 confit recover [INDEX]
 confit init [DIR]                           # scaffold, default .
 ```
 
 `@NAME` stores or loads a named plan under the user config
 folder as `plans/{NAME}.json`. Empty names plus separators
-fail.
+fail. The export picker reads `%N` for history newest-first
+from one, `@NAME` for a named slot, nothing for the applied
+slot. `-o` names the bundle file and gains `.cb` unless
+present, omitted derives the name from the slot. `-m`
+prints the manifest to stdout.
 
 ## Documents
 

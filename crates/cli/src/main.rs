@@ -49,6 +49,8 @@ fn run() -> confit_core::error::Result<()> {
         Command::Apply(args) => run_apply(args, &log_path),
         Command::Recover(args) => run_recover(args, &log_path),
         Command::Init(args) => run_init(args),
+        Command::Export(args) => run_export(args),
+        Command::Delete(args) => run_delete(args),
     }
 }
 
@@ -163,6 +165,34 @@ fn run_recover(
     }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
+    Ok(())
+}
+
+/// Runs export writing a bundle file or printing its manifest.
+fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_core::error::Result<()> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut output = stderr.lock();
+    let seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    let report = confit_cli::actions::export::ExportRunner::run(args, seams)?;
+    if let Some(dest) = report.dest {
+        anstream::println!("export: {}", dest.display());
+    } else if let Some(manifest) = report.manifest {
+        println!("{manifest}");
+    }
+    Ok(())
+}
+
+/// Runs delete dropping one named slot plus orphan blobs.
+fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_core::error::Result<()> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut output = stderr.lock();
+    let seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    let report = confit_cli::actions::delete::DeleteRunner::run(args, seams)?;
+    anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
     Ok(())
 }
 

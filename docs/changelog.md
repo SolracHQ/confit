@@ -20,6 +20,12 @@
   no lines outside the add count. The apply preview renders
   the same form. Past the first run the steady behavior
   returns unchanged.
+- `export` packs any slot (`%N` history newest-first, `@name`
+  named, nothing applied) into a portable `.cb` bundle and
+  prints the path, with `-o` naming the destination and `-m`
+  printing the manifest instead. `delete @name` drops named
+  slots and prunes orphaned pool bytes. Missing apply
+  profiles fail naming the path.
 
 ### Changed
 

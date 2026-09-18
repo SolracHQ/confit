@@ -169,6 +169,12 @@ impl<'a> ApplyRunner<'a> {
             .profile
             .as_deref()
             .ok_or_else(|| Error::Plan("apply needs --profile while absent".to_string()))?;
+        if !seams.fs.exists(profile) {
+            return Err(Error::Plan(format!(
+                "apply reads no profile '{}'",
+                profile.display()
+            )));
+        }
         let evaluation = evaluate_shared(&args.shared, profile, seams.progress.clone())?;
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);

@@ -190,7 +190,7 @@ const BUNDLE_EXTENSION: &str = "cb";
 ///
 /// The input while the suffix already lands, else the input
 /// with the suffix appended.
-fn ensure_bundle_extension(dest: &Path) -> PathBuf {
+pub fn ensure_bundle_extension(dest: &Path) -> PathBuf {
     if dest
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case(BUNDLE_EXTENSION))
