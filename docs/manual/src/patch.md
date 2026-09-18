@@ -4,7 +4,7 @@ A patch is the only way to modify a document. Documents declare
 the base. Patches carry the dynamism. Different configs
 contribute to shared documents through patches.
 
-Two kinds exist today: rc patches and structured patches.
+Two kinds exist today. Rc patches and structured patches.
 
 ```lua
 shell:add_patch(confit.patch.rc(function(doc)
@@ -25,7 +25,7 @@ runtime surprise.
 ## Priority
 
 Patches sort by priority, then by config name. Five levels
-exist: `MINOR`, `LOW`, `NORMAL`, `HIGH`, `MAJOR`. Omitted
+exist. `MINOR`, `LOW`, `NORMAL`, `HIGH`, `MAJOR`. Omitted
 means `NORMAL`.
 
 ```lua
@@ -36,7 +36,7 @@ shell:add_patch(
 )
 ```
 
-The order is stable: profile order leaves the plan unchanged.
+The order is stable. Profile order leaves the plan unchanged.
 Only priority plus owner decide.
 
 ## Conflict

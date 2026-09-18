@@ -55,7 +55,7 @@ against the same applied result.
 
 ## Experiments
 
-I try new things constantly. The tool stays idempotent: the
+I try new things constantly. The tool stays idempotent. The
 same profile always yields the same documents, and the full
 desired state stays reachable from plan alone. So I copy my
 profile into a temporal one, add the neat new tool, test it.

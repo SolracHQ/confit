@@ -40,7 +40,7 @@ to false and skips the preview render.
 Apply always writes the fixed slot state. The user owns the
 result after every apply. The next plan reads the slot and
 shows zero changes while disk matches. Switching profiles
-converges through the same slot: last applied wins, orphans
+converges through the same slot. Last applied wins, orphans
 from the earlier profile delete. Tree destinations never
 delete, dropped members delete per manifest. Prune drops pool
 blobs referenced by no slot after archiving, so rotated-out

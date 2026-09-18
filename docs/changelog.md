@@ -4,10 +4,15 @@
 
 ### Added
 
-- Bundle nouns land: `Plan` reads `Bundle`, manifests plus
+- `mise.package` takes a generic `options` table folding
+  backend tool options into the shared TOML beside the
+  version, so a rust toolchain declares its components
+  beside its version. Omitted `options` keeps the bare
+  version string.
+- Bundle nouns land. `Plan` reads `Bundle`, manifests plus
   members plus history entries carry their names, summaries
   report `Bundle:`, tree members hold `relative`. One runtime
-  language: `Manifest` serves runtime plus disk, `Bundle`
+  language. `Manifest` serves runtime plus disk, `Bundle`
   carries the manifest plus its blob map and never
   serializes, the live trio plus base64 leave with it.
   Bundle format version 6 breaks v5 without migration,
@@ -19,7 +24,7 @@
   fills on apply alone, and apply prunes unreferenced bytes
   after archiving. Hunk markers never render, and rc updates
   render content hunks against recorded documents.
-- First-run impact: a missing state slot diffs desired
+- First-run impact. A missing state slot diffs desired
   documents against disk bytes through `DriftOrder::DiskFirst`,
   rendering one lifecycle block per document holding drift
   entries. Whole disk-absent documents read as creates,

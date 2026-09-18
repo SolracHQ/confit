@@ -5,7 +5,7 @@ scoped in the user space. Its headline idea is a three-way
 diff. Desired state comes from the profile. Previous state
 comes from the last apply. Actual state comes from the disk.
 Most tools compare two of these. Confit compares all three,
-so every change reads from its own source: the world moved
+so every change reads from its own source. The world moved
 since the last apply, or the declared state changed. Aim to reach
 the following objectives.
 

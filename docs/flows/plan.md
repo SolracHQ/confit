@@ -24,7 +24,7 @@ flowchart TD
 Evaluate runs the profile through the engine. State reads the
 fixed slot at `state.json`. Missing state
 reads empty and marks the first run, so the plan diffs desired
-documents against disk bytes: disk-identical paths read as
+documents against disk bytes. Disk-identical paths read as
 already in place, disk-differing paths read as overwrites the
 apply will replace. Drift compares recorded documents against
 disk bytes past the first run. Build renders plus hashes
@@ -36,4 +36,4 @@ later apply reuse. An `-o` path gains `.cb` when missing.
 
 Stdout carries the summary plus the `plan:` path through
 anstream. Stderr carries the spinner plus the `log:` path.
-Prompts never appear here: plan writes no documents.
+Prompts stay out of plan runs. Plan writes no documents.

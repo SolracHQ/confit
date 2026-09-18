@@ -9,7 +9,7 @@ Bundle: 2 to add, 0 to change, 0 to destroy.
 Apply these changes? Type 'yes' to continue: yes
 ```
 
-The run writes every document to its path: files land with
+The run writes every document to its path. Files land with
 their rendered content, symlinks point at their targets,
 missing parent folders appear. Shell lines land in the
 startup files from the profile shells. Post-config steps run
@@ -32,7 +32,7 @@ re-applies one newest-first from one:
 confit apply %1
 ```
 
-Hand-edit a file and run plan: the drift shows. The summary
+Hand-edit a file and run plan. The drift shows. The summary
 names every change.
 
 ## One state per user

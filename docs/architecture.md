@@ -4,12 +4,11 @@ Three crates form the app, each holding one main
 responsibility.
 
 The engine converts a Lua profile into manifest documents
-plus blob bytes. The core manages state plus diffs: bundles
-from manifests, manifest store plus load, bundle writes,
-orphan removal, rotation.
+plus blob bytes. The core manages state plus diffs across bundles, manifests,
+the pool, and rotation.
 The cli orchestrates both, calling engine plus core where
-needed, and provides user experience: prompts, progress,
-previews, listings, scaffolding, arg shapes.
+needed, and provides user experience across prompts, progress,
+previews, listings, scaffolding, and arg shapes.
 
 The call flow is `main` to `actions`, with `main` rendering
 reports through `presentation`. Effects hide behind traits
@@ -52,19 +51,19 @@ through `evaluate(profile, EvalOpts)`. `EvalOpts` carries root, plugins, re-fetc
 fetcher override, plus the progress sink. Overrides keep
 tests off the network plus the OS cache.
 
-- `surface` owns one namespace module each: config,
+- `surface` owns one namespace module per kind. Config,
   document, patch, shell, paths, resources, utils,
   plugin. Resources jail reads to the project root plus the
   fetch cache. `require` jails module loads the same way.
 - `model` owns Config plus Patch handles, internal to the
   crate. `level` owns priority sorting. `exec` owns the live
-  wrappers: first-writer-wins slots, collision logging,
-  per-shell materialization.
+  wrappers across first-writer-wins slots, collision logging,
+  and per-shell materialization.
 - `fetch` owns the `Fetch` trait with HTTP plus memory
   sources. Sidecar shas guard the OS cache. Re-download
   fires on missing files, mismatched bytes, or re-fetch.
-- `progress` owns facts for slow runs: fetch, unpack, patch,
-  hash, read, write.
+- `progress` owns slow-run facts across fetch, unpack, patch,
+  hash, read, and write.
 - Embedded plugins ship beside the loader under
   `solrachq` (mise, merge, template). External plugin
   folders attach beside them. Plugin Lua composes surface
@@ -77,7 +76,7 @@ Terminal surface over evaluation plus bundles.
 - `main` owns command dispatch plus report printing.
 - `cli` owns arg shapes for plan, apply, export, delete,
   init. Tildes expand across every path arg after parsing.
-- `actions` owns the flows (see `docs/flows`): plan
+- `actions` owns the flows (see `docs/flows`). Plan
   evaluates, diffs, and stores payloads; apply previews,
   prompts, writes per kind, removes recorded orphans, writes
   state, and rotates history; export packs slots; delete

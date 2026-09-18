@@ -7,7 +7,7 @@ names both owners. Shared files change through patches.
 
 ## Structured
 
-Tool data files: toml, json, yaml. Data holds tables, lists,
+Tool data files read toml, json, yaml. Data holds tables, lists,
 strings, numbers, booleans. Functions, userdata, threads, and
 cycles fail the plan with a data-only error. Lua values cross
 into files, so only file-shaped values cross.
@@ -55,7 +55,7 @@ reports a `mode` key line on mismatch.
 Shell lines in three sections. Builders cover every line:
 `alias`, `env`, `prepend`, `eval`, `cmd`, `source`. Each
 builder takes `{ when = guard }` last. Sections order the
-render: `profile` first and always, `config` plus `final`
+render. `profile` first and always, `config` plus `final`
 behind the interactive guard.
 
 ```lua
@@ -111,7 +111,7 @@ local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(
 end)
 ```
 
-The plan reads as one line either way: one add with the file
+The plan reads as one line either way. One add with the file
 count, silence on repeat runs, one update with the changed
 count. Member modes inherit the archive executable bit. An
 empty pick fails naming the filter.

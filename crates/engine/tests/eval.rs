@@ -2118,3 +2118,170 @@ return { shells = { "bash" }, configs = { installer } }
         "names resolution: {error}"
     );
 }
+
+#[test]
+fn mise_package_options_render_components_table() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  version = "1.83.0",
+  bin = "rustc",
+  options = {
+    components = { "clippy", "rustfmt", "rust-src", "llvm-tools" },
+  },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": {
+                "version": "1.83.0",
+                "components": ["clippy", "rustfmt", "rust-src", "llvm-tools"],
+            },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_default_version_latest() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  options = {
+    components = { "clippy" },
+  },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": { "version": "latest", "components": ["clippy"] },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_scalar_values_land() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  version = "1.83.0",
+  options = { profile = "minimal", jobs = 4, locked = true },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": {
+                "version": "1.83.0",
+                "profile": "minimal",
+                "jobs": 4,
+                "locked": true,
+            },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_non_table_fails_as_plan_error() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = "components" })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options' must be a table"),
+        "names options: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_map_value_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { components = { clippy = true } } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_nested_table_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { components = { { "clippy" } } } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_function_value_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { hook = function() end } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("mise: field 'options.hook'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_sparse_array_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local comps = {}
+comps[1] = "clippy"
+comps[3] = "rustfmt"
+local rust = mise.package({ name = "rust", options = { components = comps } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
+    );
+}

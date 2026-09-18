@@ -1,7 +1,7 @@
 # Plugin
 
 A plugin is reusable code with a stable shape. Your own Lua
-library also works. The plugin shape adds two things: a stable
+library also works. The plugin shape adds two things. A stable
 structure, and the `username/name` split so each plugin grows
 into its own git project required from the profile.
 
@@ -39,9 +39,12 @@ Four plugins ship embedded.
 `mise.package` takes a table. `name` stays required, omitted
 `version` writes `latest`, omitted `bin` proves the shim under
 the package name, `aliases` maps alias names to expansions, sorted by name,
-each guarded on the binary, `rc_builder` optional. Each package folds its version into the shared TOML,
+each guarded on the binary, `rc_builder` optional, `options`
+carries backend tool options (strings, numbers, booleans, or
+arrays of those) folding into the shared TOML beside the
+version. Each package folds its version into the shared TOML,
 declares the shared `mise install` hook, and requires the
-installer config. `mise.init` returns that installer: the
+installer config. `mise.init` returns that installer. The
 mise binary composed from fetch plus unpack plus an opaque
 document, plus the activation patch with the PATH prepend
 plus the init eval. An explicit version wins, omitted resolves the
@@ -56,6 +59,19 @@ local bat = mise.package({
   rc_builder = function(rc)
     rc:env("BAT_THEME", "ansi")
   end,
+})
+```
+
+A rust toolchain carries its components the same way:
+
+```lua
+local rust = mise.package({
+  name = "rust",
+  version = "1.83.0",
+  bin = "rustc",
+  options = {
+    components = { "clippy", "rustfmt", "rust-src", "llvm-tools" },
+  },
 })
 ```
 

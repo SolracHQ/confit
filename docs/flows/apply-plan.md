@@ -31,7 +31,7 @@ Only the literal `yes` continues. Other answers abort the run.
 The fresh snapshot compares against the baseline. Drift
 re-prompts only when fresh differs from baseline. `--force`
 skips the first prompt, while drift still re-prompts.
-Writes land per kind: text plus structured through render,
+Writes land per kind. Text plus structured through render,
 opaque as raw bytes, tree members each to their joined path
 with per-member modes, links as symlinks, parents on demand.
 Orphans mean state-recorded paths absent from desired

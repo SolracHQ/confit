@@ -4,7 +4,7 @@ A config packages related documents plus the steps building
 them. One file per tool is the habit. Several configs in one
 file also reads fine.
 
-The simplest config is a shell config: one rc base plus one
+The simplest config is a shell config. One rc base plus one
 alias patch.
 
 ```lua
@@ -26,7 +26,7 @@ end))
 return shell
 ```
 
-A config grows with the tool. Kitty shows the reach: a
+A config grows with the tool. Kitty shows the reach. A
 `kitty.conf` text document, symlinks for the binaries.
 
 ```lua
@@ -87,7 +87,7 @@ end)
 ```
 
 Links plus desktop files from the previous section integrate
-the tree. The launch command waits for hooks: confit runs no
+the tree. The launch command waits for hooks. Confit runs no
 commands today. Everything else in the guide works now.
 
 Desktop integration follows the same shape. The guide links

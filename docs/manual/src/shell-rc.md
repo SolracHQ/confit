@@ -53,6 +53,6 @@ confit.document.rc.env("EDITOR", "hx", {
 })
 ```
 
-Guards compose: `env_eq` matches a variable, `env_set` tests
+Guards compose. `env_eq` matches a variable, `env_set` tests
 presence, `in_path` tests a binary, `exists` tests a file,
 `all` plus `any` combine them.
