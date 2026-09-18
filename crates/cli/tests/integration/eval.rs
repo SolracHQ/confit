@@ -27,7 +27,10 @@ fn fixture_plans_stay_deterministic() {
             },
             Err(error) => panic!("{fixture} second evaluation runs: {error}"),
         };
-        assert!(!first.documents.is_empty(), "{fixture} holds documents");
+        assert!(
+            !first.manifest.documents.is_empty(),
+            "{fixture} holds documents"
+        );
         assert_eq!(
             plan_value(&first),
             plan_value(&second),
@@ -78,7 +81,7 @@ return { shells = { "bash" }, configs = { %s } }
     let first = run(&forward);
     let second = run(&swapped);
     assert_eq!(plan_value(&first), plan_value(&second));
-    let shared = match serde_json::to_value(&first.documents) {
+    let shared = match serde_json::to_value(&first.manifest.documents) {
         Ok(value) => value,
         Err(error) => panic!("documents serialize: {error}"),
     };

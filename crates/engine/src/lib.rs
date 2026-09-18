@@ -4,10 +4,11 @@
 
 #![deny(missing_docs)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_core::document::Document;
+use confit_core::document::ManifestDocument;
 use confit_core::hook::Hook;
 
 use crate::fetch::Fetch;
@@ -81,24 +82,31 @@ impl std::fmt::Debug for EvalOpts {
     }
 }
 
-/// Finished evaluation holding documents plus hooks.
+/// Finished evaluation holding documents plus blobs plus hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Hooks hold merged post-config steps in first-seen
-/// declaration order.
+/// order. Blobs hold raw opaque plus tree member bytes under
+/// SHA-256 hex, one entry per referenced blob. Hooks hold merged
+/// post-config steps in first-seen declaration order.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use confit_engine::Evaluation;
 ///
-/// let evaluation = Evaluation { documents: Vec::new(), hooks: Vec::new() };
+/// let evaluation = Evaluation {
+///     documents: Vec::new(),
+///     blobs: std::collections::BTreeMap::new(),
+///     hooks: Vec::new(),
+/// };
 /// assert!(matches!(evaluation.documents.len(), 0));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
-    pub documents: Vec<Document>,
+    pub documents: Vec<ManifestDocument>,
+    /// Holds raw blob bytes under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, Vec<u8>>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }

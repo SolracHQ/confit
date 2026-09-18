@@ -35,7 +35,7 @@ Picks count newest-first from one, so `%1` names the
 just-previous entry. A past apply records a fresh rotation
 entry like any other apply, so history keeps moving
 forward. Applying the past restores exactly what the
-stored plan holds.
+stored bundle holds.
 
 Stdout carries `applied:` plus `previous:` through anstream
 for a picked slot. Stderr carries the preview plus prompts

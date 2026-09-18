@@ -5,7 +5,7 @@ writes. Every other answer leaves the disk untouched.
 
 ```sh
 confit apply profile.lua
-Plan: 2 to add, 0 to change, 0 to destroy.
+Bundle: 2 to add, 0 to change, 0 to destroy.
 Apply these changes? Type 'yes' to continue: yes
 ```
 
@@ -37,11 +37,11 @@ names every change.
 
 ## One state per user
 
-Plan and state share the exact shape on purpose. A state
-file holds the plan that already applied. One user holds one
+Bundle and state share the exact shape on purpose. A state
+file holds the bundle that already applied. One user holds one
 applied result, and one state slot mirrors it, so every
 apply diffs against the same recorded result. Reach for
-saved plans when switching profiles. A rendered bundle replays
+saved bundles when switching profiles. A rendered bundle replays
 through the positional, evaluation plus fetching costs stay
 paid, and the switch stays trivial and fast. Experiments
 apply a rendered file.

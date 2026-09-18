@@ -10,7 +10,7 @@ confit delete @NAME                          # drop a named slot
 confit init [DIR]                           # scaffold, default .
 ```
 
-`@NAME` stores or loads a named plan under the user config
+`@NAME` stores or loads a named slot under the user config
 folder as `plans/{NAME}.json`. Empty names plus separators
 fail. A source reads `.lua` plus extensionless paths as a
 profile, `.cb` as a bundle file, `@NAME` as a named slot,

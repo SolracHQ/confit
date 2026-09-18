@@ -8,25 +8,25 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::document::{Document, DocumentData, ManifestData, ManifestDocument, TreeMember};
+use crate::document::{ManifestData, ManifestDocument, ManifestMember};
 use crate::error::{Error, Result};
 use crate::fs::Filesystem;
 use crate::hook::Hook;
 use crate::ids::DocPath;
-use crate::plan::{PLAN_VERSION, Plan};
+use crate::plan::{BUNDLE_VERSION, Bundle};
 
 /// One stored plan entry for the apply-past listing.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::store::PreviousEntry;
+/// use confit_core::store::HistoryEntry;
 ///
-/// let entry = PreviousEntry { index: 1, created_at: String::new() };
+/// let entry = HistoryEntry { index: 1, created_at: String::new() };
 /// assert!(matches!(entry.index, 1));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreviousEntry {
+pub struct HistoryEntry {
     /// Holds the listing position used as the apply `%N` pick.
     pub index: usize,
     /// Holds the stored plan creation timestamp.
@@ -42,13 +42,14 @@ pub struct PreviousEntry {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::plan::Plan;
+/// use confit_core::plan::Bundle;
 /// use confit_core::store::Manifest;
 ///
-/// let stored = Manifest::of(&Plan::empty());
+/// let stored = Manifest::of(&Bundle::empty());
 /// assert!(matches!(stored.documents.len(), 0));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// Holds the plan format version.
     pub version: u32,
@@ -62,11 +63,14 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Builds the persisted plan holding blob references.
+    /// Reads the persisted plan back as itself.
+    ///
+    /// The manifest is the only document language, so the
+    /// projection clones the bundle manifest intact.
     ///
     /// # Arguments
     ///
-    /// * `plan` - the live plan holding binary bytes.
+    /// * `plan` - the bundle holding the manifest.
     ///
     /// # Returns
     ///
@@ -75,23 +79,27 @@ impl Manifest {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_core::plan::Plan;
+    /// use confit_core::plan::Bundle;
     /// use confit_core::store::Manifest;
     ///
-    /// let stored = Manifest::of(&Plan::empty());
-    /// assert!(matches!(stored.version, v if v == confit_core::plan::PLAN_VERSION));
+    /// let stored = Manifest::of(&Bundle::empty());
+    /// assert!(matches!(stored.version, v if v == confit_core::plan::BUNDLE_VERSION));
     /// ```
-    pub fn of(plan: &Plan) -> Self {
-        Self {
-            version: plan.version,
-            documents: plan
-                .documents
-                .iter()
-                .map(|document| document.manifest_document())
-                .collect(),
-            created_at: plan.created_at.clone(),
-            hooks: plan.hooks.clone(),
-        }
+    pub fn of(plan: &Bundle) -> Self {
+        plan.manifest.clone()
+    }
+
+    /// Reads one persisted manifest back as itself.
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest` - the persisted plan under projecting.
+    ///
+    /// # Returns
+    ///
+    /// The manifest clone.
+    pub fn of_manifest(manifest: &Manifest) -> Self {
+        manifest.clone()
     }
 }
 
@@ -134,20 +142,20 @@ const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::PLAN_VERSION;
+/// use confit_core::plan::BUNDLE_VERSION;
 /// use confit_core::store::load_state;
 ///
 /// let outcome = load_state(None, &MemoryFs::new());
-/// assert!(matches!(outcome, Ok(plan) if plan.documents.is_empty() && plan.version == PLAN_VERSION));
+/// assert!(matches!(outcome, Ok(plan) if plan.manifest.documents.is_empty() && plan.manifest.version == BUNDLE_VERSION));
 /// ```
-pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
+pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
     let Some(file) = path else {
-        return Ok(Plan::empty());
+        return Ok(Bundle::empty());
     };
     let bytes = match fs.read(file) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Plan::empty());
+            return Ok(Bundle::empty());
         }
         Err(error) => return Err(Error::from(error)),
     };
@@ -155,10 +163,10 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| Error::Plan(format!("read state '{}': {error}", file.display())))?;
     match value.get("version").and_then(serde_json::Value::as_u64) {
-        Some(version) if version == u64::from(PLAN_VERSION) => {}
+        Some(version) if version == u64::from(BUNDLE_VERSION) => {}
         Some(version) => {
             return Err(Error::Plan(format!(
-                "state version {version} reads unsupported, want {PLAN_VERSION}"
+                "state version {version} reads unsupported, want {BUNDLE_VERSION}"
             )));
         }
         None => {
@@ -199,13 +207,13 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Plan> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::plan::Plan;
-/// use confit_core::store::plan_json;
+/// use confit_core::plan::Bundle;
+/// use confit_core::store::manifest_json;
 ///
-/// let plan = Plan::empty();
-/// assert!(matches!(plan_json(&plan), Ok(text) if text.contains("documents")));
+/// let plan = Bundle::empty();
+/// assert!(matches!(manifest_json(&plan), Ok(text) if text.contains("documents")));
 /// ```
-pub fn plan_json(plan: &Plan) -> Result<String> {
+pub fn manifest_json(plan: &Bundle) -> Result<String> {
     let stored = Manifest::of(plan);
     serde_json::to_string_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render plan: {error}")))
@@ -235,15 +243,15 @@ pub fn plan_json(plan: &Plan) -> Result<String> {
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::{PLAN_VERSION, Plan};
-/// use confit_core::store::write_plan;
+/// use confit_core::plan::Bundle;
+/// use confit_core::store::write_manifest;
 ///
-/// let plan = Plan { version: PLAN_VERSION, documents: Vec::new(), created_at: String::new(), hooks: Vec::new() };
-/// assert!(matches!(write_plan(&plan, None, &MemoryFs::new()), Ok(())));
+/// let plan = Bundle::empty();
+/// assert!(matches!(write_manifest(&plan, None, &MemoryFs::new()), Ok(())));
 /// ```
-pub fn write_plan(plan: &Plan, out: Option<&Path>, fs: &dyn Filesystem) -> Result<()> {
+pub fn write_manifest(plan: &Bundle, out: Option<&Path>, fs: &dyn Filesystem) -> Result<()> {
     store_blobs(plan, fs)?;
-    let text = plan_json(plan)?;
+    let text = manifest_json(plan)?;
     match out {
         Some(dest) => fs
             .write(dest, text.as_bytes())
@@ -258,13 +266,15 @@ pub fn write_plan(plan: &Plan, out: Option<&Path>, fs: &dyn Filesystem) -> Resul
 /// Writes every document to its expanded path.
 ///
 /// Text plus structured plus rc render through core. Opaque
-/// writes raw bytes. Links land as symlinks. Documents carrying
+/// writes raw blob bytes. Links land as symlinks. Tree
+/// members write from the blob map. Documents carrying
 /// a mode set permission bits after their bytes land. Parents
 /// build on demand through the backend seam.
 ///
 /// # Arguments
 ///
 /// * `documents` - the desired documents under writing.
+/// * `blobs` - the raw blob bytes under content hashes.
 /// * `fs` - the backend under writing.
 /// * `on_written` - the per-document callback, holding `None` for silence.
 ///
@@ -279,31 +289,33 @@ pub fn write_plan(plan: &Plan, out: Option<&Path>, fs: &dyn Filesystem) -> Resul
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::document::{Document, DocumentData};
+/// use confit_core::document::{ManifestData, ManifestDocument};
 /// use confit_core::fs::{Filesystem, MemoryFs};
 /// use confit_core::ids::DocPath;
 /// use confit_core::store::write_documents;
+/// use std::collections::BTreeMap;
 ///
 /// let fs = MemoryFs::new();
-/// let documents = vec![Document::new(
+/// let documents = vec![ManifestDocument::new(
 ///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into(), mode: None },
+///     ManifestData::Text { content: "hi".into(), mode: None },
 /// )];
-/// assert!(matches!(write_documents(&documents, &fs, None), Ok(())));
+/// assert!(matches!(write_documents(&documents, &BTreeMap::new(), &fs, None), Ok(())));
 /// assert!(fs.exists(std::path::Path::new("note")));
 /// ```
 pub fn write_documents(
-    documents: &[Document],
+    documents: &[ManifestDocument],
+    blobs: &BTreeMap<String, Vec<u8>>,
     fs: &dyn Filesystem,
     on_written: Option<&dyn Fn(&DocPath)>,
 ) -> Result<()> {
     for document in documents {
         let expanded = document.path.expand();
         let outcome = match &document.data {
-            DocumentData::Link { target } => fs.symlink(&expanded, Path::new(target)),
-            DocumentData::Tree { members } => write_tree_members(&expanded, members, fs),
+            ManifestData::Link { target } => fs.symlink(&expanded, Path::new(target)),
+            ManifestData::Tree { members } => write_tree_members(&expanded, members, blobs, fs),
             _ => {
-                let bytes = document.bytes()?;
+                let bytes = document.bytes(blobs)?;
                 fs.write(&expanded, &bytes)
             }
         };
@@ -332,12 +344,14 @@ pub fn write_documents(
 ///
 /// Only the members land, never the destination folder
 /// itself. Parent folders create as needed, modes land
-/// per member from the manifest.
+/// per member from the manifest. Member bytes read from
+/// the blob map under their references.
 ///
 /// # Arguments
 ///
 /// * `dest` - the expanded destination folder.
 /// * `members` - the desired members under writing.
+/// * `blobs` - the raw blob bytes under content hashes.
 /// * `fs` - the backend under writing.
 ///
 /// # Returns
@@ -346,16 +360,23 @@ pub fn write_documents(
 ///
 /// # Errors
 ///
-/// Write plus mode failures surface as io errors carrying
-/// the member path.
+/// Missing blobs plus write plus mode failures surface as
+/// io errors carrying the member path.
 fn write_tree_members(
     dest: &std::path::Path,
-    members: &[crate::document::TreeMember],
+    members: &[ManifestMember],
+    blobs: &BTreeMap<String, Vec<u8>>,
     fs: &dyn Filesystem,
 ) -> std::io::Result<()> {
     for member in members {
-        let path = dest.join(&member.rel);
-        fs.write(&path, &member.content).map_err(|error| {
+        let path = dest.join(&member.relative);
+        let content = blobs.get(&member.blob).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("missing blob '{}' for '{}'", member.blob, path.display()),
+            )
+        })?;
+        fs.write(&path, content).map_err(|error| {
             std::io::Error::new(
                 error.kind(),
                 format!("cannot write '{}': {error}", path.display()),
@@ -395,21 +416,21 @@ fn write_tree_members(
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::document::{Document, DocumentData};
+/// use confit_core::document::{ManifestData, ManifestDocument};
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::ids::DocPath;
 /// use confit_core::store::remove_orphans;
 ///
 /// let fs = MemoryFs::new();
-/// let recorded = vec![Document::new(
+/// let recorded = vec![ManifestDocument::new(
 ///     DocPath::new("gone"),
-///     DocumentData::Text { content: "hi".into(), mode: None },
+///     ManifestData::Text { content: "hi".into(), mode: None },
 /// )];
 /// assert!(matches!(remove_orphans(&recorded, &[], &fs), Ok(0)));
 /// ```
 pub fn remove_orphans(
-    recorded: &[Document],
-    desired: &[Document],
+    recorded: &[ManifestDocument],
+    desired: &[ManifestDocument],
     fs: &dyn Filesystem,
 ) -> Result<usize> {
     let mut removed = 0;
@@ -456,21 +477,21 @@ pub fn remove_orphans(
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::document::{Document, DocumentData, TreeMember};
+/// use confit_core::document::{ManifestData, ManifestDocument, ManifestMember};
 /// use confit_core::fs::MemoryFs;
 /// use confit_core::ids::DocPath;
 /// use confit_core::store::remove_tree_members;
 ///
 /// let fs = MemoryFs::new();
-/// let recorded = vec![Document::new(
+/// let recorded = vec![ManifestDocument::new(
 ///     DocPath::new("fonts"),
-///     DocumentData::Tree { members: vec![TreeMember { rel: "gone.ttf".into(), content: vec![1], mode: 0o644 }] },
+///     ManifestData::Tree { members: vec![ManifestMember { relative: "gone.ttf".into(), blob: "abc".into(), mode: 0o644 }] },
 /// )];
 /// assert!(matches!(remove_tree_members(&recorded, &[], &fs), Ok(0)));
 /// ```
 pub fn remove_tree_members(
-    recorded: &[Document],
-    desired: &[Document],
+    recorded: &[ManifestDocument],
+    desired: &[ManifestDocument],
     fs: &dyn Filesystem,
 ) -> Result<usize> {
     let mut removed = 0;
@@ -482,14 +503,14 @@ pub fn remove_tree_members(
             .iter()
             .filter(|document| document.path == old.path)
             .filter_map(|document| document.data.tree_members())
-            .flat_map(|members| members.iter().map(|member| member.rel.as_str()))
+            .flat_map(|members| members.iter().map(|member| member.relative.as_str()))
             .collect();
         let dest = old.path.expand();
         for member in old_members {
-            if new_rels.contains(member.rel.as_str()) {
+            if new_rels.contains(member.relative.as_str()) {
                 continue;
             }
-            let path = dest.join(&member.rel);
+            let path = dest.join(&member.relative);
             if !fs.exists(&path) {
                 continue;
             }
@@ -525,14 +546,14 @@ const PREVIOUS_KEPT: usize = 5;
 /// let entries = list_previous(&MemoryFs::new());
 /// assert!(matches!(entries, Ok(entries) if entries.is_empty()));
 /// ```
-pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<PreviousEntry>> {
+pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<HistoryEntry>> {
     let dir = resolve_previous_dir()?;
     Ok(stored_entries(&dir, fs)?
         .into_iter()
         .enumerate()
-        .map(|(position, (_, stored))| PreviousEntry {
+        .map(|(position, (_, stored))| HistoryEntry {
             index: position + 1,
-            created_at: stored.created_at,
+            created_at: stored.manifest.created_at.clone(),
         })
         .collect())
 }
@@ -570,7 +591,7 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<PreviousEntry>> {
 /// let entries = stored_entries(Path::new("previous"), &MemoryFs::new());
 /// assert!(matches!(entries, Ok(entries) if entries.is_empty()));
 /// ```
-pub fn stored_entries(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<(PathBuf, Plan)>> {
+pub fn stored_entries(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<(PathBuf, Bundle)>> {
     let mut files = match fs.list_dir(dir) {
         Ok(files) => files,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -588,7 +609,7 @@ pub fn stored_entries(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<(PathBuf, P
             Ok(stored) => stored,
             Err(_) => continue,
         };
-        if stored.version != PLAN_VERSION {
+        if stored.version != BUNDLE_VERSION {
             continue;
         }
         let mut hydrator = match Hydrator::new(&file, fs) {
@@ -802,13 +823,13 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::Plan;
+/// use confit_core::plan::Bundle;
 /// use confit_core::store::archive_previous;
 ///
-/// let outcome = archive_previous(&Plan::empty(), &MemoryFs::new());
+/// let outcome = archive_previous(&Bundle::empty(), &MemoryFs::new());
 /// assert!(matches!(outcome, Ok(_)));
 /// ```
-pub fn archive_previous(plan: &Plan, fs: &dyn Filesystem) -> Result<PathBuf> {
+pub fn archive_previous(plan: &Bundle, fs: &dyn Filesystem) -> Result<PathBuf> {
     store_blobs(plan, fs)?;
     let dir = resolve_previous_dir()?;
     let mut stamp = system_nanos()?;
@@ -817,7 +838,7 @@ pub fn archive_previous(plan: &Plan, fs: &dyn Filesystem) -> Result<PathBuf> {
         stamp += 1;
         dest = dir.join(format!("{stamp}.json"));
     }
-    let text = plan_json(plan)?;
+    let text = manifest_json(plan)?;
     fs.write(&dest, text.as_bytes()).map_err(Error::from)?;
     rotate_previous(&dir, fs)?;
     Ok(dest)
@@ -921,38 +942,21 @@ fn check_blob_id(sha: &str) -> Result<()> {
 
 /// Collects pooled blob bytes under content hashes in order.
 ///
-/// Opaque documents contribute raw file bytes. Tree
-/// documents contribute raw member bytes. Equal bytes share
-/// one entry under one hash.
+/// The bundle map already holds raw bytes under hashes, so
+/// collection reads the map straight into sorted order.
 ///
 /// # Arguments
 ///
-/// * `plan` - the live plan holding binary bytes.
+/// * `plan` - the bundle holding blob bytes.
 ///
 /// # Returns
 ///
 /// Content hashes mapping to raw bytes in sorted order.
-fn collect_blobs(plan: &Plan) -> BTreeMap<String, &[u8]> {
-    let mut out: BTreeMap<String, &[u8]> = BTreeMap::new();
-    for document in &plan.documents {
-        match &document.data {
-            DocumentData::Opaque { content, .. } => {
-                out.entry(crate::plan::sha256_hex(content))
-                    .or_insert(content);
-            }
-            DocumentData::Tree { members } => {
-                for member in members {
-                    out.entry(crate::plan::sha256_hex(&member.content))
-                        .or_insert(&member.content);
-                }
-            }
-            DocumentData::Structured { .. }
-            | DocumentData::Text { .. }
-            | DocumentData::Link { .. }
-            | DocumentData::Rc(_) => {}
-        }
-    }
-    out
+fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
+    plan.blobs
+        .iter()
+        .map(|(sha, bytes)| (sha.clone(), bytes.as_slice()))
+        .collect()
 }
 
 /// Writes every referenced blob missing from the pool.
@@ -972,7 +976,7 @@ fn collect_blobs(plan: &Plan) -> BTreeMap<String, &[u8]> {
 /// # Errors
 ///
 /// Compression plus write failures surface as plan errors.
-fn store_blobs(plan: &Plan, fs: &dyn Filesystem) -> Result<()> {
+fn store_blobs(plan: &Bundle, fs: &dyn Filesystem) -> Result<()> {
     let dir = resolve_blobs_dir()?;
     for (sha, bytes) in collect_blobs(plan) {
         let dest = dir.join(&sha);
@@ -986,60 +990,13 @@ fn store_blobs(plan: &Plan, fs: &dyn Filesystem) -> Result<()> {
     Ok(())
 }
 
-/// Rebuilds one live payload through a blob reader.
-///
-/// # Arguments
-///
-/// * `data` - the persisted payload under hydrating.
-/// * `load` - reads verified raw bytes for one blob hash.
-///
-/// # Returns
-///
-/// The live payload holding binary bytes.
-///
-/// # Errors
-///
-/// Reader failures surface through the reader.
-fn hydrate_data(
-    data: &ManifestData,
-    load: &mut dyn FnMut(&str) -> Result<Vec<u8>>,
-) -> Result<DocumentData> {
-    match data {
-        ManifestData::Structured { format, data } => Ok(DocumentData::Structured {
-            format: *format,
-            data: data.clone(),
-        }),
-        ManifestData::Text { content, mode } => Ok(DocumentData::Text {
-            content: content.clone(),
-            mode: *mode,
-        }),
-        ManifestData::Link { target } => Ok(DocumentData::Link {
-            target: target.clone(),
-        }),
-        ManifestData::Rc(data) => Ok(DocumentData::Rc(data.clone())),
-        ManifestData::Opaque { blob, mode } => Ok(DocumentData::Opaque {
-            content: load(blob)?,
-            mode: *mode,
-        }),
-        ManifestData::Tree { members } => {
-            let mut live = Vec::with_capacity(members.len());
-            for member in members {
-                live.push(TreeMember {
-                    rel: member.rel.clone(),
-                    content: load(&member.blob)?,
-                    mode: member.mode,
-                });
-            }
-            Ok(DocumentData::Tree { members: live })
-        }
-    }
-}
-
 /// Pool blob reader with disk short-circuit plus memory cache.
 ///
 /// Disk destinations matching a blob hash hydrate straight
 /// from disk bytes, so steady plans skip pool reads. Pool
-/// hits verify hashes and cache per hydration run.
+/// hits verify hashes and cache per hydration run. Bundle
+/// map hits win before both, so archived plans hydrate
+/// without pool access.
 struct Hydrator<'a> {
     /// Holds the manifest path for error context.
     source: PathBuf,
@@ -1062,9 +1019,13 @@ impl<'a> Hydrator<'a> {
         })
     }
 
-    /// Rebuilds the live plan with lazy blob hydration.
-    fn hydrate(&mut self, stored: &Manifest) -> Result<Plan> {
-        let mut documents = Vec::with_capacity(stored.documents.len());
+    /// Rebuilds the bundle with lazy blob hydration.
+    ///
+    /// The manifest carries over intact as the only document
+    /// language. Every referenced blob resolves through disk
+    /// short-circuit plus pool reads into the bundle map.
+    fn hydrate(&mut self, stored: &Manifest) -> Result<Bundle> {
+        let mut blobs: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         for manifest in &stored.documents {
             let dest = manifest.path.expand();
             let mut hints: BTreeMap<&str, PathBuf> = BTreeMap::new();
@@ -1076,7 +1037,7 @@ impl<'a> Hydrator<'a> {
                     for member in members {
                         hints
                             .entry(member.blob.as_str())
-                            .or_insert_with(|| dest.join(&member.rel));
+                            .or_insert_with(|| dest.join(&member.relative));
                     }
                 }
                 ManifestData::Structured { .. }
@@ -1085,22 +1046,17 @@ impl<'a> Hydrator<'a> {
                 | ManifestData::Rc(_) => {}
             }
             let path = &manifest.path;
-            let mut load = |sha: &str| {
+            for sha in manifest.data.blob_refs() {
+                if blobs.contains_key(sha) {
+                    continue;
+                }
                 let disk = hints.get(sha).map(|hint| hint.as_path());
-                self.blob_bytes(sha, disk, path)
-            };
-            let data = hydrate_data(&manifest.data, &mut load)?;
-            documents.push(Document {
-                path: manifest.path.clone(),
-                data,
-                data_hash: manifest.data_hash.clone(),
-            });
+                blobs.insert(sha.to_string(), self.blob_bytes(sha, disk, path)?);
+            }
         }
-        Ok(Plan {
-            version: stored.version,
-            documents,
-            created_at: stored.created_at.clone(),
-            hooks: stored.hooks.clone(),
+        Ok(Bundle {
+            manifest: stored.clone(),
+            blobs,
         })
     }
 
@@ -1229,7 +1185,7 @@ fn collect_manifest_refs(path: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<S
         Ok(stored) => stored,
         Err(_) => return,
     };
-    if stored.version != PLAN_VERSION {
+    if stored.version != BUNDLE_VERSION {
         return;
     }
     for document in &stored.documents {
@@ -1262,13 +1218,13 @@ fn collect_manifest_refs(path: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<S
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::Plan;
+/// use confit_core::plan::Bundle;
 /// use confit_core::store::write_bundle;
 ///
-/// let outcome = write_bundle(&Plan::empty(), std::path::Path::new("bundle.tgz"), &MemoryFs::new());
+/// let outcome = write_bundle(&Bundle::empty(), std::path::Path::new("bundle.tgz"), &MemoryFs::new());
 /// assert!(matches!(outcome, Ok(())));
 /// ```
-pub fn write_bundle(plan: &Plan, dest: &Path, fs: &dyn Filesystem) -> Result<()> {
+pub fn write_bundle(plan: &Bundle, dest: &Path, fs: &dyn Filesystem) -> Result<()> {
     let stored = Manifest::of(plan);
     let manifest = serde_json::to_vec_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
@@ -1334,15 +1290,15 @@ fn append_bundle_entry(
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::Plan;
+/// use confit_core::plan::Bundle;
 /// use confit_core::store::{read_bundle, write_bundle};
 ///
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.tgz");
-/// assert!(matches!(write_bundle(&Plan::empty(), dest, &fs), Ok(())));
-/// assert!(matches!(read_bundle(dest, &fs), Ok(plan) if plan.documents.is_empty()));
+/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs), Ok(())));
+/// assert!(matches!(read_bundle(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
 /// ```
-pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
+pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
     let bytes = fs
         .read(path)
         .map_err(|error| Error::Plan(format!("read bundle '{}': {error}", path.display())))?;
@@ -1374,9 +1330,9 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
             let stored: Manifest = serde_json::from_slice(&raw).map_err(|error| {
                 Error::Plan(format!("read bundle '{}': {error}", path.display()))
             })?;
-            if stored.version != PLAN_VERSION {
+            if stored.version != BUNDLE_VERSION {
                 return Err(Error::Plan(format!(
-                    "bundle version {} reads unsupported, want {PLAN_VERSION}",
+                    "bundle version {} reads unsupported, want {BUNDLE_VERSION}",
                     stored.version
                 )));
             }
@@ -1425,27 +1381,19 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
             path.display()
         )));
     };
-    let mut load = |sha: &str| match blobs.get(sha) {
-        Some(bytes) => Ok(bytes.clone()),
-        None => Err(Error::Plan(format!(
-            "read bundle '{}': missing blob '{sha}'",
-            path.display()
-        ))),
-    };
-    let mut documents = Vec::with_capacity(stored.documents.len());
-    for manifest in &stored.documents {
-        let data = hydrate_data(&manifest.data, &mut load)?;
-        documents.push(Document {
-            path: manifest.path.clone(),
-            data,
-            data_hash: manifest.data_hash.clone(),
-        });
+    for document in &stored.documents {
+        for sha in document.data.blob_refs() {
+            if !blobs.contains_key(sha) {
+                return Err(Error::Plan(format!(
+                    "read bundle '{}': missing blob '{sha}'",
+                    path.display()
+                )));
+            }
+        }
     }
-    Ok(Plan {
-        version: stored.version,
-        documents,
-        created_at: stored.created_at.clone(),
-        hooks: stored.hooks.clone(),
+    Ok(Bundle {
+        manifest: stored,
+        blobs,
     })
 }
 
@@ -1473,15 +1421,15 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
 ///
 /// ```rust
 /// use confit_core::fs::MemoryFs;
-/// use confit_core::plan::Plan;
-/// use confit_core::store::{load_plan_input, write_bundle};
+/// use confit_core::plan::Bundle;
+/// use confit_core::store::{load_bundle_input, write_bundle};
 ///
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.cb");
-/// assert!(matches!(write_bundle(&Plan::empty(), dest, &fs), Ok(())));
-/// assert!(matches!(load_plan_input(dest, &fs), Ok(plan) if plan.documents.is_empty()));
+/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs), Ok(())));
+/// assert!(matches!(load_bundle_input(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
 /// ```
-pub fn load_plan_input(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
+pub fn load_bundle_input(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
     if path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
@@ -1500,48 +1448,55 @@ pub fn load_plan_input(path: &Path, fs: &dyn Filesystem) -> Result<Plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::Plan;
+    use crate::plan::Bundle;
 
     #[test]
     fn parallel_plan_json_matches_sequential() {
-        use crate::document::{StructuredFormat, Table};
+        use crate::document::{ManifestData, ManifestDocument, StructuredFormat, Table};
         use crate::ids::DocPath;
 
-        let plan = Plan {
-            version: PLAN_VERSION,
-            documents: vec![
-                Document::new(
-                    DocPath::new("note"),
-                    DocumentData::Text {
-                        content: "héllo \"quoted\"\n".to_string(),
-                        mode: None,
-                    },
-                ),
-                Document::new(
-                    DocPath::new("bin"),
-                    DocumentData::Opaque {
-                        content: vec![0xFF, 0x00, 0x41],
-                        mode: None,
-                    },
-                ),
-                Document::new(
-                    DocPath::new("app.json"),
-                    DocumentData::Structured {
-                        format: StructuredFormat::Json,
-                        data: Table::from([("name".to_string(), serde_json::json!("confit"))]),
-                    },
-                ),
-            ],
-            created_at: "now".to_string(),
-            hooks: vec![crate::hook::Hook {
-                argv: vec!["mise".to_string(), "install".to_string()],
-                path: Vec::new(),
-                when: None,
-                checks: Vec::new(),
-                timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
-            }],
+        let opaque_bytes = vec![0xFF, 0x00, 0x41];
+        let opaque_blob = crate::plan::sha256_hex(&opaque_bytes);
+        let mut blobs = BTreeMap::new();
+        blobs.insert(opaque_blob.clone(), opaque_bytes);
+        let plan = Bundle {
+            manifest: Manifest {
+                version: BUNDLE_VERSION,
+                documents: vec![
+                    ManifestDocument::new(
+                        DocPath::new("note"),
+                        ManifestData::Text {
+                            content: "héllo \"quoted\"\n".to_string(),
+                            mode: None,
+                        },
+                    ),
+                    ManifestDocument::new(
+                        DocPath::new("bin"),
+                        ManifestData::Opaque {
+                            blob: opaque_blob,
+                            mode: None,
+                        },
+                    ),
+                    ManifestDocument::new(
+                        DocPath::new("app.json"),
+                        ManifestData::Structured {
+                            format: StructuredFormat::Json,
+                            data: Table::from([("name".to_string(), serde_json::json!("confit"))]),
+                        },
+                    ),
+                ],
+                created_at: "now".to_string(),
+                hooks: vec![crate::hook::Hook {
+                    argv: vec!["mise".to_string(), "install".to_string()],
+                    path: Vec::new(),
+                    when: None,
+                    checks: Vec::new(),
+                    timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+                }],
+            },
+            blobs,
         };
-        let parallel = match plan_json(&plan) {
+        let parallel = match manifest_json(&plan) {
             Ok(text) => text,
             Err(error) => panic!("parallel serializes: {error}"),
         };
@@ -1579,10 +1534,10 @@ mod tests {
         use crate::fs::MemoryFs;
 
         let fs = MemoryFs::new();
-        let built = match Plan::build(
-            vec![crate::document::Document::new(
+        let built = match Bundle::build(
+            vec![crate::document::ManifestDocument::new(
                 crate::ids::DocPath::new("note"),
-                crate::document::DocumentData::Text {
+                crate::document::ManifestData::Text {
                     content: "hi".to_string(),
                     mode: None,
                 },
@@ -1596,7 +1551,7 @@ mod tests {
             Ok(dest) => dest,
             Err(error) => panic!("named plan resolves: {error}"),
         };
-        match write_plan(&built, Some(&dest), &fs) {
+        match write_manifest(&built, Some(&dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("named plan writes: {error}"),
         }
@@ -1604,7 +1559,7 @@ mod tests {
             Ok(loaded) => loaded,
             Err(error) => panic!("named plan loads: {error}"),
         };
-        assert_eq!(loaded.documents.len(), 1);
+        assert_eq!(loaded.manifest.documents.len(), 1);
     }
 
     #[test]
@@ -1623,12 +1578,12 @@ mod tests {
             }],
             timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
         }];
-        let built = match Plan::build(Vec::new(), hooks) {
+        let built = match Bundle::build(Vec::new(), hooks) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1637,7 +1592,7 @@ mod tests {
             Err(error) => panic!("plan loads: {error}"),
         };
         assert_eq!(loaded, built);
-        assert_eq!(loaded.hooks.len(), 1);
+        assert_eq!(loaded.manifest.hooks.len(), 1);
     }
 
     #[test]
@@ -1656,27 +1611,48 @@ mod tests {
             Ok(_) => panic!("stale version passes"),
             Err(error) => assert_eq!(
                 error.to_string(),
-                format!("state version 2 reads unsupported, want {PLAN_VERSION}")
+                format!("state version 2 reads unsupported, want {BUNDLE_VERSION}")
             ),
         }
     }
 
-    fn tree_recorded() -> Vec<Document> {
-        use crate::document::TreeMember;
+    #[test]
+    fn manifest_rejects_unknown_fields() {
+        use crate::fs::MemoryFs;
+
+        let fs = MemoryFs::new();
+        let text = format!(
+            "{{\"version\":{BUNDLE_VERSION},\"documents\":[],\"created_at\":\"\",\"hooks\":[],\"extra\":1}}"
+        );
+        match fs.write(std::path::Path::new("state.json"), text.as_bytes()) {
+            Ok(()) => {}
+            Err(error) => panic!("memory writes: {error}"),
+        }
+        match load_state(Some(std::path::Path::new("state.json")), &fs) {
+            Ok(_) => panic!("unknown field passes"),
+            Err(error) => assert!(
+                error.to_string().contains("unknown field"),
+                "names the field: {error}"
+            ),
+        }
+    }
+
+    fn tree_recorded() -> Vec<ManifestDocument> {
+        use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
 
-        vec![Document::new(
+        vec![ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree {
+            ManifestData::Tree {
                 members: vec![
-                    TreeMember {
-                        rel: "kept.ttf".into(),
-                        content: vec![1],
+                    ManifestMember {
+                        relative: "kept.ttf".into(),
+                        blob: crate::plan::sha256_hex(&[1]),
                         mode: 0o644,
                     },
-                    TreeMember {
-                        rel: "gone.ttf".into(),
-                        content: vec![2],
+                    ManifestMember {
+                        relative: "gone.ttf".into(),
+                        blob: crate::plan::sha256_hex(&[2]),
                         mode: 0o644,
                     },
                 ],
@@ -1684,12 +1660,19 @@ mod tests {
         )]
     }
 
+    fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
+        BTreeMap::from([
+            (crate::plan::sha256_hex(&[1]), vec![1]),
+            (crate::plan::sha256_hex(&[2]), vec![2]),
+        ])
+    }
+
     #[test]
     fn write_tree_members_land_with_modes() {
         use crate::fs::{Filesystem, MemoryFs};
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &fs, None) {
+        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("tree writes: {error}"),
         }
@@ -1704,12 +1687,12 @@ mod tests {
 
     #[test]
     fn remove_tree_members_drops_only_dropped() {
-        use crate::document::TreeMember;
+        use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::fs::{Filesystem, MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &fs, None) {
+        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("tree writes: {error}"),
         }
@@ -1718,12 +1701,12 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("hand writes: {error}"),
         }
-        let desired = vec![Document::new(
+        let desired = vec![ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree {
-                members: vec![TreeMember {
-                    rel: "kept.ttf".into(),
-                    content: vec![1],
+            ManifestData::Tree {
+                members: vec![ManifestMember {
+                    relative: "kept.ttf".into(),
+                    blob: crate::plan::sha256_hex(&[1]),
                     mode: 0o644,
                 }],
             },
@@ -1742,7 +1725,7 @@ mod tests {
         use crate::fs::MemoryFs;
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &fs, None) {
+        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("tree writes: {error}"),
         }
@@ -1754,47 +1737,54 @@ mod tests {
         assert!(fs.exists(&dest.join("kept.ttf")));
     }
 
-    fn mixed_plan() -> Plan {
-        use crate::document::{Document, DocumentData, TreeMember};
+    fn mixed_plan() -> Bundle {
+        use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
 
+        let opaque_blob = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
+        let a_blob = crate::plan::sha256_hex(&[1, 2, 3]);
+        let b_blob = crate::plan::sha256_hex(&[4, 5, 6]);
         let documents = vec![
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("note"),
-                DocumentData::Text {
+                ManifestData::Text {
                     content: "hi".to_string(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("bin"),
-                DocumentData::Opaque {
-                    content: vec![0xFF, 0x00, 0x41],
+                ManifestData::Opaque {
+                    blob: opaque_blob.clone(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("fonts"),
-                DocumentData::Tree {
+                ManifestData::Tree {
                     members: vec![
-                        TreeMember {
-                            rel: "a.ttf".into(),
-                            content: vec![1, 2, 3],
+                        ManifestMember {
+                            relative: "a.ttf".into(),
+                            blob: a_blob.clone(),
                             mode: 0o644,
                         },
-                        TreeMember {
-                            rel: "b.ttf".into(),
-                            content: vec![4, 5, 6],
+                        ManifestMember {
+                            relative: "b.ttf".into(),
+                            blob: b_blob.clone(),
                             mode: 0o644,
                         },
                     ],
                 },
             ),
         ];
-        match Plan::build(documents, Vec::new()) {
+        let mut built = match Bundle::build(documents, Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
-        }
+        };
+        built.blobs.insert(opaque_blob, vec![0xFF, 0x00, 0x41]);
+        built.blobs.insert(a_blob, vec![1, 2, 3]);
+        built.blobs.insert(b_blob, vec![4, 5, 6]);
+        built
     }
 
     fn pool_blobs(fs: &crate::fs::MemoryFs) -> Vec<std::path::PathBuf> {
@@ -1834,7 +1824,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1867,43 +1857,45 @@ mod tests {
 
     #[test]
     fn identical_bytes_share_one_pool_blob() {
-        use crate::document::{Document, DocumentData, TreeMember};
+        use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
 
         let fs = crate::fs::MemoryFs::new();
         let shared = vec![9, 9, 9];
+        let shared_blob = crate::plan::sha256_hex(&shared);
         let documents = vec![
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("first"),
-                DocumentData::Opaque {
-                    content: shared.clone(),
+                ManifestData::Opaque {
+                    blob: shared_blob.clone(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("second"),
-                DocumentData::Opaque {
-                    content: shared.clone(),
+                ManifestData::Opaque {
+                    blob: shared_blob.clone(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("fonts"),
-                DocumentData::Tree {
-                    members: vec![TreeMember {
-                        rel: "a.ttf".into(),
-                        content: shared.clone(),
+                ManifestData::Tree {
+                    members: vec![ManifestMember {
+                        relative: "a.ttf".into(),
+                        blob: shared_blob.clone(),
                         mode: 0o644,
                     }],
                 },
             ),
         ];
-        let built = match Plan::build(documents, Vec::new()) {
+        let mut built = match Bundle::build(documents, Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
+        built.blobs.insert(shared_blob, shared.clone());
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1919,16 +1911,17 @@ mod tests {
 
     #[test]
     fn prune_blobs_drops_only_unreferenced() {
-        use crate::document::{Document, DocumentData};
+        use crate::document::{ManifestData, ManifestDocument};
         use crate::fs::{Filesystem, MemoryFs};
         use crate::ids::DocPath;
 
-        fn opaque_plan(path: &str, byte: u8) -> Plan {
-            match Plan::build(
-                vec![Document::new(
+        fn opaque_plan(path: &str, byte: u8) -> Bundle {
+            let blob = crate::plan::sha256_hex(&[byte]);
+            let mut built = match Bundle::build(
+                vec![ManifestDocument::new(
                     DocPath::new(path),
-                    DocumentData::Opaque {
-                        content: vec![byte],
+                    ManifestData::Opaque {
+                        blob: blob.clone(),
                         mode: None,
                     },
                 )],
@@ -1936,7 +1929,9 @@ mod tests {
             ) {
                 Ok(built) => built,
                 Err(error) => panic!("plan builds: {error}"),
-            }
+            };
+            built.blobs.insert(blob, vec![byte]);
+            built
         }
 
         let fs = MemoryFs::new();
@@ -1945,7 +1940,7 @@ mod tests {
             Err(error) => panic!("slot resolves: {error}"),
         };
         let slot_plan = opaque_plan("slot-bin", 10);
-        match write_plan(&slot_plan, Some(&slot), &fs) {
+        match write_manifest(&slot_plan, Some(&slot), &fs) {
             Ok(()) => {}
             Err(error) => panic!("slot writes: {error}"),
         }
@@ -1954,7 +1949,7 @@ mod tests {
             Err(error) => panic!("history resolves: {error}"),
         };
         let history_plan = opaque_plan("history-bin", 20);
-        match write_plan(&history_plan, Some(&previous.join("1.json")), &fs) {
+        match write_manifest(&history_plan, Some(&previous.join("1.json")), &fs) {
             Ok(()) => {}
             Err(error) => panic!("history writes: {error}"),
         }
@@ -1963,7 +1958,7 @@ mod tests {
             Err(error) => panic!("named resolves: {error}"),
         };
         let named_plan = opaque_plan("named-bin", 30);
-        match write_plan(&named_plan, Some(&named), &fs) {
+        match write_manifest(&named_plan, Some(&named), &fs) {
             Ok(()) => {}
             Err(error) => panic!("named writes: {error}"),
         }
@@ -1999,7 +1994,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2036,7 +2031,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2063,7 +2058,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2101,7 +2096,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_plan(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }

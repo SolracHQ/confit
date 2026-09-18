@@ -31,17 +31,17 @@ Apply reads profiles, bundles, and slots through one positional:
 
 ```sh
 confit plan laptop.lua --root .            # preview
-confit plan laptop.lua -o @laptop          # preview into a named plan
+confit plan laptop.lua -o @laptop          # preview into a named slot
 confit apply laptop.lua                    # preview, prompt, write
 confit apply @laptop --force        # reviewed plan, no prompt
 confit apply %1                            # re-apply just-previous
 confit init myproject                      # scaffold, default .
 ```
 
-`@name` stores the rendered plan under the user config
+`@name` stores the rendered bundle under the user config
 folder as `plans/{name}.json`, pretty printed like any plan.
 `apply @name` replays it. Empty names plus separators fail.
-Switching profiles runs on named plans. Render each profile
+Switching profiles runs on named slots. Render each profile
 into its own name and replay by name:
 
 ```sh

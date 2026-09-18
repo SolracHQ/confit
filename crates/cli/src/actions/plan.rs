@@ -9,9 +9,9 @@ use confit_core::error::Result;
 use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
 
 use confit_core::ids::DocPath;
-use confit_core::plan::Plan;
+use confit_core::plan::Bundle;
 use confit_core::runtime::Runtime;
-use confit_core::store::{load_state, write_bundle, write_plan};
+use confit_core::store::{load_state, write_bundle, write_manifest};
 
 use crate::cli::PlanArgs;
 
@@ -21,9 +21,9 @@ use super::seams::{Seams, evaluate_shared, log_processed, timed};
 #[derive(Debug)]
 pub struct PlanOutcome {
     /// Holds the built plan with counts.
-    pub built: Plan,
+    pub built: Bundle,
     /// Holds the previous plan backing lifecycle marks.
-    pub previous: Plan,
+    pub previous: Bundle,
     /// Holds disk edits leading the summary, desired versus
     /// disk on first runs.
     pub drift: Vec<Drift>,
@@ -100,7 +100,8 @@ impl PlanRunner<'_> {
         let snapshot = |path: &DocPath| snapshot(path, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
         self.seams.emit_hashing();
-        let built = timed("hash", || Plan::build(documents, evaluation.hooks))?;
+        let mut built = timed("hash", || Bundle::build(documents, evaluation.hooks))?;
+        built.blobs = evaluation.blobs;
         log_processed(&built, &previous);
         let order = if first_run {
             DriftOrder::DiskFirst
@@ -116,13 +117,13 @@ impl PlanRunner<'_> {
         });
         let hook_lines = built.hook_preview(&Runtime::current(), fs)?;
         if self.args.output.is_some() || self.store_tmp {
-            self.seams.emit_writing_plan(built.documents.len());
+            self.seams.emit_writing_plan(built.manifest.documents.len());
         }
         let stored = timed("write", || {
             match (self.args.output.as_deref(), self.store_tmp) {
                 (Some(dest), _) if is_named_output(dest) => {
                     let resolved = crate::cli::resolve_plan_file(dest)?;
-                    write_plan(&built, Some(&resolved), fs).map(|()| None)
+                    write_manifest(&built, Some(&resolved), fs).map(|()| None)
                 }
                 (Some(dest), _) => {
                     let resolved = crate::cli::resolve_plan_file(dest)?;

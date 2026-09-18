@@ -9,7 +9,7 @@ use confit_core::error::{Error, Result};
 use confit_core::fs::Filesystem;
 
 use crate::fs::OsFs;
-use confit_core::plan::{DocumentStatus, Plan};
+use confit_core::plan::{Bundle, DocumentStatus};
 
 use confit_engine::{ProgressCallback, ProgressEvent};
 
@@ -267,8 +267,8 @@ pub fn evaluate_shared(
 }
 
 /// Logs finished documents with lifecycle status.
-pub fn log_processed(built: &Plan, previous: &Plan) {
-    for document in &built.documents {
+pub fn log_processed(built: &Bundle, previous: &Bundle) {
+    for document in &built.manifest.documents {
         let status = match document.status(previous) {
             DocumentStatus::Create => "create",
             DocumentStatus::Update => "update",

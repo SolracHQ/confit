@@ -72,9 +72,9 @@ fn export_named_slot_writes_auto_bundle() {
 fn export_history_slots_write_auto_bundles() {
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![Document::new(
+    let old = match build(vec![ManifestDocument::new(
         DocPath::new("history-old"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "old\n".to_string(),
             mode: None,
         },
@@ -82,9 +82,9 @@ fn export_history_slots_write_auto_bundles() {
         Ok(built) => built,
         Err(error) => panic!("old plan builds: {error}"),
     };
-    let new = match build(vec![Document::new(
+    let new = match build(vec![ManifestDocument::new(
         DocPath::new("history-new"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "new\n".to_string(),
             mode: None,
         },
@@ -96,11 +96,11 @@ fn export_history_slots_write_auto_bundles() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_plan(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_plan(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -235,10 +235,10 @@ fn export_manifest_prints_pretty_json_without_base64() {
     pin_home();
     let fs = MemoryFs::new();
     let raw = vec![0xFF, 0x00, 0x80, 0x41];
-    let built = match build(vec![Document::new(
+    let built = match build(vec![ManifestDocument::new(
         DocPath::new("bin"),
-        DocumentData::Opaque {
-            content: raw.clone(),
+        ManifestData::Opaque {
+            blob: confit_core::plan::sha256_hex(&raw),
             mode: None,
         },
     )]) {
@@ -273,7 +273,7 @@ fn export_manifest_prints_pretty_json_without_base64() {
         Ok(manifest) => manifest,
         Err(error) => panic!("manifest parses: {error}"),
     };
-    assert_eq!(manifest.version, PLAN_VERSION);
+    assert_eq!(manifest.version, BUNDLE_VERSION);
     assert_eq!(manifest.documents.len(), 1);
     match &manifest.documents[0].data {
         confit_core::document::ManifestData::Opaque { blob, .. } => assert_eq!(

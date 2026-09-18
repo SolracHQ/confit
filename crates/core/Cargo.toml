@@ -7,7 +7,6 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-base64 = "0.23.1"
 chrono = "0.4.45"
 diffy = "0.5.2"
 dirs = "7.0.0"

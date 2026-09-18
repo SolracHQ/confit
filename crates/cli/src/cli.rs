@@ -91,7 +91,7 @@ pub struct PlanArgs {
     /// Shared seam flags.
     #[command(flatten)]
     pub shared: SharedArgs,
-    /// Plan destination. Omitted stores the payload under tmp and prints the path.
+    /// Bundle destination. Omitted stores the payload under tmp and prints the path.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
@@ -113,7 +113,7 @@ pub struct PlanArgs {
 /// ```
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// Plan source under applying.
+    /// Source under applying.
     pub source: PathBuf,
     /// Shared seam flags.
     #[command(flatten)]

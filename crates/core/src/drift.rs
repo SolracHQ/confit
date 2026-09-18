@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::document::{Document, StructuredFormat, Table, TreeMember};
+use crate::document::{ManifestDocument, ManifestMember, StructuredFormat, Table};
 use crate::fs::TreeMemberRead;
 use crate::ids::{DocPath, ReadOutcome};
-use crate::plan::{Plan, opaque_label};
+use crate::plan::{Bundle, opaque_label};
 
 /// Manual edit behind one recorded path.
 ///
@@ -189,7 +189,7 @@ pub enum DriftOrder {
     DiskFirst,
 }
 
-impl Plan {
+impl Bundle {
     /// Reports manual edits between recorded documents and disk.
     ///
     /// Renders each recorded document then snapshots its path.
@@ -215,16 +215,16 @@ impl Plan {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::document::{ManifestData, ManifestDocument};
     /// use confit_core::drift::DriftOrder;
     /// use confit_core::ids::{DocPath, ReadOutcome};
-    /// use confit_core::plan::Plan;
+    /// use confit_core::plan::Bundle;
     /// use std::collections::BTreeMap;
     ///
-    /// let mut previous = Plan::empty();
-    /// previous.documents = vec![Document::new(
+    /// let mut previous = Bundle::empty();
+    /// previous.manifest.documents = vec![ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None },
     /// )];
     /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst);
     /// assert!(matches!(drifts.len(), 1));
@@ -236,12 +236,17 @@ impl Plan {
         order: DriftOrder,
     ) -> Vec<Drift> {
         let mut out = Vec::new();
-        for document in &self.documents {
+        for document in &self.manifest.documents {
             if let Some(members) = document.data.tree_members() {
-                out.extend(document.tree_drift(members, &snapshot_tree(&document.path), order));
+                out.extend(document.tree_drift(
+                    members,
+                    &self.blobs,
+                    &snapshot_tree(&document.path),
+                    order,
+                ));
                 continue;
             }
-            let recorded_bytes = match document.bytes() {
+            let recorded_bytes = match document.bytes(&self.blobs) {
                 Ok(bytes) => bytes,
                 Err(_) => continue,
             };
@@ -262,7 +267,7 @@ impl Plan {
     }
 }
 
-impl Document {
+impl ManifestDocument {
     /// Collects drift entries for one present disk path.
     ///
     /// Modes compare only while the recorded document carries
@@ -288,14 +293,14 @@ impl Document {
         disk_mode: Option<u32>,
         order: DriftOrder,
     ) -> Vec<Drift> {
-        use crate::document::{DocumentData, render_mode};
+        use crate::document::{ManifestData, render_mode};
 
         let (first, second) = match order {
             DriftOrder::RecordedFirst => (recorded, disk),
             DriftOrder::DiskFirst => (disk, recorded),
         };
         let mut out = match &self.data {
-            DocumentData::Structured { format, data } => {
+            ManifestData::Structured { format, data } => {
                 if let Some(disk_table) = parse_disk_table(*format, disk) {
                     match order {
                         DriftOrder::RecordedFirst => structured_keys(&self.path, data, &disk_table),
@@ -305,14 +310,14 @@ impl Document {
                     push_hunk(&self.path, first, second)
                 }
             }
-            DocumentData::Text { .. } | DocumentData::Rc(_) => {
+            ManifestData::Text { .. } | ManifestData::Rc(_) => {
                 if recorded != disk {
                     push_hunk(&self.path, first, second)
                 } else {
                     Vec::new()
                 }
             }
-            DocumentData::Link { target } => {
+            ManifestData::Link { target } => {
                 let disk_target = String::from_utf8_lossy(disk);
                 if disk_target.as_ref() != target {
                     let (old, new) = match order {
@@ -335,7 +340,7 @@ impl Document {
                     Vec::new()
                 }
             }
-            DocumentData::Opaque { .. } => {
+            ManifestData::Opaque { .. } => {
                 if recorded != disk {
                     let (old, new) = match order {
                         DriftOrder::RecordedFirst => (
@@ -357,7 +362,7 @@ impl Document {
                     Vec::new()
                 }
             }
-            DocumentData::Tree { .. } => Vec::new(),
+            ManifestData::Tree { .. } => Vec::new(),
         };
         if let Some(wanted) = self.mode()
             && let Some(seen) = disk_mode
@@ -395,6 +400,7 @@ impl Document {
     /// # Arguments
     ///
     /// * `members` - the recorded tree members under comparing.
+    /// * `blobs` - the raw blob bytes under content hashes.
     /// * `disk` - the relative disk reads under comparing.
     /// * `order` - the side order under assigning old and new
     ///
@@ -403,7 +409,8 @@ impl Document {
     /// Drift entries in manifest order.
     pub(crate) fn tree_drift(
         &self,
-        members: &[TreeMember],
+        members: &[ManifestMember],
+        blobs: &BTreeMap<String, Vec<u8>>,
         disk: &BTreeMap<String, TreeMemberRead>,
         order: DriftOrder,
     ) -> Vec<Drift> {
@@ -411,28 +418,32 @@ impl Document {
 
         let mut out = Vec::new();
         for member in members {
-            let member_path = DocPath::new(format!("{}/{}", self.path.as_str(), member.rel));
-            match disk.get(&member.rel) {
+            let member_path = DocPath::new(format!("{}/{}", self.path.as_str(), member.relative));
+            let recorded = match blobs.get(&member.blob) {
+                Some(bytes) => bytes,
+                None => continue,
+            };
+            match disk.get(&member.relative) {
                 None => out.push(Drift::Missing { path: member_path }),
                 Some(TreeMemberRead::Unreadable { reason }) => out.push(Drift::Unreadable {
                     path: member_path,
                     reason: reason.clone(),
                 }),
                 Some(TreeMemberRead::Present { bytes, mode }) => {
-                    if *bytes != member.content {
+                    if *bytes != *recorded {
                         let (old, new) = match order {
                             DriftOrder::RecordedFirst => (
-                                serde_json::Value::String(opaque_label(&member.content)),
+                                serde_json::Value::String(opaque_label(recorded)),
                                 serde_json::Value::String(opaque_label(bytes)),
                             ),
                             DriftOrder::DiskFirst => (
                                 serde_json::Value::String(opaque_label(bytes)),
-                                serde_json::Value::String(opaque_label(&member.content)),
+                                serde_json::Value::String(opaque_label(recorded)),
                             ),
                         };
                         out.push(Drift::Key {
                             path: self.path.clone(),
-                            key: member.rel.clone(),
+                            key: member.relative.clone(),
                             old: Some(old),
                             new: Some(new),
                         });
@@ -452,7 +463,7 @@ impl Document {
                         };
                         out.push(Drift::Key {
                             path: self.path.clone(),
-                            key: format!("{}:mode", member.rel),
+                            key: format!("{}:mode", member.relative),
                             old: Some(old),
                             new: Some(new),
                         });
@@ -587,52 +598,64 @@ fn flatten_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::DocumentData;
+    use crate::document::{ManifestData, ManifestDocument};
 
-    fn text_doc(path: &str, content: &str) -> Document {
-        Document::new(
+    fn text_doc(path: &str, content: &str) -> ManifestDocument {
+        ManifestDocument::new(
             DocPath::new(path),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
             },
         )
     }
 
-    fn structured_doc(path: &str, pairs: &[(&str, serde_json::Value)]) -> Document {
+    fn structured_doc(path: &str, pairs: &[(&str, serde_json::Value)]) -> ManifestDocument {
         let data: Table = pairs
             .iter()
             .map(|(key, value)| ((*key).to_string(), value.clone()))
             .collect();
-        Document::new(
+        ManifestDocument::new(
             DocPath::new(path),
-            DocumentData::Structured {
+            ManifestData::Structured {
                 format: StructuredFormat::Toml,
                 data,
             },
         )
     }
 
-    fn opaque_doc(path: &str, bytes: &[u8]) -> Document {
-        Document::new(
+    fn opaque_doc(path: &str, bytes: &[u8]) -> ManifestDocument {
+        ManifestDocument::new(
             DocPath::new(path),
-            DocumentData::Opaque {
-                content: bytes.to_vec(),
+            ManifestData::Opaque {
+                blob: crate::plan::sha256_hex(bytes),
                 mode: None,
             },
         )
     }
 
-    fn with_hashes(documents: Vec<Document>) -> Plan {
+    fn with_hashes(documents: Vec<ManifestDocument>) -> Bundle {
+        with_blobs(documents, BTreeMap::new())
+    }
+
+    fn with_blobs(documents: Vec<ManifestDocument>, blobs: BTreeMap<String, Vec<u8>>) -> Bundle {
         let mut docs = documents;
         for document in &mut docs {
             if let Err(error) = document.fill_hash() {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = docs;
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = docs;
+        previous.blobs = blobs;
         previous
+    }
+
+    fn opaque_blobs(pairs: &[&[u8]]) -> BTreeMap<String, Vec<u8>> {
+        pairs
+            .iter()
+            .map(|bytes| (crate::plan::sha256_hex(bytes), bytes.to_vec()))
+            .collect()
     }
 
     #[test]
@@ -685,9 +708,9 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let recorded = with_hashes(vec![Document::new(
+        let recorded = with_hashes(vec![ManifestDocument::new(
             DocPath::new("app.json"),
-            DocumentData::Structured {
+            ManifestData::Structured {
                 format: StructuredFormat::Json,
                 data,
             },
@@ -762,9 +785,9 @@ mod tests {
 
     #[test]
     fn drift_compares_link_targets() {
-        let mut recorded = vec![Document::new(
+        let mut recorded = vec![ManifestDocument::new(
             DocPath::new("shortcut"),
-            DocumentData::Link {
+            ManifestData::Link {
                 target: "old-dest".to_string(),
             },
         )];
@@ -773,8 +796,8 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = recorded;
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = recorded;
         let drifts = previous.drift(
             &|_| ReadOutcome::Present {
                 bytes: b"new-dest".to_vec(),
@@ -796,7 +819,10 @@ mod tests {
 
     #[test]
     fn opaque_drift_reports_hash_plus_size() {
-        let recorded = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
+        let recorded = with_blobs(
+            vec![opaque_doc("bin", &[0xFF, 0x00])],
+            opaque_blobs(&[&[0xFF, 0x00]]),
+        );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Present {
                 bytes: vec![0xFF, 0x01],
@@ -835,7 +861,10 @@ mod tests {
 
     #[test]
     fn opaque_drift_stays_quiet_on_equal_bytes() {
-        let recorded = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
+        let recorded = with_blobs(
+            vec![opaque_doc("bin", &[0xFF, 0x00])],
+            opaque_blobs(&[&[0xFF, 0x00]]),
+        );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Present {
                 bytes: vec![0xFF, 0x00],
@@ -879,31 +908,39 @@ mod tests {
         assert!(lines[3].contains("manually deleted"));
     }
 
-    fn tree_doc() -> Document {
-        use crate::document::TreeMember;
+    fn tree_doc() -> ManifestDocument {
+        use crate::document::ManifestMember;
 
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree {
+            ManifestData::Tree {
                 members: vec![
-                    TreeMember {
-                        rel: "changed.ttf".into(),
-                        content: vec![1],
+                    ManifestMember {
+                        relative: "changed.ttf".into(),
+                        blob: crate::plan::sha256_hex(&[1]),
                         mode: 0o644,
                     },
-                    TreeMember {
-                        rel: "gone.ttf".into(),
-                        content: vec![2],
+                    ManifestMember {
+                        relative: "gone.ttf".into(),
+                        blob: crate::plan::sha256_hex(&[2]),
                         mode: 0o644,
                     },
-                    TreeMember {
-                        rel: "remode.ttf".into(),
-                        content: vec![3],
+                    ManifestMember {
+                        relative: "remode.ttf".into(),
+                        blob: crate::plan::sha256_hex(&[3]),
                         mode: 0o644,
                     },
                 ],
             },
         )
+    }
+
+    fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
+        BTreeMap::from([
+            (crate::plan::sha256_hex(&[1]), vec![1]),
+            (crate::plan::sha256_hex(&[2]), vec![2]),
+            (crate::plan::sha256_hex(&[3]), vec![3]),
+        ])
     }
 
     fn tree_disk() -> BTreeMap<String, crate::fs::TreeMemberRead> {
@@ -936,7 +973,7 @@ mod tests {
 
     #[test]
     fn tree_drift_reports_missing_changed_mode() {
-        let recorded = with_hashes(vec![tree_doc()]);
+        let recorded = with_blobs(vec![tree_doc()], tree_blobs());
         let drifts = recorded.drift(
             &|_| ReadOutcome::Absent,
             &|_| tree_disk(),
@@ -956,7 +993,7 @@ mod tests {
     fn tree_drift_stays_quiet_on_equal_manifest() {
         use crate::fs::TreeMemberRead;
 
-        let recorded = with_hashes(vec![tree_doc()]);
+        let recorded = with_blobs(vec![tree_doc()], tree_blobs());
         let disk = BTreeMap::from([
             (
                 "changed.ttf".to_string(),

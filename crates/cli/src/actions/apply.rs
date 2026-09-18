@@ -9,12 +9,12 @@ use confit_core::error::{Error, Result};
 use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
 use confit_core::hook::{describe_condition, resolve_hook};
 use confit_core::ids::DocPath;
-use confit_core::plan::Plan;
+use confit_core::plan::Bundle;
 use confit_core::runtime::{Runtime, evaluate};
 use confit_core::store::{
-    archive_previous, default_state_path, load_plan_input, load_state, prune_blobs, remove_orphans,
-    remove_tree_members, resolve_named_plan, resolve_previous_dir, stored_entries, write_documents,
-    write_plan,
+    archive_previous, default_state_path, load_bundle_input, load_state, prune_blobs,
+    remove_orphans, remove_tree_members, resolve_named_plan, resolve_previous_dir, stored_entries,
+    write_documents, write_manifest,
 };
 
 use crate::actions::hooks::{HookRunner, OsRunner, append_hook_log};
@@ -53,20 +53,20 @@ pub struct ApplyReport {
 /// ```rust
 /// use confit_cli::actions::apply::ApplyRunner;
 /// use confit_cli::actions::seams::Seams;
-/// use confit_core::document::{Document, DocumentData};
+/// use confit_core::document::{ManifestData, ManifestDocument};
 /// use confit_core::fs::{Filesystem, MemoryFs};
 /// use confit_core::ids::DocPath;
-/// use confit_core::plan::Plan;
+/// use confit_core::plan::Bundle;
 /// use std::io::Cursor;
 /// use std::path::Path;
 ///
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new("yes\n");
 /// let mut output = Vec::new();
-/// let plan = match Plan::build(
-///     vec![Document::new(
+/// let plan = match Bundle::build(
+///     vec![ManifestDocument::new(
 ///         DocPath::new("note"),
-///         DocumentData::Text { content: "hi".into(), mode: None },
+///         ManifestData::Text { content: "hi".into(), mode: None },
 ///     )],
 ///     Vec::new(),
 /// ) {
@@ -75,7 +75,7 @@ pub struct ApplyReport {
 /// };
 /// let runner = ApplyRunner {
 ///     plan,
-///     previous: Plan::empty(),
+///     previous: Bundle::empty(),
 ///     state: None,
 ///     force: false,
 ///     preview: false,
@@ -86,9 +86,9 @@ pub struct ApplyReport {
 /// ```
 pub struct ApplyRunner<'a> {
     /// Holds the desired plan under writing plus running.
-    pub plan: Plan,
+    pub plan: Bundle,
     /// Holds the previous plan backing drift plus counts.
-    pub previous: Plan,
+    pub previous: Bundle,
     /// Holds the state file gaining the new plan, `None` skips.
     pub state: Option<PathBuf>,
     /// Skips the first prompt. Drift still re-prompts.
@@ -164,7 +164,9 @@ impl<'a> ApplyRunner<'a> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
             seams.emit_reading_plan(positional);
-            let file_plan = timed("apply plan load", || load_plan_input(positional, seams.fs))?;
+            let file_plan = timed("apply plan load", || {
+                load_bundle_input(positional, seams.fs)
+            })?;
             let state_file = default_state_path()?;
             seams.emit_reading_plan(&state_file);
             let previous = load_state(Some(state_file.as_path()), seams.fs)?;
@@ -187,8 +189,10 @@ impl<'a> ApplyRunner<'a> {
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
         let previous = load_state(Some(state_file.as_path()), seams.fs)?;
+        let mut plan = Bundle::build(evaluation.documents, evaluation.hooks)?;
+        plan.blobs = evaluation.blobs;
         Ok(Self {
-            plan: Plan::build(evaluation.documents, evaluation.hooks)?,
+            plan,
             previous,
             state: Some(state_file),
             force: args.force,
@@ -198,7 +202,7 @@ impl<'a> ApplyRunner<'a> {
     }
 
     /// Builds a slot-backed runner with preview plus prompts.
-    fn from_slot(slot_plan: Plan, force: bool, seams: Seams<'a>) -> Result<Self> {
+    fn from_slot(slot_plan: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
         let previous = load_state(Some(state_file.as_path()), seams.fs)?;
@@ -276,7 +280,7 @@ impl<'a> ApplyRunner<'a> {
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
         let fs: &dyn Filesystem = self.seams.fs;
-        let built = std::mem::replace(&mut self.plan, Plan::empty());
+        let built = std::mem::replace(&mut self.plan, Bundle::empty());
         log_processed(&built, &self.previous);
         let snapshot = |path: &DocPath| snapshot(path, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
@@ -344,22 +348,30 @@ impl<'a> ApplyRunner<'a> {
         } else {
             None
         };
-        write_documents(&built.documents, fs, notify)?;
-        let removed = remove_orphans(&self.previous.documents, &built.documents, fs)?;
-        let removed =
-            removed + remove_tree_members(&self.previous.documents, &built.documents, fs)?;
+        write_documents(&built.manifest.documents, &built.blobs, fs, notify)?;
+        let removed = remove_orphans(
+            &self.previous.manifest.documents,
+            &built.manifest.documents,
+            fs,
+        )?;
+        let removed = removed
+            + remove_tree_members(
+                &self.previous.manifest.documents,
+                &built.manifest.documents,
+                fs,
+            )?;
         if self.state.is_some() {
-            self.seams.emit_writing_plan(built.documents.len());
+            self.seams.emit_writing_plan(built.manifest.documents.len());
         }
         if let Some(state) = self.state.as_deref() {
-            write_plan(&built, Some(state), fs)?;
+            write_manifest(&built, Some(state), fs)?;
         }
-        self.seams.emit_writing_plan(built.documents.len());
+        self.seams.emit_writing_plan(built.manifest.documents.len());
         let stored = archive_previous(&built, fs)?;
         prune_blobs(fs)?;
         self.run_hooks(&built, &rt, fs)?;
         Ok(ApplyReport {
-            written: built.documents.len(),
+            written: built.manifest.documents.len(),
             removed,
             stored,
         })
@@ -371,14 +383,14 @@ impl<'a> ApplyRunner<'a> {
     /// pre-checks, spawns through the runner, verifies
     /// post-checks, and appends captured bytes to the run log.
     /// Failures abort the rest.
-    fn run_hooks(&mut self, built: &Plan, rt: &Runtime, fs: &dyn Filesystem) -> Result<()> {
-        let total = built.hooks.len();
+    fn run_hooks(&mut self, built: &Bundle, rt: &Runtime, fs: &dyn Filesystem) -> Result<()> {
+        let total = built.manifest.hooks.len();
         let real = OsRunner;
         let runner: &dyn HookRunner = match self.seams.hook_runner {
             Some(runner) => runner,
             None => &real,
         };
-        for (index, hook) in built.hooks.iter().enumerate() {
+        for (index, hook) in built.manifest.hooks.iter().enumerate() {
             let position = index + 1;
             let argv_text = hook.argv.join(" ");
             if let Some(gate) = hook.when.as_ref()
@@ -497,7 +509,7 @@ fn parse_history_pick(raw: &str, rest: &str) -> Result<usize> {
 ///
 /// Out-of-range picks fail naming the stored count. Load
 /// failures surface as plan or io errors.
-fn load_history_pick(raw: &str, pick: usize, fs: &dyn Filesystem) -> Result<Plan> {
+fn load_history_pick(raw: &str, pick: usize, fs: &dyn Filesystem) -> Result<Bundle> {
     let dir = resolve_previous_dir()?;
     let entries = stored_entries(&dir, fs)?;
     let total = entries.len();
@@ -531,7 +543,7 @@ fn load_history_pick(raw: &str, pick: usize, fs: &dyn Filesystem) -> Result<Plan
 /// # Errors
 ///
 /// Absent slots plus load failures surface as plan or io errors.
-fn load_named_slot(name: &str, fs: &dyn Filesystem) -> Result<Plan> {
+fn load_named_slot(name: &str, fs: &dyn Filesystem) -> Result<Bundle> {
     let path = resolve_named_plan(name)?;
     if !fs.exists(&path) {
         return Err(Error::Plan(format!("apply: '@{name}' reads absent")));

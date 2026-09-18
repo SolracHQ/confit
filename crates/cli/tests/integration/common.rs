@@ -1,12 +1,12 @@
 pub(crate) use std::io::Cursor;
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use confit_core::document::{Document, DocumentData};
+pub(crate) use confit_core::document::{ManifestData, ManifestDocument};
 pub(crate) use confit_core::drift::DriftOrder;
 pub(crate) use confit_core::error::Error;
 pub(crate) use confit_core::fs::MemoryFs;
 pub(crate) use confit_core::ids::{DocPath, ReadOutcome};
-pub(crate) use confit_core::plan::{PLAN_VERSION, Plan};
+pub(crate) use confit_core::plan::{BUNDLE_VERSION, Bundle};
 
 /// Points at the workspace examples folder from the cli crate dir.
 pub(crate) fn examples_root() -> PathBuf {
@@ -34,7 +34,7 @@ pub(crate) fn pin_home() -> PathBuf {
 }
 
 /// Evaluates one profile file with no external plugins.
-pub(crate) fn evaluate(profile: &Path, root: &Path) -> Result<Vec<Document>, Error> {
+pub(crate) fn evaluate(profile: &Path, root: &Path) -> Result<Vec<ManifestDocument>, Error> {
     pin_home();
     confit_engine::evaluate(
         profile,
@@ -91,7 +91,7 @@ pub(crate) fn evaluate_fetch(
     root: &Path,
     cache: &Path,
     fetcher: std::sync::Arc<confit_engine::fetch::MemoryFetch>,
-) -> Result<Vec<Document>, Error> {
+) -> Result<Vec<ManifestDocument>, Error> {
     pin_home();
     confit_engine::evaluate(
         profile,
@@ -108,12 +108,24 @@ pub(crate) fn evaluate_fetch(
 }
 
 /// Builds a plan off disk with an empty previous state.
-pub(crate) fn build(documents: Vec<Document>) -> Result<confit_core::plan::Plan, Error> {
-    confit_core::plan::Plan::build(documents, Vec::new())
+pub(crate) fn build(documents: Vec<ManifestDocument>) -> Result<confit_core::plan::Bundle, Error> {
+    let mut built = confit_core::plan::Bundle::build(documents, Vec::new())?;
+    let blobs = sample_blobs();
+    for (sha, bytes) in &blobs {
+        if built
+            .manifest
+            .documents
+            .iter()
+            .any(|document| document.data.blob_refs().contains(&sha.as_str()))
+        {
+            built.blobs.insert(sha.clone(), bytes.clone());
+        }
+    }
+    Ok(built)
 }
 
 /// Fills data hashes or panics with context.
-pub(crate) fn fill_hashes(documents: &mut [Document]) {
+pub(crate) fn fill_hashes(documents: &mut [ManifestDocument]) {
     for document in documents {
         if let Err(error) = document.fill_hash() {
             panic!("hashes fill: {error}");
@@ -122,8 +134,8 @@ pub(crate) fn fill_hashes(documents: &mut [Document]) {
 }
 
 /// Serializes one built plan with the timestamp blanked for comparison.
-pub(crate) fn plan_value(built: &confit_core::plan::Plan) -> serde_json::Value {
-    let mut value = match serde_json::to_value(built) {
+pub(crate) fn plan_value(built: &confit_core::plan::Bundle) -> serde_json::Value {
+    let mut value = match serde_json::to_value(confit_core::store::Manifest::of(built)) {
         Ok(value) => value,
         Err(error) => panic!("plan serializes: {error}"),
     };
@@ -159,50 +171,58 @@ pub(crate) fn eval_error(profile: &str) -> String {
 }
 
 /// Builds sample documents across text, structured, link, plus opaque kinds.
-pub(crate) fn sample_documents() -> Vec<Document> {
+pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
     use confit_core::document::{StructuredFormat, Table};
 
     vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hello\n".to_string(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("app.toml"),
-            DocumentData::Structured {
+            ManifestData::Structured {
                 format: StructuredFormat::Toml,
                 data: Table::from([("name".to_string(), serde_json::json!("confit"))]),
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("shortcut"),
-            DocumentData::Link {
+            ManifestData::Link {
                 target: "dest".to_string(),
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("bin"),
-            DocumentData::Opaque {
-                content: vec![0xFF, 0x00, 0x80, 0x41],
+            ManifestData::Opaque {
+                blob: confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
                 mode: None,
             },
         ),
     ]
 }
 
+/// Builds the blob map backing the sample opaque document.
+pub(crate) fn sample_blobs() -> std::collections::BTreeMap<String, Vec<u8>> {
+    std::collections::BTreeMap::from([(
+        confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+        vec![0xFF, 0x00, 0x80, 0x41],
+    )])
+}
+
 /// Builds an apply runner over memory fakes.
 pub(crate) fn apply_runner<'a>(
-    desired: Vec<Document>,
-    previous: Plan,
+    desired: Vec<ManifestDocument>,
+    previous: Bundle,
     state: Option<PathBuf>,
     force: bool,
     preview: bool,
     seams: confit_cli::actions::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let plan = match Plan::build(desired, Vec::new()) {
+    let plan = match build(desired) {
         Ok(plan) => plan,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -310,8 +330,8 @@ pub(crate) fn hook_runner<'a>(
     let mut seams = confit_cli::actions::seams::Seams::memory(fs, input, output);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
-    let mut runner = apply_runner(Vec::new(), Plan::empty(), None, true, false, seams);
-    runner.plan = match Plan::build(Vec::new(), hooks) {
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    runner.plan = match Bundle::build(Vec::new(), hooks) {
         Ok(plan) => plan,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -319,12 +339,12 @@ pub(crate) fn hook_runner<'a>(
 }
 
 /// Seeds the applied slot manifest plus pool on a memory backend.
-pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Plan) -> PathBuf {
+pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
     let slot = match confit_core::store::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    match confit_core::store::write_plan(plan, Some(&slot), fs) {
+    match confit_core::store::write_manifest(plan, Some(&slot), fs) {
         Ok(()) => {}
         Err(error) => panic!("slot seeds: {error}"),
     }
@@ -332,12 +352,12 @@ pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Plan) -> PathBuf {
 }
 
 /// Seeds one named slot manifest plus pool on a memory backend.
-pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Plan) -> PathBuf {
+pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Bundle) -> PathBuf {
     let dest = match confit_core::store::resolve_named_plan(name) {
         Ok(dest) => dest,
         Err(error) => panic!("named slot resolves: {error}"),
     };
-    match confit_core::store::write_plan(plan, Some(&dest), fs) {
+    match confit_core::store::write_manifest(plan, Some(&dest), fs) {
         Ok(()) => {}
         Err(error) => panic!("named slot seeds: {error}"),
     }

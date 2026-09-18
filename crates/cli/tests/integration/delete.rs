@@ -13,41 +13,49 @@ fn delete_prunes_orphans_keeping_shared() {
     let drop_bytes = b"drop-confit-blob".to_vec();
     let drop_sha = confit_core::plan::sha256_hex(&drop_bytes);
     let keep_plan = match build(vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("shared.bin"),
-            DocumentData::Opaque {
-                content: shared_bytes.clone(),
+            ManifestData::Opaque {
+                blob: shared_sha.clone(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("keep.bin"),
-            DocumentData::Opaque {
-                content: keep_bytes,
+            ManifestData::Opaque {
+                blob: keep_sha.clone(),
                 mode: None,
             },
         ),
     ]) {
-        Ok(built) => built,
+        Ok(mut built) => {
+            built.blobs.insert(shared_sha.clone(), shared_bytes.clone());
+            built.blobs.insert(keep_sha.clone(), keep_bytes.clone());
+            built
+        }
         Err(error) => panic!("keep plan builds: {error}"),
     };
     let drop_plan = match build(vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("shared.bin"),
-            DocumentData::Opaque {
-                content: shared_bytes,
+            ManifestData::Opaque {
+                blob: shared_sha.clone(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("drop.bin"),
-            DocumentData::Opaque {
-                content: drop_bytes,
+            ManifestData::Opaque {
+                blob: drop_sha.clone(),
                 mode: None,
             },
         ),
     ]) {
-        Ok(built) => built,
+        Ok(mut built) => {
+            built.blobs.insert(shared_sha.clone(), shared_bytes.clone());
+            built.blobs.insert(drop_sha.clone(), drop_bytes.clone());
+            built
+        }
         Err(error) => panic!("drop plan builds: {error}"),
     };
     let keep_dest = seed_named(&fs, "keep", &keep_plan);

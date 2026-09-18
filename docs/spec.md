@@ -16,7 +16,7 @@ Two-phase workflow: `plan` previews and diffs before `apply` touches
 anything.
 
 Working today: `plan` over Lua configs, portable bundle files
-(plus named plans under `@`), `apply` with preview plus
+(plus named slots under `@`), `apply` with preview plus
 prompt plus post-config hooks, past slots through `apply`,
 `init` scaffolding. Apply removes state-recorded paths absent
 from desired documents.
@@ -29,7 +29,7 @@ from desired documents.
 patches plus hooks plus configs, runs patch callbacks in pipeline order, merges
 hooks sharing argv plus path, hashes
 the data, loads previous state, and diffs desired vs previous. Output:
-a JSON plan file carrying documents plus hooks plus a terminal summary, with zero writes to home
+a JSON bundle file carrying documents plus hooks plus a terminal summary, with zero writes to home
 paths. The preview lists each hook as a `! run:` line with the
 resolved absolute binary, and the literal `yes` covers files
 plus hooks together.
@@ -84,17 +84,17 @@ document header, trees
 collapse to `~ tree ({changed} of {total} files changed)`. Documents
 holding no entries read no lines and leave the add count.
 The counts line reads
-`Plan: {add} to add, {in_place} already in place.`
+`Bundle: {add} to add, {in_place} already in place.`
 
-### Plans on disk
+### Bundles on disk
 
-- Plan: one portable bundle per run (`-o ./plan.cb`, omitted
+- Bundle: one portable bundle per run (`-o ./plan.cb`, omitted
   stores a bundle under tmp and prints the path), git-storable.
   `-o` appends `.cb` when the path lacks the extension.
-  `-o @work` stores a named plan under the user config folder
+  `-o @work` stores a named slot under the user config folder
   as `plans/work.json`. Contains document metadata plus hook
-  declarations plus `created_at` metadata (excluded from the SHA). Plan
-  format version 5. Text, structured, rc, plus link payloads
+  declarations plus `created_at` metadata (excluded from the SHA). Bundle
+  format version 6. Text, structured, rc, plus link payloads
   stay inline. Opaque files plus tree members read as `blob`
   hash refs. Planning writes bundles holding their own blobs
   and the pool fills on apply alone.
@@ -109,10 +109,10 @@ The counts line reads
   pool reads, and missing blobs fail naming the hash. Version
   mismatches fail as unsupported before parsing. Hooks persist
   as pure data (argv, gates, checks) and re-evaluate each plan.
-- History plus named plans: `previous/<stamp>.json` entries plus
+- History plus named slots: `previous/<stamp>.json` entries plus
   `plans/<name>.json` slots hold manifests against the same pool.
   Pruning drops pool entries referenced by no slot, history
-  entry, or named plan. Apply prunes after archiving, so a
+  entry, or named slot. Apply prunes after archiving, so a
   rotated-out entry releases its bytes at once.
 - Bundle: one portable `.cb` file holding `manifest.json` plus
   the referenced blobs alone, so any stored state travels by file.
@@ -129,7 +129,7 @@ collisions record one log-file line naming winner and loser:
   + init[0] = eval "$(mise activate bash)"
 ~/.config/mise/config.toml: toml
   + tools.bat = latest
-Plan: 2 to add, 0 to change, 0 to destroy.
+Bundle: 2 to add, 0 to change, 0 to destroy.
 log: /tmp/confit-123.log
 ```
 
@@ -156,7 +156,7 @@ the plan half when disk reads show changes.
 ### Documents, patches, configs, profiles, plugins
 
 A **document** is the unit that touches disk once `apply` exists.
-Every document has a `path`. Plan diffs and hashes happen at document
+Every document has a `path`. Bundle diffs and hashes happen at document
 level alone. Six kinds cover everything: structured plus plain text
 plus rc plus link plus opaque plus tree.
 
@@ -204,7 +204,7 @@ dialects. Data alone crosses the engine boundary, in both directions.
 
 A **hook** is a post-config step riding a config beside documents
 plus patches. It holds an argv list plus `path` dirs plus a `when`
-gate plus `checks` plus a timeout. Plan resolves `argv[0]` against
+gate plus `checks` plus a timeout. Apply resolves `argv[0]` against
 the hook path dirs plus the engine process PATH and prints the
 absolute in the preview. Apply runs hooks after documents
 materialize. A closed gate warns and excuses the hook. Passing
@@ -307,7 +307,7 @@ documents ride the profile `documents` array or `config:add_document`.
 
 Opaque documents carry raw bytes end to end: `load_bytes` plus
 compressed callbacks plus `fetch_file` bodies supply the bytes,
-`confit.document.opaque(path, content, opts?)` declares them, plan files hold
+`confit.document.opaque(path, content, opts?)` declares them, bundle files hold
 blob refs into the shared pool, hashes cover raw bytes, apply writes raw bytes. The summary
 lists creates as `opaque (n bytes)` bodies and updates as `~ content`
 hash lines; kind changes to or from opaque count as updates with a
@@ -331,7 +331,7 @@ the filter. The manifest sorts by relative path. Member modes
 inherit the archive executable bit (`755` where set, `644`
 otherwise), so trees never depend on the umask.
 
-Tree documents carry member bytes end to end: plan files hold
+Tree documents carry member bytes end to end: bundle files hold
 blob refs per member, hashes cover the canonical manifest (octal
 mode plus relative path plus member sha per line). The summary
 lists creates as `tree (n files)` bodies and updates as
@@ -492,7 +492,7 @@ confit init [DIR]
 ```
 
 - `-o`/`--output` is the explicit output path holding a bundle,
-  or `@name` for a named plan under the user config folder
+  or `@name` for a named slot under the user config folder
   (`plans/{name}.json`); omitted stores a bundle
   under tmp and prints the path. The summary goes to stdout, with zero
   writes to home paths.

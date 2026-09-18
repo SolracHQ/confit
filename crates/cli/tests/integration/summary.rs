@@ -31,9 +31,9 @@ fn drift_reports_manual_edits_on_memory_fs() {
 
     pin_home();
     let mut recorded_docs = vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("app.toml"),
-            DocumentData::Structured {
+            ManifestData::Structured {
                 format: StructuredFormat::Toml,
                 data: Table::from([
                     ("name".to_string(), serde_json::json!("old")),
@@ -41,28 +41,24 @@ fn drift_reports_manual_edits_on_memory_fs() {
                 ]),
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hello\n".to_string(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("vanished"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "bye".to_string(),
                 mode: None,
             },
         ),
     ];
     fill_hashes(&mut recorded_docs);
-    let previous = Plan {
-        version: PLAN_VERSION,
-        documents: recorded_docs,
-        created_at: String::new(),
-        hooks: Vec::new(),
-    };
+    let mut previous = Bundle::empty();
+    previous.manifest.documents = recorded_docs;
     let fs = MemoryFs::new();
     match fs.write(
         Path::new("app.toml"),
@@ -80,12 +76,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
     );
-    let built = confit_core::plan::Plan {
-        version: confit_core::plan::PLAN_VERSION,
-        documents: Vec::new(),
-        created_at: String::new(),
-        hooks: Vec::new(),
-    };
+    let built = Bundle::empty();
     let report = confit_cli::presentation::summary::Summary {
         built: &built,
         previous: &previous,
@@ -111,28 +102,24 @@ fn drift_reports_manual_edits_on_memory_fs() {
 fn plan_shows_old_to_new_on_updates() {
     use confit_core::document::{StructuredFormat, Table};
 
-    let mut old_docs = vec![Document::new(
+    let mut old_docs = vec![ManifestDocument::new(
         DocPath::new("app.toml"),
-        DocumentData::Structured {
+        ManifestData::Structured {
             format: StructuredFormat::Toml,
             data: Table::from([("name".to_string(), serde_json::json!("old"))]),
         },
     )];
     fill_hashes(&mut old_docs);
-    let previous = Plan {
-        version: PLAN_VERSION,
-        documents: old_docs,
-        created_at: String::new(),
-        hooks: Vec::new(),
-    };
-    let desired = vec![Document::new(
+    let mut previous = Bundle::empty();
+    previous.manifest.documents = old_docs;
+    let desired = vec![ManifestDocument::new(
         DocPath::new("app.toml"),
-        DocumentData::Structured {
+        ManifestData::Structured {
             format: StructuredFormat::Toml,
             data: Table::from([("name".to_string(), serde_json::json!("new"))]),
         },
     )];
-    let built = match confit_core::plan::Plan::build(desired, Vec::new()) {
+    let built = match Bundle::build(desired, Vec::new()) {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -165,29 +152,29 @@ fn first_run_preview_shows_impact_plus_in_place() {
         Err(error) => panic!("clash seeds: {error}"),
     }
     let desired = vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("same"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "kept\n".to_string(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("clash"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "desired\n".to_string(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("gone"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "fresh\n".to_string(),
                 mode: None,
             },
         ),
     ];
-    let built = match Plan::build(desired.clone(), Vec::new()) {
+    let built = match Bundle::build(desired.clone(), Vec::new()) {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -196,7 +183,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::DiskFirst,
     );
-    let empty = Plan::empty();
+    let empty = Bundle::empty();
     let steady = confit_cli::presentation::summary::Summary {
         built: &built,
         previous: &empty,
@@ -210,7 +197,10 @@ fn first_run_preview_shows_impact_plus_in_place() {
         first_run: true,
     };
     assert!(steady.render().contains("to change"));
-    assert_eq!(first.summary_line(), "Plan: 2 to add, 1 already in place.");
+    assert_eq!(
+        first.summary_line(),
+        "Bundle: 2 to add, 1 already in place."
+    );
     let text = first.render();
     assert!(text.contains("2 to add, 1 already in place"), "{text}");
     assert!(text.contains("gone: text"), "create header shows: {text}");
@@ -225,7 +215,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
     let mut output = Vec::new();
     let runner = apply_runner(
         desired,
-        Plan::empty(),
+        Bundle::empty(),
         Some(slot),
         false,
         true,
@@ -274,16 +264,16 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         Ok(()) => {}
         Err(error) => panic!("disk seeds: {error}"),
     }
-    let mut recorded_docs = vec![Document::new(
+    let mut recorded_docs = vec![ManifestDocument::new(
         DocPath::new("order-pin-note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "recorded\n".to_string(),
             mode: None,
         },
     )];
     fill_hashes(&mut recorded_docs);
-    let mut previous = Plan::empty();
-    previous.documents = recorded_docs;
+    let mut previous = Bundle::empty();
+    previous.manifest.documents = recorded_docs;
     let drifts = previous.drift(
         &|path| snapshot(path, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
@@ -308,10 +298,10 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         }
         _ => panic!("steady flow pins hunk drift"),
     }
-    let built = match Plan::build(
-        vec![Document::new(
+    let built = match Bundle::build(
+        vec![ManifestDocument::new(
             DocPath::new("order-pin-note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "recorded\n".to_string(),
                 mode: None,
             },
@@ -355,9 +345,9 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
     let mut input = Cursor::new(String::new());
     let mut output = Vec::new();
     let runner = apply_runner(
-        vec![Document::new(
+        vec![ManifestDocument::new(
             DocPath::new("order-pin-note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "recorded\n".to_string(),
                 mode: None,
             },
@@ -406,14 +396,14 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         Ok(()) => {}
         Err(error) => panic!("disk seeds: {error}"),
     }
-    let desired = vec![Document::new(
+    let desired = vec![ManifestDocument::new(
         DocPath::new("order-pin-note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "desired\n".to_string(),
             mode: None,
         },
     )];
-    let built = match Plan::build(desired.clone(), Vec::new()) {
+    let built = match Bundle::build(desired.clone(), Vec::new()) {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
@@ -444,7 +434,7 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         }
         _ => panic!("first-run flow pins hunk drift"),
     }
-    let empty = Plan::empty();
+    let empty = Bundle::empty();
     let report = confit_cli::presentation::summary::Summary {
         built: &built,
         previous: &empty,
@@ -476,7 +466,7 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
     let mut output = Vec::new();
     let runner = apply_runner(
         desired,
-        Plan::empty(),
+        Bundle::empty(),
         Some(PathBuf::from("first-run-state.json")),
         true,
         true,

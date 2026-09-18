@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use confit_core::error::{Error, Result};
 use confit_core::fs::Filesystem;
-use confit_core::plan::Plan;
+use confit_core::plan::Bundle;
 use confit_core::store::{
-    default_state_path, load_state, plan_json, resolve_named_plan, resolve_previous_dir,
+    default_state_path, load_state, manifest_json, resolve_named_plan, resolve_previous_dir,
     stored_entries, write_bundle,
 };
 
@@ -89,7 +89,7 @@ impl<'a> ExportRunner<'a> {
         let fs: &dyn Filesystem = seams.fs;
         let (plan, auto) = timed("export load", || resolve_slot(args.picker.as_deref(), fs))?;
         if args.manifest {
-            let text = timed("export manifest", || plan_json(&plan))?;
+            let text = timed("export manifest", || manifest_json(&plan))?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -99,7 +99,7 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => ensure_bundle_extension(raw),
             None => auto,
         };
-        seams.emit_writing_plan(plan.documents.len());
+        seams.emit_writing_plan(plan.manifest.documents.len());
         timed("export write", || write_bundle(&plan, &dest, fs))?;
         Ok(ExportReport {
             dest: Some(dest),
@@ -142,7 +142,7 @@ impl<'a> ExportRunner<'a> {
 /// assert!(matches!(resolve_slot(Some("backup.cb"), &fs), Err(_)));
 /// assert!(matches!(resolve_slot(Some("%1"), &fs), Err(_)));
 /// ```
-pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Plan, PathBuf)> {
+pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, PathBuf)> {
     let Some(raw) = picker else {
         let slot = default_state_path()?;
         if !fs.exists(&slot) {

@@ -55,7 +55,7 @@ fn run() -> confit_core::error::Result<()> {
 
 /// Runs plan with summary output.
 ///
-/// Plan without a destination stores the payload under tmp and
+/// A plan run without a destination stores the bundle under tmp and
 /// prints the path for later apply reuse.
 fn run_plan_like(
     args: &confit_cli::cli::PlanArgs,

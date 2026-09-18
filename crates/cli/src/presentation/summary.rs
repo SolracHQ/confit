@@ -5,11 +5,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_core::document::{Document, DocumentData, DocumentKind, RcOp, Table};
+use confit_core::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
 use confit_core::drift::{Drift, recorded_hunk};
 use confit_core::ids::DocPath;
 use confit_core::plan::opaque_label;
-use confit_core::plan::{DocumentStatus, Plan};
+use confit_core::plan::{Bundle, DocumentStatus};
 
 /// Yellow style for changed lines.
 const UPDATE_STYLE: &str = "\x1b[33m";
@@ -111,15 +111,15 @@ impl Default for Painter {
 /// ```rust
 /// use confit_cli::presentation::summary::Summary;
 /// use confit_core::ids::DocPath;
-/// use confit_core::document::{Document, DocumentData};
-/// use confit_core::plan::Plan;
+/// use confit_core::document::{ManifestData, ManifestDocument};
+/// use confit_core::plan::Bundle;
 ///
-/// let document = Document::new(
+/// let document = ManifestDocument::new(
 ///     DocPath::new("note"),
-///     DocumentData::Text { content: "hi".into(), mode: None },
+///     ManifestData::Text { content: "hi".into(), mode: None },
 /// );
-/// let built = Plan::build(vec![document], Vec::new());
-/// let previous = Plan::empty();
+/// let built = Bundle::build(vec![document], Vec::new());
+/// let previous = Bundle::empty();
 /// let summary = match built {
 ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false },
 ///     Err(error) => panic!("plan builds: {error}"),
@@ -129,9 +129,9 @@ impl Default for Painter {
 #[derive(Debug)]
 pub struct Summary<'a> {
     /// Holds the built plan under display.
-    pub built: &'a Plan,
+    pub built: &'a Bundle,
     /// Holds the previous plan for lifecycle marks.
-    pub previous: &'a Plan,
+    pub previous: &'a Bundle,
     /// Holds the plan versus disk edits leading the text.
     pub drift: &'a [Drift],
     /// Holds true while the state slot reads absent.
@@ -155,7 +155,7 @@ impl Summary<'_> {
         let painter = Painter::new();
         let mut lines: Vec<String> = Vec::new();
         lines.extend(self.steady_drift_lines(&painter));
-        for document in &self.built.documents {
+        for document in &self.built.manifest.documents {
             let status = document.status(self.previous);
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
@@ -183,28 +183,28 @@ impl Summary<'_> {
     ///
     /// ```rust
     /// use confit_cli::presentation::summary::Summary;
-    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::document::{ManifestData, ManifestDocument};
     /// use confit_core::ids::DocPath;
-    /// use confit_core::plan::Plan;
+    /// use confit_core::plan::Bundle;
     ///
-    /// let first = Document::new(DocPath::new("a"), DocumentData::Text { content: "a".into(), mode: None });
-    /// let second = Document::new(DocPath::new("b"), DocumentData::Text { content: "b".into(), mode: None });
-    /// let built = Plan::build(vec![first, second], Vec::new());
-    /// let previous = Plan::empty();
+    /// let first = ManifestDocument::new(DocPath::new("a"), ManifestData::Text { content: "a".into(), mode: None });
+    /// let second = ManifestDocument::new(DocPath::new("b"), ManifestData::Text { content: "b".into(), mode: None });
+    /// let built = Bundle::build(vec![first, second], Vec::new());
+    /// let previous = Bundle::empty();
     /// let summary = match built {
     ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false },
     ///     Err(error) => panic!("plan builds: {error}"),
     /// };
-    /// assert!(matches!(summary.summary_line().as_str(), "Plan: 2 to add, 0 to change, 0 to destroy."));
+    /// assert!(matches!(summary.summary_line().as_str(), "Bundle: 2 to add, 0 to change, 0 to destroy."));
     /// ```
     pub fn summary_line(&self) -> String {
         if self.first_run {
             let (adds, in_place) = self.first_run_counts();
-            return format!("Plan: {adds} to add, {in_place} already in place.");
+            return format!("Bundle: {adds} to add, {in_place} already in place.");
         }
         let summary = self.built.summary(self.previous);
         format!(
-            "Plan: {} to add, {} to change, {} to destroy.",
+            "Bundle: {} to add, {} to change, {} to destroy.",
             summary.create, summary.update, summary.delete
         )
     }
@@ -220,7 +220,7 @@ impl Summary<'_> {
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut in_place = 0;
-        for document in &self.built.documents {
+        for document in &self.built.manifest.documents {
             if first_run_entries(self.drift, document).is_empty() {
                 in_place += 1;
             } else {
@@ -244,14 +244,14 @@ impl Summary<'_> {
     fn render_first_run(&self) -> String {
         let painter = Painter::new();
         let mut lines = Vec::new();
-        for document in &self.built.documents {
+        for document in &self.built.manifest.documents {
             let entries = first_run_entries(self.drift, document);
             if entries.is_empty() {
                 continue;
             }
             lines.push(painter.paint(Sigil::Header, &header_line(document)));
             if first_run_creates(document, &entries) {
-                for body in entry_bodies(document) {
+                for body in entry_bodies(document, &self.built.blobs) {
                     lines.push(painter.paint(Sigil::Add, &format!("  + {body}")));
                 }
             } else {
@@ -261,7 +261,7 @@ impl Summary<'_> {
         let (adds, in_place) = self.first_run_counts();
         lines.push(painter.paint(
             Sigil::Header,
-            &format!("Plan: {adds} to add, {in_place} already in place."),
+            &format!("Bundle: {adds} to add, {in_place} already in place."),
         ));
         lines.join("\n")
     }
@@ -271,15 +271,21 @@ impl Summary<'_> {
     /// so callers pass the painter plus the document alone.
     /// Create bodies read green, update bodies read yellow,
     /// rc updates read per-symbol hunk paint.
-    fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
+    fn document_lines(&self, painter: &Painter, document: &ManifestDocument) -> Vec<String> {
         match document.status(self.previous) {
-            DocumentStatus::Create => entry_bodies(document)
+            DocumentStatus::Create => entry_bodies(document, &self.built.blobs)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  + {body}")))
                 .collect(),
             DocumentStatus::Update => match self.find_recorded(document) {
-                Some(old) => update_lines(painter, document, old),
-                None => update_fallback(painter, document),
+                Some(old) => update_lines(
+                    painter,
+                    document,
+                    old,
+                    &self.built.blobs,
+                    &self.previous.blobs,
+                ),
+                None => update_fallback(painter, document, &self.built.blobs),
             },
             DocumentStatus::Unchanged => Vec::new(),
         }
@@ -312,10 +318,17 @@ impl Summary<'_> {
     fn drift_hunk_header(&self, path: &DocPath) -> String {
         let found = self
             .previous
+            .manifest
             .documents
             .iter()
             .find(|item| item.path == *path)
-            .or_else(|| self.built.documents.iter().find(|item| item.path == *path));
+            .or_else(|| {
+                self.built
+                    .manifest
+                    .documents
+                    .iter()
+                    .find(|item| item.path == *path)
+            });
         match found {
             Some(document) => header_line(document),
             None => path.as_str().to_string(),
@@ -326,21 +339,24 @@ impl Summary<'_> {
     fn delete_headers(&self) -> Vec<String> {
         let seen: BTreeSet<String> = self
             .built
+            .manifest
             .documents
             .iter()
             .map(|document| document.key())
             .collect();
         self.previous
+            .manifest
             .documents
             .iter()
             .filter(|recorded| {
-                !seen.contains(&recorded.key()) && !recorded.superseded_by(&self.built.documents)
+                !seen.contains(&recorded.key())
+                    && !recorded.superseded_by(&self.built.manifest.documents)
             })
             .map(|recorded| {
                 let key = recorded.key();
                 let (kind, path) = split_key(&key);
                 match &recorded.data {
-                    DocumentData::Tree { members } => {
+                    ManifestData::Tree { members } => {
                         format!("{path}: {kind} ({} files)", members.len())
                     }
                     _ => format!("{path}: {kind}"),
@@ -350,16 +366,17 @@ impl Summary<'_> {
     }
 
     /// Finds one recorded document by key with opaque fallback.
-    fn find_recorded<'a>(&'a self, document: &Document) -> Option<&'a Document> {
+    fn find_recorded<'a>(&'a self, document: &ManifestDocument) -> Option<&'a ManifestDocument> {
         if let Some(found) = self
             .previous
+            .manifest
             .documents
             .iter()
             .find(|item| item.key() == document.key())
         {
             return Some(found);
         }
-        self.previous.documents.iter().find(|recorded| {
+        self.previous.manifest.documents.iter().find(|recorded| {
             recorded.path == document.path
                 && recorded.key() != document.key()
                 && (recorded.is_opaque() || document.is_opaque())
@@ -368,15 +385,15 @@ impl Summary<'_> {
 }
 
 /// Reads the display label for one document.
-fn doc_label(document: &Document) -> Cow<'_, str> {
+fn doc_label(document: &ManifestDocument) -> Cow<'_, str> {
     match &document.data {
-        DocumentData::Structured { format, .. } => Cow::Borrowed(format.name()),
+        ManifestData::Structured { format, .. } => Cow::Borrowed(format.name()),
         _ => Cow::Borrowed(document.data.kind().name()),
     }
 }
 
 /// Reads the header line for one document.
-fn header_line(document: &Document) -> String {
+fn header_line(document: &ManifestDocument) -> String {
     format!("{}: {}", document.path.as_str(), doc_label(document))
 }
 
@@ -384,7 +401,7 @@ fn header_line(document: &Document) -> String {
 ///
 /// Tree member entries group under their destination path.
 /// Every other entry groups under its own path.
-fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Drift> {
+fn first_run_entries<'a>(drift: &'a [Drift], document: &ManifestDocument) -> Vec<&'a Drift> {
     let dest = document.path.as_str();
     let is_tree = document.data.tree_members().is_some();
     drift
@@ -411,7 +428,7 @@ fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Dri
 ///
 /// Whole-file missing entries always land whole. Whole trees
 /// holding missing entries alone land whole.
-fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
+fn first_run_creates(document: &ManifestDocument, entries: &[&Drift]) -> bool {
     if entries
         .iter()
         .any(|entry| matches!(entry, Drift::Missing { path } if path == &document.path))
@@ -432,7 +449,11 @@ fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
 /// Text plus rc hunks render verbatim with per-line paint.
 /// Trees collapse to one changed member count.
 /// Unreadable paths name the replacement.
-fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift]) -> Vec<String> {
+fn first_run_updates(
+    painter: &Painter,
+    document: &ManifestDocument,
+    entries: &[&Drift],
+) -> Vec<String> {
     if let Some(members) = document.data.tree_members() {
         let mut rels = BTreeSet::new();
         for entry in entries {
@@ -512,7 +533,7 @@ fn paint_hunk_line(painter: &Painter, line: &str) -> String {
 }
 
 /// Reads one entry's tree member rel under its destination.
-fn member_rel<'a>(document: &'a Document, entry: &'a Drift) -> &'a str {
+fn member_rel<'a>(document: &'a ManifestDocument, entry: &'a Drift) -> &'a str {
     let dest = document.path.as_str();
     match entry {
         Drift::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key),
@@ -594,23 +615,26 @@ fn named_text(op: &RcOp) -> String {
 }
 
 /// Collects plain entry bodies for one document.
-fn entry_bodies(document: &Document) -> Vec<String> {
+fn entry_bodies(document: &ManifestDocument, blobs: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
     match &document.data {
-        DocumentData::Structured { data, .. } => table_leaves(data, "")
+        ManifestData::Structured { data, .. } => table_leaves(data, "")
             .into_iter()
             .map(|(key, value)| format!("{key} = {value}"))
             .collect(),
-        DocumentData::Text { content, .. } => {
+        ManifestData::Text { content, .. } => {
             if content.is_empty() {
                 Vec::new()
             } else {
                 content.split('\n').map(str::to_string).collect()
             }
         }
-        DocumentData::Link { target } => vec![target.clone()],
-        DocumentData::Opaque { content, .. } => vec![format!("opaque ({} bytes)", content.len())],
-        DocumentData::Tree { members } => vec![format!("tree ({} files)", members.len())],
-        DocumentData::Rc(rc) => {
+        ManifestData::Link { target } => vec![target.clone()],
+        ManifestData::Opaque { blob, .. } => {
+            let len = blobs.get(blob).map(|bytes| bytes.len()).unwrap_or(0);
+            vec![format!("opaque ({} bytes)", len)]
+        }
+        ManifestData::Tree { members } => vec![format!("tree ({} files)", members.len())],
+        ManifestData::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {
                 match &entry.op {
@@ -634,7 +658,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
 }
 
 /// Reports whether either side carries the opaque kind.
-fn touches_opaque(first: &Document, second: &Document) -> bool {
+fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
     matches!(first.data.kind(), DocumentKind::Opaque)
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
@@ -665,11 +689,17 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
 /// Structured plus link plus opaque plus tree lines read yellow
 /// under the update sigil. Rc updates read as a recorded to
 /// desired text hunk with per-symbol paint.
-fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
+fn update_lines(
+    painter: &Painter,
+    document: &ManifestDocument,
+    recorded: &ManifestDocument,
+    new_blobs: &BTreeMap<String, Vec<u8>>,
+    old_blobs: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
     match (&document.data, &recorded.data) {
         (
-            DocumentData::Structured { data: new, .. },
-            DocumentData::Structured { data: old, .. },
+            ManifestData::Structured { data: new, .. },
+            ManifestData::Structured { data: old, .. },
         ) => {
             let mut old_flat = BTreeMap::new();
             for (key, value) in old {
@@ -712,35 +742,49 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
             }
             out
         }
-        (DocumentData::Link { target: new }, DocumentData::Link { target: old }) => {
+        (ManifestData::Link { target: new }, ManifestData::Link { target: old }) => {
             if old == new {
                 Vec::new()
             } else {
                 vec![painter.paint(Sigil::Update, &format!("  ~ target = {old} -> {new}"))]
             }
         }
-        (DocumentData::Opaque { content: new, .. }, DocumentData::Opaque { content: old, .. }) => {
-            if old == new {
+        (
+            ManifestData::Opaque { blob: new_blob, .. },
+            ManifestData::Opaque { blob: old_blob, .. },
+        ) => {
+            if old_blob == new_blob {
                 Vec::new()
             } else {
-                vec![painter.paint(
-                    Sigil::Update,
-                    &format!(
-                        "  ~ content = {} -> {}",
-                        opaque_label(old),
-                        opaque_label(new)
-                    ),
-                )]
+                match (old_blobs.get(old_blob), new_blobs.get(new_blob)) {
+                    (Some(old_bytes), Some(new_bytes)) => {
+                        if old_bytes == new_bytes {
+                            Vec::new()
+                        } else {
+                            vec![painter.paint(
+                                Sigil::Update,
+                                &format!(
+                                    "  ~ content = {} -> {}",
+                                    opaque_label(old_bytes),
+                                    opaque_label(new_bytes)
+                                ),
+                            )]
+                        }
+                    }
+                    _ => update_fallback(painter, document, new_blobs),
+                }
             }
         }
-        (DocumentData::Tree { members: new }, DocumentData::Tree { members: old }) => {
+        (ManifestData::Tree { members: new }, ManifestData::Tree { members: old }) => {
             let changed = confit_core::document::tree_changed(old, new);
             vec![painter.paint(
                 Sigil::Update,
                 &format!("  ~ tree ({changed} of {} files changed)", new.len()),
             )]
         }
-        (DocumentData::Rc(_), DocumentData::Rc(_)) => rc_update_lines(painter, document, recorded),
+        (ManifestData::Rc(_), ManifestData::Rc(_)) => {
+            rc_update_lines(painter, document, recorded, new_blobs, old_blobs)
+        }
         _ if touches_opaque(document, recorded) => {
             let mut out = vec![painter.paint(
                 Sigil::Update,
@@ -750,16 +794,20 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     document.data.kind().name()
                 ),
             )];
-            out.extend(update_fallback(painter, document));
+            out.extend(update_fallback(painter, document, new_blobs));
             out
         }
-        _ => update_fallback(painter, document),
+        _ => update_fallback(painter, document, new_blobs),
     }
 }
 
 /// Renders desired entry bodies under the update sigil.
-fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
-    entry_bodies(document)
+fn update_fallback(
+    painter: &Painter,
+    document: &ManifestDocument,
+    blobs: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    entry_bodies(document, blobs)
         .into_iter()
         .map(|body| painter.paint(Sigil::Update, &format!("  ~ {body}")))
         .collect()
@@ -770,14 +818,20 @@ fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
 /// Hunk lines carry per-symbol paint through the shared hunk
 /// path. Render failures fall back to desired entry bodies under
 /// the update sigil.
-fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
-    let old_bytes = match recorded.bytes() {
+fn rc_update_lines(
+    painter: &Painter,
+    document: &ManifestDocument,
+    recorded: &ManifestDocument,
+    new_blobs: &BTreeMap<String, Vec<u8>>,
+    old_blobs: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    let old_bytes = match recorded.bytes(old_blobs) {
         Ok(bytes) => bytes,
-        Err(_) => return update_fallback(painter, document),
+        Err(_) => return update_fallback(painter, document, new_blobs),
     };
-    let new_bytes = match document.bytes() {
+    let new_bytes = match document.bytes(new_blobs) {
         Ok(bytes) => bytes,
-        Err(_) => return update_fallback(painter, document),
+        Err(_) => return update_fallback(painter, document, new_blobs),
     };
     if old_bytes == new_bytes {
         return Vec::new();
@@ -805,10 +859,12 @@ mod tests {
     fn opaque_update_reuses_content_shape() {
         use confit_core::plan::opaque_label;
 
-        let mut previous_docs = vec![Document::new(
+        let old_blob = confit_core::plan::sha256_hex(&[0xFF, 0x00]);
+        let new_blob = confit_core::plan::sha256_hex(&[0xFF, 0x01]);
+        let mut previous_docs = vec![ManifestDocument::new(
             DocPath::new("bin"),
-            DocumentData::Opaque {
-                content: vec![0xFF, 0x00],
+            ManifestData::Opaque {
+                blob: old_blob.clone(),
                 mode: None,
             },
         )];
@@ -817,19 +873,21 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = previous_docs;
-        let desired = Document::new(
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = previous_docs;
+        previous.blobs.insert(old_blob, vec![0xFF, 0x00]);
+        let desired = ManifestDocument::new(
             DocPath::new("bin"),
-            DocumentData::Opaque {
-                content: vec![0xFF, 0x01],
+            ManifestData::Opaque {
+                blob: new_blob.clone(),
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+        let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
+        built.blobs.insert(new_blob, vec![0xFF, 0x01]);
         let report = Summary {
             built: &built,
             previous: &previous,
@@ -847,9 +905,9 @@ mod tests {
 
     #[test]
     fn opaque_kind_change_renders_kind_line_plus_body() {
-        let mut previous_docs = vec![Document::new(
+        let mut previous_docs = vec![ManifestDocument::new(
             DocPath::new("bin"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
             },
@@ -859,19 +917,21 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = previous_docs;
-        let desired = Document::new(
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = previous_docs;
+        let blob = confit_core::plan::sha256_hex(&[0xFF, 0x00]);
+        let desired = ManifestDocument::new(
             DocPath::new("bin"),
-            DocumentData::Opaque {
-                content: vec![0xFF, 0x00],
+            ManifestData::Opaque {
+                blob: blob.clone(),
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+        let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
+        built.blobs.insert(blob, vec![0xFF, 0x00]);
         let report = Summary {
             built: &built,
             previous: &previous,
@@ -888,9 +948,9 @@ mod tests {
     fn unchanged_plan_keeps_drift_notes_plus_counts() {
         use confit_core::ids::DocPath;
 
-        let mut previous_docs = vec![Document::new(
+        let mut previous_docs = vec![ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
             },
@@ -900,16 +960,16 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = previous_docs;
-        let desired = Document::new(
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = previous_docs;
+        let desired = ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -924,23 +984,23 @@ mod tests {
         };
         let text = report.render();
         assert!(text.contains("manually deleted"));
-        assert!(text.contains("Plan: 0 to add, 0 to change, 0 to destroy."));
+        assert!(text.contains("Bundle: 0 to add, 0 to change, 0 to destroy."));
         assert!(!text.contains("note: text"));
     }
 
     #[test]
     fn mixed_plan_shows_only_moving_docs() {
         let mut previous_docs = vec![
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("same"),
-                DocumentData::Text {
+                ManifestData::Text {
                     content: "kept".to_string(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("moving"),
-                DocumentData::Text {
+                ManifestData::Text {
                     content: "old".to_string(),
                     mode: None,
                 },
@@ -951,25 +1011,25 @@ mod tests {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = previous_docs;
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = previous_docs;
         let desired = vec![
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("same"),
-                DocumentData::Text {
+                ManifestData::Text {
                     content: "kept".to_string(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("moving"),
-                DocumentData::Text {
+                ManifestData::Text {
                     content: "new".to_string(),
                     mode: None,
                 },
             ),
         ];
-        let built = match confit_core::plan::Plan::build(desired, Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(desired, Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -984,39 +1044,39 @@ mod tests {
         assert!(!text.contains("same: text"));
     }
 
-    fn tree_member(rel: &str, byte: u8) -> confit_core::document::TreeMember {
-        confit_core::document::TreeMember {
-            rel: rel.to_string(),
-            content: vec![byte],
+    fn tree_member(relative: &str, byte: u8) -> confit_core::document::ManifestMember {
+        confit_core::document::ManifestMember {
+            relative: relative.to_string(),
+            blob: confit_core::plan::sha256_hex(&[byte]),
             mode: 0o644,
         }
     }
 
-    fn tree_previous(members: Vec<confit_core::document::TreeMember>) -> Plan {
-        let mut docs = vec![Document::new(
+    fn tree_previous(members: Vec<confit_core::document::ManifestMember>) -> Bundle {
+        let mut docs = vec![ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree { members },
+            ManifestData::Tree { members },
         )];
         for document in &mut docs {
             if let Err(error) = document.fill_hash() {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = docs;
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = docs;
         previous
     }
 
     #[test]
     fn tree_create_collapses_to_one_counted_line() {
-        let previous = Plan::empty();
-        let desired = Document::new(
+        let previous = Bundle::empty();
+        let desired = ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree {
+            ManifestData::Tree {
                 members: vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)],
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1029,19 +1089,19 @@ mod tests {
         let text = report.render();
         assert!(text.contains("fonts: tree"));
         assert!(text.contains("  + tree (2 files)"));
-        assert!(text.contains("Plan: 1 to add, 0 to change, 0 to destroy."));
+        assert!(text.contains("Bundle: 1 to add, 0 to change, 0 to destroy."));
     }
 
     #[test]
     fn tree_update_counts_changed_members() {
         let previous = tree_previous(vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)]);
-        let desired = Document::new(
+        let desired = ManifestDocument::new(
             DocPath::new("fonts"),
-            DocumentData::Tree {
+            ManifestData::Tree {
                 members: vec![tree_member("a.ttf", 9), tree_member("b.ttf", 2)],
             },
         );
-        let built = match confit_core::plan::Plan::build(vec![desired], Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1053,13 +1113,13 @@ mod tests {
         };
         let text = report.render();
         assert!(text.contains("  ~ tree (1 of 2 files changed)"));
-        assert!(text.contains("Plan: 0 to add, 1 to change, 0 to destroy."));
+        assert!(text.contains("Bundle: 0 to add, 1 to change, 0 to destroy."));
     }
 
     #[test]
     fn tree_delete_names_counted_kind() {
         let previous = tree_previous(vec![tree_member("a.ttf", 1)]);
-        let built = match confit_core::plan::Plan::build(Vec::new(), Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1071,7 +1131,7 @@ mod tests {
         };
         let text = report.render();
         assert!(text.contains("fonts: tree (1 files)"));
-        assert!(text.contains("Plan: 0 to add, 0 to change, 1 to destroy."));
+        assert!(text.contains("Bundle: 0 to add, 0 to change, 1 to destroy."));
     }
 
     #[test]
@@ -1079,40 +1139,40 @@ mod tests {
         use confit_core::drift::Drift;
         use confit_core::ids::DocPath;
 
-        let built = match confit_core::plan::Plan::build(
+        let built = match confit_core::plan::Bundle::build(
             vec![
-                Document::new(
+                ManifestDocument::new(
                     DocPath::new("same"),
-                    DocumentData::Text {
+                    ManifestData::Text {
                         content: "kept".to_string(),
                         mode: None,
                     },
                 ),
-                Document::new(
+                ManifestDocument::new(
                     DocPath::new("gone"),
-                    DocumentData::Text {
+                    ManifestData::Text {
                         content: "fresh".to_string(),
                         mode: None,
                     },
                 ),
-                Document::new(
+                ManifestDocument::new(
                     DocPath::new("app.toml"),
-                    DocumentData::Structured {
+                    ManifestData::Structured {
                         format: confit_core::document::StructuredFormat::Toml,
                         data: [("name".to_string(), serde_json::json!("desired"))]
                             .into_iter()
                             .collect(),
                     },
                 ),
-                Document::new(
+                ManifestDocument::new(
                     DocPath::new("fonts"),
-                    DocumentData::Tree {
+                    ManifestData::Tree {
                         members: vec![tree_member("a.ttf", 1), tree_member("b.ttf", 2)],
                     },
                 ),
-                Document::new(
+                ManifestDocument::new(
                     DocPath::new("clash"),
-                    DocumentData::Text {
+                    ManifestData::Text {
                         content: "desired\n".to_string(),
                         mode: None,
                     },
@@ -1123,7 +1183,7 @@ mod tests {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
-        let previous = Plan::empty();
+        let previous = Bundle::empty();
         let drift = vec![
             Drift::Missing {
                 path: DocPath::new("gone"),
@@ -1179,7 +1239,7 @@ mod tests {
         );
         assert!(text.contains("-disk"), "hunk shows disk line: {text}");
         assert!(text.contains("+desired"), "hunk shows desired line: {text}");
-        assert!(text.contains("Plan: 4 to add, 1 already in place."));
+        assert!(text.contains("Bundle: 4 to add, 1 already in place."));
         assert!(!text.contains("changed outside config"));
     }
 
@@ -1212,22 +1272,22 @@ mod tests {
         );
     }
 
-    fn hashed_docs(documents: Vec<Document>) -> Plan {
+    fn hashed_docs(documents: Vec<ManifestDocument>) -> Bundle {
         let mut docs = documents;
         for document in &mut docs {
             if let Err(error) = document.fill_hash() {
                 panic!("hashes fill: {error}");
             }
         }
-        let mut previous = Plan::empty();
-        previous.documents = docs;
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = docs;
         previous
     }
 
-    fn text_document(path: &str, content: &str) -> Document {
-        Document::new(
+    fn text_document(path: &str, content: &str) -> ManifestDocument {
+        ManifestDocument::new(
             DocPath::new(path),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
             },
@@ -1238,10 +1298,10 @@ mod tests {
         confit_core::document::RcEntry { op, when: None }
     }
 
-    fn rc_document(path: &str, profile: Vec<confit_core::document::RcEntry>) -> Document {
-        Document::new(
+    fn rc_document(path: &str, profile: Vec<confit_core::document::RcEntry>) -> ManifestDocument {
+        ManifestDocument::new(
             DocPath::new(path),
-            DocumentData::Rc(confit_core::document::RcData::new(
+            ManifestData::Rc(confit_core::document::RcData::new(
                 profile,
                 Vec::new(),
                 Vec::new(),
@@ -1255,7 +1315,7 @@ mod tests {
         use confit_core::ids::ReadOutcome;
 
         let previous = hashed_docs(vec![text_document("note", "recorded\n")]);
-        let built = match Plan::build(vec![text_document("note", "recorded\n")], Vec::new()) {
+        let built = match Bundle::build(vec![text_document("note", "recorded\n")], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1350,7 +1410,7 @@ mod tests {
     #[test]
     fn steady_non_hunk_lines_stay_byte_identical() {
         let previous = hashed_docs(vec![text_document("note", "hi")]);
-        let built = match Plan::build(vec![text_document("note", "hi")], Vec::new()) {
+        let built = match Bundle::build(vec![text_document("note", "hi")], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1422,7 +1482,7 @@ mod tests {
             ],
         );
         let previous = hashed_docs(vec![recorded]);
-        let built = match Plan::build(vec![desired], Vec::new()) {
+        let built = match Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1472,7 +1532,7 @@ mod tests {
             value: "same".to_string(),
         })];
         let previous = hashed_docs(vec![rc_document("~/.bashrc", profile.clone())]);
-        let built = match Plan::build(vec![rc_document("~/.bashrc", profile)], Vec::new()) {
+        let built = match Bundle::build(vec![rc_document("~/.bashrc", profile)], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };
@@ -1526,7 +1586,7 @@ mod tests {
             ],
         );
         let previous = hashed_docs(vec![recorded]);
-        let built = match Plan::build(vec![desired], Vec::new()) {
+        let built = match Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("plan builds: {error}"),
         };

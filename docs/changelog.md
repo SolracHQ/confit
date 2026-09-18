@@ -4,6 +4,15 @@
 
 ### Added
 
+- Bundle nouns land: `Plan` reads `Bundle`, manifests plus
+  members plus history entries carry their names, summaries
+  report `Bundle:`, tree members hold `relative`. One runtime
+  language: `Manifest` serves runtime plus disk, `Bundle`
+  carries the manifest plus its blob map and never
+  serializes, the live trio plus base64 leave with it.
+  Bundle format version 6 breaks v5 without migration,
+  decoders reject unknown fields, and the serde derives
+  stand as the schema with no checked-in file.
 - Slots store manifests now, binary bytes live once gzipped
   in a shared pool under content hashes. `plan -o` writes
   portable `.cb` bundles holding their own blobs, the pool

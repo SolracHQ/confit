@@ -3,22 +3,28 @@
 //! Document payloads to on-disk bytes.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use crate::document::{
-    Condition, Document, DocumentData, RcData, RcEntry, RcOp, StructuredFormat, Table,
+    Condition, ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
 };
 use crate::error::{Error, Result};
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
-impl Document {
+impl ManifestDocument {
     /// Renders one document to exact on-disk bytes.
     ///
     /// Structured payloads serialize through their format.
     /// Text payloads pass content through. Link payloads pass the
     /// target through. Rc payloads render shell text. Opaque
-    /// plus tree payloads fail, reads use `bytes` instead.
+    /// payloads read raw bytes from the blob map. Tree payloads
+    /// fail, reads use `bytes` instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `blobs` - the raw blob bytes under content hashes.
     ///
     /// # Returns
     ///
@@ -26,35 +32,34 @@ impl Document {
     ///
     /// # Errors
     ///
-    /// Opaque payloads fail as plan errors. Serializer failures
-    /// fail as plan errors.
+    /// Missing blobs plus opaque tree reads plus serializer
+    /// failures fail as plan errors.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::document::{ManifestData, ManifestDocument};
     /// use confit_core::ids::DocPath;
+    /// use std::collections::BTreeMap;
     ///
-    /// let document = Document::new(
+    /// let document = ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     DocumentData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None },
     /// );
-    /// assert!(matches!(document.render(), Ok(bytes) if bytes == b"hi".to_vec()));
+    /// assert!(matches!(document.render(&BTreeMap::new()), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
-    pub fn render(&self) -> Result<Vec<u8>> {
+    pub fn render(&self, blobs: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
         match &self.data {
-            DocumentData::Structured { format, data } => match format {
+            ManifestData::Structured { format, data } => match format {
                 StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
                 StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
                 StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
             },
-            DocumentData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-            DocumentData::Link { target } => Ok(target.as_bytes().to_vec()),
-            DocumentData::Rc(data) => Ok(render_rc(data).into_bytes()),
-            DocumentData::Opaque { .. } => Err(Error::Plan(
-                "render opaque: opaque documents hold raw bytes".to_string(),
-            )),
-            DocumentData::Tree { .. } => Err(Error::Plan(
+            ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+            ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
+            ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
+            ManifestData::Opaque { blob, .. } => blob_bytes(blobs, blob),
+            ManifestData::Tree { .. } => Err(Error::Plan(
                 "render tree: tree documents hold member bytes".to_string(),
             )),
         }
@@ -62,9 +67,13 @@ impl Document {
 
     /// Returns exact on-disk bytes for one document.
     ///
-    /// Opaque payloads return raw bytes. Tree payloads return
+    /// Opaque payloads return raw blob bytes. Tree payloads return
     /// canonical manifest bytes for hashing, never disk bytes.
     /// Every other payload renders through `render`.
+    ///
+    /// # Arguments
+    ///
+    /// * `blobs` - the raw blob bytes under content hashes.
     ///
     /// # Returns
     ///
@@ -72,26 +81,86 @@ impl Document {
     ///
     /// # Errors
     ///
-    /// Serializer failures fail as plan errors.
+    /// Missing blobs plus serializer failures fail as plan errors.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use confit_core::document::{Document, DocumentData};
+    /// use confit_core::document::{ManifestData, ManifestDocument};
     /// use confit_core::ids::DocPath;
+    /// use std::collections::BTreeMap;
     ///
-    /// let document = Document::new(
+    /// let mut blobs = BTreeMap::new();
+    /// blobs.insert("abc".to_string(), vec![0xFF, 0x00]);
+    /// let document = ManifestDocument::new(
     ///     DocPath::new("bin"),
-    ///     DocumentData::Opaque { content: vec![0xFF, 0x00], mode: None },
+    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
     /// );
-    /// assert!(matches!(document.bytes(), Ok(bytes) if bytes == vec![0xFF, 0x00]));
+    /// assert!(matches!(document.bytes(&blobs), Ok(bytes) if bytes == vec![0xFF, 0x00]));
     /// ```
-    pub fn bytes(&self) -> Result<Vec<u8>> {
+    pub fn bytes(&self, blobs: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
         match &self.data {
-            DocumentData::Opaque { content, .. } => Ok(content.clone()),
-            DocumentData::Tree { members } => Ok(crate::document::tree_manifest_bytes(members)),
-            _ => self.render(),
+            ManifestData::Opaque { blob, .. } => blob_bytes(blobs, blob),
+            ManifestData::Tree { members } => Ok(crate::document::tree_manifest_bytes(members)),
+            _ => self.render(blobs),
         }
+    }
+}
+
+/// Reads raw bytes for one blob reference.
+///
+/// # Arguments
+///
+/// * `blobs` - the raw blob bytes under content hashes.
+/// * `blob` - the SHA-256 hex under reading.
+///
+/// # Returns
+///
+/// The raw bytes.
+///
+/// # Errors
+///
+/// Missing references fail as plan errors naming the hash.
+fn blob_bytes(blobs: &BTreeMap<String, Vec<u8>>, blob: &str) -> Result<Vec<u8>> {
+    match blobs.get(blob) {
+        Some(bytes) => Ok(bytes.clone()),
+        None => Err(Error::Plan(format!("render opaque: missing blob '{blob}'"))),
+    }
+}
+
+/// Renders inline payload bytes without blob access.
+///
+/// Structured, text, link, plus rc payloads render. Opaque
+/// plus tree payloads fail, reads use `bytes` instead.
+///
+/// # Arguments
+///
+/// * `data` - the persisted payload under rendering.
+///
+/// # Returns
+///
+/// Exact bytes for inline payloads.
+///
+/// # Errors
+///
+/// Opaque plus tree payloads plus serializer failures fail
+/// as plan errors.
+pub(crate) fn render_inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
+    match data {
+        ManifestData::Structured { format, data } => match format {
+            StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
+            StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
+            StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
+        },
+        ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+        ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
+        ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
+        ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
+            "render opaque '{blob}': blob bytes ride the bundle map"
+        ))),
+        ManifestData::Tree { .. } => Err(Error::Plan(
+            "render tree: tree documents hold member bytes".to_string(),
+        )),
     }
 }
 
@@ -266,8 +335,8 @@ mod tests {
     use crate::document::{PathOp, RcEntry, RcOp};
     use crate::ids::DocPath;
 
-    fn rc_document(data: RcData) -> Document {
-        Document::new(DocPath::new("~/.bashrc"), DocumentData::Rc(data))
+    fn rc_document(data: RcData) -> ManifestDocument {
+        ManifestDocument::new(DocPath::new("~/.bashrc"), ManifestData::Rc(data))
     }
 
     fn entry(op: RcOp, when: Option<Condition>) -> RcEntry {
@@ -343,7 +412,7 @@ mod tests {
                 cmd(&["sdkman", "init"]),
             ],
         );
-        let bytes = match rc_document(data).render() {
+        let bytes = match rc_document(data).render(&BTreeMap::new()) {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -371,7 +440,7 @@ mod tests {
     #[test]
     fn setup_only_skips_guard() {
         let data = RcData::new(vec![path("/a")], Vec::new(), Vec::new());
-        let bytes = match rc_document(data).render() {
+        let bytes = match rc_document(data).render(&BTreeMap::new()) {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -387,7 +456,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let bytes = match rc_document(data).render() {
+        let bytes = match rc_document(data).render(&BTreeMap::new()) {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -399,7 +468,7 @@ mod tests {
     #[test]
     fn env_in_final_renders_in_final_block() {
         let data = RcData::new(Vec::new(), Vec::new(), vec![env("EDITOR", "hx")]);
-        let bytes = match rc_document(data).render() {
+        let bytes = match rc_document(data).render(&BTreeMap::new()) {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };
@@ -416,7 +485,7 @@ mod tests {
             Vec::new(),
             vec![cmd(&["z-last"]), eval(&["a-first"]), cmd(&["m-mid"])],
         );
-        let bytes = match rc_document(data).render() {
+        let bytes = match rc_document(data).render(&BTreeMap::new()) {
             Ok(bytes) => bytes,
             Err(error) => panic!("rc renders: {error}"),
         };

@@ -4,9 +4,9 @@ use crate::common::*;
 fn plan_file_feeds_state_roundtrip() {
     use confit_core::fs::{Filesystem, MemoryFs};
 
-    let built = match build(vec![Document::new(
+    let built = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "hi".to_string(),
             mode: None,
         },
@@ -14,7 +14,7 @@ fn plan_file_feeds_state_roundtrip() {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    let text = match serde_json::to_string_pretty(&built) {
+    let text = match confit_core::store::manifest_json(&built) {
         Ok(text) => text,
         Err(error) => panic!("plan serializes: {error}"),
     };
@@ -31,13 +31,13 @@ fn plan_file_feeds_state_roundtrip() {
         Ok(state) => state,
         Err(error) => panic!("plan feeds state: {error}"),
     };
-    assert_eq!(state.documents.len(), 1);
-    assert_eq!(state.version, PLAN_VERSION);
-    assert!(!state.documents[0].data_hash.is_empty());
-    let rebuilt = match confit_core::plan::Plan::build(
-        vec![Document::new(
+    assert_eq!(state.manifest.documents.len(), 1);
+    assert_eq!(state.manifest.version, BUNDLE_VERSION);
+    assert!(!state.manifest.documents[0].data_hash.is_empty());
+    let rebuilt = match confit_core::plan::Bundle::build(
+        vec![ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
             },
@@ -68,7 +68,7 @@ fn stale_state_version_fails_as_unsupported() {
         Ok(_) => panic!("stale version passes"),
         Err(error) => assert_eq!(
             error.to_string(),
-            format!("state version 1 reads unsupported, want {PLAN_VERSION}")
+            format!("state version 1 reads unsupported, want {BUNDLE_VERSION}")
         ),
     }
 }
@@ -148,8 +148,8 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(plan) => plan,
         Err(error) => panic!("tmp bundle reads: {error}"),
     };
-    assert_eq!(plan.documents.len(), 1);
-    assert_eq!(plan.version, PLAN_VERSION);
+    assert_eq!(plan.manifest.documents.len(), 1);
+    assert_eq!(plan.manifest.version, BUNDLE_VERSION);
     assert_eq!(plan_value(&plan), plan_value(&outcome.built));
     match std::fs::remove_file(&stored) {
         Ok(()) => {}
@@ -184,7 +184,7 @@ return { shells = { "bash" }, configs = { tool } }
         "slot holds one fixed name"
     );
     let seeded = serde_json::json!({
-        "version": PLAN_VERSION,
+        "version": BUNDLE_VERSION,
         "documents": [
             {"path": "tmp-slot-note", "data": {"text": {"content": "old\n"}}, "data_hash": ""}
         ],
@@ -219,7 +219,7 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(outcome) => outcome,
         Err(error) => panic!("plan runs: {error}"),
     };
-    assert_eq!(outcome.previous.documents.len(), 1);
+    assert_eq!(outcome.previous.manifest.documents.len(), 1);
     assert_eq!(outcome.built.summary(&outcome.previous).update, 1);
     match std::fs::remove_file(&slot) {
         Ok(()) => {}
@@ -257,7 +257,7 @@ fn plan_file_output_roundtrips_as_bundle() {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
-    assert_eq!(restored.documents.len(), 4);
+    assert_eq!(restored.manifest.documents.len(), 4);
     assert_eq!(plan_value(&restored), plan_value(&built));
     let pool = match confit_core::store::resolve_blobs_dir() {
         Ok(pool) => pool,
@@ -271,13 +271,13 @@ fn plan_file_output_roundtrips_as_bundle() {
 }
 
 #[test]
-fn plan_manifest_json_parses_as_version_five() {
+fn plan_manifest_json_roundtrips() {
     pin_home();
     let built = match build(sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    let text = match confit_core::store::plan_json(&built) {
+    let text = match confit_core::store::manifest_json(&built) {
         Ok(text) => text,
         Err(error) => panic!("manifest renders: {error}"),
     };
@@ -285,8 +285,7 @@ fn plan_manifest_json_parses_as_version_five() {
         Ok(manifest) => manifest,
         Err(error) => panic!("manifest parses: {error}"),
     };
-    assert_eq!(manifest.version, PLAN_VERSION);
-    assert_eq!(manifest.version, 5);
+    assert_eq!(manifest.version, BUNDLE_VERSION);
     assert_eq!(manifest.documents.len(), 4);
     assert!(
         !manifest.created_at.is_empty(),
@@ -312,7 +311,7 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
         Ok(dest) => dest,
         Err(error) => panic!("named output resolves: {error}"),
     };
-    match confit_core::store::write_plan(&built, Some(&dest), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dest), &fs) {
         Ok(()) => {}
         Err(error) => panic!("named plan writes: {error}"),
     }
@@ -373,7 +372,7 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(outcome) => outcome,
         Err(error) => panic!("plan runs on memory seams: {error}"),
     };
-    assert_eq!(outcome.built.documents.len(), 1);
+    assert_eq!(outcome.built.manifest.documents.len(), 1);
     assert!(outcome.first_run, "memory slot reads absent for first run");
     let guard = match seen.lock() {
         Ok(guard) => guard,
@@ -411,7 +410,7 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(restored) => restored,
         Err(error) => panic!("memory bundle reads: {error}"),
     };
-    assert_eq!(restored.documents.len(), 1);
+    assert_eq!(restored.manifest.documents.len(), 1);
     assert!(
         !Path::new("seam-out-order-pin.cb").exists(),
         "memory run writes no host file"
@@ -454,7 +453,7 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(outcome) => outcome,
         Err(error) => panic!("named plan runs on memory seams: {error}"),
     };
-    assert_eq!(outcome.built.documents.len(), 1);
+    assert_eq!(outcome.built.manifest.documents.len(), 1);
     let slot = match confit_cli::cli::resolve_plan_file(Path::new("@seam-slot-order-pin")) {
         Ok(slot) => slot,
         Err(error) => panic!("named output resolves: {error}"),
@@ -464,7 +463,7 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(reloaded) => reloaded,
         Err(error) => panic!("slot manifest loads: {error}"),
     };
-    assert_eq!(reloaded.documents.len(), 1);
+    assert_eq!(reloaded.manifest.documents.len(), 1);
     let sibling = match slot.with_file_name("seam-slot-order-pin.cb").to_str() {
         Some(_) => slot.with_file_name("seam-slot-order-pin.cb"),
         None => panic!("slot sibling resolves"),

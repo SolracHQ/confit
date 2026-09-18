@@ -10,7 +10,7 @@ fn apply_yes_writes_all_files() {
     let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         Some(PathBuf::from("state.json")),
         false,
         true,
@@ -44,7 +44,7 @@ fn apply_yes_writes_all_files() {
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].created_at.is_empty());
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Plan:"), "preview renders: {text}");
+    assert!(text.contains("Bundle:"), "preview renders: {text}");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn apply_non_yes_writes_nothing() {
         let mut output = Vec::new();
         let runner = apply_runner(
             sample_documents(),
-            Plan::empty(),
+            Bundle::empty(),
             Some(PathBuf::from("state.json")),
             false,
             true,
@@ -92,7 +92,7 @@ fn apply_force_skips_prompt() {
     let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         None,
         true,
         false,
@@ -117,7 +117,7 @@ fn apply_drift_reprompts() {
     let mut seed_output = Vec::new();
     let seed = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         None,
         true,
         false,
@@ -129,8 +129,8 @@ fn apply_drift_reprompts() {
     }
     let mut recorded = sample_documents();
     fill_hashes(&mut recorded);
-    let mut previous = Plan::empty();
-    previous.documents = recorded;
+    let mut previous = Bundle::empty();
+    previous.manifest.documents = recorded;
 
     let mut input = DriftInjector {
         inner: Cursor::new(b"yes\nno\n".to_vec()),
@@ -203,7 +203,7 @@ fn apply_rotation_drops_sixth() {
         let mut output = Vec::new();
         let runner = apply_runner(
             sample_documents(),
-            Plan::empty(),
+            Bundle::empty(),
             None,
             true,
             false,
@@ -227,9 +227,9 @@ fn apply_history_first_restores_just_previous() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![Document::new(
+    let old = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "first\n".to_string(),
             mode: None,
         },
@@ -237,9 +237,9 @@ fn apply_history_first_restores_just_previous() {
         Ok(built) => built,
         Err(error) => panic!("old plan builds: {error}"),
     };
-    let new = match build(vec![Document::new(
+    let new = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "second\n".to_string(),
             mode: None,
         },
@@ -251,11 +251,11 @@ fn apply_history_first_restores_just_previous() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_plan(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_plan(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -281,7 +281,7 @@ fn apply_history_first_restores_just_previous() {
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"second\n");
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Plan:"), "preview renders: {text}");
+    assert!(text.contains("Bundle:"), "preview renders: {text}");
     assert!(
         text.contains("Type 'yes' to continue"),
         "prompt shows: {text}"
@@ -297,9 +297,9 @@ fn apply_history_first_restores_just_previous() {
 fn apply_history_second_restores_older() {
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![Document::new(
+    let old = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "first\n".to_string(),
             mode: None,
         },
@@ -307,9 +307,9 @@ fn apply_history_second_restores_older() {
         Ok(built) => built,
         Err(error) => panic!("old plan builds: {error}"),
     };
-    let new = match build(vec![Document::new(
+    let new = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "second\n".to_string(),
             mode: None,
         },
@@ -321,11 +321,11 @@ fn apply_history_second_restores_older() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_plan(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_plan(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -352,9 +352,9 @@ fn apply_history_second_restores_older() {
 fn apply_history_out_of_range_names_count() {
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(vec![Document::new(
+    let built = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "only\n".to_string(),
             mode: None,
         },
@@ -366,7 +366,7 @@ fn apply_history_out_of_range_names_count() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_plan(&built, Some(&dir.join("a-only.json")), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dir.join("a-only.json")), &fs) {
         Ok(()) => {}
         Err(error) => panic!("entry seeds: {error}"),
     }
@@ -404,9 +404,9 @@ fn apply_named_slot_restores() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(vec![Document::new(
+    let built = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
-        DocumentData::Text {
+        ManifestData::Text {
             content: "named\n".to_string(),
             mode: None,
         },
@@ -437,7 +437,7 @@ fn apply_named_slot_restores() {
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"named\n");
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Plan:"), "preview renders: {text}");
+    assert!(text.contains("Bundle:"), "preview renders: {text}");
     assert!(
         text.contains("Type 'yes' to continue"),
         "prompt shows: {text}"
@@ -508,7 +508,7 @@ return { shells = { "bash" }, configs = { tool } }
     }
     assert_eq!(memory_bytes(&fs, Path::new("apply-lua-note")), b"probe\n");
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Plan:"), "profile previews: {text}");
+    assert!(text.contains("Bundle:"), "profile previews: {text}");
 }
 
 #[test]
@@ -554,7 +554,7 @@ fn apply_then_drift_stays_quiet() {
     let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         None,
         true,
         false,
@@ -566,8 +566,8 @@ fn apply_then_drift_stays_quiet() {
     }
     let mut recorded = sample_documents();
     fill_hashes(&mut recorded);
-    let mut previous = Plan::empty();
-    previous.documents = recorded;
+    let mut previous = Bundle::empty();
+    previous.manifest.documents = recorded;
     let drifts = previous.drift(
         &|path| snapshot(path, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
@@ -590,7 +590,7 @@ fn apply_second_profile_removes_recorded_orphans() {
     let mut output = Vec::new();
     let first = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         Some(PathBuf::from("state.json")),
         true,
         false,
@@ -608,16 +608,16 @@ fn apply_second_profile_removes_recorded_orphans() {
         Err(error) => panic!("state loads: {error}"),
     };
     let desired = vec![
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("note"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "hello again\n".to_string(),
                 mode: None,
             },
         ),
-        Document::new(
+        ManifestDocument::new(
             DocPath::new("app.toml"),
-            DocumentData::Structured {
+            ManifestData::Structured {
                 format: confit_core::document::StructuredFormat::Toml,
                 data: confit_core::document::Table::from([(
                     "name".to_string(),
@@ -664,7 +664,7 @@ fn apply_emits_writing_plan_fact() {
     let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
-        Plan::empty(),
+        Bundle::empty(),
         None,
         true,
         false,
@@ -754,14 +754,14 @@ fn two_profiles_share_one_slot_last_applied_wins() {
     let mut first_input = Cursor::new(String::new());
     let mut first_output = Vec::new();
     let first = apply_runner(
-        vec![Document::new(
+        vec![ManifestDocument::new(
             DocPath::new("first"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "one\n".to_string(),
                 mode: None,
             },
         )],
-        Plan::empty(),
+        Bundle::empty(),
         Some(slot.clone()),
         true,
         false,
@@ -775,13 +775,13 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Ok(previous) => previous,
         Err(error) => panic!("slot loads: {error}"),
     };
-    assert_eq!(previous.documents.len(), 1);
+    assert_eq!(previous.manifest.documents.len(), 1);
     let mut second_input = Cursor::new(String::new());
     let mut second_output = Vec::new();
     let second = apply_runner(
-        vec![Document::new(
+        vec![ManifestDocument::new(
             DocPath::new("second"),
-            DocumentData::Text {
+            ManifestData::Text {
                 content: "two\n".to_string(),
                 mode: None,
             },
@@ -806,8 +806,8 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Ok(slot_plan) => slot_plan,
         Err(error) => panic!("slot reloads: {error}"),
     };
-    assert_eq!(slot_plan.documents.len(), 1);
-    assert_eq!(slot_plan.documents[0].path, DocPath::new("second"));
+    assert_eq!(slot_plan.manifest.documents.len(), 1);
+    assert_eq!(slot_plan.manifest.documents[0].path, DocPath::new("second"));
 }
 
 #[test]
@@ -826,7 +826,7 @@ fn named_plan_output_roundtrips_through_apply() {
         Err(error) => panic!("named output resolves: {error}"),
     };
     assert!(dest.ends_with("confit/plans/work.json"));
-    match confit_core::store::write_plan(&built, Some(&dest), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dest), &fs) {
         Ok(()) => {}
         Err(error) => panic!("named plan writes: {error}"),
     }
@@ -834,7 +834,7 @@ fn named_plan_output_roundtrips_through_apply() {
         Ok(reloaded) => reloaded,
         Err(error) => panic!("named plan loads: {error}"),
     };
-    assert_eq!(reloaded.documents.len(), 4);
+    assert_eq!(reloaded.manifest.documents.len(), 4);
     let args = confit_cli::cli::ApplyArgs {
         source: PathBuf::from("@work"),
         shared: confit_cli::cli::SharedArgs {
@@ -928,33 +928,40 @@ fn apply_rotation_prunes_exclusive_blobs() {
     let mut exclusive_shas = Vec::new();
     for generation in 0..6 {
         let unique_bytes = format!("unique-confit-blob-{generation}").into_bytes();
-        exclusive_shas.push(confit_core::plan::sha256_hex(&unique_bytes));
+        let unique_sha = confit_core::plan::sha256_hex(&unique_bytes);
+        exclusive_shas.push(unique_sha.clone());
         let desired = vec![
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("shared.bin"),
-                DocumentData::Opaque {
-                    content: shared_bytes.clone(),
+                ManifestData::Opaque {
+                    blob: shared_sha.clone(),
                     mode: None,
                 },
             ),
-            Document::new(
+            ManifestDocument::new(
                 DocPath::new("unique.bin"),
-                DocumentData::Opaque {
-                    content: unique_bytes,
+                ManifestData::Opaque {
+                    blob: unique_sha.clone(),
                     mode: None,
                 },
             ),
         ];
+        let mut plan = match build(desired) {
+            Ok(plan) => plan,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        plan.blobs.insert(shared_sha.clone(), shared_bytes.clone());
+        plan.blobs.insert(unique_sha, unique_bytes);
         let mut input = Cursor::new(String::new());
         let mut output = Vec::new();
-        let runner = apply_runner(
-            desired,
-            Plan::empty(),
-            Some(slot.clone()),
-            true,
-            false,
-            confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
-        );
+        let runner = confit_cli::actions::apply::ApplyRunner {
+            plan,
+            previous: Bundle::empty(),
+            state: Some(slot.clone()),
+            force: true,
+            preview: false,
+            seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        };
         match runner.execute() {
             Ok(_) => {}
             Err(error) => panic!("apply {generation} runs: {error}"),

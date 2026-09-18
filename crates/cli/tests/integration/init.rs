@@ -69,7 +69,7 @@ fn init_scaffold_evaluates_to_one_rc() {
     };
     assert_eq!(documents.len(), 1);
     match &documents[0].data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.profile.len(), 1);
             match &data.profile[0].op {
                 RcOp::Path { dir, .. } => assert!(dir.ends_with(".local/bin")),
