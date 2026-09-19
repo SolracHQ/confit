@@ -2,8 +2,8 @@ name: cd
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -13,25 +13,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Tag matches crate versions
+      - name: Resolve version
+        id: version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -m1 '^version' crates/cli/Cargo.toml | cut -d'"' -f2)"
           for crate in core engine cli; do
-            version="$(grep -m1 '^version' "crates/$crate/Cargo.toml" | cut -d'"' -f2)"
-            if [ "$version" != "$tag" ]; then
-              echo "Tag v$tag does not match crates/$crate version $version."
+            other="$(grep -m1 '^version' "crates/$crate/Cargo.toml" | cut -d'"' -f2)"
+            if [ "$other" != "$version" ]; then
+              echo "crates/$crate reads $other, want $version."
               exit 1
             fi
           done
+          if git ls-remote --tags origin | grep -q "refs/tags/v$version$"; then
+            echo "v$version already tagged, nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.version.outputs.release == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.version.outputs.release == 'true'
+      - name: Push tag
+        if: steps.version.outputs.release == 'true'
+        run: |
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
       - name: Release build
+        if: steps.version.outputs.release == 'true'
         run: cargo build --release
       - name: Publish release
+        if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp target/release/confit confit-linux-x64
-          gh release create "$GITHUB_REF_NAME" confit-linux-x64 \
-            --title "$GITHUB_REF_NAME" \
+          gh release create "v${{ steps.version.outputs.version }}" confit-linux-x64 \
+            --title "v${{ steps.version.outputs.version }}" \
             --notes "Details in docs/changelog.md."
