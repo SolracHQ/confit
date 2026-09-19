@@ -1,16 +1,16 @@
-# Rollback
+# Apply the past
 
-`confit recover` lists stored plans. `confit recover INDEX`
-re-applies the picked one through the standard apply flow.
-Rollback is apply with older desired documents.
+`confit apply %N` re-applies one history entry newest-first
+from one. `confit apply @name` re-applies one named slot.
+Both run the standard apply flow with preview plus prompts.
+Applying the past is apply with older desired documents.
 
 ```mermaid
 flowchart TD
-    A["Parse flags, expand tildes"] --> B{"Index given?"}
-    B -- no --> C["List index plus timestamp lines"]
-    B -- yes --> D["Load stored plan by index"]
-    D --> E["Unknown index fails"]
-    D --> F["Load fixed slot state"]
+    A["Parse flags, expand tildes"] --> B["Sniff positional shape"]
+    B --> C["Load slot plan through the pool"]
+    C --> D["Unknown pick fails naming the count"]
+    C --> F["Load fixed slot state"]
     F --> G["Trust stored hashes, no render"]
     G --> H["Drift baseline against disk"]
     H --> I["Render preview"]
@@ -31,14 +31,14 @@ flowchart TD
     S --> T["Report written, removed, stored"]
 ```
 
-The listing shows `index @ timestamp` lines, oldest first.
-Unknown indices fail naming the range. A recovered apply
-records a fresh rotation entry like any other apply, so
-history keeps moving forward. Recovery restores exactly what
-the stored plan holds.
+Picks count newest-first from one, so `%1` names the
+just-previous entry. A past apply records a fresh rotation
+entry like any other apply, so history keeps moving
+forward. Applying the past restores exactly what the
+stored bundle holds.
 
 Stdout carries `applied:` plus `previous:` through anstream
-for a picked index. Stderr carries the listing lines plus the
-preview plus prompts plus the spinner plus the `log:` path.
-The listing, preview, and drift lines land on stderr through
-the seams output; the report lands on stdout.
+for a picked slot. Stderr carries the preview plus prompts
+plus the spinner plus the `log:` path. The preview and
+drift lines land on stderr through the seams output; the
+report lands on stdout.

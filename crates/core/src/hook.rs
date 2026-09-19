@@ -33,6 +33,7 @@ use crate::runtime::{Runtime, evaluate, find_binary};
 /// assert!(matches!(hook.argv.len(), 2));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Hook {
     /// Holds the command plus arguments in order.
     pub argv: Vec<String>,

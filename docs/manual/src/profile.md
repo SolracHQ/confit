@@ -1,65 +1,55 @@
 # Profile
 
-A profile composes a shared pool of configs into one user.
-I keep few computers, each with its own specs and purpose. I
-reinstall from scratch each 6 months to work on clean
-systems. One pool plus one profile per user makes that neat.
+You stand at `~/confit-demo` with one shell and one alias. This chapter adds a second shell plus a shared tool file.
 
-## Parts
+A profile composes a shared pool of configs into one user. Three fields compose a profile. `shells` lists the startup files to render. `documents` holds user-owned base files. `configs` holds the tool contributions.
 
-Three fields compose a profile. `shells` lists the startup
-files to render. `documents` holds user-owned base files.
-`configs` holds the tool contributions.
+The demo profile starts with `bash` alone. Add `zsh` beside it. Add one shared tool file under the root and require it. The demo layout reads:
+
+```text
+~/confit-demo/
+  profile.lua
+  tools/
+    tools.lua
+```
+
+`profile.lua` now returns two shells plus two configs:
 
 ```lua
 local tools = require("tools.tools")
+
 return {
   shells = { "bash", "zsh" },
-  documents = { fonts },
-  configs = { tools, kitty },
+  documents = { base },
+  configs = { shell, tools },
 }
 ```
 
-`bash` renders `~/.bashrc`, `zsh` renders `~/.zshrc`, every
-other name renders `~/.<name>rc`. `require` resolves files
-under the root. The root defaults to the profile folder.
-`--root` moves it.
+`bash` renders `~/.bashrc`, `zsh` renders `~/.zshrc`, every other name renders `~/.<name>rc`. `require` resolves files under the root. The root defaults to the profile folder. `--root` moves it for shared layouts.
+
+`tools/tools.lua` holds the first extracted tool config. It returns one config built the same way the profile shell config reads. The profile stays small while the pool grows beside it.
 
 ## Commands
 
-Every command takes the profile first:
+Apply reads profiles, bundles, and slots through one positional:
 
 ```sh
 confit plan laptop.lua --root .            # preview
-confit plan laptop.lua -o @laptop          # preview into a named plan
+confit plan laptop.lua -o @laptop          # preview into a named slot
 confit apply laptop.lua                    # preview, prompt, write
-confit apply --plan @laptop --force        # reviewed plan, no prompt
-confit recover                             # list stored states
-confit recover 0                           # re-apply one
+confit apply @laptop --force        # reviewed plan, no prompt
+confit apply %1                            # re-apply just-previous
 confit init myproject                      # scaffold, default .
 ```
 
-`@name` stores the rendered plan under the user config
-folder as `plans/{name}.json`, pretty printed like any plan.
-`--plan @name` replays it. Empty names plus separators fail.
-Switching profiles runs on named plans. Render each profile
-into its own name and replay with `apply --plan`:
+`@name` saves a named slot for replay. Reference lists the saved shapes. `apply @name` replays it. Empty names plus separators fail. Switching profiles runs on named slots. Render each profile into its own name and replay by name:
 
 ```sh
 confit plan laptop.lua -o @laptop
 confit plan server.lua -o @server
-confit apply --plan @laptop
+confit apply @laptop
 ```
 
-One shared slot keeps drift honest. Every switch diffs
-against the same applied result.
+One shared slot keeps drift honest. Every switch diffs against the same applied result.
 
-## Experiments
-
-I try new things constantly. The tool stays idempotent: the
-same profile always yields the same documents, and the full
-desired state stays reachable from plan alone. So I copy my
-profile into a temporal one, add the neat new tool, test it.
-I like it, it becomes my profile. I dislike it, I delete the
-file, apply the old profile or recover, done. Simpler
-impossible.
+The demo now covers two shells with room for more tools. Next, [Config](config.md) adds kitty as its second config.

@@ -3,12 +3,12 @@
 Three crates form the app, each holding one main
 responsibility.
 
-The engine converts a Lua profile into a list of documents.
-The core manages state plus diffs: plans from documents, plan
-store plus load, plan writes, orphan removal, rotation.
+The engine converts a Lua profile into manifest documents
+plus blob bytes. The core manages state plus diffs across bundles, manifests,
+the pool, and rotation.
 The cli orchestrates both, calling engine plus core where
-needed, and provides user experience: prompts, progress,
-previews, listings, scaffolding, arg shapes.
+needed, and provides user experience across prompts, progress,
+previews, listings, scaffolding, and arg shapes.
 
 The call flow is `main` to `actions`, with `main` rendering
 reports through `presentation`. Effects hide behind traits
@@ -29,40 +29,41 @@ These three edges are the whole graph.
 
 Pure data plus render. Every function here runs as a unit test on data alone.
 
-- `document` owns `Document` plus `DocumentData`: structured,
-  text, link, rc, opaque. One path holds one document. Paths
-  expand tildes. Opaque payloads ride base64 in JSON, raw
-  bytes everywhere else.
+- `document` owns `ManifestDocument` plus `ManifestData`:
+  structured, text, link, rc, opaque, tree. One path holds
+  one document. Paths expand tildes. Opaque plus tree
+  payloads persist as blob refs in manifests, raw bytes
+  in the bundle blob map.
 - `ids` owns `DocPath` plus `ReadOutcome` (present, absent,
   unreadable).
-- `plan` owns versioned `Plan` plus on-demand counts
-  against previous plans. The plan file is the state.
-- `drift` owns `Drift` entries comparing recorded plans
+- `plan` owns versioned `Bundle` (`manifest` plus `blobs`)
+  plus on-demand counts against previous bundles.
+  The state slot holds the applied manifest.
+- `drift` owns `Drift` entries comparing recorded manifests
   against disk, plus their display lines.
 - `render` owns shell-agnostic document bytes plus text.
 - `error` owns the plan-or-io failure shape.
 
 ## confit-engine
 
-Lua profiles evaluate into finished documents through
-`evaluate(profile, EvalOpts) -> Result<Vec<Document>>`.
-`EvalOpts` carries root, plugins, re-fetch, cache override,
+Lua profiles evaluate into manifest documents plus blobs
+through `evaluate(profile, EvalOpts)`. `EvalOpts` carries root, plugins, re-fetch, cache override,
 fetcher override, plus the progress sink. Overrides keep
 tests off the network plus the OS cache.
 
-- `surface` owns one namespace module each: config,
+- `surface` owns one namespace module per kind. Config,
   document, patch, shell, paths, resources, utils,
   plugin. Resources jail reads to the project root plus the
   fetch cache. `require` jails module loads the same way.
 - `model` owns Config plus Patch handles, internal to the
   crate. `level` owns priority sorting. `exec` owns the live
-  wrappers: first-writer-wins slots, collision logging,
-  per-shell materialization.
+  wrappers across first-writer-wins slots, collision logging,
+  and per-shell materialization.
 - `fetch` owns the `Fetch` trait with HTTP plus memory
   sources. Sidecar shas guard the OS cache. Re-download
   fires on missing files, mismatched bytes, or re-fetch.
-- `progress` owns facts for slow runs: fetch, unpack, patch,
-  hash, read, write.
+- `progress` owns slow-run facts across fetch, unpack, patch,
+  hash, read, and write.
 - Embedded plugins ship beside the loader under
   `solrachq` (mise, merge, template). External plugin
   folders attach beside them. Plugin Lua composes surface
@@ -70,16 +71,17 @@ tests off the network plus the OS cache.
 
 ## confit-cli
 
-Terminal surface over evaluation plus plans.
+Terminal surface over evaluation plus bundles.
 
 - `main` owns command dispatch plus report printing.
-- `cli` owns arg shapes for plan, status, apply, recover,
+- `cli` owns arg shapes for plan, apply, export, delete,
   init. Tildes expand across every path arg after parsing.
-- `actions` owns the four flows (see `docs/flows`): plan
+- `actions` owns the flows (see `docs/flows`). Plan
   evaluates, diffs, and stores payloads; apply previews,
   prompts, writes per kind, removes recorded orphans, writes
-  state, and rotates history; recover lists plus re-applies;
-  init scaffolds profiles plus stubs from embedded text.
+  state, and rotates history; export packs slots; delete
+  drops named slots; init scaffolds profiles plus stubs
+  from embedded text.
 - `fs` owns the `Filesystem` seam with OS plus memory
   backends. Memory fakes keep tests hermetic.
 - `presentation` owns summaries, drift lines, plus report
@@ -89,10 +91,11 @@ Terminal surface over evaluation plus plans.
 
 ## Data flow
 
-The profile evaluates to documents. The build diffs desired
-documents against the previous plan plus disk snapshots,
-hashing rendered bytes. The payload writes as compact JSON,
-full bytes always. Apply writes documents per kind, removes
+The profile evaluates to manifest documents plus blobs. The build diffs desired
+documents against the previous manifest plus disk snapshots,
+hashing rendered bytes. The payload writes as pretty JSON,
+metadata always. Binary bytes gzip once into the shared
+pool under content hashes. Apply writes documents per kind, removes
 state-recorded paths absent from desired documents, records
-the fixed state slot, and rotates bare-plan history. Recover
-re-applies stored plans through the same write path.
+the fixed state slot, and rotates manifest history. Apply
+re-applies past slots through the same write path.

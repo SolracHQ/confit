@@ -1,18 +1,34 @@
 # Reference
 
+You stand at a working demo with fixes at hand. This chapter lists every command shape.
+
 ## Commands
 
 ```sh
 confit plan PROFILE [-o FILE|@NAME]         # preview
-confit apply PROFILE [--plan FILE|@NAME] [--force]
-confit apply --plan FILE|@NAME
-confit recover [INDEX]
+confit apply SOURCE [--force]
+confit export [PICKER] [-o FILE] [-m]        # pack a slot, default applied
+confit delete @NAME                          # drop a named slot
 confit init [DIR]                           # scaffold, default .
 ```
 
-`@NAME` stores or loads a named plan under the user config
-folder as `plans/{NAME}.json`. Empty names plus separators
-fail.
+Plan `-o` names the bundle file and gains `.cb` unless
+present. Omitted plan output stores a bundle under tmp and
+prints the path. `@NAME` stores or loads a named slot under
+the user config folder. Named slots hold saved plans.
+Portable bundles hold `.cb` files.
+Empty names plus separators fail. A source reads `.lua` plus
+extensionless paths as a profile, `.cb` as a bundle file,
+`@NAME` as a named slot, `%N` as history newest-first from
+one.
+
+The export picker reads `%N` for history newest-first
+from one, `@NAME` for a named slot, nothing for the applied
+slot. `-o` names the bundle file and gains `.cb` unless
+present. Omitted export output derives the name from the
+slot as `applied.cb`, `personal.cb`, or `prev-2.cb`. `-m`
+prints the manifest, not the file contents. `-o` plus
+`--manifest` refuse together.
 
 ## Documents
 
@@ -21,7 +37,7 @@ confit.document.structured("toml"|"json"|"yaml", { path, data })
 confit.document.text(path, content)
 confit.document.link(path, target)
 confit.document.opaque(path, content)
-confit.document.compressed(path_or_url, fn)   -- fn returns Document or nil
+confit.document.compressed(path, fn)          -- path reads root or cache relative alone, URLs travel through fetch_file; fn returns Document or nil
 confit.document.tree(archive, dest, fn)       -- fn returns relative path or nil
 confit.document.rc.new({ profile = {}, config = {}, final = {} })
 ```
@@ -88,8 +104,10 @@ config:require("plugin:solrachq/mise:install", "Add mise.init() to the profile c
 ```lua
 confit.utils.render(template, vars)
 confit.utils.holds_cycle(value)  confit.utils.is_array(value)
-confit.plugin.solrachq.mise.package({ name, version?, bin?, aliases?, rc_builder? })  .init(version?)
-confit.plugin.solrachq.nerd_fonts.font(name, version?)  .init()
+confit.plugin.solrachq.mise.package({ name, version?, bin?, aliases?, options?, rc_builder? })  .init(version?)
+confit.plugin.solrachq.nerd_fonts.font(name, version?)
 confit.plugin.solrachq.merge(base, overlay, { shallow, list_append }?)
 confit.plugin.solrachq.template(path, { src, vars })
 ```
+
+Every shape now sits in one place. Next, [Philosophy](philosophy.md) tells why the tool reads this way.

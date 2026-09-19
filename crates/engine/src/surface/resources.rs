@@ -12,7 +12,7 @@ use super::confit_table;
 use crate::error::plan_error;
 use crate::fetch::Fetch;
 use crate::lua::{JsonExt, ValueExt};
-use crate::progress::{ProgressCallback, ProgressEvent};
+use confit_core::progress::{Event, ProgressSender};
 
 /// Shared fetch inputs for one evaluation.
 #[derive(Clone)]
@@ -25,8 +25,8 @@ struct FetchState {
     re_fetch: bool,
     /// Network source behind the trait.
     fetcher: Arc<dyn Fetch>,
-    /// Progress sink for fetch facts.
-    progress: Option<ProgressCallback>,
+    /// Progress sender for fetch facts.
+    progress: Option<ProgressSender>,
 }
 
 /// Installs the resources namespace on a state.
@@ -230,8 +230,8 @@ impl FetchState {
         wanted: Option<String>,
     ) -> mlua::Result<Value> {
         log::debug!("fetch start url={url}");
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::FetchStarted { url: url.clone() });
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::FetchStarted { url: url.clone() });
         }
         let cache = crate::fetch::Cache::new(self.cache.clone());
         let start = std::time::Instant::now();
@@ -243,8 +243,8 @@ impl FetchState {
                 stored.len(),
                 start.elapsed().as_millis()
             );
-            if let Some(sink) = self.progress.as_ref() {
-                sink(ProgressEvent::FetchCached {
+            if let Some(sender) = self.progress.as_ref() {
+                let _ = sender.send(Event::FetchCached {
                     url: url.clone(),
                     bytes: stored.len(),
                 });
@@ -301,8 +301,8 @@ impl FetchState {
             "fetch download url={url} bytes={bytes_len} took {}ms",
             download_start.elapsed().as_millis()
         );
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::FetchDownloaded {
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::FetchDownloaded {
                 url: url.clone(),
                 bytes: bytes_len,
             });
@@ -373,8 +373,8 @@ impl FetchState {
     /// Returns cached bytes or downloads plus refreshes the sidecar.
     fn fetch_bytes(&self, caller: &str, url: &str) -> mlua::Result<Vec<u8>> {
         log::debug!("fetch start url={url}");
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::FetchStarted {
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::FetchStarted {
                 url: url.to_string(),
             });
         }
@@ -388,8 +388,8 @@ impl FetchState {
                 stored.len(),
                 start.elapsed().as_millis()
             );
-            if let Some(sink) = self.progress.as_ref() {
-                sink(ProgressEvent::FetchCached {
+            if let Some(sender) = self.progress.as_ref() {
+                let _ = sender.send(Event::FetchCached {
                     url: url.to_string(),
                     bytes: stored.len(),
                 });
@@ -418,8 +418,8 @@ impl FetchState {
             bytes.len(),
             download_start.elapsed().as_millis()
         );
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::FetchDownloaded {
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::FetchDownloaded {
                 url: url.to_string(),
                 bytes: bytes.len(),
             });

@@ -1,41 +1,32 @@
 //! Progress
 //!
-//! Facts for one evaluation run.
+//! Log facts for one run. Every layer reports. Only the CLI renders.
 
-use std::sync::Arc;
-
-/// Shared sink for evaluation progress.
+/// Unbounded channel sender for progress facts.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use confit_engine::ProgressEvent;
+/// use confit_core::progress::Event;
 ///
-/// let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-/// let inner = seen.clone();
-/// let sink: confit_engine::ProgressCallback = std::sync::Arc::new(move |event: ProgressEvent| {
-///     match inner.lock() {
-///         Ok(mut guard) => guard.push(event),
-///         Err(poisoned) => poisoned.into_inner().push(event),
-///     }
-/// });
-/// sink(ProgressEvent::Hashing);
-/// assert!(matches!(seen.lock().map(|guard| guard.len()), Ok(1)));
+/// let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
+/// sender.send(Event::Hashing);
+/// assert!(matches!(receiver.try_recv(), Ok(Event::Hashing)));
 /// ```
-pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
+pub type ProgressSender = crossbeam_channel::Sender<Event>;
 
-/// Fact for one evaluation step.
+/// Fact for one run step.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use confit_engine::ProgressEvent;
+/// use confit_core::progress::Event;
 ///
-/// let event = ProgressEvent::Hashing;
-/// assert!(matches!(event, ProgressEvent::Hashing));
+/// let event = Event::Hashing;
+/// assert!(matches!(event, Event::Hashing));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProgressEvent {
+pub enum Event {
     /// Fetch started for one URL.
     FetchStarted {
         /// Remote address under fetching.
@@ -70,10 +61,19 @@ pub enum ProgressEvent {
         owner: String,
         /// Target document path or rc.
         target: String,
+        /// Finished patch count including this patch.
+        done: usize,
+        /// Total patches under running.
+        total: usize,
     },
-    /// Hash phase entered on the CLI side.
+    /// Patch run started with a known total.
+    PatchesStarted {
+        /// Patch count under running.
+        patches: usize,
+    },
+    /// Hash phase entered.
     Hashing,
-    /// Plan file read entered on the CLI side.
+    /// Plan file read entered.
     ReadingPlan {
         /// Plan file path under reading.
         path: String,
@@ -88,7 +88,7 @@ pub enum ProgressEvent {
         /// Destination path under writing.
         path: String,
     },
-    /// One hook started on the CLI side.
+    /// One hook started.
     HookRunning {
         /// One-based hook position.
         position: usize,
@@ -96,5 +96,21 @@ pub enum ProgressEvent {
         total: usize,
         /// Hook argv text under running.
         argv: String,
+    },
+    /// Compression started with known totals.
+    CompressStarted {
+        /// Blob count under compressing.
+        blobs: usize,
+        /// Total raw bytes under compressing.
+        bytes: u64,
+    },
+    /// One blob finished compressing.
+    BlobCompressed {
+        /// Finished blob count including this blob.
+        done: usize,
+        /// Total blobs under compressing.
+        total: usize,
+        /// Raw bytes finished including this blob.
+        bytes: u64,
     },
 }

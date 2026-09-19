@@ -232,12 +232,13 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "confit-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anstream",
  "clap",
  "confit-core",
  "confit-engine",
+ "crossbeam-channel",
  "dirs",
  "fern",
  "flate2",
@@ -252,27 +253,30 @@ dependencies = [
 
 [[package]]
 name = "confit-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
- "base64",
  "chrono",
+ "crossbeam-channel",
  "diffy",
  "dirs",
+ "flate2",
  "log",
  "noyalib",
  "rayon",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "thiserror",
  "toml",
 ]
 
 [[package]]
 name = "confit-engine"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "confit-core",
+ "crossbeam-channel",
  "directories",
  "dirs",
  "flate2",
@@ -342,6 +346,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit_core::document::{Condition, Document, DocumentData, StructuredFormat};
+use confit_core::document::{Condition, ManifestData, ManifestDocument, StructuredFormat};
 use confit_core::error::{Error, Result};
 use confit_engine::{EvalOpts, evaluate};
 use serde_json::Value as Json;
@@ -31,7 +31,7 @@ fn project(files: &[(&str, &str)], profile: &str) -> (tempfile::TempDir, PathBuf
 }
 
 /// Evaluates one profile string in a temp root.
-fn run_profile(files: &[(&str, &str)], profile: &str) -> Result<Vec<Document>> {
+fn run_profile(files: &[(&str, &str)], profile: &str) -> Result<Vec<ManifestDocument>> {
     let (dir, profile_path) = project(files, profile);
     let outcome = evaluate(
         &profile_path,
@@ -49,7 +49,7 @@ fn run_profile(files: &[(&str, &str)], profile: &str) -> Result<Vec<Document>> {
 }
 
 /// Evaluates one passing profile string in a temp root.
-fn run_ok(files: &[(&str, &str)], profile: &str) -> Vec<Document> {
+fn run_ok(files: &[(&str, &str)], profile: &str) -> Vec<ManifestDocument> {
     match run_profile(files, profile) {
         Ok(documents) => documents,
         Err(error) => panic!("profile evaluates: {error}"),
@@ -98,7 +98,7 @@ fn run_err(files: &[(&str, &str)], profile: &str) -> Error {
 }
 
 /// Reads one document by path from a result.
-fn by_path(documents: &[Document], path: &str) -> Document {
+fn by_path(documents: &[ManifestDocument], path: &str) -> ManifestDocument {
     match documents.iter().find(|item| item.path.as_str() == path) {
         Some(found) => found.clone(),
         None => panic!("document '{path}' missing"),
@@ -106,9 +106,9 @@ fn by_path(documents: &[Document], path: &str) -> Document {
 }
 
 /// Reads structured data from one document.
-fn structured(document: &Document) -> (StructuredFormat, BTreeMap<String, Json>) {
+fn structured(document: &ManifestDocument) -> (StructuredFormat, BTreeMap<String, Json>) {
     match &document.data {
-        DocumentData::Structured { format, data } => (*format, data.clone()),
+        ManifestData::Structured { format, data } => (*format, data.clone()),
         other => panic!("structured expected, got {other:?}"),
     }
 }
@@ -357,7 +357,7 @@ return { shells = { "bash" }, configs = { c } }
     let documents = run_ok(&[], profile);
     let found = by_path(&documents, "~/.bashrc");
     match &found.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.config.len(), 1);
             match &data.config[0].op {
                 confit_core::document::RcOp::Alias { name, expansion } => {
@@ -392,12 +392,12 @@ return { shells = { "bash", "zsh" }, configs = { c } }
     let bash = by_path(&documents, "~/.bashrc");
     let zsh = by_path(&documents, "~/.zshrc");
     match &bash.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.profile.len(), 1);
             assert_eq!(data.final_entries.len(), 1);
             match &data.final_entries[0].op {
                 confit_core::document::RcOp::Eval { argv, .. } => {
-                    assert_eq!(argv, &vec!["echo".to_string(), "bash".to_string()]);
+                    assert_eq!(*argv, vec!["echo".to_string(), "bash".to_string()]);
                 }
                 other => panic!("eval expected, got {other:?}"),
             }
@@ -405,9 +405,9 @@ return { shells = { "bash", "zsh" }, configs = { c } }
         other => panic!("rc expected, got {other:?}"),
     }
     match &zsh.data {
-        DocumentData::Rc(data) => match &data.final_entries[0].op {
+        ManifestData::Rc(data) => match &data.final_entries[0].op {
             confit_core::document::RcOp::Eval { argv, .. } => {
-                assert_eq!(argv, &vec!["echo".to_string(), "zsh".to_string()]);
+                assert_eq!(*argv, vec!["echo".to_string(), "zsh".to_string()]);
             }
             other => panic!("eval expected, got {other:?}"),
         },
@@ -433,12 +433,12 @@ rc,
     let text = by_path(&documents, "/etc/motd");
     assert!(matches!(
         text.data,
-        DocumentData::Text { ref content, .. } if content == "hi"
+        ManifestData::Text { ref content, .. } if content == "hi"
     ));
     let link = by_path(&documents, "~/.vimrc");
     assert!(matches!(
         link.data,
-        DocumentData::Link { ref target } if target == "~/.vim/vimrc"
+        ManifestData::Link { ref target } if target == "~/.vim/vimrc"
     ));
 }
 
@@ -485,7 +485,7 @@ return { shells = { "bash" }, configs = { first, second } }
     let documents = run_ok(&[], profile);
     let found = by_path(&documents, "~/.bashrc");
     match &found.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.profile.len(), 1);
             assert!(data.config.is_empty());
             match &data.profile[0].op {
@@ -522,7 +522,7 @@ return { shells = { "bash" }, configs = { installer, bat } }
     );
     let rc = by_path(&documents, "~/.bashrc");
     match &rc.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.config.len(), 1);
             match &data.config[0].op {
                 confit_core::document::RcOp::Alias { name, .. } => {
@@ -551,7 +551,7 @@ return { shells = { "bash" }, configs = { tool } }
     let documents = run_ok(&[], profile);
     let rc = by_path(&documents, "~/.bashrc");
     match &rc.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.config.len(), 1);
             assert_eq!(data.final_entries.len(), 1);
             match &data.final_entries[0].op {
@@ -592,7 +592,7 @@ return { shells = { "bash" }, configs = { c } }
     let found = by_path(&documents, "starship.toml");
     assert!(matches!(
         found.data,
-        DocumentData::Text { ref content, .. } if content == "timeout = 5"
+        ManifestData::Text { ref content, .. } if content == "timeout = 5"
     ));
 }
 
@@ -759,10 +759,12 @@ confit.document.opaque("bin/logo", string.char(0xFF, 0x00, 0x41)),
   configs = { confit.config("tool") },
 }
 "#;
-    let documents = run_ok(&[], profile);
-    let found = by_path(&documents, "bin/logo");
+    let evaluation = run_eval_ok(&[], profile);
+    let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        DocumentData::Opaque { content, .. } => assert_eq!(content, &vec![0xFF, 0x00, 0x41]),
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        }
         other => panic!("opaque expected, got {other:?}"),
     }
 }
@@ -801,12 +803,14 @@ return {
         },
     );
     let documents = match outcome {
-        Ok(evaluation) => evaluation.documents,
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("profile evaluates: {error}"),
     };
-    let found = by_path(&documents, "bin/logo");
+    let found = by_path(&documents.documents, "bin/logo");
     match &found.data {
-        DocumentData::Opaque { content, .. } => assert_eq!(content, &vec![0xFF, 0x00, 0x41]),
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(documents.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        }
         other => panic!("opaque expected, got {other:?}"),
     }
 }
@@ -841,7 +845,17 @@ fn run_fetch(
     cache: &Path,
     fetcher: std::sync::Arc<confit_engine::fetch::MemoryFetch>,
     re_fetch: bool,
-) -> Result<Vec<Document>> {
+) -> Result<Vec<ManifestDocument>> {
+    run_fetch_eval(profile, cache, fetcher, re_fetch).map(|evaluation| evaluation.documents)
+}
+
+/// Runs one profile with fetch inputs returning its full evaluation.
+fn run_fetch_eval(
+    profile: &str,
+    cache: &Path,
+    fetcher: std::sync::Arc<confit_engine::fetch::MemoryFetch>,
+    re_fetch: bool,
+) -> Result<confit_engine::Evaluation> {
     let (dir, profile_path) = project(&[], profile);
     let outcome = evaluate(
         &profile_path,
@@ -855,14 +869,14 @@ fn run_fetch(
         },
     );
     std::mem::drop(dir);
-    outcome.map(|evaluation| evaluation.documents)
+    outcome
 }
 
 /// Reads text content from one document path.
-fn text_content(documents: &[Document], path: &str) -> String {
+fn text_content(documents: &[ManifestDocument], path: &str) -> String {
     let found = by_path(documents, path);
     match &found.data {
-        DocumentData::Text { content, .. } => content.clone(),
+        ManifestData::Text { content, .. } => content.clone(),
         other => panic!("text expected, got {other:?}"),
     }
 }
@@ -1004,13 +1018,15 @@ return {
 }
 "#;
     let fake = stubbed(url, &[0xFF, 0x00, 0x41]);
-    let documents = match run_fetch(profile, cache.path(), fake, false) {
-        Ok(documents) => documents,
+    let evaluation = match run_fetch_eval(profile, cache.path(), fake, false) {
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("cached read runs: {error}"),
     };
-    let found = by_path(&documents, "bin/tool");
+    let found = by_path(&evaluation.documents, "bin/tool");
     match &found.data {
-        DocumentData::Opaque { content, .. } => assert_eq!(content, &vec![0xFF, 0x00, 0x41]),
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        }
         other => panic!("opaque expected, got {other:?}"),
     }
 }
@@ -1076,7 +1092,11 @@ fn tar_bytes(members: &[(&str, &[u8], u32)]) -> Vec<u8> {
 }
 
 /// Writes archive bytes plus profile into a temp root and evaluates.
-fn run_with_archive(archive_name: &str, archive: &[u8], profile: &str) -> Result<Vec<Document>> {
+fn run_with_archive(
+    archive_name: &str,
+    archive: &[u8],
+    profile: &str,
+) -> Result<confit_engine::Evaluation> {
     let dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(error) => panic!("tempdir builds: {error}"),
@@ -1101,13 +1121,22 @@ fn run_with_archive(archive_name: &str, archive: &[u8], profile: &str) -> Result
         },
     );
     std::mem::drop(dir);
-    outcome.map(|evaluation| evaluation.documents)
+    outcome
 }
 
 /// Evaluates one passing archive profile in a temp root.
-fn run_archive_ok(archive_name: &str, archive: &[u8], profile: &str) -> Vec<Document> {
+fn run_archive_ok(archive_name: &str, archive: &[u8], profile: &str) -> Vec<ManifestDocument> {
+    run_archive_eval(archive_name, archive, profile).documents
+}
+
+/// Evaluates one passing archive profile returning its full evaluation.
+fn run_archive_eval(
+    archive_name: &str,
+    archive: &[u8],
+    profile: &str,
+) -> confit_engine::Evaluation {
     match run_with_archive(archive_name, archive, profile) {
-        Ok(documents) => documents,
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("profile evaluates: {error}"),
     }
 }
@@ -1138,7 +1167,7 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
     assert_eq!(documents.len(), 1);
     let found = by_path(&documents, "/fonts/fonts/Regular.ttf");
     match &found.data {
-        DocumentData::Text { content, .. } => assert_eq!(content, "ttfdata"),
+        ManifestData::Text { content, .. } => assert_eq!(content, "ttfdata"),
         other => panic!("text expected, got {other:?}"),
     }
 }
@@ -1161,7 +1190,7 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
     assert_eq!(documents.len(), 1);
     let found = by_path(&documents, "/out/bin/run");
     match &found.data {
-        DocumentData::Text { content, .. } => assert_eq!(content, "3"),
+        ManifestData::Text { content, .. } => assert_eq!(content, "3"),
         other => panic!("text expected, got {other:?}"),
     }
 }
@@ -1192,11 +1221,14 @@ local kept = confit.document.compressed("bin.tar.gz", function(path, info, conte
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
-    let documents = run_archive_ok("bin.tar.gz", &archive, profile);
-    let found = by_path(&documents, "bin/logo");
+    let evaluation = run_archive_eval("bin.tar.gz", &archive, profile);
+    let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        DocumentData::Opaque { content, .. } => {
-            assert_eq!(content, &vec![0xFF, 0x00, 0x41, 0xFE]);
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(
+                evaluation.blobs.get(blob),
+                Some(&vec![0xFF, 0x00, 0x41, 0xFE])
+            );
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1250,13 +1282,15 @@ end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
     let fake = stubbed(url, &archive);
-    let documents = match run_fetch(profile, cache.path(), fake, false) {
-        Ok(documents) => documents,
+    let evaluation = match run_fetch_eval(profile, cache.path(), fake, false) {
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("paired fetch runs: {error}"),
     };
-    let found = by_path(&documents, "bin/logo");
+    let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        DocumentData::Opaque { content, .. } => assert_eq!(content, &vec![0xFF, 0x00, 0x41]),
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        }
         other => panic!("opaque expected, got {other:?}"),
     }
 }
@@ -1277,16 +1311,19 @@ local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info
 end)
 return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
 "#;
-    let documents = run_archive_ok("fonts.tar.gz", &archive, profile);
-    assert_eq!(documents.len(), 1);
-    let found = by_path(&documents, "/fonts");
+    let evaluation = run_archive_eval("fonts.tar.gz", &archive, profile);
+    assert_eq!(evaluation.documents.len(), 1);
+    let found = by_path(&evaluation.documents, "/fonts");
     match &found.data {
-        DocumentData::Tree { members } => {
+        ManifestData::Tree { members } => {
             assert_eq!(members.len(), 2);
-            assert_eq!(members[0].rel, "alpha.ttf");
-            assert_eq!(members[0].content, b"alpha");
+            assert_eq!(members[0].relative, "alpha.ttf");
+            assert_eq!(
+                evaluation.blobs.get(&members[0].blob),
+                Some(&b"alpha".to_vec())
+            );
             assert_eq!(members[0].mode, 0o644);
-            assert_eq!(members[1].rel, "zulu.ttf");
+            assert_eq!(members[1].relative, "zulu.ttf");
         }
         other => panic!("tree expected, got {other:?}"),
     }
@@ -1305,13 +1342,16 @@ end)
 assert(tools.members[1].rel == "data", "members expose rels in order")
 return { shells = { "bash" }, documents = { tools }, configs = { confit.config("tool") } }
 "#;
-    let documents = run_archive_ok("tools.tar", &archive, profile);
-    let found = by_path(&documents, "/out");
+    let evaluation = run_archive_eval("tools.tar", &archive, profile);
+    let found = by_path(&evaluation.documents, "/out");
     match &found.data {
-        DocumentData::Tree { members } => {
+        ManifestData::Tree { members } => {
             assert_eq!(members[0].mode, 0o644);
             assert_eq!(members[1].mode, 0o755);
-            assert_eq!(members[1].content, b"run");
+            assert_eq!(
+                evaluation.blobs.get(&members[1].blob),
+                Some(&b"run".to_vec())
+            );
         }
         other => panic!("tree expected, got {other:?}"),
     }
@@ -1442,12 +1482,15 @@ local kept = confit.document.compressed("fonts.zip", function(path, info, conten
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
-    let documents = run_archive_ok("fonts.zip", &archive, profile);
-    assert_eq!(documents.len(), 1);
-    let found = by_path(&documents, "fonts/JetBrainsMono-Bold.ttf");
+    let evaluation = run_archive_eval("fonts.zip", &archive, profile);
+    assert_eq!(evaluation.documents.len(), 1);
+    let found = by_path(&evaluation.documents, "fonts/JetBrainsMono-Bold.ttf");
     match &found.data {
-        DocumentData::Opaque { content, .. } => {
-            assert_eq!(content, &vec![0x00, 0x01, 0x00, 0x00]);
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(
+                evaluation.blobs.get(blob),
+                Some(&vec![0x00, 0x01, 0x00, 0x00])
+            );
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1465,13 +1508,13 @@ return { shells = { "bash" }, configs = { tool } }
     let documents = run_ok(&[], profile);
     let rc = by_path(&documents, "~/.bashrc");
     match &rc.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.config.len(), 1);
             match &data.config[0].op {
                 confit_core::document::RcOp::Eval { argv } => {
                     assert_eq!(
-                        argv,
-                        &vec![
+                        *argv,
+                        vec![
                             "mise".to_string(),
                             "activate".to_string(),
                             "bash".to_string()
@@ -1519,7 +1562,7 @@ return { shells = { "bash" }, configs = { low, high } }
     let documents = run_ok(&[], profile);
     let rc = by_path(&documents, "~/.bashrc");
     match &rc.data {
-        DocumentData::Rc(data) => {
+        ManifestData::Rc(data) => {
             assert_eq!(data.config.len(), 1);
             match &data.config[0].op {
                 confit_core::document::RcOp::Alias { name, expansion } => {
@@ -1892,7 +1935,7 @@ return { shells = { "bash" }, configs = { installer, bat } }
 "#;
     let documents = run_ok(&[], profile);
     let rc = by_path(&documents, "~/.bashrc");
-    let DocumentData::Rc(data) = &rc.data else {
+    let ManifestData::Rc(data) = &rc.data else {
         panic!("rc expected");
     };
     let names: Vec<&str> = data
@@ -1946,29 +1989,30 @@ local installer = mise.init("2026.9.12")
 local bat = mise.package({ name = "bat" })
 return { shells = { "bash" }, configs = { installer, bat } }
 "#;
-    let documents = match run_fetch(profile, cache.path(), stubbed(url, &archive), false) {
-        Ok(documents) => documents,
+    let evaluation = match run_fetch_eval(profile, cache.path(), stubbed(url, &archive), false) {
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("installer builds: {error}"),
     };
+    let documents = &evaluation.documents;
     let found = documents
         .iter()
         .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
         .unwrap_or_else(|| panic!("installer binary missing"));
     match &found.data {
-        DocumentData::Opaque { content, mode } => {
-            assert_eq!(content, &b"mise-binary".to_vec());
+        ManifestData::Opaque { blob, mode } => {
+            assert_eq!(evaluation.blobs.get(blob), Some(&b"mise-binary".to_vec()));
             assert_eq!(mode, &Some(0o755));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
-    let folded = by_path(&documents, "~/.config/mise/config.toml");
+    let folded = by_path(documents, "~/.config/mise/config.toml");
     let (_, data) = structured(&folded);
     assert_eq!(
         data.get("tools"),
         Some(&serde_json::json!({"bat": "latest"}))
     );
-    let rc = by_path(&documents, "~/.bashrc");
-    let DocumentData::Rc(rc) = &rc.data else {
+    let rc = by_path(documents, "~/.bashrc");
+    let ManifestData::Rc(rc) = &rc.data else {
         panic!("rc expected");
     };
     assert_eq!(rc.profile.len(), 2);
@@ -1993,13 +2037,13 @@ fn mise_init_resolves_latest_tag() {
         Err(error) => panic!("cache builds: {error}"),
     };
     let archive = tar_gz_bytes(&[("mise/bin/mise", b"mise-binary".as_slice(), 0o755)]);
-    let tags = r#"[{"name": "vfox-v2026.9.12", "commit": {"sha": "9caff4"}}]"#;
+    let releases = r#"[{"tag_name": "v2026.9.10", "name": "v2026.9.10"}]"#;
     let fake = stubbed(
-        "https://api.github.com/repos/jdx/mise/tags",
-        tags.as_bytes(),
+        "https://api.github.com/repos/jdx/mise/releases",
+        releases.as_bytes(),
     );
     fake.insert(
-        "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-x64.tar.gz",
+        "https://github.com/jdx/mise/releases/download/v2026.9.10/mise-v2026.9.10-linux-x64.tar.gz",
         &archive,
     );
     let profile = r#"
@@ -2008,17 +2052,18 @@ local installer = mise.init()
 local bat = mise.package({ name = "bat" })
 return { shells = { "bash" }, configs = { installer, bat } }
 "#;
-    let documents = match run_fetch(profile, cache.path(), fake, false) {
-        Ok(documents) => documents,
+    let evaluation = match run_fetch_eval(profile, cache.path(), fake, false) {
+        Ok(evaluation) => evaluation,
         Err(error) => panic!("installer resolves: {error}"),
     };
+    let documents = &evaluation.documents;
     let found = documents
         .iter()
         .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
         .unwrap_or_else(|| panic!("installer binary missing"));
     match &found.data {
-        DocumentData::Opaque { content, .. } => {
-            assert_eq!(content, &b"mise-binary".to_vec());
+        ManifestData::Opaque { blob, .. } => {
+            assert_eq!(evaluation.blobs.get(blob), Some(&b"mise-binary".to_vec()));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -2048,7 +2093,7 @@ return { shells = { "bash" }, configs = { installer } }
 }
 
 #[test]
-fn mise_init_empty_tag_feed_fails_as_plan_error() {
+fn mise_init_empty_releases_feed_fails_as_plan_error() {
     let cache = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(error) => panic!("cache builds: {error}"),
@@ -2060,7 +2105,7 @@ return { shells = { "bash" }, configs = { installer } }
     let outcome = run_fetch(
         profile,
         cache.path(),
-        stubbed("https://api.github.com/repos/jdx/mise/tags", b"[]"),
+        stubbed("https://api.github.com/repos/jdx/mise/releases", b"[]"),
         false,
     );
     let error = match outcome {
@@ -2071,5 +2116,172 @@ return { shells = { "bash" }, configs = { installer } }
     assert!(
         error.to_string().contains("mise: cannot resolve"),
         "names resolution: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_render_components_table() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  version = "1.83.0",
+  bin = "rustc",
+  options = {
+    components = { "clippy", "rustfmt", "rust-src", "llvm-tools" },
+  },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": {
+                "version": "1.83.0",
+                "components": ["clippy", "rustfmt", "rust-src", "llvm-tools"],
+            },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_default_version_latest() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  options = {
+    components = { "clippy" },
+  },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": { "version": "latest", "components": ["clippy"] },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_scalar_values_land() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local installer = confit.config("plugin:solrachq/mise:install")
+local rust = mise.package({
+  name = "rust",
+  version = "1.83.0",
+  options = { profile = "minimal", jobs = 4, locked = true },
+})
+return { shells = { "bash" }, configs = { installer, rust } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "~/.config/mise/config.toml");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("tools"),
+        Some(&serde_json::json!({
+            "rust": {
+                "version": "1.83.0",
+                "profile": "minimal",
+                "jobs": 4,
+                "locked": true,
+            },
+        }))
+    );
+}
+
+#[test]
+fn mise_package_options_non_table_fails_as_plan_error() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = "components" })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options' must be a table"),
+        "names options: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_map_value_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { components = { clippy = true } } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_nested_table_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { components = { { "clippy" } } } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_function_value_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local rust = mise.package({ name = "rust", options = { hook = function() end } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error.to_string().contains("mise: field 'options.hook'"),
+        "names key: {error}"
+    );
+}
+
+#[test]
+fn mise_package_options_sparse_array_fails_naming_key() {
+    let profile = r#"
+local mise = confit.plugin.solrachq.mise
+local comps = {}
+comps[1] = "clippy"
+comps[3] = "rustfmt"
+local rust = mise.package({ name = "rust", options = { components = comps } })
+return { shells = { "bash" }, configs = { rust } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("mise: field 'options.components'"),
+        "names key: {error}"
     );
 }

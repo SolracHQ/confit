@@ -1,9 +1,74 @@
 # Changelog
 
-## [Unreleased]
+## [0.7] - 2026-09-19
+
+Design spec: `docs/design/v0.7.md`.
+
+### Added
+
+- `mise.package` takes a generic `options` table folding
+  backend tool options into the shared TOML beside the
+  version, so a rust toolchain declares its components
+  beside its version. Omitted `options` keeps the bare
+  version string.
+- Bundle nouns land. `Plan` reads `Bundle`, manifests plus
+  members plus history entries carry their names, summaries
+  report `Bundle:`, tree members hold `relative`. One runtime
+  language. `Manifest` serves runtime plus disk, `Bundle`
+  carries the manifest plus its blob map and never
+  serializes, the live trio plus base64 leave with it.
+  Bundle format version 6 breaks v5 without migration,
+  decoders reject unknown fields, and the serde derives
+  stand as the schema with no checked-in file.
+- Slots store manifests now, binary bytes live once gzipped
+  in a shared pool under content hashes. `plan -o` writes
+  portable `.cb` bundles holding their own blobs, the pool
+  fills on apply alone, and apply prunes unreferenced bytes
+  after archiving. Hunk markers never render, and rc updates
+  render content hunks against recorded documents.
+- First-run impact. A missing state slot diffs desired
+  documents against disk bytes through `DriftOrder::DiskFirst`,
+  rendering one lifecycle block per document holding drift
+  entries. Whole disk-absent documents read as creates,
+  remaining groups read as updates with disk values first,
+  text hunks render verbatim disk-first, trees collapse to
+  one changed member count, documents holding no entries read
+  no lines outside the add count. The apply preview renders
+  the same form. Past the first run the steady behavior
+  returns unchanged.
+- `export` packs any slot (`%N` history newest-first, `@name`
+  named, nothing applied) into a portable `.cb` bundle and
+  prints the path, with `-o` naming the destination and `-m`
+  printing the manifest. `delete @name` drops named
+  slots and prunes orphaned pool bytes. Missing apply
+  profiles fail naming the path.
+- `apply` reads its positional by shape now: `.lua` plus
+  extensionless paths evaluate a profile, `.cb` runs a bundle,
+  `@name` runs a named slot, `%N` runs history newest-first
+  from one. The `--plan` flag retires, `recover` retires with
+  it, their coverage moves to apply picker tests.
+- Live progress renderer. One CLI thread owns a single
+  spinner, fed by a shared event channel from every layer.
+  The spinner animates through silent phases (hash,
+  compression, tar write) instead of freezing, counters ride
+  in the spinner message (`compressing blobs (done/total)`,
+  `patching artifacts (done/total)`), and painting parks
+  around the `yes` prompt so ticks never cover it.
+- Core reports compression progress. `CompressStarted` carries
+  blob plus byte totals upfront, one `BlobCompressed` lands per
+  finished blob, so the spinner counter stays honest across
+  parallel workers. Skipped pool blobs stay silent.
 
 ### Changed
 
+- `mise.init` without a version resolves the latest release
+  from the releases feed. The tags feed heads with `vfox-*`
+  registry tags holding no release assets, so latest
+  resolution 404'd on a ghost version.
+- `nerd_fonts.font` lands each font under its own
+  `fonts/{name}` folder with its own `fc-cache -f` hook
+  scoped to that folder. The shared installer config plus
+  `nerd_fonts.init` disappear with it.
 - CI runs on pull requests alone, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match
@@ -11,6 +76,11 @@
 - Test `pin_home` pins the XDG vars under the fake home.
   Runners exporting `XDG_CONFIG_HOME` outside HOME broke
   the fixed-slot assertion.
+- Faster plans through parallel gzip. Blob bytes compress at
+  level 6 across rayon workers instead of level 9 in one
+  thread, and the outer bundle tar groups at level 0 since
+  inner entries already carry the compression. Example 3
+  plans in a third of the wall time at near the same size.
 
 ## [0.6.1] - 2026-09-17
 

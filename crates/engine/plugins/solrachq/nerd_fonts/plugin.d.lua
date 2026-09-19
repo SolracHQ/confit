@@ -6,19 +6,15 @@
 
 ---@class NerdFontsNs
 -- Font installer dialect namespace. `font` builds the config from a name
--- plus an optional version, `init` returns the installer config holding
--- the shared fc-cache hook.
+-- plus an optional version, landing the fonts under `fonts/{name}`
+-- with its own fc-cache refresh hook.
 local NerdFontsNs = {}
 
--- Declares one nerd font plus its refresh proof.
+-- Declares one nerd font plus its refresh hook.
 ---@param name string # Nerd font name matching the release zip, e.g. "JetBrainsMono".
----@param version? string # Pinned release, e.g. "3.5.1". Omitted resolves the latest tag.
+---@param version? string # Pinned release, e.g. "3.4.0". Omitted resolves the latest release.
 ---@return table # Config userdata for the profile configs array.
 function NerdFontsNs.font(name, version) end
-
--- Returns the installer config holding the shared fc-cache hook.
----@return table # Installer config userdata for the profile configs array.
-function NerdFontsNs.init() end
 
 ---@class SolrachqNs
 -- Default plugin user table. Each field is one embedded plugin.

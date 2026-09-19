@@ -15,8 +15,8 @@
 -- tarball, unpack `mise/bin/mise`, place it under `~/.local/bin`
 -- with mode `755`. It also carries the activation patch, PATH
 -- prepend plus eval entry with the `{{shell}}` slot. An explicit
--- version wins; an omitted one resolves
--- the latest upstream tag through the tags API.
+-- version wins; an omitted one resolves the latest release
+-- from the releases feed.
 --
 -- Per-shell activation choice: the plugin runs during profile evaluation,
 -- before the profile declares its shells, so it cannot name a shell here.
@@ -44,8 +44,9 @@ local INSTALL_CONFIG = "plugin:solrachq/mise:install"
 -- Hint rendered beside the missing installer config name.
 local REQUIRE_HINT = "Add mise.init() to the profile configs."
 
--- Tags feed backing latest-version resolution for `init()`.
-local MISE_TAGS_URL = "https://api.github.com/repos/jdx/mise/tags"
+-- Releases feed backing latest-version resolution for `init()`.
+-- Latest release reads first, so the first tag wins.
+local MISE_RELEASES_URL = "https://api.github.com/repos/jdx/mise/releases"
 
 -- Splits caller opts into patch section plus entry opts.
 --
@@ -140,19 +141,19 @@ end
 
 -- Resolves the mise release backing the installer tarball.
 --
--- An explicit version wins as is. An omitted one reads the latest tag
--- from the tags feed and strips the `vfox-` style prefix plus the `v`
--- to reach the version number. Anything else fails as a plan error.
+-- An explicit version wins as is. An omitted one reads the latest
+-- release tag from the releases feed and strips the `v` to reach
+-- the version number. Anything else fails as a plan error.
 local function resolve_version(version)
 	if version ~= nil then
 		return version
 	end
-	local body = confit.resources.fetch_text(MISE_TAGS_URL)
-	local tag = body:match('"name"%s*:%s*"([^"]+)"')
+	local body = confit.resources.fetch_text(MISE_RELEASES_URL)
+	local tag = body:match('"tag_name"%s*:%s*"([^"]+)"')
 	if tag == nil then
-		confit.plugin.helpers.error("mise: cannot resolve the latest release from the tags feed")
+		confit.plugin.helpers.error("mise: cannot resolve the latest release from the releases feed")
 	end
-	local stripped = tag:gsub("^vfox%-", ""):gsub("^v", "")
+	local stripped = tag:gsub("^v", "")
 	if stripped:match("^%d+%.%d+") == nil then
 		confit.plugin.helpers.error("mise: tag '" .. tag .. "' holds no version number")
 	end
@@ -229,6 +230,7 @@ local function package(opts)
 	local version = opts.version
 	local bin = opts.bin
 	local aliases = opts.aliases
+	local options = opts.options
 	local rc_builder = opts.rc_builder
 	if type(name) ~= "string" or name == "" then
 		confit.plugin.helpers.error("mise: field 'name' must be a non-empty string")
@@ -249,14 +251,59 @@ local function package(opts)
 	if aliases ~= nil and type(aliases) ~= "table" then
 		confit.plugin.helpers.error("mise: field 'aliases' must be a table")
 	end
+	if options ~= nil then
+		if type(options) ~= "table" then
+			confit.plugin.helpers.error("mise: field 'options' must be a table")
+		end
+		for key, value in pairs(options) do
+			if type(key) ~= "string" or key == "" then
+				confit.plugin.helpers.error("mise: field 'options' keys must be non-empty strings")
+			end
+			local field = "mise: field 'options." .. key .. "' must be a string, number, boolean, or array of those"
+			local value_type = type(value)
+			if value_type == "string" or value_type == "number" or value_type == "boolean" then
+				-- Scalar option, nothing more to check.
+			elseif value_type == "table" then
+				local count = 0
+				local max = 0
+				for item_key, item in pairs(value) do
+					if type(item_key) ~= "number" or item_key % 1 ~= 0 or item_key < 1 then
+						confit.plugin.helpers.error(field)
+					end
+					if item_key > max then
+						max = item_key
+					end
+					count = count + 1
+					local item_type = type(item)
+					if item_type ~= "string" and item_type ~= "number" and item_type ~= "boolean" then
+						confit.plugin.helpers.error(field)
+					end
+				end
+				if max ~= count then
+					confit.plugin.helpers.error(field)
+				end
+			else
+				confit.plugin.helpers.error(field)
+			end
+		end
+	end
 	for key, _ in pairs(opts) do
-		if key ~= "name" and key ~= "version" and key ~= "bin" and key ~= "aliases" and key ~= "rc_builder" then
+		if key ~= "name" and key ~= "version" and key ~= "bin" and key ~= "aliases" and key ~= "options" and key ~= "rc_builder" then
 			confit.plugin.helpers.error("mise: field 'opts' unknown field '" .. tostring(key) .. "'")
 		end
 	end
 	local config = confit.config(name)
 	config:add_patch(confit.patch.structured("toml", MISE_PATH, function(data)
-		data:set("tools." .. name, version)
+		if options == nil then
+			data:set("tools." .. name, version)
+		else
+			local entry = {}
+			for key, value in pairs(options) do
+				entry[key] = value
+			end
+			entry.version = version
+			data:set("tools." .. name, entry)
+		end
 	end))
 	config:require(INSTALL_CONFIG, REQUIRE_HINT)
 	config:add_hook(confit.hook.run({ "mise", "install" }, {

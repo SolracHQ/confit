@@ -48,16 +48,18 @@ pub enum Command {
     Plan(PlanArgs),
     /// Preview the plan, confirm, and create every document in place.
     Apply(ApplyArgs),
-    /// List stored plans, re-apply the picked one by index.
-    Recover(RecoverArgs),
     /// Scaffold one profile plus stubs in the target folder.
     Init(InitArgs),
+    /// Pack one slot into a portable bundle file or print its manifest.
+    Export(ExportArgs),
+    /// Drop one named slot plus its orphaned pool bytes.
+    Delete(DeleteArgs),
 }
 
 /// Shared run flags carried by plan plus apply.
 ///
-/// The profile rides positionally on each command instead,
-/// required by `plan`, required unless `--plan` on `apply`.
+/// Profiles ride positionally: `plan` takes one, `apply`
+/// takes a source in every shape.
 #[derive(Debug, Args)]
 pub struct SharedArgs {
     /// Require resolution base. Defaults to the profile parent.
@@ -89,12 +91,16 @@ pub struct PlanArgs {
     /// Shared seam flags.
     #[command(flatten)]
     pub shared: SharedArgs,
-    /// Plan destination. Omitted stores the payload under tmp and prints the path.
+    /// Bundle destination. Omitted stores the payload under tmp and prints the path.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
 
 /// Arguments for `confit apply`.
+///
+/// The positional sniffs its shape: `.lua` plus extensionless
+/// paths read a profile, `.cb` reads a bundle file, `@name`
+/// reads a named slot, `%N` reads history newest-first from one.
 ///
 /// # Examples
 ///
@@ -107,35 +113,11 @@ pub struct PlanArgs {
 /// ```
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// Profile Lua file under evaluation. Omitted while `--plan` passes.
-    #[arg(required_unless_present = "plan")]
-    pub profile: Option<PathBuf>,
+    /// Source under applying.
+    pub source: PathBuf,
     /// Shared seam flags.
     #[command(flatten)]
     pub shared: SharedArgs,
-    /// Reviewed plan file. Runs on the file alone with no profile.
-    #[arg(long)]
-    pub plan: Option<PathBuf>,
-    /// Skips the confirmation prompt. Drift still re-prompts.
-    #[arg(long)]
-    pub force: bool,
-}
-
-/// Arguments for `confit recover`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "recover"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Recover(_))));
-/// ```
-#[derive(Debug, Args)]
-pub struct RecoverArgs {
-    /// Stored plan index from the listing. Omitted lists only.
-    pub index: Option<usize>,
     /// Skips the confirmation prompt. Drift still re-prompts.
     #[arg(long)]
     pub force: bool,
@@ -157,6 +139,46 @@ pub struct InitArgs {
     /// Target folder gaining the profile plus stubs. Omitted means the current folder.
     #[arg(default_value = ".")]
     pub dir: PathBuf,
+}
+
+/// Arguments for `confit export`.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_cli::cli::{Cli, Command};
+/// use clap::Parser;
+///
+/// let cli = Cli::try_parse_from(["confit", "export", "@personal", "-o", "backup.cb"]);
+/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Export(_))));
+/// ```
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// Slot picker: `%N` history newest-first from one, `@name` named slot. Omitted means the applied slot.
+    pub picker: Option<String>,
+    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb` unless present.
+    #[arg(short, long, conflicts_with = "manifest")]
+    pub output: Option<PathBuf>,
+    /// Prints pretty manifest JSON to stdout instead of writing a bundle file.
+    #[arg(short, long)]
+    pub manifest: bool,
+}
+
+/// Arguments for `confit delete`.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_cli::cli::{Cli, Command};
+/// use clap::Parser;
+///
+/// let cli = Cli::try_parse_from(["confit", "delete", "@personal"]);
+/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Delete(_))));
+/// ```
+#[derive(Debug, Args)]
+pub struct DeleteArgs {
+    /// Named slot under deleting, shaped `@name`.
+    pub name: String,
 }
 
 /// Expands one leading `~` against the OS home folder.
@@ -219,14 +241,16 @@ pub fn expand_command(command: &mut Command) {
             opt(&mut args.output);
         }
         Command::Apply(args) => {
-            opt(&mut args.profile);
+            args.source = expand_tilde(&args.source);
             shared(&mut args.shared);
-            opt(&mut args.plan);
         }
-        Command::Recover(_) => {}
         Command::Init(args) => {
             args.dir = expand_tilde(&args.dir);
         }
+        Command::Export(args) => {
+            opt(&mut args.output);
+        }
+        Command::Delete(_) => {}
     }
 }
 

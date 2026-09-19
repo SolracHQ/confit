@@ -1,6 +1,6 @@
 [package]
 name = "confit-engine"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 
 [lints]
@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 confit-core = { path = "../core" }
+crossbeam-channel = "0.5.17"
 directories.workspace = true
 dirs = "7.0.0"
 flate2 = "1.1.10"

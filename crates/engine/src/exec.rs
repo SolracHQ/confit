@@ -2,7 +2,7 @@
 //!
 //! Live patch execution with first-writer wins.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -14,8 +14,8 @@ use crate::level::Level;
 use crate::lua::{JsonExt, TableExt, ValueExt, read_marker};
 use crate::model::StoredPatch;
 use crate::path_expr::{Segment, flatten_json, parse_path};
-use crate::progress::{ProgressCallback, ProgressEvent};
 use crate::surface::document::convert::entry_slot;
+use confit_core::progress::{Event, ProgressSender};
 
 /// Winner map from slot key to owner name.
 pub(crate) type OwnerMap = BTreeMap<String, String>;
@@ -46,14 +46,18 @@ pub(crate) enum Area {
 
 /// Executor running patch callbacks against live tables.
 ///
-/// The Lua state plus the progress sink travel together, so execution
+/// The Lua state plus the progress sender travel together, so execution
 /// methods read them from self.
 ///
 pub(crate) struct Executor<'a> {
     /// Lua state carrying the live tables.
     pub(crate) lua: &'a Lua,
-    /// Progress sink holding `None` for silence.
-    pub(crate) progress: Option<ProgressCallback>,
+    /// Progress sender holding `None` for silence.
+    pub(crate) progress: Option<ProgressSender>,
+    /// Total patches under the run.
+    pub(crate) patch_total: usize,
+    /// Finished patch count shared across documents.
+    pub(crate) patch_done: &'a Cell<usize>,
 }
 
 impl Executor<'_> {
@@ -129,10 +133,14 @@ impl Executor<'_> {
                 patch.target,
                 patch.priority
             );
-            if let Some(sink) = self.progress.as_ref() {
-                sink(ProgressEvent::PatchApplied {
+            let done = self.patch_done.get() + 1;
+            self.patch_done.set(done);
+            if let Some(sender) = self.progress.as_ref() {
+                let _ = sender.send(Event::PatchApplied {
                     owner: patch.owner.clone(),
                     target: patch.target.clone(),
+                    done,
+                    total: self.patch_total,
                 });
             }
         }
@@ -820,6 +828,8 @@ fn rc_op(
     Executor {
         lua,
         progress: None,
+        patch_total: 0,
+        patch_done: &Cell::new(0),
     }
     .rc_insert(doc, &json, section, owner, owners, ctx)
 }

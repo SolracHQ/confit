@@ -1,8 +1,9 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use confit_core::error::Result;
-use confit_engine::{EvalOpts, ProgressEvent, evaluate};
+use confit_core::progress::Event;
+use confit_engine::{EvalOpts, evaluate};
 
 /// Writes files plus profile into a temp root.
 fn project(files: &[(&str, &[u8])], profile: &str) -> (tempfile::TempDir, PathBuf) {
@@ -28,27 +29,13 @@ fn project(files: &[(&str, &[u8])], profile: &str) -> (tempfile::TempDir, PathBu
     (dir, profile_path)
 }
 
-/// Builds one recording sink plus its store.
-fn recorder() -> (
-    confit_engine::ProgressCallback,
-    Arc<Mutex<Vec<ProgressEvent>>>,
-) {
-    let store: Arc<Mutex<Vec<ProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
-    let inner = store.clone();
-    let sink: confit_engine::ProgressCallback =
-        Arc::new(move |event: ProgressEvent| match inner.lock() {
-            Ok(mut guard) => guard.push(event),
-            Err(poisoned) => poisoned.into_inner().push(event),
-        });
-    (sink, store)
-}
-
-/// Reads recorded events from one store.
-fn recorded(store: &Arc<Mutex<Vec<ProgressEvent>>>) -> Vec<ProgressEvent> {
-    match store.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
+/// Drains one receiver into a vector in receive order.
+fn drain(receiver: &crossbeam_channel::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Ok(event) = receiver.try_recv() {
+        events.push(event);
     }
+    events
 }
 
 /// Builds one memory fetcher holding a single stub.
@@ -75,7 +62,7 @@ end))
 return { shells = { "bash" }, configs = { alpha } }
 "#;
     let (dir, profile_path) = project(&[], profile);
-    let (sink, store) = recorder();
+    let (sender, receiver) = crossbeam_channel::unbounded();
     let outcome = evaluate(
         &profile_path,
         EvalOpts {
@@ -84,7 +71,7 @@ return { shells = { "bash" }, configs = { alpha } }
             re_fetch: false,
             cache_dir: Some(cache.path().to_path_buf()),
             fetcher: Some(stubbed(url, b"1.2.3")),
-            progress: Some(sink),
+            progress: Some(sender),
         },
     );
     match outcome {
@@ -92,17 +79,15 @@ return { shells = { "bash" }, configs = { alpha } }
         Err(error) => panic!("profile evaluates: {error}"),
     }
     std::mem::drop(dir);
-    let events = recorded(&store);
-    let started = events.iter().position(
-        |event| matches!(event, ProgressEvent::FetchStarted { url: seen } if seen == url),
-    );
-    let downloaded = events
+    let events = drain(&receiver);
+    let started = events
         .iter()
-        .position(|event| {
-            matches!(event, ProgressEvent::FetchDownloaded { url: seen, bytes: 5 } if seen == url)
-        });
+        .position(|event| matches!(event, Event::FetchStarted { url: seen } if seen == url));
+    let downloaded = events.iter().position(
+        |event| matches!(event, Event::FetchDownloaded { url: seen, bytes: 5 } if seen == url),
+    );
     let patched = events.iter().position(|event| {
-        matches!(event, ProgressEvent::PatchApplied { owner, target }
+        matches!(event, Event::PatchApplied { owner, target, done: 1, total: 1 }
                 if owner == "alpha" && target == "app.json")
     });
     match (started, downloaded, patched) {
@@ -147,7 +132,7 @@ return {
     }
     std::mem::drop(first_dir);
     let (second_dir, second_profile) = project(&[], profile);
-    let (sink, store) = recorder();
+    let (sender, receiver) = crossbeam_channel::unbounded();
     let empty = Arc::new(confit_engine::fetch::MemoryFetch::new());
     let second: Result<confit_engine::Evaluation> = evaluate(
         &second_profile,
@@ -157,7 +142,7 @@ return {
             re_fetch: false,
             cache_dir: Some(cache.path().to_path_buf()),
             fetcher: Some(empty),
-            progress: Some(sink),
+            progress: Some(sender),
         },
     );
     match second {
@@ -165,18 +150,18 @@ return {
         Err(error) => panic!("cached fetch runs: {error}"),
     }
     std::mem::drop(second_dir);
-    let events = recorded(&store);
+    let events = drain(&receiver);
     assert!(
         events.iter().any(|event| matches!(
             event,
-            ProgressEvent::FetchCached { url: seen, bytes: 5 } if seen == url
+            Event::FetchCached { url: seen, bytes: 5 } if seen == url
         )),
         "cached event missing: {events:?}"
     );
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, ProgressEvent::FetchDownloaded { .. })),
+            .any(|event| matches!(event, Event::FetchDownloaded { .. })),
         "download fires on hit: {events:?}"
     );
 }
@@ -216,7 +201,7 @@ end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
     let (dir, profile_path) = project(&[("fonts.tar.gz", archive.as_slice())], profile);
-    let (sink, store) = recorder();
+    let (sender, receiver) = crossbeam_channel::unbounded();
     let outcome = evaluate(
         &profile_path,
         EvalOpts {
@@ -225,7 +210,7 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
             re_fetch: false,
             cache_dir: None,
             fetcher: None,
-            progress: Some(sink),
+            progress: Some(sender),
         },
     );
     match outcome {
@@ -233,11 +218,11 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
         Err(error) => panic!("profile evaluates: {error}"),
     }
     std::mem::drop(dir);
-    let events = recorded(&store);
+    let events = drain(&receiver);
     assert!(
         events.iter().any(|event| matches!(
             event,
-            ProgressEvent::Unpacked { archive, kept: 1, total: 2 } if archive == "fonts.tar.gz"
+            Event::Unpacked { archive, kept: 1, total: 2 } if archive == "fonts.tar.gz"
         )),
         "unpack event missing: {events:?}"
     );

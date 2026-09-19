@@ -4,11 +4,13 @@
 
 #![deny(missing_docs)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_core::document::Document;
+use confit_core::document::ManifestDocument;
 use confit_core::hook::Hook;
+use confit_core::progress::ProgressSender;
 
 use crate::fetch::Fetch;
 
@@ -20,11 +22,8 @@ mod level;
 mod lua;
 mod model;
 mod path_expr;
-pub mod progress;
 mod require;
 mod surface;
-
-pub use progress::{ProgressCallback, ProgressEvent};
 
 /// Evaluation inputs for one profile run.
 ///
@@ -32,7 +31,7 @@ pub use progress::{ProgressCallback, ProgressEvent};
 /// namespaces beside the embedded defaults. The re-fetch flag forces
 /// remote downloads. The cache override keeps tests off the OS cache.
 /// The fetcher override keeps tests off the network. The progress
-/// sink stays silent while holding `None`.
+/// sender stays silent while holding `None`.
 ///
 /// # Examples
 ///
@@ -64,8 +63,8 @@ pub struct EvalOpts {
     pub cache_dir: Option<PathBuf>,
     /// Network source override for tests, holding `None` for HTTP.
     pub fetcher: Option<Arc<dyn Fetch>>,
-    /// Progress sink for fetch plus unpack plus patch facts.
-    pub progress: Option<ProgressCallback>,
+    /// Progress sender for fetch plus unpack plus patch facts.
+    pub progress: Option<ProgressSender>,
 }
 
 impl std::fmt::Debug for EvalOpts {
@@ -81,24 +80,31 @@ impl std::fmt::Debug for EvalOpts {
     }
 }
 
-/// Finished evaluation holding documents plus hooks.
+/// Finished evaluation holding documents plus blobs plus hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Hooks hold merged post-config steps in first-seen
-/// declaration order.
+/// order. Blobs hold raw opaque plus tree member bytes under
+/// SHA-256 hex, one entry per referenced blob. Hooks hold merged
+/// post-config steps in first-seen declaration order.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use confit_engine::Evaluation;
 ///
-/// let evaluation = Evaluation { documents: Vec::new(), hooks: Vec::new() };
+/// let evaluation = Evaluation {
+///     documents: Vec::new(),
+///     blobs: std::collections::BTreeMap::new(),
+///     hooks: Vec::new(),
+/// };
 /// assert!(matches!(evaluation.documents.len(), 0));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
-    pub documents: Vec<Document>,
+    pub documents: Vec<ManifestDocument>,
+    /// Holds raw blob bytes under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, Vec<u8>>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }
