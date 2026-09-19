@@ -1,6 +1,6 @@
 # ConfIt spec (current)
 
-Spec-Version: 0.6.0
+Spec-Version: 0.7.0
 
 Living description of what confit does today. If you want to know why
 it looks like this, the intent behind each version lives in `../design/`.
@@ -15,7 +15,7 @@ the same documents.
 Work flows in two phases. `plan` previews and diffs before `apply` touches
 anything.
 
-Working today means `plan` over Lua configs, portable bundle files
+Working today means `plan` over Lua configs, portable `.cb` bundle files
 (plus named slots under `@`), `apply` with preview plus
 prompt plus post-config hooks, past slots through `apply`,
 `init` scaffolding. Apply removes state-recorded paths absent
@@ -29,10 +29,12 @@ from desired documents.
 patches plus hooks plus configs, runs patch callbacks in pipeline order, merges
 hooks sharing argv plus path, hashes
 the data, loads previous state, and diffs desired vs previous. Output:
-a JSON bundle file carrying documents plus hooks plus a terminal summary, with zero writes to home
+a portable `.cb` tar holding `manifest.json` plus the referenced blobs alone,
+carrying documents plus hooks plus a terminal summary, with zero writes to home
 paths. The preview lists each hook as a `! run:` line with the
 resolved absolute binary, and the literal `yes` covers files
-plus hooks together.
+plus hooks together. A bundle file applies on the file alone
+with no profile and no preview.
 
 ### Plan and drift
 
@@ -116,6 +118,10 @@ The counts line reads
   rotated-out entry releases its bytes at once.
 - Bundle: one portable `.cb` file holding `manifest.json` plus
   the referenced blobs alone, so any stored state travels by file.
+  Blobs compress in parallel with gzip level 6 and the outer tar
+  wraps with gzip level 0. The manifest schema lives in serde
+  Serialize plus Deserialize derives with deny_unknown_fields
+  and ships with no separate schema file.
 
 ### Terminal summary and color
 
@@ -141,8 +147,13 @@ Hook lines ride beside the summary. Runnable hooks print
 `! run: {absolute} {args}` in the preview. Passing checks
 print `skipped: {argv} (checks pass)`. Closed gates print
 `warn: {argv} cannot run ({gate})`. Apply runs hooks after
-files land, printing `hook n of m: {argv}` beside a spinner,
-with hook output streaming into the run log file.
+files land, printing `hook n of m: {argv}` beside a single
+spinner, with hook output streaming into the run log file.
+One thread owns the single spinner for the run and run events
+feed it through one channel. Counters ride inside the message
+as `patching artifacts (done/total)` and
+`compressing blobs (done/total)`. The run shows this spinner
+alone and shows no progress bar.
 
 Terminal runs paint updates yellow, additions green, removals
 red, headers bold. Piped output stays plain text, and `NO_COLOR`
@@ -364,6 +375,7 @@ local mise = confit.plugin.solrachq.mise
 
 local bat = mise.package({
   name = "bat",
+  options = { auto_install = true, jobs = 4 },
   rc_builder = function(rc)
     rc:alias("cat", "bat --colors=always")
     rc:alias("c", "bat")
@@ -374,6 +386,10 @@ return bat
 
 One call generates the config under the package name, declares the
 install hook, requires the installer config, and sets `when` on every callback entry against the binary.
+`options` holds a generic table beside `version`. Keys hold
+non-empty strings. Values hold strings, numbers, booleans, or
+arrays of those. The entry folds the table beside `version`
+under `tools.{name}`.
 `mise.init(version?)` returns the installer config holding the
 mise binary plus the activation patch; an explicit version wins, omitted resolves the
 latest release.

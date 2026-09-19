@@ -1,10 +1,10 @@
 # Patch
 
-A patch is the only way to modify a document. Documents declare
-the base. Patches carry the dynamism. Different configs
-contribute to shared documents through patches.
+You stand at `~/confit-demo` with startup lines rendering for two shells. This chapter shows how demo configs share one file.
 
-Two kinds exist today. Rc patches and structured patches.
+A patch is the only way to modify a document. Documents declare the base. Patches carry the dynamism. Different configs contribute to shared documents through patches. The demo shell config declares its rc base in `~/confit-demo/profile.lua` while tool configs add their own lines through patches.
+
+Two kinds exist today. Rc patches and structured patches:
 
 ```lua
 shell:add_patch(confit.patch.rc(function(doc)
@@ -16,17 +16,11 @@ starship:add_patch(confit.patch.structured("toml", path, function(data)
 end))
 ```
 
-The rc callback receives a handle with `add(section, entry)`.
-The structured callback receives a handle with `set(path,
-value)` plus `append(path, value)`. Each handle exposes its
-own verbs. The wrong verb means a missing method, not a
-runtime surprise.
+The rc callback receives a handle with `add(section, entry)`. The structured callback receives a handle with `set(path, value)` plus `append(path, value)`. Each handle exposes its own verbs. The wrong verb means a missing method, not a runtime surprise.
 
 ## Priority
 
-Patches sort by priority, then by config name. Five levels
-exist. `MINOR`, `LOW`, `NORMAL`, `HIGH`, `MAJOR`. Omitted
-means `NORMAL`.
+Patches sort by priority desc, then by config declaration order. Five levels exist. `MINOR`, `LOW`, `NORMAL`, `HIGH`, `MAJOR`. Omitted means `NORMAL`:
 
 ```lua
 shell:add_patch(
@@ -36,27 +30,21 @@ shell:add_patch(
 )
 ```
 
-The order is stable. Profile order leaves the plan unchanged.
-Only priority plus owner decide.
+The order is stable. Same priority follows config declaration order. Only priority plus declaration order decide.
 
 ## Conflict
 
-Same slot twice means first writer wins, with a warning naming
-both owners. The log shows the decision:
+Same slot twice means first writer wins, with a warning naming both owners. The demo meets this when two tool configs claim the same alias. The log shows the decision:
 
-```sh
+```text
 collision on alias "ll": "eza" overwritten, "shell" wins
 ```
 
-`"shell"` wrote first, so its expansion lands. `"eza"` keeps
-its other entries. Rename one alias or raise one priority to
-resolve it.
+`"shell"` wrote first, so its expansion lands. `"eza"` keeps its other entries. Rename one alias or raise one priority to resolve it.
 
 ## Many changes, one patch
 
-One callback holds many changes, and they run in call order.
-Relative order survives, so tools needing subsequent steps
-express them in one patch:
+One callback holds many changes, and they run in call order. Relative order survives, so tools needing subsequent steps express them in one patch. The demo tool config uses one patch for its PATH line plus its init eval:
 
 ```lua
 tool:add_patch(confit.patch.rc(function(doc)
@@ -69,8 +57,7 @@ The prepend lands before the init eval, every run.
 
 ## Key language
 
-Structured writes address dotted keys. Dots walk tables, one
-`[N]` per segment walks lists starting at 0:
+Structured writes address dotted keys. Dots walk tables, one `[N]` per segment walks lists starting at 0:
 
 ```lua
 data:set("server.host", "example.com")
@@ -79,7 +66,6 @@ data:set("servers[0].host", "example.com")
 data:append("plugins", "tail")
 ```
 
-`set` writes the leaf, creating parent tables along the way.
-`append` extends the list at the key, creating it on nil. A
-non-list leaf under `append` fails the plan naming the key.
+`set` writes the leaf, creating parent tables along the way. `append` extends the list at the key, creating it on nil. A non-list leaf under `append` fails the plan naming the key.
 
+The demo configs now share files cleanly through patches. Next, [Plugin](plugin.md) installs demo tools with reusable code.

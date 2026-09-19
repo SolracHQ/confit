@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.7] - 2026-09-19
+
+Design spec: `docs/design/v0.7.md`.
 
 ### Added
 
@@ -45,16 +47,17 @@
   `@name` runs a named slot, `%N` runs history newest-first
   from one. The `--plan` flag retires, `recover` retires with
   it, their coverage moves to apply picker tests.
-- Live progress renderer. One CLI thread owns the spinner
-  plus a determinate compression bar, fed by a shared event
-  channel from every layer. The spinner animates through
-  silent phases (hash, compression, tar write) instead of
-  freezing, the bar shows blob count plus rate, and painting
-  parks around the `yes` prompt so ticks never cover it.
+- Live progress renderer. One CLI thread owns a single
+  spinner, fed by a shared event channel from every layer.
+  The spinner animates through silent phases (hash,
+  compression, tar write) instead of freezing, counters ride
+  in the spinner message (`compressing blobs (done/total)`,
+  `patching artifacts (done/total)`), and painting parks
+  around the `yes` prompt so ticks never cover it.
 - Core reports compression progress. `CompressStarted` carries
   blob plus byte totals upfront, one `BlobCompressed` lands per
-  finished blob, so the bar stays determinate across parallel
-  workers. Skipped pool blobs stay silent.
+  finished blob, so the spinner counter stays honest across
+  parallel workers. Skipped pool blobs stay silent.
 
 ### Changed
 
