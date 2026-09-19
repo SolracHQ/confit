@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use confit_core::document::ManifestDocument;
 use confit_core::hook::Hook;
+use confit_core::progress::ProgressSender;
 
 use crate::fetch::Fetch;
 
@@ -21,11 +22,8 @@ mod level;
 mod lua;
 mod model;
 mod path_expr;
-pub mod progress;
 mod require;
 mod surface;
-
-pub use progress::{ProgressCallback, ProgressEvent};
 
 /// Evaluation inputs for one profile run.
 ///
@@ -33,7 +31,7 @@ pub use progress::{ProgressCallback, ProgressEvent};
 /// namespaces beside the embedded defaults. The re-fetch flag forces
 /// remote downloads. The cache override keeps tests off the OS cache.
 /// The fetcher override keeps tests off the network. The progress
-/// sink stays silent while holding `None`.
+/// sender stays silent while holding `None`.
 ///
 /// # Examples
 ///
@@ -65,8 +63,8 @@ pub struct EvalOpts {
     pub cache_dir: Option<PathBuf>,
     /// Network source override for tests, holding `None` for HTTP.
     pub fetcher: Option<Arc<dyn Fetch>>,
-    /// Progress sink for fetch plus unpack plus patch facts.
-    pub progress: Option<ProgressCallback>,
+    /// Progress sender for fetch plus unpack plus patch facts.
+    pub progress: Option<ProgressSender>,
 }
 
 impl std::fmt::Debug for EvalOpts {

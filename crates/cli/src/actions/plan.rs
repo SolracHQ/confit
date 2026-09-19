@@ -58,8 +58,7 @@ pub struct PlanOutcome {
 /// };
 /// let fs = OsFs;
 /// let mut input = Cursor::new(String::new());
-/// let mut output = Vec::new();
-/// let runner = PlanRunner { args: &args, store_tmp: false, seams: Seams::memory(&fs, &mut input, &mut output) };
+/// let runner = PlanRunner { args: &args, store_tmp: false, seams: Seams::memory(&fs, &mut input) };
 /// let outcome = runner.execute();
 /// assert!(matches!(outcome, Ok(_) | Err(_)));
 /// ```
@@ -123,16 +122,17 @@ impl PlanRunner<'_> {
             match (self.args.output.as_deref(), self.store_tmp) {
                 (Some(dest), _) if is_named_output(dest) => {
                     let resolved = crate::cli::resolve_plan_file(dest)?;
-                    write_manifest(&built, Some(&resolved), fs).map(|()| None)
+                    write_manifest(&built, Some(&resolved), fs, self.seams.progress.as_ref())
+                        .map(|()| None)
                 }
                 (Some(dest), _) => {
                     let resolved = crate::cli::resolve_plan_file(dest)?;
                     let dest = ensure_bundle_extension(&resolved);
-                    write_bundle(&built, &dest, fs).map(|()| None)
+                    write_bundle(&built, &dest, fs, self.seams.progress.as_ref()).map(|()| None)
                 }
                 (None, true) => {
                     let tmp = tmp_plan_path();
-                    write_bundle(&built, &tmp, fs).map(|()| Some(tmp))
+                    write_bundle(&built, &tmp, fs, self.seams.progress.as_ref()).map(|()| Some(tmp))
                 }
                 (None, false) => Ok(None),
             }

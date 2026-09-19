@@ -116,11 +116,10 @@ return { shells = { "bash" }, configs = { tool } }
     };
     let fs = confit_cli::fs::OsFs;
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let plan_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: true,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match plan_runner.execute() {
         Ok(outcome) => outcome,
@@ -209,11 +208,10 @@ return { shells = { "bash" }, configs = { tool } }
     };
     let fs = confit_cli::fs::OsFs;
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let slot_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match slot_runner.execute() {
         Ok(outcome) => outcome,
@@ -249,7 +247,7 @@ fn plan_file_output_roundtrips_as_bundle() {
         Err(error) => panic!("plan builds: {error}"),
     };
     let dest = Path::new("proof.cb");
-    match confit_core::store::write_bundle(&built, dest, &fs) {
+    match confit_core::store::write_bundle(&built, dest, &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("bundle writes: {error}"),
     }
@@ -311,7 +309,7 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
         Ok(dest) => dest,
         Err(error) => panic!("named output resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&built, Some(&dest), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dest), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named plan writes: {error}"),
     }
@@ -344,13 +342,7 @@ return { shells = { "bash" }, configs = { tool } }
 "#;
     let profile = write_profile(dir.path(), "profile.lua", body);
     let fs = MemoryFs::new();
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let inner = seen.clone();
-    let sink: confit_engine::ProgressCallback = std::sync::Arc::new(move |event| {
-        if let Ok(mut guard) = inner.lock() {
-            guard.push(event);
-        }
-    });
+    let (sender, receiver) = crossbeam_channel::unbounded();
     let args = confit_cli::cli::PlanArgs {
         profile,
         shared: confit_cli::cli::SharedArgs {
@@ -361,12 +353,10 @@ return { shells = { "bash" }, configs = { tool } }
         output: Some(PathBuf::from("seam-out-order-pin")),
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output)
-            .with_progress(sink),
+        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input).with_progress(sender),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -374,30 +364,27 @@ return { shells = { "bash" }, configs = { tool } }
     };
     assert_eq!(outcome.built.manifest.documents.len(), 1);
     assert!(outcome.first_run, "memory slot reads absent for first run");
-    let guard = match seen.lock() {
-        Ok(guard) => guard,
-        Err(error) => panic!("events read: {error}"),
-    };
+    let mut seen = Vec::new();
+    while let Ok(event) = receiver.try_recv() {
+        seen.push(event);
+    }
     assert!(
-        guard
-            .iter()
-            .any(|event| matches!(event, confit_engine::ProgressEvent::ReadingPlan { .. })),
+        seen.iter()
+            .any(|event| matches!(event, confit_core::progress::Event::ReadingPlan { .. })),
         "reading plan reaches the injected sink"
     );
     assert!(
-        guard
-            .iter()
-            .any(|event| matches!(event, confit_engine::ProgressEvent::Hashing)),
+        seen.iter()
+            .any(|event| matches!(event, confit_core::progress::Event::Hashing)),
         "hashing reaches the injected sink"
     );
     assert!(
-        guard.iter().any(|event| matches!(
+        seen.iter().any(|event| matches!(
             event,
-            confit_engine::ProgressEvent::WritingPlan { documents: 1 }
+            confit_core::progress::Event::WritingPlan { documents: 1 }
         )),
         "writing plan reaches the injected sink"
     );
-    drop(guard);
     assert!(
         fs.exists(Path::new("seam-out-order-pin.cb")),
         "bare output gains the bundle suffix in memory"
@@ -443,11 +430,10 @@ return { shells = { "bash" }, configs = { tool } }
         output: Some(PathBuf::from("@seam-slot-order-pin")),
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -472,4 +458,15 @@ return { shells = { "bash" }, configs = { tool } }
         !fs.exists(&sibling),
         "named output writes no bundle sibling"
     );
+}
+
+#[test]
+fn live_headless_finish_joins_twice() {
+    let live = confit_cli::presentation::spinner::Live::new();
+    if let Some(sender) = live.sink() {
+        let _ = sender.send(confit_core::progress::Event::Hashing);
+        let _ = sender.send(confit_core::progress::Event::WritingPlan { documents: 1 });
+    }
+    live.finish();
+    live.finish();
 }

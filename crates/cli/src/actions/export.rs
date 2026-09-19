@@ -45,8 +45,7 @@ pub struct ExportReport {
 /// let args = ExportArgs { picker: None, output: None, manifest: true };
 /// let fs = OsFs;
 /// let mut input = Cursor::new(String::new());
-/// let mut output = Vec::new();
-/// let report = ExportRunner::run(&args, Seams::memory(&fs, &mut input, &mut output));
+/// let report = ExportRunner::run(&args, Seams::memory(&fs, &mut input));
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
 pub struct ExportRunner<'a> {
@@ -100,7 +99,9 @@ impl<'a> ExportRunner<'a> {
             None => auto,
         };
         seams.emit_writing_plan(plan.manifest.documents.len());
-        timed("export write", || write_bundle(&plan, &dest, fs))?;
+        timed("export write", || {
+            write_bundle(&plan, &dest, fs, seams.progress.as_ref())
+        })?;
         Ok(ExportReport {
             dest: Some(dest),
             manifest: None,

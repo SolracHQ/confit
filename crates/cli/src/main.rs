@@ -62,13 +62,12 @@ fn run_plan_like(
     store_tmp: bool,
     log_path: &std::path::Path,
 ) -> confit_core::error::Result<()> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let stderr = std::io::stderr();
-    let mut output = stderr.lock();
+    let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
-    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    let mut seams = confit_cli::actions::seams::Seams::host(&mut input);
     seams.progress = live.sink();
+    seams.print = live.print_handle();
+    seams.suspend = live.suspend_handle();
     let outcome = confit_cli::actions::plan::PlanRunner {
         args,
         store_tmp,
@@ -99,13 +98,12 @@ fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
 ) -> confit_core::error::Result<()> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let stderr = std::io::stderr();
-    let mut output = stderr.lock();
+    let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
-    let mut seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    let mut seams = confit_cli::actions::seams::Seams::host(&mut input);
     seams.progress = live.sink();
+    seams.print = live.print_handle();
+    seams.suspend = live.suspend_handle();
     seams.log_file = Some(log_path.to_path_buf());
     let report = match confit_cli::actions::apply::ApplyRunner::run(args, seams) {
         Ok(report) => report,
@@ -130,11 +128,8 @@ fn run_apply(
 
 /// Runs export writing a bundle file or printing its manifest.
 fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_core::error::Result<()> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let stderr = std::io::stderr();
-    let mut output = stderr.lock();
-    let seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
+    let mut input = std::io::BufReader::new(std::io::stdin());
+    let seams = confit_cli::actions::seams::Seams::host(&mut input);
     let report = confit_cli::actions::export::ExportRunner::run(args, seams)?;
     if let Some(dest) = report.dest {
         anstream::println!("export: {}", dest.display());
@@ -146,12 +141,9 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_core::error::Result<
 
 /// Runs delete dropping one named slot plus orphan blobs.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_core::error::Result<()> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let stderr = std::io::stderr();
-    let mut output = stderr.lock();
-    let seams = confit_cli::actions::seams::Seams::host(&mut input, &mut output);
-    let report = confit_cli::actions::delete::DeleteRunner::run(args, seams)?;
+    let mut input = std::io::BufReader::new(std::io::stdin());
+    let seams = confit_cli::actions::seams::Seams::host(&mut input);
+    let report = confit_cli::actions::delete::run(args, seams)?;
     anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
     Ok(())
 }

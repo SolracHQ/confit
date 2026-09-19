@@ -2,7 +2,7 @@
 //!
 //! Injected effects shared by command runners.
 
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use confit_core::error::{Error, Result};
@@ -11,17 +11,18 @@ use confit_core::fs::Filesystem;
 use crate::fs::OsFs;
 use confit_core::plan::{Bundle, DocumentStatus};
 
-use confit_engine::{ProgressCallback, ProgressEvent};
+use confit_core::progress::{Event, ProgressSender};
 
 use crate::actions::hooks::HookRunner;
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
+use crate::presentation::spinner::{PrintSender, SuspendControl};
 
 /// Host filesystem under sharing by host seams.
 static HOST_FS: OsFs = OsFs;
 
 /// Injected effects under one command run.
 ///
-/// Host runs pass stdio locks. Tests pass memory fakes.
+/// Host runs pass stdin plus print senders. Tests pass memory fakes.
 ///
 /// # Examples
 ///
@@ -32,19 +33,21 @@ static HOST_FS: OsFs = OsFs;
 ///
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new("yes\n");
-/// let mut output = Vec::new();
-/// let seams = Seams::memory(&fs, &mut input, &mut output);
+/// let seams = Seams::memory(&fs, &mut input);
 /// assert!(matches!(seams.progress, None));
+/// assert!(matches!(seams.suspend, None));
 /// ```
 pub struct Seams<'a> {
     /// Reads plus writes backend, memory under tests.
     pub fs: &'a dyn Filesystem,
     /// Gains the confirmation answer, stdin on the host.
     pub input: &'a mut dyn BufRead,
-    /// Gains previews plus prompts, stderr on the host.
-    pub output: &'a mut dyn Write,
+    /// Gains stderr lines through the renderer, holding `None` for silence.
+    pub print: Option<PrintSender>,
     /// Gains engine facts, holding `None` for silence.
-    pub progress: Option<ProgressCallback>,
+    pub progress: Option<ProgressSender>,
+    /// Parks widgets across prompts, holding `None` while headless.
+    pub suspend: Option<SuspendControl>,
     /// Runs hook subprocesses, holding `None` for the host runner.
     pub hook_runner: Option<&'a dyn HookRunner>,
     /// Gains hook output bytes, holding `None` for no log.
@@ -52,35 +55,33 @@ pub struct Seams<'a> {
 }
 
 impl<'a> Seams<'a> {
-    /// Bundles host stdio locks with the host filesystem.
+    /// Bundles host stdin with the host filesystem.
     ///
     /// # Arguments
     ///
-    /// * `input` - the stdin lock under prompting.
-    /// * `output` - the stderr lock under previews.
+    /// * `input` - the stdin reader under prompting.
     ///
     /// # Returns
     ///
-    /// Silent host seams gaining a sink through the field.
+    /// Silent host seams gaining senders through the fields.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use confit_cli::actions::seams::Seams;
     ///
-    /// let stdin = std::io::stdin();
-    /// let mut input = stdin.lock();
-    /// let stderr = std::io::stderr();
-    /// let mut output = stderr.lock();
-    /// let seams = Seams::host(&mut input, &mut output);
+    /// let mut input = std::io::BufReader::new(std::io::stdin());
+    /// let seams = Seams::host(&mut input);
     /// assert!(matches!(seams.progress, None));
+    /// assert!(matches!(seams.suspend, None));
     /// ```
-    pub fn host(input: &'a mut dyn BufRead, output: &'a mut dyn Write) -> Self {
+    pub fn host(input: &'a mut dyn BufRead) -> Self {
         Self {
             fs: &HOST_FS,
             input,
-            output,
+            print: None,
             progress: None,
+            suspend: None,
             hook_runner: None,
             log_file: None,
         }
@@ -92,11 +93,10 @@ impl<'a> Seams<'a> {
     ///
     /// * `fs` - the memory backend under reading plus writing.
     /// * `input` - the answer source under prompting.
-    /// * `output` - the preview plus prompt sink.
     ///
     /// # Returns
     ///
-    /// Silent memory seams gaining a sink through chaining.
+    /// Silent memory seams gaining a sender through chaining.
     ///
     /// # Examples
     ///
@@ -107,34 +107,31 @@ impl<'a> Seams<'a> {
     ///
     /// let fs = MemoryFs::new();
     /// let mut input = Cursor::new(String::new());
-    /// let mut output = Vec::new();
-    /// let seams = Seams::memory(&fs, &mut input, &mut output);
+    /// let seams = Seams::memory(&fs, &mut input);
     /// assert!(matches!(seams.progress, None));
+    /// assert!(matches!(seams.suspend, None));
     /// ```
-    pub fn memory(
-        fs: &'a dyn Filesystem,
-        input: &'a mut dyn BufRead,
-        output: &'a mut dyn Write,
-    ) -> Self {
+    pub fn memory(fs: &'a dyn Filesystem, input: &'a mut dyn BufRead) -> Self {
         Self {
             fs,
             input,
-            output,
+            print: None,
             progress: None,
+            suspend: None,
             hook_runner: None,
             log_file: None,
         }
     }
 
-    /// Gains one engine sink while chaining.
+    /// Gains one engine sender while chaining.
     ///
     /// # Arguments
     ///
-    /// * `sink` - the facts receiver under the run.
+    /// * `sender` - the facts sender under the run.
     ///
     /// # Returns
     ///
-    /// The same seams carrying the sink.
+    /// The same seams carrying the sender.
     ///
     /// # Examples
     ///
@@ -142,21 +139,95 @@ impl<'a> Seams<'a> {
     /// use confit_cli::actions::seams::Seams;
     /// use confit_core::fs::MemoryFs;
     /// use std::io::Cursor;
-    /// use std::sync::Arc;
     ///
     /// let fs = MemoryFs::new();
     /// let mut input = Cursor::new(String::new());
-    /// let mut output = Vec::new();
-    /// let sink = Arc::new(|_: confit_engine::ProgressEvent| {});
-    /// let seams = Seams::memory(&fs, &mut input, &mut output).with_progress(sink);
+    /// let (sender, _) = crossbeam_channel::unbounded();
+    /// let seams = Seams::memory(&fs, &mut input).with_progress(sender);
     /// assert!(matches!(seams.progress, Some(_)));
     /// ```
-    pub fn with_progress(mut self, sink: ProgressCallback) -> Self {
-        self.progress = Some(sink);
+    pub fn with_progress(mut self, sender: ProgressSender) -> Self {
+        self.progress = Some(sender);
         self
     }
 
+    /// Gains one print sender while chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `sender` - the stderr line sender under the run.
+    ///
+    /// # Returns
+    ///
+    /// The same seams carrying the sender.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_cli::actions::seams::Seams;
+    /// use confit_core::fs::MemoryFs;
+    /// use std::io::Cursor;
+    ///
+    /// let fs = MemoryFs::new();
+    /// let mut input = Cursor::new(String::new());
+    /// let (sender, _) = crossbeam_channel::unbounded();
+    /// let seams = Seams::memory(&fs, &mut input).with_print(sender);
+    /// assert!(matches!(seams.print, Some(_)));
+    /// ```
+    pub fn with_print(mut self, sender: PrintSender) -> Self {
+        self.print = Some(sender);
+        self
+    }
+
+    /// Gains one suspend control while chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `control` - the widget control under prompts.
+    ///
+    /// # Returns
+    ///
+    /// The same seams carrying the control.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_cli::actions::seams::Seams;
+    /// use confit_cli::presentation::spinner::Live;
+    /// use confit_core::fs::MemoryFs;
+    /// use std::io::Cursor;
+    ///
+    /// let fs = MemoryFs::new();
+    /// let mut input = Cursor::new(String::new());
+    /// let live = Live::new();
+    /// let seams = Seams::memory(&fs, &mut input);
+    /// let seams = match live.suspend_handle() {
+    ///     Some(control) => seams.with_suspend(control),
+    ///     None => seams,
+    /// };
+    /// assert!(matches!(seams.suspend, Some(_) | None));
+    /// live.finish();
+    /// ```
+    pub fn with_suspend(mut self, control: SuspendControl) -> Self {
+        self.suspend = Some(control);
+        self
+    }
+
+    /// Sends one stderr line through the renderer while present.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - the formatted line under printing.
+    pub fn print_line(&self, line: String) {
+        if let Some(sender) = self.print.as_ref() {
+            let _ = sender.send(line);
+        }
+    }
+
     /// Prompts for the literal `yes` confirmation.
+    ///
+    /// Hosted runs ask through the suspend control with widgets
+    /// parked. Memory runs read one input line directly.
     ///
     /// # Returns
     ///
@@ -164,7 +235,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Errors
     ///
-    /// Reader plus writer failures surface as io errors.
+    /// Reader failures surface as io errors.
     ///
     /// # Examples
     ///
@@ -175,16 +246,15 @@ impl<'a> Seams<'a> {
     ///
     /// let fs = MemoryFs::new();
     /// let mut input = Cursor::new("yes\n");
-    /// let mut output = Vec::new();
-    /// let mut seams = Seams::memory(&fs, &mut input, &mut output);
+    /// let mut seams = Seams::memory(&fs, &mut input);
     /// assert!(matches!(seams.confirm(), Ok(true)));
     /// ```
     pub fn confirm(&mut self) -> Result<bool> {
-        self.output.write_all(b"\n").map_err(Error::from)?;
-        self.output
-            .write_all(b"Apply these changes? Type 'yes' to continue: ")
-            .map_err(Error::from)?;
-        self.output.flush().map_err(Error::from)?;
+        if let Some(control) = self.suspend.clone() {
+            return control
+                .ask("\nApply these changes? Type 'yes' to continue: ")
+                .map_err(Error::from);
+        }
         log::debug!("prompt waiting for answer");
         let mut answer = String::new();
         let reads = self.input.read_line(&mut answer).map_err(Error::from)?;
@@ -192,26 +262,26 @@ impl<'a> Seams<'a> {
         Ok(answer.trim() == "yes")
     }
 
-    /// Emits one hashing fact while a sink passes.
+    /// Emits one hashing fact while a sender passes.
     pub fn emit_hashing(&self) {
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::Hashing);
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::Hashing);
         }
     }
 
-    /// Emits one plan-reading fact while a sink passes.
+    /// Emits one plan-reading fact while a sender passes.
     pub fn emit_reading_plan(&self, path: &Path) {
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::ReadingPlan {
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::ReadingPlan {
                 path: path.display().to_string(),
             });
         }
     }
 
-    /// Emits one plan-writing fact while a sink passes.
+    /// Emits one plan-writing fact while a sender passes.
     pub fn emit_writing_plan(&self, documents: usize) {
-        if let Some(sink) = self.progress.as_ref() {
-            sink(ProgressEvent::WritingPlan { documents });
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::WritingPlan { documents });
         }
     }
 }
@@ -249,7 +319,7 @@ pub fn timed<T>(label: &str, step: impl FnOnce() -> T) -> T {
 pub fn evaluate_shared(
     shared: &SharedArgs,
     profile: &Path,
-    progress: Option<ProgressCallback>,
+    progress: Option<ProgressSender>,
 ) -> Result<confit_engine::Evaluation> {
     let root = resolve_root(&shared.root, Some(profile));
     let plugins = resolve_plugins(&root, &shared.plugins);

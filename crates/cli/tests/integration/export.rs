@@ -96,11 +96,11 @@ fn export_history_slots_write_auto_bundles() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }

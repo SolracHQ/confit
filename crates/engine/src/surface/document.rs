@@ -11,8 +11,8 @@ use super::runtime::check_condition_json;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, read_marker, set_marker};
 use crate::model::{LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl};
-use crate::progress::{ProgressCallback, ProgressEvent};
 use confit_core::document::{RcData, StructuredFormat};
+use confit_core::progress::{Event, ProgressSender};
 
 pub(crate) mod archive;
 pub(crate) mod convert;
@@ -324,7 +324,7 @@ fn compressed_impl(
     root: &Path,
     cache: &Path,
     args: (Value, Value),
-    progress: Option<ProgressCallback>,
+    progress: Option<ProgressSender>,
 ) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.compressed";
     let (path_value, callback_value) = args;
@@ -347,7 +347,7 @@ impl CompressedDocs {
     /// * `ctor` - error prefix naming the constructor.
     /// * `rel` - archive path under reading.
     /// * `callback` - per-member document picker.
-    /// * `progress` - progress sink holding `None` for silence.
+    /// * `progress` - progress sender holding `None` for silence.
     ///
     /// # Returns
     ///
@@ -366,7 +366,7 @@ impl CompressedDocs {
         ctor: &str,
         rel: String,
         callback: Function,
-        progress: Option<ProgressCallback>,
+        progress: Option<ProgressSender>,
     ) -> mlua::Result<Table> {
         if rel.is_empty() {
             return Err(plan_error(format!(
@@ -409,8 +409,8 @@ impl CompressedDocs {
             members.len(),
             start.elapsed().as_millis()
         );
-        if let Some(sink) = progress.as_ref() {
-            sink(ProgressEvent::Unpacked {
+        if let Some(sender) = progress.as_ref() {
+            let _ = sender.send(Event::Unpacked {
                 archive: rel.clone(),
                 kept: out.raw_len(),
                 total: members.len(),
@@ -426,7 +426,7 @@ fn tree_impl(
     root: &Path,
     cache: &Path,
     args: (Value, Value, Value),
-    progress: Option<ProgressCallback>,
+    progress: Option<ProgressSender>,
 ) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.tree";
     let (archive_value, dest_value, callback_value) = args;
@@ -451,7 +451,7 @@ impl TreeDocs {
     /// * `rel` - archive path under reading.
     /// * `dest` - destination folder holding the members.
     /// * `callback` - per-member destination picker.
-    /// * `progress` - progress sink holding `None` for silence.
+    /// * `progress` - progress sender holding `None` for silence.
     ///
     /// # Returns
     ///
@@ -476,7 +476,7 @@ impl TreeDocs {
         rel: String,
         dest: String,
         callback: Function,
-        progress: Option<ProgressCallback>,
+        progress: Option<ProgressSender>,
     ) -> mlua::Result<Table> {
         if rel.is_empty() {
             return Err(plan_error(format!(
@@ -542,8 +542,8 @@ impl TreeDocs {
             members.len(),
             start.elapsed().as_millis()
         );
-        if let Some(sink) = progress.as_ref() {
-            sink(ProgressEvent::Unpacked {
+        if let Some(sender) = progress.as_ref() {
+            let _ = sender.send(Event::Unpacked {
                 archive: rel.clone(),
                 kept: kept.len(),
                 total: members.len(),

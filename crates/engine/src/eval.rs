@@ -2,6 +2,7 @@
 //!
 //! Profile loading plus document assembly.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +17,6 @@ use crate::fetch::Fetch;
 use crate::lua::{JsonExt, TableExt};
 use crate::model::{ConfigData, StoredPatch};
 use crate::path_expr::flatten_json;
-use crate::progress::ProgressCallback;
 use crate::require::Requirer;
 use crate::surface::config::ConfigBuilder;
 use crate::surface::document::Declared;
@@ -28,11 +28,12 @@ use confit_core::document::{
 use confit_core::error::{Error, Result};
 use confit_core::hook::{Hook, merge_hooks};
 use confit_core::ids::DocPath;
+use confit_core::progress::{Event, ProgressSender};
 
 /// One evaluation holding the Lua state plus its context.
 ///
 /// The state, the resolution roots, the fetcher, and the progress
-/// sink travel together, so assembly methods read them from self
+/// sender travel together, so assembly methods read them from self
 /// instead of threading six arguments per call.
 pub(crate) struct Session {
     /// Lua state carrying the confit surface.
@@ -47,8 +48,10 @@ pub(crate) struct Session {
     pub(crate) plugins: PathBuf,
     /// Forces remote downloads past the sidecar cache.
     pub(crate) re_fetch: bool,
-    /// Progress sink, holding `None` for silence.
-    pub(crate) progress: Option<ProgressCallback>,
+    /// Progress sender, holding `None` for silence.
+    pub(crate) progress: Option<ProgressSender>,
+    /// Finished patch count shared across documents.
+    pub(crate) patch_done: Cell<usize>,
 }
 
 impl Session {
@@ -74,6 +77,7 @@ impl Session {
             plugins: opts.plugins,
             re_fetch: opts.re_fetch,
             progress: opts.progress,
+            patch_done: Cell::new(0),
         };
         let requirer = Requirer {
             current: session.root.clone(),
@@ -100,6 +104,12 @@ impl Session {
         let profile = Profile::read(&table, &profile_ctx)?;
         profile.check(&profile_ctx)?;
         let patches = profile.patches();
+        let total = patches.len();
+        if total > 0
+            && let Some(sender) = session.progress.as_ref()
+        {
+            let _ = sender.send(Event::PatchesStarted { patches: total });
+        }
         let mut blobs: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         let mut out = session
             .assemble_structured(&profile, &patches, &profile_ctx)
@@ -502,6 +512,8 @@ impl Session {
         let exec = Executor {
             lua: &self.lua,
             progress: self.progress.clone(),
+            patch_total: patches.len(),
+            patch_done: &self.patch_done,
         };
         let mut out: BTreeMap<String, ManifestDocument> = BTreeMap::new();
         for (path, (format, base, owner)) in &bases {
@@ -775,6 +787,8 @@ impl Session {
         let exec = Executor {
             lua: &self.lua,
             progress: self.progress.clone(),
+            patch_total: patches.len(),
+            patch_done: &self.patch_done,
         };
         Executor::sort_patches(&mut handles);
         let doc = self.lua.create_table()?;

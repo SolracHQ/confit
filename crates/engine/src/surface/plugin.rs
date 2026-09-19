@@ -118,7 +118,7 @@ fn names_index(lua: &Lua, user: &str, key: Value, root: PathBuf) -> mlua::Result
     let external = root.join(user).join(&name).join("plugin.lua");
     let external = external.is_file().then_some(external);
     if embedded.is_some() && external.is_some() {
-        eprintln!("confit.plugin.{user}.{name}: embedded default wins, external plugin skipped");
+        log::warn!("confit.plugin.{user}.{name}: embedded default wins, external plugin skipped");
     }
     let value = match embedded {
         Some(source) => {

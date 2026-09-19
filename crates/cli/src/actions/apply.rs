@@ -23,7 +23,7 @@ use crate::presentation::summary::Summary;
 
 use super::seams::{Seams, evaluate_shared, log_processed, timed};
 
-use confit_engine::ProgressEvent;
+use confit_core::progress::Event;
 
 /// Outcome of one successful apply run.
 ///
@@ -62,7 +62,6 @@ pub struct ApplyReport {
 ///
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new("yes\n");
-/// let mut output = Vec::new();
 /// let plan = match Bundle::build(
 ///     vec![ManifestDocument::new(
 ///         DocPath::new("note"),
@@ -79,7 +78,7 @@ pub struct ApplyReport {
 ///     state: None,
 ///     force: false,
 ///     preview: false,
-///     seams: Seams::memory(&fs, &mut input, &mut output),
+///     seams: Seams::memory(&fs, &mut input),
 /// };
 /// assert!(matches!(runner.execute(), Ok(_)));
 /// assert!(fs.exists(Path::new("note")));
@@ -142,8 +141,7 @@ impl<'a> ApplyRunner<'a> {
     /// };
     /// let fs = OsFs;
     /// let mut input = Cursor::new(String::new());
-    /// let mut output = Vec::new();
-    /// let seams = Seams::memory(&fs, &mut input, &mut output);
+    /// let seams = Seams::memory(&fs, &mut input);
     /// let runner = ApplyRunner::from_args(&args, seams);
     /// assert!(matches!(runner, Ok(_) | Err(_)));
     /// ```
@@ -253,8 +251,7 @@ impl<'a> ApplyRunner<'a> {
     /// };
     /// let fs = OsFs;
     /// let mut input = Cursor::new(String::new());
-    /// let mut output = Vec::new();
-    /// let seams = Seams::memory(&fs, &mut input, &mut output);
+    /// let seams = Seams::memory(&fs, &mut input);
     /// let report = ApplyRunner::run(&args, seams);
     /// assert!(matches!(report, Ok(_) | Err(_)));
     /// ```
@@ -304,17 +301,9 @@ impl<'a> ApplyRunner<'a> {
                 first_run,
             };
             let text = report.render();
-            self.seams
-                .output
-                .write_all(text.as_bytes())
-                .map_err(Error::from)?;
-            self.seams.output.write_all(b"\n").map_err(Error::from)?;
+            self.seams.print_line(text);
             for line in built.hook_preview(&rt, fs)? {
-                self.seams
-                    .output
-                    .write_all(line.as_bytes())
-                    .map_err(Error::from)?;
-                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                self.seams.print_line(line);
             }
         }
         if !self.force && !self.seams.confirm()? {
@@ -325,11 +314,7 @@ impl<'a> ApplyRunner<'a> {
         let fresh = reference.drift(&snapshot, &snapshot_tree, order);
         if fresh != baseline {
             for line in Drift::lines(&fresh) {
-                self.seams
-                    .output
-                    .write_all(line.as_bytes())
-                    .map_err(Error::from)?;
-                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                self.seams.print_line(line);
             }
             if !self.seams.confirm()? {
                 return Err(Error::Plan(
@@ -338,9 +323,9 @@ impl<'a> ApplyRunner<'a> {
             }
         }
         let notify_written;
-        let notify = if let Some(sink) = self.seams.progress.clone() {
+        let notify = if let Some(sender) = self.seams.progress.clone() {
             notify_written = move |path: &DocPath| {
-                sink(ProgressEvent::DocumentWritten {
+                let _ = sender.send(Event::DocumentWritten {
                     path: path.as_str().to_string(),
                 });
             };
@@ -364,10 +349,10 @@ impl<'a> ApplyRunner<'a> {
             self.seams.emit_writing_plan(built.manifest.documents.len());
         }
         if let Some(state) = self.state.as_deref() {
-            write_manifest(&built, Some(state), fs)?;
+            write_manifest(&built, Some(state), fs, self.seams.progress.as_ref())?;
         }
         self.seams.emit_writing_plan(built.manifest.documents.len());
-        let stored = archive_previous(&built, fs)?;
+        let stored = archive_previous(&built, fs, self.seams.progress.as_ref())?;
         prune_blobs(fs)?;
         self.run_hooks(&built, &rt, fs)?;
         Ok(ApplyReport {
@@ -400,20 +385,12 @@ impl<'a> ApplyRunner<'a> {
                     "warn: {argv_text} cannot run ({})",
                     describe_condition(gate)
                 );
-                self.seams
-                    .output
-                    .write_all(line.as_bytes())
-                    .map_err(Error::from)?;
-                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                self.seams.print_line(line);
                 continue;
             }
             if !hook.checks.is_empty() && hook.checks.iter().all(|check| evaluate(check, rt, fs)) {
                 let line = format!("skipped: {argv_text} (checks pass)");
-                self.seams
-                    .output
-                    .write_all(line.as_bytes())
-                    .map_err(Error::from)?;
-                self.seams.output.write_all(b"\n").map_err(Error::from)?;
+                self.seams.print_line(line);
                 continue;
             }
             let binary = resolve_hook(hook, rt, fs).ok_or_else(|| {
@@ -423,13 +400,9 @@ impl<'a> ApplyRunner<'a> {
             let mut spawn: Vec<String> = vec![binary.display().to_string()];
             spawn.extend(hook.argv.iter().skip(1).cloned());
             let line = format!("hook {position} of {total}: {argv_text}");
-            self.seams
-                .output
-                .write_all(line.as_bytes())
-                .map_err(Error::from)?;
-            self.seams.output.write_all(b"\n").map_err(Error::from)?;
-            if let Some(sink) = self.seams.progress.as_ref() {
-                sink(ProgressEvent::HookRunning {
+            self.seams.print_line(line.clone());
+            if let Some(sender) = self.seams.progress.as_ref() {
+                let _ = sender.send(Event::HookRunning {
                     position,
                     total,
                     argv: argv_text.clone(),

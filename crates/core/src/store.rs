@@ -16,6 +16,7 @@ use crate::fs::Filesystem;
 use crate::hook::Hook;
 use crate::ids::DocPath;
 use crate::plan::{BUNDLE_VERSION, Bundle};
+use crate::progress::{Event, ProgressSender};
 
 /// One stored plan entry for the apply-past listing.
 ///
@@ -108,10 +109,8 @@ impl Manifest {
 /// Pool folder name under the base folder.
 const BLOBS_DIR: &str = "blobs";
 /// Gzip level for pooled plus inner bundle blob bytes.
-/// Compression lives here. Level 6 marks the measured knee.
 const BLOB_GZIP_LEVEL: u32 = 6;
 /// Gzip level for the outer bundle tar.
-/// Outer tar groups only. Inner entries already carry compression.
 const BUNDLE_GZIP_LEVEL: u32 = 0;
 /// Blob hash length in lowercase hex chars.
 const BLOB_ID_LEN: usize = 64;
@@ -236,6 +235,7 @@ pub fn manifest_json(plan: &Bundle) -> Result<String> {
 /// * `plan` - the versioned desired state.
 /// * `out` - the destination, holding `None` for stdout.
 /// * `fs` - the backend under writing.
+/// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
 /// # Returns
 ///
@@ -253,10 +253,15 @@ pub fn manifest_json(plan: &Bundle) -> Result<String> {
 /// use confit_core::store::write_manifest;
 ///
 /// let plan = Bundle::empty();
-/// assert!(matches!(write_manifest(&plan, None, &MemoryFs::new()), Ok(())));
+/// assert!(matches!(write_manifest(&plan, None, &MemoryFs::new(), None), Ok(())));
 /// ```
-pub fn write_manifest(plan: &Bundle, out: Option<&Path>, fs: &dyn Filesystem) -> Result<()> {
-    store_blobs(plan, fs)?;
+pub fn write_manifest(
+    plan: &Bundle,
+    out: Option<&Path>,
+    fs: &dyn Filesystem,
+    progress: Option<&ProgressSender>,
+) -> Result<()> {
+    store_blobs(plan, fs, progress)?;
     let text = manifest_json(plan)?;
     match out {
         Some(dest) => fs
@@ -816,6 +821,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// * `plan` - the applied plan under storing.
 /// * `fs` - the backend under writing.
+/// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
 /// # Returns
 ///
@@ -832,11 +838,15 @@ pub fn default_state_path() -> Result<PathBuf> {
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::archive_previous;
 ///
-/// let outcome = archive_previous(&Bundle::empty(), &MemoryFs::new());
+/// let outcome = archive_previous(&Bundle::empty(), &MemoryFs::new(), None);
 /// assert!(matches!(outcome, Ok(_)));
 /// ```
-pub fn archive_previous(plan: &Bundle, fs: &dyn Filesystem) -> Result<PathBuf> {
-    store_blobs(plan, fs)?;
+pub fn archive_previous(
+    plan: &Bundle,
+    fs: &dyn Filesystem,
+    progress: Option<&ProgressSender>,
+) -> Result<PathBuf> {
+    store_blobs(plan, fs, progress)?;
     let dir = resolve_previous_dir()?;
     let mut stamp = system_nanos()?;
     let mut dest = dir.join(format!("{stamp}.json"));
@@ -974,6 +984,7 @@ fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
 ///
 /// * `plan` - the live plan holding binary bytes.
 /// * `fs` - the backend under writing.
+/// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
 /// # Returns
 ///
@@ -982,7 +993,11 @@ fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
 /// # Errors
 ///
 /// Compression plus write failures surface as plan errors.
-fn store_blobs(plan: &Bundle, fs: &dyn Filesystem) -> Result<()> {
+fn store_blobs(
+    plan: &Bundle,
+    fs: &dyn Filesystem,
+    progress: Option<&ProgressSender>,
+) -> Result<()> {
     let dir = resolve_blobs_dir()?;
     let mut missing: Vec<(String, Vec<u8>)> = Vec::new();
     for (sha, bytes) in collect_blobs(plan) {
@@ -992,9 +1007,36 @@ fn store_blobs(plan: &Bundle, fs: &dyn Filesystem) -> Result<()> {
         }
         missing.push((sha, bytes.to_vec()));
     }
-    let compressed: Vec<Result<(String, Vec<u8>)>> = missing
+    let total = missing.len();
+    if total > 0
+        && let Some(sender) = progress
+    {
+        let bytes: u64 = missing.iter().map(|(_, raw)| raw.len() as u64).sum();
+        let _ = sender.send(Event::CompressStarted {
+            blobs: total,
+            bytes,
+        });
+    }
+    let indexed: Vec<(usize, String, Vec<u8>)> = missing
+        .into_iter()
+        .enumerate()
+        .map(|(index, (sha, raw))| (index, sha, raw))
+        .collect();
+    let compressed: Vec<Result<(String, Vec<u8>)>> = indexed
         .par_iter()
-        .map(|(sha, bytes)| gzip_bytes(bytes).map(|gzipped| (sha.clone(), gzipped)))
+        .map(|(index, sha, raw)| {
+            let raw_len = raw.len() as u64;
+            gzip_bytes(raw).map(|gzipped| {
+                if let Some(sender) = progress {
+                    let _ = sender.send(Event::BlobCompressed {
+                        done: index + 1,
+                        total,
+                        bytes: raw_len,
+                    });
+                }
+                (sha.clone(), gzipped)
+            })
+        })
         .collect();
     for entry in compressed {
         let (sha, gzipped) = entry?;
@@ -1219,6 +1261,7 @@ fn collect_manifest_refs(path: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<S
 /// * `plan` - the live plan under exporting.
 /// * `dest` - the bundle file under writing.
 /// * `fs` - the backend under writing.
+/// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
 /// # Returns
 ///
@@ -1236,10 +1279,15 @@ fn collect_manifest_refs(path: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<S
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::write_bundle;
 ///
-/// let outcome = write_bundle(&Bundle::empty(), std::path::Path::new("bundle.tgz"), &MemoryFs::new());
+/// let outcome = write_bundle(&Bundle::empty(), std::path::Path::new("bundle.tgz"), &MemoryFs::new(), None);
 /// assert!(matches!(outcome, Ok(())));
 /// ```
-pub fn write_bundle(plan: &Bundle, dest: &Path, fs: &dyn Filesystem) -> Result<()> {
+pub fn write_bundle(
+    plan: &Bundle,
+    dest: &Path,
+    fs: &dyn Filesystem,
+    progress: Option<&ProgressSender>,
+) -> Result<()> {
     let stored = Manifest::of(plan);
     let manifest = serde_json::to_vec_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
@@ -1251,9 +1299,36 @@ pub fn write_bundle(plan: &Bundle, dest: &Path, fs: &dyn Filesystem) -> Result<(
         .into_iter()
         .map(|(sha, bytes)| (sha, bytes.to_vec()))
         .collect();
-    let compressed: Vec<Result<(String, Vec<u8>)>> = blobs
+    let total = blobs.len();
+    if total > 0
+        && let Some(sender) = progress
+    {
+        let bytes: u64 = blobs.iter().map(|(_, raw)| raw.len() as u64).sum();
+        let _ = sender.send(Event::CompressStarted {
+            blobs: total,
+            bytes,
+        });
+    }
+    let indexed: Vec<(usize, String, Vec<u8>)> = blobs
+        .into_iter()
+        .enumerate()
+        .map(|(index, (sha, raw))| (index, sha, raw))
+        .collect();
+    let compressed: Vec<Result<(String, Vec<u8>)>> = indexed
         .par_iter()
-        .map(|(sha, bytes)| gzip_bytes(bytes).map(|gzipped| (sha.clone(), gzipped)))
+        .map(|(index, sha, raw)| {
+            let raw_len = raw.len() as u64;
+            gzip_bytes(raw).map(|gzipped| {
+                if let Some(sender) = progress {
+                    let _ = sender.send(Event::BlobCompressed {
+                        done: index + 1,
+                        total,
+                        bytes: raw_len,
+                    });
+                }
+                (sha.clone(), gzipped)
+            })
+        })
         .collect();
     for entry in compressed {
         let (sha, gzipped) = entry?;
@@ -1318,7 +1393,7 @@ fn append_bundle_entry(
 ///
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.tgz");
-/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs), Ok(())));
+/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs, None), Ok(())));
 /// assert!(matches!(read_bundle(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
 /// ```
 pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
@@ -1449,7 +1524,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.cb");
-/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs), Ok(())));
+/// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs, None), Ok(())));
 /// assert!(matches!(load_bundle_input(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
 /// ```
 pub fn load_bundle_input(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
@@ -1574,7 +1649,7 @@ mod tests {
             Ok(dest) => dest,
             Err(error) => panic!("named plan resolves: {error}"),
         };
-        match write_manifest(&built, Some(&dest), &fs) {
+        match write_manifest(&built, Some(&dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("named plan writes: {error}"),
         }
@@ -1606,7 +1681,7 @@ mod tests {
             Err(error) => panic!("plan builds: {error}"),
         };
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1847,7 +1922,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1918,7 +1993,7 @@ mod tests {
         };
         built.blobs.insert(shared_blob, shared.clone());
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -1963,7 +2038,7 @@ mod tests {
             Err(error) => panic!("slot resolves: {error}"),
         };
         let slot_plan = opaque_plan("slot-bin", 10);
-        match write_manifest(&slot_plan, Some(&slot), &fs) {
+        match write_manifest(&slot_plan, Some(&slot), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("slot writes: {error}"),
         }
@@ -1972,7 +2047,7 @@ mod tests {
             Err(error) => panic!("history resolves: {error}"),
         };
         let history_plan = opaque_plan("history-bin", 20);
-        match write_manifest(&history_plan, Some(&previous.join("1.json")), &fs) {
+        match write_manifest(&history_plan, Some(&previous.join("1.json")), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("history writes: {error}"),
         }
@@ -1981,7 +2056,7 @@ mod tests {
             Err(error) => panic!("named resolves: {error}"),
         };
         let named_plan = opaque_plan("named-bin", 30);
-        match write_manifest(&named_plan, Some(&named), &fs) {
+        match write_manifest(&named_plan, Some(&named), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("named writes: {error}"),
         }
@@ -2017,7 +2092,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2054,7 +2129,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2081,7 +2156,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2119,7 +2194,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2149,7 +2224,7 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("bundle.tgz");
-        match write_bundle(&built, dest, &fs) {
+        match write_bundle(&built, dest, &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
@@ -2252,7 +2327,7 @@ mod tests {
         built.blobs.insert(empty_blob.clone(), empty.clone());
         let fs = MemoryFs::new();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("plan writes: {error}"),
         }
@@ -2269,7 +2344,7 @@ mod tests {
         };
         assert_eq!(loaded, built);
         let bundle = std::path::Path::new("bundle.tgz");
-        match write_bundle(&built, bundle, &fs) {
+        match write_bundle(&built, bundle, &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
@@ -2290,12 +2365,12 @@ mod tests {
         let fs = MemoryFs::new();
         let built = mixed_plan();
         let dest = std::path::Path::new("plan.json");
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("first plan writes: {error}"),
         }
         let first = pool_blobs(&fs);
-        match write_manifest(&built, Some(dest), &fs) {
+        match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("second plan writes: {error}"),
         }
@@ -2303,7 +2378,7 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(second.len(), built.blobs.len());
         let bundle = std::path::Path::new("bundle.tgz");
-        match write_bundle(&built, bundle, &fs) {
+        match write_bundle(&built, bundle, &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
@@ -2351,5 +2426,85 @@ mod tests {
         for name in &rest {
             assert!(seen.insert(name.clone()), "duplicate entry {name}");
         }
+    }
+
+    #[test]
+    fn compress_events_cover_every_blob_once() {
+        use crate::fs::MemoryFs;
+        use crate::progress::Event;
+
+        let fs = MemoryFs::new();
+        let built = mixed_plan();
+        let dest = std::path::Path::new("plan.json");
+        let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
+        match write_manifest(&built, Some(dest), &fs, Some(&sender)) {
+            Ok(()) => {}
+            Err(error) => panic!("plan writes: {error}"),
+        }
+        drop(sender);
+        let mut started: Vec<(usize, u64)> = Vec::new();
+        let mut dones: Vec<usize> = Vec::new();
+        let mut totals: Vec<usize> = Vec::new();
+        let mut compressed_bytes: u64 = 0;
+        for event in receiver.iter() {
+            match event {
+                Event::CompressStarted { blobs, bytes } => started.push((blobs, bytes)),
+                Event::BlobCompressed { done, total, bytes } => {
+                    dones.push(done);
+                    totals.push(total);
+                    compressed_bytes += bytes;
+                }
+                _ => panic!("unexpected progress event"),
+            }
+        }
+        let total = built.blobs.len();
+        let raw_bytes: u64 = built.blobs.values().map(|bytes| bytes.len() as u64).sum();
+        match started.as_slice() {
+            [(blobs, bytes)] => {
+                assert_eq!(*blobs, total);
+                assert_eq!(*bytes, raw_bytes);
+            }
+            _ => panic!("one compress start passes: {started:?}"),
+        }
+        assert_eq!(dones.len(), total);
+        for seen in &totals {
+            assert_eq!(*seen, total);
+        }
+        dones.sort();
+        let want: Vec<usize> = (1..=total).collect();
+        assert_eq!(dones, want);
+        assert_eq!(compressed_bytes, raw_bytes);
+        let loaded = match load_state(Some(dest), &fs) {
+            Ok(loaded) => loaded,
+            Err(error) => panic!("plan loads: {error}"),
+        };
+        assert_eq!(loaded, built);
+    }
+
+    #[test]
+    fn skipped_pool_blobs_emit_nothing() {
+        use crate::fs::MemoryFs;
+        use crate::progress::Event;
+
+        let fs = MemoryFs::new();
+        let built = mixed_plan();
+        let dest = std::path::Path::new("plan.json");
+        match write_manifest(&built, Some(dest), &fs, None) {
+            Ok(()) => {}
+            Err(error) => panic!("first plan writes: {error}"),
+        }
+        let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
+        match write_manifest(&built, Some(dest), &fs, Some(&sender)) {
+            Ok(()) => {}
+            Err(error) => panic!("second plan writes: {error}"),
+        }
+        drop(sender);
+        let events: Vec<Event> = receiver.iter().collect();
+        assert!(events.is_empty(), "second run stays silent: {events:?}");
+        let loaded = match load_state(Some(dest), &fs) {
+            Ok(loaded) => loaded,
+            Err(error) => panic!("plan loads: {error}"),
+        };
+        assert_eq!(loaded, built);
     }
 }

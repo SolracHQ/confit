@@ -15,6 +15,7 @@ anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
 confit-core = { path = "../core" }
 confit-engine = { path = "../engine" }
+crossbeam-channel = "0.5.17"
 dirs = "7.0.0"
 fern = "0.7.1"
 indicatif = "0.18.6"

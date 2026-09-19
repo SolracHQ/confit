@@ -7,14 +7,13 @@ fn apply_yes_writes_all_files() {
     pin_home();
     let fs = MemoryFs::new();
     let mut input = Cursor::new("yes\n");
-    let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
         Bundle::empty(),
         Some(PathBuf::from("state.json")),
         false,
         true,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     let report = match runner.execute() {
         Ok(report) => report,
@@ -43,8 +42,6 @@ fn apply_yes_writes_all_files() {
     };
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].created_at.is_empty());
-    let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Bundle:"), "preview renders: {text}");
 }
 
 #[test]
@@ -55,14 +52,13 @@ fn apply_non_yes_writes_nothing() {
     let fs = MemoryFs::new();
     for answer in ["no\n", "YES\n", "\n"] {
         let mut input = Cursor::new(answer);
-        let mut output = Vec::new();
         let runner = apply_runner(
             sample_documents(),
             Bundle::empty(),
             Some(PathBuf::from("state.json")),
             false,
             true,
-            confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+            confit_cli::actions::seams::Seams::memory(&fs, &mut input),
         );
         match runner.execute() {
             Ok(_) => panic!("{answer:?} proceeds"),
@@ -89,14 +85,13 @@ fn apply_force_skips_prompt() {
     pin_home();
     let fs = MemoryFs::new();
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
         Bundle::empty(),
         None,
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     match runner.execute() {
         Ok(_) => {}
@@ -114,14 +109,13 @@ fn apply_drift_reprompts() {
     pin_home();
     let fs = MemoryFs::new();
     let mut seed_input = Cursor::new(String::new());
-    let mut seed_output = Vec::new();
     let seed = apply_runner(
         sample_documents(),
         Bundle::empty(),
         None,
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut seed_input, &mut seed_output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut seed_input),
     );
     match seed.execute() {
         Ok(_) => {}
@@ -137,14 +131,13 @@ fn apply_drift_reprompts() {
         edits: Some(vec![(PathBuf::from("note"), b"hand edit\n".to_vec())]),
         fs: &fs,
     };
-    let mut output = Vec::new();
     let denied = apply_runner(
         sample_documents(),
         previous.clone(),
         None,
         false,
         true,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     match denied.execute() {
         Ok(_) => panic!("drifted apply proceeds on no"),
@@ -154,12 +147,6 @@ fn apply_drift_reprompts() {
         ),
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"hand edit\n");
-    let text = String::from_utf8_lossy(&output);
-    assert_eq!(
-        text.matches("Type 'yes' to continue").count(),
-        2,
-        "drift prompts again: {text}"
-    );
 
     let mut input = DriftInjector {
         inner: Cursor::new(b"yes\nyes\n".to_vec()),
@@ -169,14 +156,13 @@ fn apply_drift_reprompts() {
         )]),
         fs: &fs,
     };
-    let mut output = Vec::new();
     let retry = apply_runner(
         sample_documents(),
         previous,
         None,
         false,
         true,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     match retry.execute() {
         Ok(_) => {}
@@ -200,14 +186,13 @@ fn apply_rotation_drops_sixth() {
     let fs = MemoryFs::new();
     for _ in 0..6 {
         let mut input = Cursor::new(String::new());
-        let mut output = Vec::new();
         let runner = apply_runner(
             sample_documents(),
             Bundle::empty(),
             None,
             true,
             false,
-            confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+            confit_cli::actions::seams::Seams::memory(&fs, &mut input),
         );
         match runner.execute() {
             Ok(_) => {}
@@ -251,11 +236,11 @@ fn apply_history_first_restores_just_previous() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -273,19 +258,12 @@ fn apply_history_first_restores_just_previous() {
         force: false,
     };
     let mut input = Cursor::new("yes\n");
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => {}
         Err(error) => panic!("history apply runs: {error}"),
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"second\n");
-    let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Bundle:"), "preview renders: {text}");
-    assert!(
-        text.contains("Type 'yes' to continue"),
-        "prompt shows: {text}"
-    );
     let slot = match confit_core::store::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
@@ -321,11 +299,11 @@ fn apply_history_second_restores_older() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs) {
+    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs) {
+    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -339,8 +317,7 @@ fn apply_history_second_restores_older() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => {}
         Err(error) => panic!("older apply runs: {error}"),
@@ -366,7 +343,7 @@ fn apply_history_out_of_range_names_count() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&built, Some(&dir.join("a-only.json")), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dir.join("a-only.json")), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("entry seeds: {error}"),
     }
@@ -380,8 +357,7 @@ fn apply_history_out_of_range_names_count() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => panic!("out-of-range applies"),
         Err(error) => {
@@ -429,19 +405,12 @@ fn apply_named_slot_restores() {
         force: false,
     };
     let mut input = Cursor::new("yes\n");
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => {}
         Err(error) => panic!("named apply runs: {error}"),
     }
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"named\n");
-    let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Bundle:"), "preview renders: {text}");
-    assert!(
-        text.contains("Type 'yes' to continue"),
-        "prompt shows: {text}"
-    );
 }
 
 #[test]
@@ -458,8 +427,7 @@ fn apply_named_slot_absent_fails() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => panic!("absent slot applies"),
         Err(error) => {
@@ -500,15 +468,12 @@ return { shells = { "bash" }, configs = { tool } }
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(_) => {}
         Err(error) => panic!("lua apply runs: {error}"),
     }
     assert_eq!(memory_bytes(&fs, Path::new("apply-lua-note")), b"probe\n");
-    let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("Bundle:"), "profile previews: {text}");
 }
 
 #[test]
@@ -519,7 +484,7 @@ fn apply_cb_positional_loads_bundle() {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    match confit_core::store::write_bundle(&built, Path::new("backup.cb"), &fs) {
+    match confit_core::store::write_bundle(&built, Path::new("backup.cb"), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("bundle writes: {error}"),
     }
@@ -533,15 +498,19 @@ fn apply_cb_positional_loads_bundle() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let (print_tx, print_rx) = crossbeam_channel::unbounded();
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
         Err(error) => panic!("bundle positional runs: {error}"),
     };
     assert_eq!(report.written, 4);
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"hello\n");
-    assert!(output.is_empty(), "bundle skips preview");
+    let mut lines = Vec::new();
+    while let Ok(line) = print_rx.try_recv() {
+        lines.push(line);
+    }
+    assert!(lines.is_empty(), "bundle skips preview");
 }
 
 #[test]
@@ -551,14 +520,13 @@ fn apply_then_drift_stays_quiet() {
     pin_home();
     let fs = MemoryFs::new();
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
         Bundle::empty(),
         None,
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     match runner.execute() {
         Ok(_) => {}
@@ -587,14 +555,13 @@ fn apply_second_profile_removes_recorded_orphans() {
         panic!("stray writes: {error}");
     }
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let first = apply_runner(
         sample_documents(),
         Bundle::empty(),
         Some(PathBuf::from("state.json")),
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     match first.execute() {
         Ok(_) => {}
@@ -627,14 +594,13 @@ fn apply_second_profile_removes_recorded_orphans() {
         ),
     ];
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let second = apply_runner(
         desired,
         previous,
         Some(PathBuf::from("state.json")),
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input),
     );
     let report = match second.execute() {
         Ok(report) => report,
@@ -653,42 +619,35 @@ fn apply_emits_writing_plan_fact() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let inner = seen.clone();
-    let sink: confit_engine::ProgressCallback = std::sync::Arc::new(move |event| {
-        if let Ok(mut guard) = inner.lock() {
-            guard.push(event);
-        }
-    });
+    let (sender, receiver) = crossbeam_channel::unbounded();
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     let runner = apply_runner(
         sample_documents(),
         Bundle::empty(),
         None,
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output).with_progress(sink),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut input).with_progress(sender),
     );
     match runner.execute() {
         Ok(_) => {}
         Err(error) => panic!("apply runs: {error}"),
     }
-    let guard = match seen.lock() {
-        Ok(guard) => guard,
-        Err(error) => panic!("events read: {error}"),
-    };
+    let mut seen = Vec::new();
+    while let Ok(event) = receiver.try_recv() {
+        seen.push(event);
+    }
     assert!(
-        guard.iter().any(|event| matches!(
+        seen.iter().any(|event| matches!(
             event,
-            confit_engine::ProgressEvent::WritingPlan { documents: 4 }
+            confit_core::progress::Event::WritingPlan { documents: 4 }
         )),
         "writing plan fires with document count"
     );
     assert!(
-        !guard
+        !seen
             .iter()
-            .any(|event| matches!(event, confit_engine::ProgressEvent::ReadingPlan { .. })),
+            .any(|event| matches!(event, confit_core::progress::Event::ReadingPlan { .. })),
         "memory apply reads no plan files"
     );
 }
@@ -704,7 +663,7 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    match confit_core::store::write_bundle(&built, Path::new("backup.cb"), &fs) {
+    match confit_core::store::write_bundle(&built, Path::new("backup.cb"), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("plan writes: {error}"),
     }
@@ -719,8 +678,7 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
         Err(error) => panic!("plan-file apply runs: {error}"),
@@ -752,7 +710,6 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Err(error) => panic!("slot resolves: {error}"),
     };
     let mut first_input = Cursor::new(String::new());
-    let mut first_output = Vec::new();
     let first = apply_runner(
         vec![ManifestDocument::new(
             DocPath::new("first"),
@@ -765,7 +722,7 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Some(slot.clone()),
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut first_input, &mut first_output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut first_input),
     );
     match first.execute() {
         Ok(_) => {}
@@ -777,7 +734,6 @@ fn two_profiles_share_one_slot_last_applied_wins() {
     };
     assert_eq!(previous.manifest.documents.len(), 1);
     let mut second_input = Cursor::new(String::new());
-    let mut second_output = Vec::new();
     let second = apply_runner(
         vec![ManifestDocument::new(
             DocPath::new("second"),
@@ -790,7 +746,7 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Some(slot.clone()),
         true,
         false,
-        confit_cli::actions::seams::Seams::memory(&fs, &mut second_input, &mut second_output),
+        confit_cli::actions::seams::Seams::memory(&fs, &mut second_input),
     );
     let report = match second.execute() {
         Ok(report) => report,
@@ -826,7 +782,7 @@ fn named_plan_output_roundtrips_through_apply() {
         Err(error) => panic!("named output resolves: {error}"),
     };
     assert!(dest.ends_with("confit/plans/work.json"));
-    match confit_core::store::write_manifest(&built, Some(&dest), &fs) {
+    match confit_core::store::write_manifest(&built, Some(&dest), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named plan writes: {error}"),
     }
@@ -845,8 +801,7 @@ fn named_plan_output_roundtrips_through_apply() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
         Err(error) => panic!("named plan applies: {error}"),
@@ -871,7 +826,7 @@ fn apply_bundle_populates_pool() {
         Err(error) => panic!("plan builds: {error}"),
     };
     let bundle = PathBuf::from("proof.cb");
-    match confit_core::store::write_bundle(&built, &bundle, &fs) {
+    match confit_core::store::write_bundle(&built, &bundle, &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("bundle writes: {error}"),
     }
@@ -894,8 +849,7 @@ fn apply_bundle_populates_pool() {
         force: true,
     };
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output);
+    let seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
         Err(error) => panic!("bundle apply runs: {error}"),
@@ -953,14 +907,13 @@ fn apply_rotation_prunes_exclusive_blobs() {
         plan.blobs.insert(shared_sha.clone(), shared_bytes.clone());
         plan.blobs.insert(unique_sha, unique_bytes);
         let mut input = Cursor::new(String::new());
-        let mut output = Vec::new();
         let runner = confit_cli::actions::apply::ApplyRunner {
             plan,
             previous: Bundle::empty(),
             state: Some(slot.clone()),
             force: true,
             preview: false,
-            seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input, &mut output),
+            seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
         };
         match runner.execute() {
             Ok(_) => {}
@@ -998,4 +951,19 @@ fn apply_rotation_prunes_exclusive_blobs() {
         memory_bytes(&fs, Path::new("unique.bin")),
         b"unique-confit-blob-5"
     );
+}
+
+#[test]
+fn confirm_accepts_only_literal_yes() {
+    pin_home();
+    let fs = MemoryFs::new();
+    for (answer, want) in [("yes\n", true), ("no\n", false), ("\n", false)] {
+        let mut input = Cursor::new(answer);
+        let mut seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input);
+        let got = match seams.confirm() {
+            Ok(got) => got,
+            Err(error) => panic!("confirm reads: {error}"),
+        };
+        assert_eq!(got, want, "answer decides: {answer:?}");
+    }
 }

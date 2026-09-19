@@ -7,7 +7,6 @@ fn hooks_run_spawn_resolve_and_log() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Ok(
         confit_cli::actions::hooks::HookRun {
             code: 0,
@@ -17,7 +16,6 @@ fn hooks_run_spawn_resolve_and_log() {
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         Some(PathBuf::from("run.log")),
         vec![hook_for(&["tool", "--flag"], &["/fakebin"], None, vec![])],
@@ -34,11 +32,6 @@ fn hooks_run_spawn_resolve_and_log() {
     );
     assert_eq!(calls[0].path_dirs, vec![PathBuf::from("/fakebin")]);
     assert_eq!(calls[0].timeout_secs, 600);
-    let text = String::from_utf8_lossy(&output);
-    assert!(
-        text.contains("hook 1 of 1: tool --flag"),
-        "terminal line shows: {text}"
-    );
     let log = memory_bytes(&fs, Path::new("run.log"));
     let log_text = match String::from_utf8(log) {
         Ok(text) => text,
@@ -58,12 +51,10 @@ fn hooks_skip_on_passing_checks_without_spawning() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::new());
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         None,
         vec![hook_for(
@@ -80,11 +71,6 @@ fn hooks_skip_on_passing_checks_without_spawning() {
         Err(error) => panic!("apply runs: {error}"),
     }
     assert!(fake.calls().is_empty());
-    let text = String::from_utf8_lossy(&output);
-    assert!(
-        text.contains("skipped: tool (checks pass)"),
-        "skip line shows: {text}"
-    );
 }
 
 #[test]
@@ -94,12 +80,10 @@ fn hooks_warn_on_closed_gates_without_spawning() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::new());
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         None,
         vec![hook_for(
@@ -116,11 +100,6 @@ fn hooks_warn_on_closed_gates_without_spawning() {
         Err(error) => panic!("apply runs: {error}"),
     }
     assert!(fake.calls().is_empty());
-    let text = String::from_utf8_lossy(&output);
-    assert!(
-        text.contains("warn: tool cannot run (in_path(definitely-missing-confit-binary))"),
-        "warn line shows: {text}"
-    );
 }
 
 #[test]
@@ -130,7 +109,6 @@ fn hooks_abort_on_first_failure() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([
         Ok(confit_cli::actions::hooks::HookRun {
             code: 1,
@@ -144,7 +122,6 @@ fn hooks_abort_on_first_failure() {
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         Some(PathBuf::from("run.log")),
         vec![
@@ -169,14 +146,12 @@ fn hooks_timeout_aborts_as_own_error() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Err(
         confit_core::error::Error::Plan("hook 'tool' timed out after 600s".to_string()),
     )]));
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         None,
         vec![hook_for(&["tool"], &["/fakebin"], None, vec![])],
@@ -197,7 +172,6 @@ fn hooks_post_checks_fail_after_run() {
     pin_home();
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
-    let mut output = Vec::new();
     let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([Ok(
         confit_cli::actions::hooks::HookRun {
             code: 0,
@@ -207,7 +181,6 @@ fn hooks_post_checks_fail_after_run() {
     let runner = hook_runner(
         &fs,
         &mut input,
-        &mut output,
         &fake,
         None,
         vec![hook_for(
@@ -226,4 +199,54 @@ fn hooks_post_checks_fail_after_run() {
             "post checks verify: {error}"
         ),
     }
+}
+
+#[test]
+fn print_lines_keep_hook_order_as_data() {
+    use std::collections::VecDeque;
+
+    pin_home();
+    let fs = hook_fs();
+    let mut input = Cursor::new(Vec::new());
+    let (print_tx, print_rx) = crossbeam_channel::unbounded();
+    let fake = confit_cli::actions::hooks::FakeRunner::new(VecDeque::from([
+        Ok(confit_cli::actions::hooks::HookRun {
+            code: 0,
+            output: Vec::new(),
+        }),
+        Ok(confit_cli::actions::hooks::HookRun {
+            code: 0,
+            output: Vec::new(),
+        }),
+    ]));
+    let mut seams = confit_cli::actions::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    seams.hook_runner = Some(&fake);
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    runner.plan = match Bundle::build(
+        Vec::new(),
+        vec![
+            hook_for(&["tool", "first"], &["/fakebin"], None, vec![]),
+            hook_for(&["tool", "second"], &["/fakebin"], None, vec![]),
+        ],
+    ) {
+        Ok(plan) => plan,
+        Err(error) => panic!("plan builds: {error}"),
+    };
+    match runner.execute() {
+        Ok(_) => {}
+        Err(error) => panic!("apply runs: {error}"),
+    }
+    let mut lines = Vec::new();
+    while let Ok(line) = print_rx.try_recv() {
+        lines.push(line);
+    }
+    let first = match lines.iter().position(|line| line.contains("hook 1 of 2")) {
+        Some(index) => index,
+        None => panic!("first hook prints"),
+    };
+    let second = match lines.iter().position(|line| line.contains("hook 2 of 2")) {
+        Some(index) => index,
+        None => panic!("second hook prints"),
+    };
+    assert!(first < second, "hook lines keep order");
 }

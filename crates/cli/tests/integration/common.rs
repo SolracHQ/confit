@@ -322,12 +322,11 @@ pub(crate) fn hook_fs() -> MemoryFs {
 pub(crate) fn hook_runner<'a>(
     fs: &'a MemoryFs,
     input: &'a mut Cursor<Vec<u8>>,
-    output: &'a mut Vec<u8>,
     fake: &'a confit_cli::actions::hooks::FakeRunner,
     log: Option<PathBuf>,
     hooks: Vec<confit_core::hook::Hook>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let mut seams = confit_cli::actions::seams::Seams::memory(fs, input, output);
+    let mut seams = confit_cli::actions::seams::Seams::memory(fs, input);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
@@ -344,7 +343,7 @@ pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&slot), fs) {
+    match confit_core::store::write_manifest(plan, Some(&slot), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("slot seeds: {error}"),
     }
@@ -357,7 +356,7 @@ pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Bundle) -> PathBuf {
         Ok(dest) => dest,
         Err(error) => panic!("named slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&dest), fs) {
+    match confit_core::store::write_manifest(plan, Some(&dest), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named slot seeds: {error}"),
     }
@@ -370,10 +369,9 @@ pub(crate) fn run_export(
     args: &confit_cli::cli::ExportArgs,
 ) -> Result<confit_cli::actions::export::ExportReport, Error> {
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
     confit_cli::actions::export::ExportRunner::run(
         args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(fs, &mut input),
     )
 }
 
@@ -383,9 +381,8 @@ pub(crate) fn run_delete(
     args: &confit_cli::cli::DeleteArgs,
 ) -> Result<confit_cli::actions::delete::DeleteReport, Error> {
     let mut input = Cursor::new(String::new());
-    let mut output = Vec::new();
-    confit_cli::actions::delete::DeleteRunner::run(
+    confit_cli::actions::delete::run(
         args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input, &mut output),
+        confit_cli::actions::seams::Seams::memory(fs, &mut input),
     )
 }

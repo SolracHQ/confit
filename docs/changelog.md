@@ -45,6 +45,16 @@
   `@name` runs a named slot, `%N` runs history newest-first
   from one. The `--plan` flag retires, `recover` retires with
   it, their coverage moves to apply picker tests.
+- Live progress renderer. One CLI thread owns the spinner
+  plus a determinate compression bar, fed by a shared event
+  channel from every layer. The spinner animates through
+  silent phases (hash, compression, tar write) instead of
+  freezing, the bar shows blob count plus rate, and painting
+  parks around the `yes` prompt so ticks never cover it.
+- Core reports compression progress. `CompressStarted` carries
+  blob plus byte totals upfront, one `BlobCompressed` lands per
+  finished blob, so the bar stays determinate across parallel
+  workers. Skipped pool blobs stay silent.
 
 ### Changed
 
@@ -56,9 +66,6 @@
   `fonts/{name}` folder with its own `fc-cache -f` hook
   scoped to that folder. The shared installer config plus
   `nerd_fonts.init` disappear with it.
-
-### Changed
-
 - CI runs on pull requests alone, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match
@@ -66,6 +73,11 @@
 - Test `pin_home` pins the XDG vars under the fake home.
   Runners exporting `XDG_CONFIG_HOME` outside HOME broke
   the fixed-slot assertion.
+- Faster plans through parallel gzip. Blob bytes compress at
+  level 6 across rayon workers instead of level 9 in one
+  thread, and the outer bundle tar groups at level 0 since
+  inner entries already carry the compression. Example 3
+  plans in a third of the wall time at near the same size.
 
 ## [0.6.1] - 2026-09-17
 
