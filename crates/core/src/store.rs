@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use rayon::prelude::*;
+
 use crate::document::{ManifestData, ManifestDocument, ManifestMember};
 use crate::error::{Error, Result};
 use crate::fs::Filesystem;
@@ -105,8 +107,12 @@ impl Manifest {
 
 /// Pool folder name under the base folder.
 const BLOBS_DIR: &str = "blobs";
-/// Gzip level for pooled plus bundled blobs.
-const BLOB_GZIP_LEVEL: u32 = 9;
+/// Gzip level for pooled plus inner bundle blob bytes.
+/// Compression lives here. Level 6 marks the measured knee.
+const BLOB_GZIP_LEVEL: u32 = 6;
+/// Gzip level for the outer bundle tar.
+/// Outer tar groups only. Inner entries already carry compression.
+const BUNDLE_GZIP_LEVEL: u32 = 0;
 /// Blob hash length in lowercase hex chars.
 const BLOB_ID_LEN: usize = 64;
 /// Bundle manifest file name inside the archive.
@@ -978,12 +984,21 @@ fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
 /// Compression plus write failures surface as plan errors.
 fn store_blobs(plan: &Bundle, fs: &dyn Filesystem) -> Result<()> {
     let dir = resolve_blobs_dir()?;
+    let mut missing: Vec<(String, Vec<u8>)> = Vec::new();
     for (sha, bytes) in collect_blobs(plan) {
         let dest = dir.join(&sha);
         if fs.exists(&dest) {
             continue;
         }
-        let gzipped = gzip_bytes(bytes)?;
+        missing.push((sha, bytes.to_vec()));
+    }
+    let compressed: Vec<Result<(String, Vec<u8>)>> = missing
+        .par_iter()
+        .map(|(sha, bytes)| gzip_bytes(bytes).map(|gzipped| (sha.clone(), gzipped)))
+        .collect();
+    for entry in compressed {
+        let (sha, gzipped) = entry?;
+        let dest = dir.join(&sha);
         fs.write(&dest, &gzipped)
             .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
     }
@@ -1229,11 +1244,19 @@ pub fn write_bundle(plan: &Bundle, dest: &Path, fs: &dyn Filesystem) -> Result<(
     let manifest = serde_json::to_vec_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
     let encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(BLOB_GZIP_LEVEL));
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(BUNDLE_GZIP_LEVEL));
     let mut builder = tar::Builder::new(encoder);
     append_bundle_entry(&mut builder, BUNDLE_MANIFEST, &manifest, dest)?;
-    for (sha, bytes) in collect_blobs(plan) {
-        let gzipped = gzip_bytes(bytes)?;
+    let blobs: Vec<(String, Vec<u8>)> = collect_blobs(plan)
+        .into_iter()
+        .map(|(sha, bytes)| (sha, bytes.to_vec()))
+        .collect();
+    let compressed: Vec<Result<(String, Vec<u8>)>> = blobs
+        .par_iter()
+        .map(|(sha, bytes)| gzip_bytes(bytes).map(|gzipped| (sha.clone(), gzipped)))
+        .collect();
+    for entry in compressed {
+        let (sha, gzipped) = entry?;
         append_bundle_entry(
             &mut builder,
             &format!("{BUNDLE_BLOBS_PREFIX}{sha}"),
@@ -2164,5 +2187,169 @@ mod tests {
         }
         want.sort();
         assert_eq!(names, want);
+    }
+
+    #[test]
+    fn pool_plus_bundle_roundtrip_multi_blob() {
+        use crate::document::{ManifestData, ManifestDocument, ManifestMember};
+        use crate::fs::MemoryFs;
+        use crate::ids::DocPath;
+
+        let compressible = vec![0x41; 2048];
+        let mut noisy = Vec::with_capacity(1024);
+        let mut state: u64 = 0x1234_5678_9abc_def1;
+        for _ in 0..1024 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            noisy.push((state >> 33) as u8);
+        }
+        let empty: Vec<u8> = Vec::new();
+        let compressible_blob = crate::plan::sha256_hex(&compressible);
+        let noisy_blob = crate::plan::sha256_hex(&noisy);
+        let empty_blob = crate::plan::sha256_hex(&empty);
+        let documents = vec![
+            ManifestDocument::new(
+                DocPath::new("packed"),
+                ManifestData::Opaque {
+                    blob: compressible_blob.clone(),
+                    mode: None,
+                },
+            ),
+            ManifestDocument::new(
+                DocPath::new("noisy"),
+                ManifestData::Opaque {
+                    blob: noisy_blob.clone(),
+                    mode: None,
+                },
+            ),
+            ManifestDocument::new(
+                DocPath::new("fonts"),
+                ManifestData::Tree {
+                    members: vec![
+                        ManifestMember {
+                            relative: "empty.ttf".into(),
+                            blob: empty_blob.clone(),
+                            mode: 0o644,
+                        },
+                        ManifestMember {
+                            relative: "copy.ttf".into(),
+                            blob: compressible_blob.clone(),
+                            mode: 0o644,
+                        },
+                    ],
+                },
+            ),
+        ];
+        let mut built = match Bundle::build(documents, Vec::new()) {
+            Ok(built) => built,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        built
+            .blobs
+            .insert(compressible_blob.clone(), compressible.clone());
+        built.blobs.insert(noisy_blob.clone(), noisy.clone());
+        built.blobs.insert(empty_blob.clone(), empty.clone());
+        let fs = MemoryFs::new();
+        let dest = std::path::Path::new("plan.json");
+        match write_manifest(&built, Some(dest), &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("plan writes: {error}"),
+        }
+        let pool = match resolve_blobs_dir() {
+            Ok(pool) => pool,
+            Err(error) => panic!("blobs resolve: {error}"),
+        };
+        for sha in built.blobs.keys() {
+            assert!(fs.exists(&pool.join(sha)), "pool holds {sha}");
+        }
+        let loaded = match load_state(Some(dest), &fs) {
+            Ok(loaded) => loaded,
+            Err(error) => panic!("plan loads: {error}"),
+        };
+        assert_eq!(loaded, built);
+        let bundle = std::path::Path::new("bundle.tgz");
+        match write_bundle(&built, bundle, &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("bundle writes: {error}"),
+        }
+        let restored = match read_bundle(bundle, &fs) {
+            Ok(restored) => restored,
+            Err(error) => panic!("bundle reads: {error}"),
+        };
+        assert_eq!(restored.manifest, built.manifest);
+        assert_eq!(restored.blobs, built.blobs);
+        assert_eq!(restored, built);
+    }
+
+    #[test]
+    fn bundle_skips_present_pool_blobs_and_stays_sorted() {
+        use crate::fs::MemoryFs;
+        use std::io::Read as _;
+
+        let fs = MemoryFs::new();
+        let built = mixed_plan();
+        let dest = std::path::Path::new("plan.json");
+        match write_manifest(&built, Some(dest), &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("first plan writes: {error}"),
+        }
+        let first = pool_blobs(&fs);
+        match write_manifest(&built, Some(dest), &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("second plan writes: {error}"),
+        }
+        let second = pool_blobs(&fs);
+        assert_eq!(first, second);
+        assert_eq!(second.len(), built.blobs.len());
+        let bundle = std::path::Path::new("bundle.tgz");
+        match write_bundle(&built, bundle, &fs) {
+            Ok(()) => {}
+            Err(error) => panic!("bundle writes: {error}"),
+        }
+        let bytes = match fs.read(bundle) {
+            Ok(bytes) => bytes,
+            Err(error) => panic!("bundle reads: {error}"),
+        };
+        let decoder = flate2::read::GzDecoder::new(&bytes[..]);
+        let mut archive = tar::Archive::new(decoder);
+        let entries = match archive.entries() {
+            Ok(entries) => entries,
+            Err(error) => panic!("bundle lists: {error}"),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let mut entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => panic!("entry reads: {error}"),
+            };
+            let path = match entry.path() {
+                Ok(path) => path.into_owned(),
+                Err(error) => panic!("entry names: {error}"),
+            };
+            let mut raw = Vec::new();
+            match entry.read_to_end(&mut raw) {
+                Ok(_) => {}
+                Err(error) => panic!("entry drains: {error}"),
+            }
+            names.push(path.to_string_lossy().into_owned());
+        }
+        let first_name = match names.first() {
+            Some(first_name) => first_name.clone(),
+            None => panic!("bundle holds entries"),
+        };
+        assert_eq!(first_name, "manifest.json");
+        let rest = names[1..].to_vec();
+        let mut want: Vec<String> = built
+            .blobs
+            .keys()
+            .map(|sha| format!("blobs/{sha}"))
+            .collect();
+        want.sort();
+        assert_eq!(rest, want);
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &rest {
+            assert!(seen.insert(name.clone()), "duplicate entry {name}");
+        }
     }
 }
