@@ -128,6 +128,9 @@ kind:
 - Tree documents write each member to its joined path with
   per-member modes.
 - Link documents land as symlinks.
+- A pre-existing symlink under a plain document unlinks
+  first, leaving its target alone, then the fresh regular
+  file lands in its place.
 - Modes land after bytes. Parents build on demand.
 
 Recorded orphans delete next. Orphans hold state-recorded paths

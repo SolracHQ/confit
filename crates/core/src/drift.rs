@@ -67,11 +67,6 @@ impl Drift {
 
     /// Renders drift entries as display lines.
     ///
-    /// Key edits read `~ path: key = old -> new`. Added keys
-    /// read `+ path: key = new`, removed keys read
-    /// `- path: key = old`. Hunks land verbatim. Missing and
-    /// unreadable lines carry the outside config framing.
-    ///
     /// # Arguments
     ///
     /// * `entries` - the drift entries under display.
@@ -172,9 +167,6 @@ impl Drift {
 
 /// Builds one recorded-to-desired unified hunk for plan updates.
 ///
-/// Headers read `--- recorded` plus `+++ desired`, matching the
-/// order-named headers from hunk drift.
-///
 /// # Arguments
 ///
 /// * `old` - the recorded text under display.
@@ -213,18 +205,14 @@ pub enum DriftOrder {
 impl Bundle {
     /// Reports manual edits between recorded documents and disk.
     ///
-    /// Renders each recorded document then snapshots its path.
-    /// Absent paths report missing. Unreadable paths report
-    /// the failure detail. Structured documents diff leaf by
-    /// leaf. Text documents diff with unified hunks. Link
-    /// documents compare target strings. Opaque documents
-    /// compare raw bytes with hash plus size values. Tree
-    /// documents walk their destination folder member by
-    /// member, ignoring hand-placed extras.
+    /// The reader sees the whole document, so link documents
+    /// compare target text while every other kind compares
+    /// bytes from behind disk symlinks. Entries arrive in
+    /// recorded path order.
     ///
     /// # Arguments
     ///
-    /// * `snapshot` - the disk reader mapping paths to outcomes.
+    /// * `snapshot` - the disk reader mapping documents to outcomes.
     /// * `snapshot_tree` - the disk walker mapping destination
     ///   folders to relative member reads.
     /// * `order` - the side order under assigning old and new
@@ -258,7 +246,7 @@ impl Bundle {
     /// ```
     pub fn drift(
         &self,
-        snapshot: &dyn Fn(&DocPath) -> ReadOutcome,
+        snapshot: &dyn Fn(&ManifestDocument) -> ReadOutcome,
         snapshot_tree: &dyn Fn(&DocPath) -> BTreeMap<String, TreeMemberRead>,
         order: DriftOrder,
     ) -> Vec<Drift> {
@@ -277,7 +265,7 @@ impl Bundle {
                 Ok(bytes) => bytes,
                 Err(_) => continue,
             };
-            match snapshot(&document.path) {
+            match snapshot(document) {
                 ReadOutcome::Absent => out.push(Drift::Missing {
                     path: document.path.clone(),
                 }),
@@ -683,6 +671,32 @@ mod tests {
             .iter()
             .map(|bytes| (crate::plan::sha256_hex(bytes), bytes.to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn non_link_docs_compare_behind_disk_links() {
+        use crate::fs::{Filesystem, MemoryFs, snapshot_document, snapshot_tree};
+
+        let fs = MemoryFs::new();
+        assert!(fs.write(std::path::Path::new("behind"), b"hi").is_ok());
+        assert!(
+            fs.symlink(std::path::Path::new("link"), std::path::Path::new("behind"))
+                .is_ok()
+        );
+        let recorded = with_hashes(vec![text_doc("link", "hi")]);
+        let quiet = recorded.drift(
+            &|document| snapshot_document(document, &fs),
+            &|path| snapshot_tree(&path.expand(), &fs),
+            DriftOrder::RecordedFirst,
+        );
+        assert!(quiet.is_empty());
+        assert!(fs.write(std::path::Path::new("behind"), b"changed").is_ok());
+        let drifted = recorded.drift(
+            &|document| snapshot_document(document, &fs),
+            &|path| snapshot_tree(&path.expand(), &fs),
+            DriftOrder::RecordedFirst,
+        );
+        assert!(matches!(drifted.as_slice(), [Drift::Hunk { .. }]));
     }
 
     #[test]

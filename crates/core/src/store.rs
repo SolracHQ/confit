@@ -17,11 +17,9 @@ use crate::ids::DocPath;
 
 /// Writes every document to its expanded path.
 ///
-/// Text plus structured plus rc render through core. Opaque
-/// writes raw blob bytes. Links land as symlinks. Tree
-/// members write from the blob map. Documents carrying
-/// a mode set permission bits after their bytes land. Parents
-/// build on demand through the backend seam.
+/// A pre-existing symlink under a plain document unlinks
+/// first, leaving its target alone, then the fresh regular
+/// file lands in its place.
 ///
 /// # Arguments
 ///
@@ -52,7 +50,7 @@ use crate::ids::DocPath;
 ///     DocPath::new("note"),
 ///     ManifestData::Text { content: "hi".into(), mode: None },
 /// )];
-/// assert!(matches!(write_documents(&documents, &BTreeMap::new(), &fs, None), Ok(())));
+/// assert!(write_documents(&documents, &BTreeMap::new(), &fs, None).is_ok());
 /// assert!(fs.exists(std::path::Path::new("note")));
 /// ```
 pub fn write_documents(
@@ -67,6 +65,14 @@ pub fn write_documents(
             ManifestData::Link { target } => fs.symlink(&expanded, Path::new(target)),
             ManifestData::Tree { members } => write_tree_members(&expanded, members, blobs, fs),
             _ => {
+                if fs.read_link(&expanded).is_some()
+                    && let Err(error) = fs.remove(&expanded)
+                {
+                    return Err(Error::Plan(format!(
+                        "cannot remove link '{}': {error}",
+                        expanded.display()
+                    )));
+                }
                 let bytes = document.bytes(blobs)?;
                 fs.write(&expanded, &bytes)
             }
@@ -282,10 +288,7 @@ mod tests {
         use crate::fs::{Filesystem, MemoryFs};
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
-            Ok(()) => {}
-            Err(error) => panic!("tree writes: {error}"),
-        }
+        assert!(write_documents(&tree_recorded(), &tree_blobs(), &fs, None).is_ok());
         let dest = std::path::Path::new("fonts");
         match fs.read(&dest.join("kept.ttf")) {
             Ok(bytes) => assert_eq!(bytes, vec![1]),
@@ -296,16 +299,44 @@ mod tests {
     }
 
     #[test]
+    fn plain_writes_replace_disk_links_leaving_targets() {
+        use crate::document::{ManifestData, ManifestDocument};
+        use crate::fs::{Filesystem, MemoryFs};
+        use crate::ids::DocPath;
+
+        let fs = MemoryFs::new();
+        assert!(fs.write(std::path::Path::new("behind"), b"old").is_ok());
+        assert!(
+            fs.symlink(std::path::Path::new("link"), std::path::Path::new("behind"))
+                .is_ok()
+        );
+        let documents = vec![ManifestDocument::new(
+            DocPath::new("link"),
+            ManifestData::Text {
+                content: "new".into(),
+                mode: None,
+            },
+        )];
+        assert!(write_documents(&documents, &std::collections::BTreeMap::new(), &fs, None).is_ok());
+        assert!(fs.read_link(std::path::Path::new("link")).is_none());
+        match fs.read(std::path::Path::new("behind")) {
+            Ok(bytes) => assert_eq!(bytes, b"old"),
+            Err(error) => panic!("target reads: {error}"),
+        }
+        match fs.read(std::path::Path::new("link")) {
+            Ok(bytes) => assert_eq!(bytes, b"new"),
+            Err(error) => panic!("fresh reads: {error}"),
+        }
+    }
+
+    #[test]
     fn remove_tree_members_drops_only_dropped() {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::fs::{Filesystem, MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
-            Ok(()) => {}
-            Err(error) => panic!("tree writes: {error}"),
-        }
+        assert!(write_documents(&tree_recorded(), &tree_blobs(), &fs, None).is_ok());
         let dest = std::path::Path::new("fonts");
         match fs.write(&dest.join("hand.ttf"), b"mine") {
             Ok(()) => {}
@@ -335,10 +366,7 @@ mod tests {
         use crate::fs::MemoryFs;
 
         let fs = MemoryFs::new();
-        match write_documents(&tree_recorded(), &tree_blobs(), &fs, None) {
-            Ok(()) => {}
-            Err(error) => panic!("tree writes: {error}"),
-        }
+        assert!(write_documents(&tree_recorded(), &tree_blobs(), &fs, None).is_ok());
         match remove_orphans(&tree_recorded(), &[], &fs) {
             Ok(removed) => assert_eq!(removed, 0),
             Err(error) => panic!("orphans remove: {error}"),

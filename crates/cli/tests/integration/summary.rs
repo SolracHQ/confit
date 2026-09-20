@@ -27,7 +27,7 @@ fn memory_snapshot_covers_present_absent_unreadable() {
 #[test]
 fn drift_reports_manual_edits_on_memory_fs() {
     use confit_core::document::{StructuredFormat, Table};
-    use confit_core::fs::{Filesystem, MemoryFs, snapshot, snapshot_tree};
+    use confit_core::fs::{Filesystem, MemoryFs, snapshot_document, snapshot_tree};
 
     pin_home();
     let mut recorded_docs = vec![
@@ -72,7 +72,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
         Err(error) => panic!("memory writes: {error}"),
     }
     let drifts = previous.drift(
-        &|path| snapshot(path, &fs),
+        &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
     );
@@ -147,7 +147,7 @@ fn plan_shows_old_to_new_on_updates() {
 
 #[test]
 fn first_run_preview_shows_impact_plus_in_place() {
-    use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+    use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -187,7 +187,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
         Err(error) => panic!("plan builds: {error}"),
     };
     let drift = built.drift(
-        &|path| snapshot(path, &fs),
+        &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::DiskFirst,
     );
@@ -245,7 +245,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
 #[test]
 fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
     use confit_core::drift::Drift;
-    use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+    use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -264,7 +264,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
     let mut previous = Bundle::empty();
     previous.manifest.documents = recorded_docs;
     let drifts = previous.drift(
-        &|path| snapshot(path, &fs),
+        &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
     );
@@ -365,7 +365,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
 #[test]
 fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
     use confit_core::drift::Drift;
-    use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+    use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -385,7 +385,7 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         Err(error) => panic!("plan builds: {error}"),
     };
     let drifts = built.drift(
-        &|path| snapshot(path, &fs),
+        &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::DiskFirst,
     );

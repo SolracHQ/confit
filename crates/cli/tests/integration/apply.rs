@@ -523,7 +523,7 @@ fn apply_cb_positional_loads_bundle() {
 
 #[test]
 fn apply_then_drift_stays_quiet() {
-    use confit_core::fs::{snapshot, snapshot_tree};
+    use confit_core::fs::{snapshot_document, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -545,7 +545,7 @@ fn apply_then_drift_stays_quiet() {
     let mut previous = Bundle::empty();
     previous.manifest.documents = recorded;
     let drifts = previous.drift(
-        &|path| snapshot(path, &fs),
+        &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
     );

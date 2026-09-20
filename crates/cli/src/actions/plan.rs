@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::Result;
-use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
 
+use confit_core::document::ManifestDocument;
 use confit_core::hook::lifecycle_lines;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
@@ -97,7 +98,7 @@ impl PlanRunner<'_> {
         let fs: &dyn Filesystem = self.seams.fs;
         let first_run = !fs.exists(&state_file);
         let previous = load_state(Some(&state_file), fs)?;
-        let snapshot = |path: &DocPath| snapshot(path, fs);
+        let snapshot = |document: &ManifestDocument| snapshot_document(document, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
         self.seams.emit_hashing();
         let mut built = timed("hash", || Bundle::build(documents, evaluation.hooks))?;

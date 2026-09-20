@@ -40,6 +40,13 @@ Disk bytes read as a UTF-8 target string. The recorded target
 compares against that string. Edits use `target` as the key
 with old plus new values.
 
+### Links on disk
+
+Disk symlinks resolve before non-link comparisons, so opaque,
+text, rc, plus structured documents compare the bytes behind
+the link. Relative targets resolve beside the link. Dangling
+links read absent, the content they named is gone.
+
 ### Opaque
 
 Raw bytes compare directly. Edits surface under the `content`

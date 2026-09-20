@@ -27,6 +27,11 @@ Design spec: `docs/design/v0.8.md`.
   closed `when` skips as unneeded instead of warning inability.
   Profiles carrying capability leaves in `when` move them to
   `requires`.
+- Disk symlinks resolve before non-link comparisons, so opaque
+  plus text plus rc plus structured documents compare the bytes
+  behind the link. Dangling links read absent. A pre-existing
+  symlink under a plain document unlinks first, leaving its
+  target alone, then the fresh file lands as a normal write.
 
 ## [0.7] - 2026-09-19
 

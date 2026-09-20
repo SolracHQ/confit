@@ -5,9 +5,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use confit_core::document::ManifestDocument;
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::{Error, Result};
-use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
 use confit_core::hook::{describe_condition, lifecycle_lines, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
@@ -268,7 +269,7 @@ impl<'a> ApplyRunner<'a> {
         let fs: &dyn Filesystem = self.seams.fs;
         let built = std::mem::replace(&mut self.plan, Bundle::empty());
         log_processed(&built, &self.previous);
-        let snapshot = |path: &DocPath| snapshot(path, fs);
+        let snapshot = |document: &ManifestDocument| snapshot_document(document, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
         let first_run = match self.state.as_deref() {
             Some(slot) => !fs.exists(slot),
