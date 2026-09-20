@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit_core::document::{Condition, ManifestData, ManifestDocument, StructuredFormat};
+use confit_core::condition::Condition;
+use confit_core::document::{ManifestData, ManifestDocument, StructuredFormat};
 use confit_core::error::{Error, Result};
 use confit_engine::{EvalOpts, evaluate};
 use serde_json::Value as Json;
@@ -1529,6 +1530,42 @@ return { shells = { "bash" }, configs = { tool } }
 }
 
 #[test]
+fn changed_unknown_dest_fails_naming_path() {
+    let profile = r#"
+local c = confit.config("c")
+c:add_document(confit.document.text("note", "hi"))
+c:add_hook(confit.hook.run({ "tool" }, { when = confit.runtime.changed("elsewhere") }))
+return { shells = { "bash" }, configs = { c } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    let message = error.to_string();
+    assert!(
+        message.contains("confit.runtime.changed"),
+        "names the constructor: {message}"
+    );
+    assert!(message.contains("elsewhere"), "names the path: {message}");
+}
+
+#[test]
+fn changed_matching_dest_passes() {
+    let profile = r#"
+local c = confit.config("c")
+c:add_document(confit.document.text("note", "hi"))
+c:add_hook(confit.hook.run({ "tool" }, { when = confit.runtime.changed("note") }))
+return { shells = { "bash" }, configs = { c } }
+"#;
+    let evaluation = run_eval_ok(&[], profile);
+    let hook = hook_by_head(&evaluation, "tool");
+    assert_eq!(
+        hook.when,
+        Some(Condition::Changed {
+            path: "note".to_string()
+        })
+    );
+}
+
+#[test]
 fn dual_rc_base_fails_as_plan_error() {
     let profile = r#"
 local first = confit.config("first")
@@ -1891,9 +1928,15 @@ return { shells = { "bash" }, configs = { installer, bat } }
         hook.path
     );
     assert_eq!(
-        hook.when,
+        hook.requires,
         Some(Condition::InPath {
             name: "mise".to_string()
+        })
+    );
+    assert_eq!(
+        hook.when,
+        Some(Condition::Changed {
+            path: "~/.config/mise/config.toml".to_string()
         })
     );
     assert_eq!(hook.checks.len(), 1);

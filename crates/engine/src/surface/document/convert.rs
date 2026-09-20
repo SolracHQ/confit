@@ -229,7 +229,15 @@ pub(crate) fn push_live_entry(
     };
     let when = match object.get("when") {
         None | Some(Json::Null) => None,
-        Some(raw) => Some(condition_from_json(raw, &format!("{ctx}: field 'when'"))?),
+        Some(raw) => {
+            let cond = condition_from_json(raw, &format!("{ctx}: field 'when'"))?;
+            if cond.holds_changed() {
+                return Err(plan_error(format!(
+                    "{ctx}: field 'when' holds 'changed' (hooks only)"
+                )));
+            }
+            Some(cond)
+        }
     };
     let key = op_key(
         json,

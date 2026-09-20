@@ -27,7 +27,7 @@ fn export_applied_slot_writes_auto_bundle() {
         None => panic!("file export holds a dest"),
     };
     assert!(fs.exists(&dest), "bundle lands at the auto name");
-    let restored = match confit_core::store::read_bundle(&dest, &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(&dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -61,7 +61,7 @@ fn export_named_slot_writes_auto_bundle() {
         None => panic!("file export holds a dest"),
     };
     assert!(fs.exists(&dest), "bundle lands at the auto name");
-    let restored = match confit_core::store::read_bundle(&dest, &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(&dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -92,15 +92,17 @@ fn export_history_slots_write_auto_bundles() {
         Ok(built) => built,
         Err(error) => panic!("new plan builds: {error}"),
     };
-    let dir = match confit_core::store::resolve_previous_dir() {
+    let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None) {
+    match confit_core::store::slots::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None)
+    {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None) {
+    match confit_core::store::slots::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None)
+    {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -118,7 +120,7 @@ fn export_history_slots_write_auto_bundles() {
         Some(dest) => dest,
         None => panic!("file export holds a dest"),
     };
-    let first_restored = match confit_core::store::read_bundle(&first_dest, &fs) {
+    let first_restored = match confit_core::store::bundle::read_bundle(&first_dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("newest bundle reads: {error}"),
     };
@@ -137,7 +139,7 @@ fn export_history_slots_write_auto_bundles() {
         Some(dest) => dest,
         None => panic!("file export holds a dest"),
     };
-    let second_restored = match confit_core::store::read_bundle(&second_dest, &fs) {
+    let second_restored = match confit_core::store::bundle::read_bundle(&second_dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("older bundle reads: {error}"),
     };
@@ -191,7 +193,7 @@ fn export_output_imposes_cb_suffix() {
         !fs.exists(Path::new("backup")),
         "bare output writes no suffixless file"
     );
-    let restored = match confit_core::store::read_bundle(Path::new("backup.cb"), &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(Path::new("backup.cb"), &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -269,7 +271,7 @@ fn export_manifest_prints_pretty_json_without_base64() {
         !text.contains("content"),
         "manifest holds refs, no inline bytes: {text}"
     );
-    let manifest: confit_core::store::Manifest = match serde_json::from_str(&text) {
+    let manifest: confit_core::store::manifest::Manifest = match serde_json::from_str(&text) {
         Ok(manifest) => manifest,
         Err(error) => panic!("manifest parses: {error}"),
     };

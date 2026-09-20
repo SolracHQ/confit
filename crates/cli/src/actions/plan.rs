@@ -8,14 +8,15 @@ use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::Result;
 use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
 
+use confit_core::hook::lifecycle_lines;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
-use confit_core::runtime::Runtime;
-use confit_core::store::{load_state, write_bundle, write_manifest};
+use confit_core::store::bundle::write_bundle;
+use confit_core::store::slots::{load_state, write_manifest};
 
 use crate::cli::PlanArgs;
 
-use super::seams::{Seams, evaluate_shared, log_processed, timed};
+use crate::seams::{Seams, evaluate_shared, log_processed, timed};
 
 /// Outcome of one profile run with its previous plan.
 #[derive(Debug)]
@@ -29,7 +30,7 @@ pub struct PlanOutcome {
     pub drift: Vec<Drift>,
     /// Holds true while the state slot file reads absent.
     pub first_run: bool,
-    /// Holds hook preview lines beside the summary.
+    /// Holds hook lifecycle lines beside the summary.
     pub hook_lines: Vec<String>,
     /// Holds the tmp plan path while no output destination passes.
     pub stored: Option<PathBuf>,
@@ -41,7 +42,7 @@ pub struct PlanOutcome {
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::plan::PlanRunner;
-/// use confit_cli::actions::seams::Seams;
+/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::{PlanArgs, SharedArgs};
 /// use confit_cli::fs::OsFs;
 /// use std::io::Cursor;
@@ -91,7 +92,7 @@ impl PlanRunner<'_> {
             self.seams.progress.clone(),
         )?;
         let documents = evaluation.documents;
-        let state_file = confit_core::store::default_state_path()?;
+        let state_file = confit_core::store::slots::default_state_path()?;
         self.seams.emit_reading_plan(&state_file);
         let fs: &dyn Filesystem = self.seams.fs;
         let first_run = !fs.exists(&state_file);
@@ -114,7 +115,7 @@ impl PlanRunner<'_> {
                 previous.drift(&snapshot, &snapshot_tree, order)
             }
         });
-        let hook_lines = built.hook_preview(&Runtime::current(), fs)?;
+        let hook_lines = lifecycle_lines(&built.manifest.hooks, &previous.manifest.hooks);
         if self.args.output.is_some() || self.store_tmp {
             self.seams.emit_writing_plan(built.manifest.documents.len());
         }

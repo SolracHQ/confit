@@ -14,7 +14,7 @@ fn plan_file_feeds_state_roundtrip() {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    let text = match confit_core::store::manifest_json(&built) {
+    let text = match confit_core::store::manifest::manifest_json(&built) {
         Ok(text) => text,
         Err(error) => panic!("plan serializes: {error}"),
     };
@@ -27,7 +27,7 @@ fn plan_file_feeds_state_roundtrip() {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
-    let state = match confit_core::store::load_state(Some(Path::new("state.json")), &fs) {
+    let state = match confit_core::store::slots::load_state(Some(Path::new("state.json")), &fs) {
         Ok(state) => state,
         Err(error) => panic!("plan feeds state: {error}"),
     };
@@ -57,14 +57,11 @@ fn stale_state_version_fails_as_unsupported() {
     use confit_core::fs::{Filesystem, MemoryFs};
 
     let fs = MemoryFs::new();
-    match fs.write(
-        Path::new("state.json"),
-        b"{\"version\":1,\"documents\":[],\"created_at\":\"\"}",
-    ) {
+    match fs.write(Path::new("state.json"), b"{\"version\":1,\"documents\":[]}") {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
-    match confit_core::store::load_state(Some(Path::new("state.json")), &fs) {
+    match confit_core::store::slots::load_state(Some(Path::new("state.json")), &fs) {
         Ok(_) => panic!("stale version passes"),
         Err(error) => assert_eq!(
             error.to_string(),
@@ -82,7 +79,7 @@ fn missing_state_version_fails_as_plan_error() {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
-    match confit_core::store::load_state(Some(Path::new("state.json")), &fs) {
+    match confit_core::store::slots::load_state(Some(Path::new("state.json")), &fs) {
         Ok(_) => panic!("missing version passes"),
         Err(error) => {
             let message = error.to_string();
@@ -119,7 +116,7 @@ return { shells = { "bash" }, configs = { tool } }
     let plan_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: true,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match plan_runner.execute() {
         Ok(outcome) => outcome,
@@ -143,7 +140,7 @@ return { shells = { "bash" }, configs = { tool } }
         "tmp payload reads as a bundle: {}",
         stored.display()
     );
-    let plan = match confit_core::store::read_bundle(&stored, &confit_cli::fs::OsFs) {
+    let plan = match confit_core::store::bundle::read_bundle(&stored, &confit_cli::fs::OsFs) {
         Ok(plan) => plan,
         Err(error) => panic!("tmp bundle reads: {error}"),
     };
@@ -154,6 +151,43 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(()) => {}
         Err(error) => panic!("tmp plan cleans: {error}"),
     }
+}
+
+#[test]
+fn plan_without_output_nor_tmp_stores_nothing() {
+    pin_home();
+    let dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => panic!("tempdir builds: {error}"),
+    };
+    let body = r#"
+local tool = confit.config("tool")
+tool:add_document(confit.document.text("tmp-probe-note", "probe\n"))
+return { shells = { "bash" }, configs = { tool } }
+"#;
+    let profile = write_profile(dir.path(), "profile.lua", body);
+    let args = confit_cli::cli::PlanArgs {
+        profile,
+        shared: confit_cli::cli::SharedArgs {
+            root: Some(dir.path().to_path_buf()),
+            plugins: None,
+            re_fetch: false,
+        },
+        output: None,
+    };
+    let fs = MemoryFs::new();
+    let mut input = Cursor::new(String::new());
+    let plan_runner = confit_cli::actions::plan::PlanRunner {
+        args: &args,
+        store_tmp: false,
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+    };
+    let outcome = match plan_runner.execute() {
+        Ok(outcome) => outcome,
+        Err(error) => panic!("plan runs: {error}"),
+    };
+    assert!(outcome.stored.is_none(), "bare plan stores nothing");
+    assert_eq!(outcome.built.manifest.documents.len(), 1);
 }
 
 #[test]
@@ -169,7 +203,7 @@ tool:add_document(confit.document.text("tmp-slot-note", "probe\n"))
 return { shells = { "bash" }, configs = { tool } }
 "#;
     let profile = write_profile(dir.path(), "profile.lua", body);
-    let slot = match confit_core::store::default_state_path() {
+    let slot = match confit_core::store::slots::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
@@ -187,7 +221,6 @@ return { shells = { "bash" }, configs = { tool } }
         "documents": [
             {"path": "tmp-slot-note", "data": {"text": {"content": "old\n"}}, "data_hash": ""}
         ],
-        "created_at": "",
     });
     if let Some(parent) = slot.parent()
         && let Err(error) = std::fs::create_dir_all(parent)
@@ -211,7 +244,7 @@ return { shells = { "bash" }, configs = { tool } }
     let slot_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match slot_runner.execute() {
         Ok(outcome) => outcome,
@@ -247,17 +280,17 @@ fn plan_file_output_roundtrips_as_bundle() {
         Err(error) => panic!("plan builds: {error}"),
     };
     let dest = Path::new("proof.cb");
-    match confit_core::store::write_bundle(&built, dest, &fs, None) {
+    match confit_core::store::bundle::write_bundle(&built, dest, &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("bundle writes: {error}"),
     }
-    let restored = match confit_core::store::read_bundle(dest, &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
     assert_eq!(restored.manifest.documents.len(), 4);
     assert_eq!(plan_value(&restored), plan_value(&built));
-    let pool = match confit_core::store::resolve_blobs_dir() {
+    let pool = match confit_core::store::blobs::resolve_blobs_dir() {
         Ok(pool) => pool,
         Err(error) => panic!("pool resolves: {error}"),
     };
@@ -275,20 +308,16 @@ fn plan_manifest_json_roundtrips() {
         Ok(built) => built,
         Err(error) => panic!("plan builds: {error}"),
     };
-    let text = match confit_core::store::manifest_json(&built) {
+    let text = match confit_core::store::manifest::manifest_json(&built) {
         Ok(text) => text,
         Err(error) => panic!("manifest renders: {error}"),
     };
-    let manifest: confit_core::store::Manifest = match serde_json::from_str(&text) {
+    let manifest: confit_core::store::manifest::Manifest = match serde_json::from_str(&text) {
         Ok(manifest) => manifest,
         Err(error) => panic!("manifest parses: {error}"),
     };
     assert_eq!(manifest.version, BUNDLE_VERSION);
     assert_eq!(manifest.documents.len(), 4);
-    assert!(
-        !manifest.created_at.is_empty(),
-        "manifest carries a timestamp"
-    );
     assert!(
         text.contains("\"blob\""),
         "opaque payloads persist as blob refs: {text}"
@@ -309,16 +338,16 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
         Ok(dest) => dest,
         Err(error) => panic!("named output resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&built, Some(&dest), &fs, None) {
+    match confit_core::store::slots::write_manifest(&built, Some(&dest), &fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named plan writes: {error}"),
     }
-    let reloaded = match confit_core::store::load_state(Some(&dest), &fs) {
+    let reloaded = match confit_core::store::slots::load_state(Some(&dest), &fs) {
         Ok(reloaded) => reloaded,
         Err(error) => panic!("named plan loads: {error}"),
     };
     assert_eq!(plan_value(&reloaded), plan_value(&built));
-    let pool = match confit_core::store::resolve_blobs_dir() {
+    let pool = match confit_core::store::blobs::resolve_blobs_dir() {
         Ok(pool) => pool,
         Err(error) => panic!("pool resolves: {error}"),
     };
@@ -356,7 +385,7 @@ return { shells = { "bash" }, configs = { tool } }
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input).with_progress(sender),
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input).with_progress(sender),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -393,10 +422,11 @@ return { shells = { "bash" }, configs = { tool } }
         !fs.exists(Path::new("seam-out-order-pin")),
         "bare output writes no suffixless file"
     );
-    let restored = match confit_core::store::read_bundle(Path::new("seam-out-order-pin.cb"), &fs) {
-        Ok(restored) => restored,
-        Err(error) => panic!("memory bundle reads: {error}"),
-    };
+    let restored =
+        match confit_core::store::bundle::read_bundle(Path::new("seam-out-order-pin.cb"), &fs) {
+            Ok(restored) => restored,
+            Err(error) => panic!("memory bundle reads: {error}"),
+        };
     assert_eq!(restored.manifest.documents.len(), 1);
     assert!(
         !Path::new("seam-out-order-pin.cb").exists(),
@@ -433,7 +463,7 @@ return { shells = { "bash" }, configs = { tool } }
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::actions::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -445,7 +475,7 @@ return { shells = { "bash" }, configs = { tool } }
         Err(error) => panic!("named output resolves: {error}"),
     };
     assert!(fs.exists(&slot), "named output lands the slot manifest");
-    let reloaded = match confit_core::store::load_state(Some(&slot), &fs) {
+    let reloaded = match confit_core::store::slots::load_state(Some(&slot), &fs) {
         Ok(reloaded) => reloaded,
         Err(error) => panic!("slot manifest loads: {error}"),
     };
@@ -469,4 +499,54 @@ fn live_headless_finish_joins_twice() {
     }
     live.finish();
     live.finish();
+}
+
+#[test]
+fn plan_hook_lines_carry_lifecycle_without_evaluation() {
+    pin_home();
+    let dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => panic!("tempdir builds: {error}"),
+    };
+    let body = r#"
+local tool = confit.config("tool")
+tool:add_hook(confit.hook.run({ "tool", "--flag" }, { when = confit.runtime.in_path("mise") }))
+return { shells = { "bash" }, configs = { tool } }
+"#;
+    let profile = write_profile(dir.path(), "profile.lua", body);
+    let fs = MemoryFs::new();
+    let args = confit_cli::cli::PlanArgs {
+        profile,
+        shared: confit_cli::cli::SharedArgs {
+            root: Some(dir.path().to_path_buf()),
+            plugins: None,
+            re_fetch: false,
+        },
+        output: None,
+    };
+    let mut input = Cursor::new(String::new());
+    let runner = confit_cli::actions::plan::PlanRunner {
+        args: &args,
+        store_tmp: false,
+        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+    };
+    let outcome = match runner.execute() {
+        Ok(outcome) => outcome,
+        Err(error) => panic!("plan runs: {error}"),
+    };
+    assert_eq!(
+        outcome.hook_lines,
+        vec![
+            "+ tool --flag".to_string(),
+            "  + when (in_path(mise))".to_string(),
+        ]
+    );
+    for line in &outcome.hook_lines {
+        assert!(!line.contains("! run:"), "no evaluated run: {line}");
+        assert!(
+            !line.contains("warn: cannot run"),
+            "no evaluated warn: {line}"
+        );
+        assert!(!line.contains("skipped:"), "no evaluated skip: {line}");
+    }
 }

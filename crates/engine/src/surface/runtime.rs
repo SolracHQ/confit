@@ -17,6 +17,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     namespace.set("env_set", lua.create_function(env_set_impl)?)?;
     namespace.set("in_path", lua.create_function(in_path_impl)?)?;
     namespace.set("exists", lua.create_function(exists_impl)?)?;
+    namespace.set("changed", lua.create_function(changed_impl)?)?;
     namespace.set("all", lua.create_function(all_impl)?)?;
     namespace.set("any", lua.create_function(any_impl)?)?;
     namespace.set("nop", lua.create_function(nop_impl)?)?;
@@ -51,6 +52,13 @@ fn exists_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.runtime.exists";
     let path = path.req_str(CTOR, "path")?;
     CondTables::leaf(lua, "exists", "path", path)
+}
+
+/// Builds a `changed` condition table.
+fn changed_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
+    const CTOR: &str = "confit.runtime.changed";
+    let path = path.req_str(CTOR, "path")?;
+    CondTables::leaf(lua, "changed", "path", path)
 }
 
 /// Builds an `all` condition table.
@@ -379,6 +387,10 @@ pub(crate) fn check_condition_json(json: &Json, ctx: &str) -> Result<(), String>
             check_leaf(inner, ctx, &["path"])?;
             Ok(())
         }
+        "changed" => {
+            check_leaf(inner, ctx, &["path"])?;
+            Ok(())
+        }
         "all" | "any" => {
             let items = match inner {
                 Json::Array(items) => items,
@@ -418,8 +430,8 @@ fn check_leaf(inner: &Json, ctx: &str, known: &[&str]) -> Result<(), String> {
 pub(crate) fn condition_from_json(
     json: &Json,
     ctx: &str,
-) -> mlua::Result<confit_core::document::Condition> {
-    use confit_core::document::Condition;
+) -> mlua::Result<confit_core::condition::Condition> {
+    use confit_core::condition::Condition;
     check_condition_json(json, ctx).map_err(crate::error::plan_error)?;
     let map = match json {
         Json::Object(map) => map,
@@ -447,6 +459,9 @@ pub(crate) fn condition_from_json(
             name: leaf("name")?,
         }),
         "exists" => Ok(Condition::Exists {
+            path: leaf("path")?,
+        }),
+        "changed" => Ok(Condition::Changed {
             path: leaf("path")?,
         }),
         "all" => {

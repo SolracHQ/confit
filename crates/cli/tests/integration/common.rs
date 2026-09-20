@@ -133,16 +133,12 @@ pub(crate) fn fill_hashes(documents: &mut [ManifestDocument]) {
     }
 }
 
-/// Serializes one built plan with the timestamp blanked for comparison.
+/// Serializes one built plan for comparison.
 pub(crate) fn plan_value(built: &confit_core::plan::Bundle) -> serde_json::Value {
-    let mut value = match serde_json::to_value(confit_core::store::Manifest::of(built)) {
+    match serde_json::to_value(confit_core::store::manifest::Manifest::of(built)) {
         Ok(value) => value,
         Err(error) => panic!("plan serializes: {error}"),
-    };
-    if let Some(created) = value.get_mut("created_at") {
-        *created = serde_json::Value::String(String::new());
     }
-    value
 }
 
 /// Writes one profile file into a temp root.
@@ -220,7 +216,7 @@ pub(crate) fn apply_runner<'a>(
     state: Option<PathBuf>,
     force: bool,
     preview: bool,
-    seams: confit_cli::actions::seams::Seams<'a>,
+    seams: confit_cli::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
     let plan = match build(desired) {
         Ok(plan) => plan,
@@ -286,12 +282,13 @@ impl std::io::BufRead for DriftInjector<'_> {
 pub(crate) fn hook_for(
     argv: &[&str],
     path: &[&str],
-    when: Option<confit_core::document::Condition>,
-    checks: Vec<confit_core::document::Condition>,
+    when: Option<confit_core::condition::Condition>,
+    checks: Vec<confit_core::condition::Condition>,
 ) -> confit_core::hook::Hook {
     confit_core::hook::Hook {
         argv: argv.iter().map(|item| item.to_string()).collect(),
         path: path.iter().map(|item| item.to_string()).collect(),
+        requires: None,
         when,
         checks,
         timeout_secs: 600,
@@ -322,11 +319,11 @@ pub(crate) fn hook_fs() -> MemoryFs {
 pub(crate) fn hook_runner<'a>(
     fs: &'a MemoryFs,
     input: &'a mut Cursor<Vec<u8>>,
-    fake: &'a confit_cli::actions::hooks::FakeRunner,
+    fake: &'a confit_cli::hooks::FakeRunner,
     log: Option<PathBuf>,
     hooks: Vec<confit_core::hook::Hook>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let mut seams = confit_cli::actions::seams::Seams::memory(fs, input);
+    let mut seams = confit_cli::seams::Seams::memory(fs, input);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
@@ -339,11 +336,11 @@ pub(crate) fn hook_runner<'a>(
 
 /// Seeds the applied slot manifest plus pool on a memory backend.
 pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
-    let slot = match confit_core::store::default_state_path() {
+    let slot = match confit_core::store::slots::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&slot), fs, None) {
+    match confit_core::store::slots::write_manifest(plan, Some(&slot), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("slot seeds: {error}"),
     }
@@ -352,11 +349,11 @@ pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
 
 /// Seeds one named slot manifest plus pool on a memory backend.
 pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Bundle) -> PathBuf {
-    let dest = match confit_core::store::resolve_named_plan(name) {
+    let dest = match confit_core::store::slots::resolve_named_plan(name) {
         Ok(dest) => dest,
         Err(error) => panic!("named slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&dest), fs, None) {
+    match confit_core::store::slots::write_manifest(plan, Some(&dest), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named slot seeds: {error}"),
     }
@@ -371,7 +368,7 @@ pub(crate) fn run_export(
     let mut input = Cursor::new(String::new());
     confit_cli::actions::export::ExportRunner::run(
         args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input),
+        confit_cli::seams::Seams::memory(fs, &mut input),
     )
 }
 
@@ -381,8 +378,5 @@ pub(crate) fn run_delete(
     args: &confit_cli::cli::DeleteArgs,
 ) -> Result<confit_cli::actions::delete::DeleteReport, Error> {
     let mut input = Cursor::new(String::new());
-    confit_cli::actions::delete::run(
-        args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input),
-    )
+    confit_cli::actions::delete::run(args, confit_cli::seams::Seams::memory(fs, &mut input))
 }

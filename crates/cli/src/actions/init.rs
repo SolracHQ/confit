@@ -77,15 +77,6 @@ const STUB_FILES: &[(&str, &str)] = &[
 
 /// Outcome of one init run.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::init::InitReport;
-/// use std::path::PathBuf;
-///
-/// let report = InitReport { profile: PathBuf::from("demo/profile.lua"), written: 14 };
-/// assert!(matches!(report.written, 14));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
     /// Holds the scaffolded profile path.

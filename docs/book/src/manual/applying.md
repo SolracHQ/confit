@@ -63,4 +63,6 @@ through the positional, evaluation plus fetching costs stay
 paid, and the switch stays trivial and fast. Experiments
 apply a rendered file.
 
+For the exact contract see [spec apply](../spec/apply.md) and [spec drift](../spec/drift.md).
+
 Safe applies now read clearly. Next, [Troubleshooting](troubleshooting.md) fixes common stops.

@@ -75,7 +75,10 @@ local function font(name, version)
 	end)
 	local config = confit.config(name)
 	config:add_document(tree)
-	config:add_hook(confit.hook.run({ "fc-cache", "-f", dest }, { when = confit.runtime.in_path("fc-cache") }))
+	config:add_hook(confit.hook.run({ "fc-cache", "-f", dest }, {
+		requires = confit.runtime.in_path("fc-cache"),
+		when = confit.runtime.changed(dest),
+	}))
 	return config
 end
 

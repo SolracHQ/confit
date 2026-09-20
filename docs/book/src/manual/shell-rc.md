@@ -12,7 +12,10 @@ One rc document renders once per shell. `{{shell}}` inside `eval` and `source` e
 
 ## Sections
 
-Entries live in three sections. `profile` lines render first and always run. `config` plus `final` lines render after an interactive guard, so scripts stay quiet:
+Entries live in three sections:
+
+- `profile` lines render first and always run.
+- `config` plus `final` lines render after an interactive guard, so scripts stay quiet:
 
 ```sh
 case $- in

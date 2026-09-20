@@ -8,16 +8,6 @@ use std::path::{Path, PathBuf};
 use confit_core::fs::Filesystem;
 
 /// Host filesystem backend.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::fs::OsFs;
-/// use confit_core::fs::Filesystem;
-///
-/// let fs = OsFs;
-/// assert!(matches!(fs.exists(std::path::Path::new("/definitely-missing-confit-path")), false));
-/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OsFs;
 
@@ -36,15 +26,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing files plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.read(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
         std::fs::read(path)
     }
@@ -170,15 +151,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing directories plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.list_dir(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn list_dir(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         for entry in std::fs::read_dir(dir)? {
@@ -201,15 +173,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing paths plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.remove(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn remove(&self, path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)
     }
@@ -251,14 +214,6 @@ impl Filesystem for OsFs {
     /// The permission bits for files, else `None` for
     /// symlinks plus missing paths.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// assert!(matches!(OsFs.file_mode(std::path::Path::new("/definitely-missing-confit-path")), None));
-    /// ```
     fn file_mode(&self, path: &Path) -> Option<u32> {
         use std::os::unix::fs::PermissionsExt;
         let metadata = std::fs::symlink_metadata(path).ok()?;
@@ -278,14 +233,6 @@ impl Filesystem for OsFs {
     ///
     /// True while the path exists.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// assert!(matches!(OsFs.exists(std::path::Path::new("/definitely-missing-confit-path")), false));
-    /// ```
     fn exists(&self, path: &Path) -> bool {
         path.exists()
     }

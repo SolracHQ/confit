@@ -308,7 +308,8 @@ local function package(opts)
 	config:require(INSTALL_CONFIG, REQUIRE_HINT)
 	config:add_hook(confit.hook.run({ "mise", "install" }, {
 		path = { confit.path.home(".local/bin") },
-		when = confit.runtime.in_path("mise"),
+		requires = confit.runtime.in_path("mise"),
+		when = confit.runtime.changed("~/.config/mise/config.toml"),
 		checks = { confit.runtime.exists(confit.path.data("mise/shims/" .. bin)) },
 	}))
 	if rc_builder ~= nil then

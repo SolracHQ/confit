@@ -10,36 +10,21 @@ use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
 use crate::fs::Filesystem;
 use crate::hook::{Hook, preview_hook};
+use crate::ids::DocPath;
 use crate::runtime::Runtime;
-use crate::store::Manifest;
+use crate::store::manifest::Manifest;
 
 /// Plan format version written by every plan build.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::BUNDLE_VERSION;
-///
-/// assert!(matches!(BUNDLE_VERSION, 6));
-/// ```
-pub const BUNDLE_VERSION: u32 = 6;
+pub const BUNDLE_VERSION: u32 = 7;
 
 /// Versioned desired state written by plan builds.
 ///
-/// The manifest holds version, documents, timestamp, plus
+/// The manifest holds version, documents, plus
 /// hooks as the only document language. The blob map holds
 /// raw bytes under content hashes beside it. The bundle
 /// holds no duplicate fields.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::Bundle;
-///
-/// let plan = Bundle::empty();
-/// assert!(matches!(plan.manifest.documents.len(), 0));
-/// assert!(matches!(plan.blobs.is_empty(), true));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     /// Holds the portable manifest as the only document language.
@@ -53,23 +38,13 @@ impl Bundle {
     ///
     /// # Returns
     ///
-    /// The plan holding version plus empty documents plus empty timestamp.
+    /// The plan holding version plus empty documents.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::plan::{BUNDLE_VERSION, Bundle};
-    ///
-    /// let plan = Bundle::empty();
-    /// assert!(matches!(plan.manifest.version, v if v == BUNDLE_VERSION));
-    /// assert!(matches!(plan.manifest.documents.len(), 0));
-    /// ```
     pub fn empty() -> Self {
         Self {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
                 documents: Vec::new(),
-                created_at: String::new(),
                 hooks: Vec::new(),
             },
             blobs: BTreeMap::new(),
@@ -222,22 +197,6 @@ impl ManifestDocument {
     ///
     /// True while an opaque same-path sibling exists in desired.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let recorded = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
-    /// );
-    /// let desired = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
-    /// );
-    /// assert!(matches!(recorded.superseded_by(&[desired]), true));
-    /// ```
     pub fn superseded_by(&self, desired: &[ManifestDocument]) -> bool {
         desired.iter().any(|document| {
             document.path == self.path
@@ -315,7 +274,6 @@ impl Bundle {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
                 documents,
-                created_at: now_timestamp(),
                 hooks,
             },
             blobs: BTreeMap::new(),
@@ -381,18 +339,11 @@ impl Bundle {
 
     /// Renders one preview line per hook in plan order.
     ///
-    /// Resolution runs first: `argv[0]` searches hook path
-    /// dirs plus runtime dirs, first hit wins. Runnable hooks
-    /// read `! run:` with the resolved binary. Satisfied
-    /// checks read `skipped:`. Closed gates read `warn:` with
-    /// the gate named. Recorded hooks drift through the same
-    /// lines: previous hooks re-evaluate checks each plan, so
-    /// a failed check reads as not applied beside drift lines.
-    ///
     /// # Arguments
     ///
     /// * `rt` - the runtime facts under reading.
     /// * `fs` - the backend under stating.
+    /// * `changed` - the changed document ids under reading.
     ///
     /// # Returns
     ///
@@ -408,15 +359,21 @@ impl Bundle {
     /// use confit_core::plan::Bundle;
     /// use confit_core::fs::MemoryFs;
     /// use confit_core::runtime::Runtime;
+    /// use std::collections::BTreeSet;
     ///
     /// let rt = Runtime { vars: Default::default(), path_dirs: Vec::new() };
-    /// let lines = Bundle::empty().hook_preview(&rt, &MemoryFs::new());
+    /// let lines = Bundle::empty().hook_preview(&rt, &MemoryFs::new(), &BTreeSet::new());
     /// assert!(matches!(lines, Ok(lines) if lines.is_empty()));
     /// ```
-    pub fn hook_preview(&self, rt: &Runtime, fs: &dyn Filesystem) -> Result<Vec<String>> {
+    pub fn hook_preview(
+        &self,
+        rt: &Runtime,
+        fs: &dyn Filesystem,
+        changed: &BTreeSet<DocPath>,
+    ) -> Result<Vec<String>> {
         let mut lines = Vec::with_capacity(self.manifest.hooks.len());
         for hook in &self.manifest.hooks {
-            lines.push(preview_hook(hook, rt, fs)?);
+            lines.push(preview_hook(hook, rt, fs, changed)?);
         }
         Ok(lines)
     }
@@ -445,11 +402,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// Reads the current UTC time as an RFC3339 timestamp.
-fn now_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]
@@ -602,6 +554,7 @@ mod tests {
         let hooks = vec![Hook {
             argv: vec!["mise".to_string()],
             path: Vec::new(),
+            requires: None,
             when: None,
             checks: Vec::new(),
             timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
@@ -633,6 +586,7 @@ mod tests {
         crate::hook::Hook {
             argv: argv.iter().map(|item| item.to_string()).collect(),
             path: Vec::new(),
+            requires: None,
             when: None,
             checks: Vec::new(),
             timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
@@ -641,7 +595,7 @@ mod tests {
 
     #[test]
     fn hook_preview_renders_run_skip_warn_lines() {
-        use crate::document::Condition;
+        use crate::condition::Condition;
 
         let (rt, fs) = preview_runtime();
         let mut plan = Bundle::empty();
@@ -660,7 +614,7 @@ mod tests {
                 ..preview_hook(&["tool"])
             },
         ];
-        let lines = match plan.hook_preview(&rt, &fs) {
+        let lines = match plan.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -669,14 +623,14 @@ mod tests {
             vec![
                 "! run: /opt/tool --flag".to_string(),
                 "skipped: tool (checks pass)".to_string(),
-                "warn: tool cannot run (in_path(absent))".to_string(),
+                "skipped: tool (no need: in_path(absent))".to_string(),
             ]
         );
     }
 
     #[test]
     fn hook_preview_runs_on_failing_checks() {
-        use crate::document::Condition;
+        use crate::condition::Condition;
 
         let (rt, fs) = preview_runtime();
         let mut plan = Bundle::empty();
@@ -686,7 +640,7 @@ mod tests {
             }],
             ..preview_hook(&["tool"])
         }];
-        let lines = match plan.hook_preview(&rt, &fs) {
+        let lines = match plan.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -698,7 +652,7 @@ mod tests {
         let (rt, fs) = preview_runtime();
         let mut plan = Bundle::empty();
         plan.manifest.hooks = vec![preview_hook(&["absent", "install"])];
-        match plan.hook_preview(&rt, &fs) {
+        match plan.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

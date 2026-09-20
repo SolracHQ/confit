@@ -13,14 +13,6 @@ use confit_core::error::{Error, Result};
 /// Code holds the process exit code, signal deaths read as 1.
 /// Output holds captured stdout plus stderr bytes in order.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::hooks::HookRun;
-///
-/// let run = HookRun { code: 0, output: Vec::new() };
-/// assert!(matches!(run.code, 0));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookRun {
     /// Holds the process exit code.
@@ -34,14 +26,6 @@ pub struct HookRun {
 /// Host runs spawn through the OS. Tests replay scripted
 /// outcomes through the fake without spawning.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::hooks::{FakeRunner, HookRunner};
-///
-/// let runner = FakeRunner::default();
-/// assert!(matches!(runner.calls().len(), 0));
-/// ```
 pub trait HookRunner {
     /// Runs one hook argv with extended PATH plus a timeout.
     ///
@@ -171,15 +155,6 @@ pub struct FakeCall {
 /// Tests script one outcome per expected call. Exhausted
 /// scripts panic, so missing calls surface loudly.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::hooks::{FakeRunner, HookRun};
-/// use std::collections::VecDeque;
-///
-/// let runner = FakeRunner::new(VecDeque::from([Ok(HookRun { code: 0, output: Vec::new() })]));
-/// assert!(matches!(runner.calls().len(), 0));
-/// ```
 #[derive(Debug, Default)]
 pub struct FakeRunner {
     /// Calls seen so far in order.

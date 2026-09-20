@@ -130,6 +130,7 @@ impl Session {
             declared.extend(config.hooks.iter().cloned());
         }
         let hooks = merge_hooks(declared);
+        validate_changed(&hooks, &out).map_err(wrap)?;
         Ok(crate::Evaluation {
             documents: out,
             blobs,
@@ -155,6 +156,32 @@ fn wrap(error: mlua::Error) -> Error {
         return plan(message);
     }
     plan(error.to_string())
+}
+
+/// Rejects changed gates naming documents outside the built set.
+fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Result<()> {
+    const CTOR: &str = "confit.runtime.changed";
+    let built: std::collections::BTreeSet<&str> = documents
+        .iter()
+        .map(|document| document.path.as_str())
+        .collect();
+    let mut paths = Vec::new();
+    for hook in hooks {
+        if let Some(gate) = hook.when.as_ref() {
+            gate.collect_changed(&mut paths);
+        }
+        for check in &hook.checks {
+            check.collect_changed(&mut paths);
+        }
+    }
+    for path in paths {
+        if !built.contains(path.as_str()) {
+            return Err(crate::error::plan_error(format!(
+                "{CTOR}: unknown document '{path}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Coerces the profile return into a table.

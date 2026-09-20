@@ -2,7 +2,13 @@
 
 You stand at the end of the demo from init to managed machines. This chapter tells why the tool reads this way.
 
-confit compares three states. Desired state comes from the profile. Previous state comes from the last apply. Actual state comes from the disk. Every change reads from its own source. The world moved since the last apply, or the declared state changed.
+confit compares three states:
+
+- Desired state comes from the profile.
+- Previous state comes from the last apply.
+- Actual state comes from the disk.
+
+Every change reads from its own source. The world moved since the last apply, or the declared state changed.
 
 I aim for these objectives:
 

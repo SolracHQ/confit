@@ -13,9 +13,8 @@ confit init [DIR]                           # scaffold, default .
 ```
 
 Plan `-o` names the bundle file and gains `.cb` unless
-present. Omitted plan output stores a bundle under tmp and
-prints the path. `@NAME` stores or loads a named slot under
-the user config folder. Named slots hold saved plans.
+present. Omitted plan output runs preview-only. `@NAME` stores
+or loads a named slot under the user config folder. Named slots hold saved plans.
 Portable bundles hold `.cb` files.
 Empty names plus separators fail. A source reads `.lua` plus
 extensionless paths as a profile, `.cb` as a bundle file,
@@ -109,5 +108,7 @@ confit.plugin.solrachq.nerd_fonts.font(name, version?)
 confit.plugin.solrachq.merge(base, overlay, { shallow, list_append }?)
 confit.plugin.solrachq.template(path, { src, vars })
 ```
+
+For the exact contract see [spec cli](../spec/cli.md).
 
 Every shape now sits in one place. Next, [Philosophy](philosophy.md) tells why the tool reads this way.

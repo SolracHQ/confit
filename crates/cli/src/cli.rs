@@ -91,7 +91,7 @@ pub struct PlanArgs {
     /// Shared seam flags.
     #[command(flatten)]
     pub shared: SharedArgs,
-    /// Bundle destination. Omitted stores the payload under tmp and prints the path.
+    /// Bundle destination. Omitted writes nothing and previews only.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
@@ -195,14 +195,6 @@ pub struct DeleteArgs {
 ///
 /// The home-joined path, else the input unchanged.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::expand_tilde;
-/// use std::path::Path;
-///
-/// assert!(matches!(expand_tilde(Path::new("rel/x")).to_str(), Some("rel/x")));
-/// ```
 pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
@@ -337,8 +329,11 @@ pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> Pat
 /// use confit_cli::cli::resolve_plan_file;
 /// use std::path::Path;
 ///
-/// assert!(matches!(resolve_plan_file(Path::new("plan.json")), Ok(_)));
-/// assert!(matches!(resolve_plan_file(Path::new("@work")), Ok(_)));
+/// assert!(matches!(resolve_plan_file(Path::new("plan.json")), Ok(path) if path == Path::new("plan.json")));
+/// assert!(matches!(
+///     resolve_plan_file(Path::new("@work")),
+///     Ok(path) if path.ends_with("confit/plans/work.json")
+/// ));
 /// ```
 pub fn resolve_plan_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::error::Error> {
     let Some(text) = raw.to_str() else {
@@ -347,5 +342,5 @@ pub fn resolve_plan_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::
     let Some(name) = text.strip_prefix('@') else {
         return Ok(raw.to_path_buf());
     };
-    confit_core::store::resolve_named_plan(name)
+    confit_core::store::slots::resolve_named_plan(name)
 }

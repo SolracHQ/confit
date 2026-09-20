@@ -52,4 +52,6 @@ confit apply @laptop
 
 One shared slot keeps drift honest. Every switch diffs against the same applied result.
 
+For the exact contract see [spec plan](../spec/plan.md).
+
 The demo now covers two shells with room for more tools. Next, [Config](config.md) adds kitty as its second config.

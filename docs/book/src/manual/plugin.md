@@ -2,7 +2,10 @@
 
 You stand at `~/confit-demo` with shared files patched from many configs. This chapter installs demo tools with reusable code.
 
-A plugin is reusable code with a stable shape. Your own Lua library also works. The plugin shape adds two things. A stable structure, and the `username/name` split so each plugin grows into its own git project required from the profile:
+A plugin is reusable code with a stable shape. Your own Lua library also works. The plugin shape adds two things:
+
+- A stable structure.
+- The `username/name` split, so each plugin grows into its own git project required from the profile:
 
 ```lua
 local mise = confit.plugin.solrachq.mise
@@ -91,5 +94,7 @@ config:require("plugin:solrachq/mise:install", "Add mise.init() to the profile c
 ```
 
 User code keeps clear of require. The plugin injects it, and a profile missing the installer fails the plan with the hint.
+
+For the exact contract see [spec lua](../spec/lua.md).
 
 The demo now installs versioned tools through plugins. Next, [Machines](machines.md) splits the demo across laptop plus server.

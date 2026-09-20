@@ -2,40 +2,33 @@
 //!
 //! Desired documents to disk writes with prompts.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::{Error, Result};
 use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
-use confit_core::hook::{describe_condition, resolve_hook};
+use confit_core::hook::{describe_condition, lifecycle_lines, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
 use confit_core::runtime::{Runtime, evaluate};
-use confit_core::store::{
-    archive_previous, default_state_path, load_bundle_input, load_state, prune_blobs,
-    remove_orphans, remove_tree_members, resolve_named_plan, resolve_previous_dir, stored_entries,
-    write_documents, write_manifest,
+use confit_core::store::blobs::prune_blobs;
+use confit_core::store::bundle::load_bundle_input;
+use confit_core::store::slots::{
+    archive_previous, default_state_path, load_state, resolve_slot, write_manifest,
 };
+use confit_core::store::{remove_orphans, remove_tree_members, write_documents};
 
-use crate::actions::hooks::{HookRunner, OsRunner, append_hook_log};
 use crate::cli::ApplyArgs;
+use crate::hooks::{HookRunner, OsRunner, append_hook_log};
 use crate::presentation::summary::Summary;
 
-use super::seams::{Seams, evaluate_shared, log_processed, timed};
+use crate::seams::{Seams, evaluate_shared, log_processed, timed};
 
 use confit_core::progress::Event;
 
 /// Outcome of one successful apply run.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::apply::ApplyReport;
-/// use std::path::PathBuf;
-///
-/// let report = ApplyReport { written: 1, removed: 0, stored: PathBuf::from("previous/x.json") };
-/// assert!(matches!((report.written, report.removed), (1, 0)));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyReport {
     /// Counts documents written to disk.
@@ -52,7 +45,7 @@ pub struct ApplyReport {
 ///
 /// ```rust
 /// use confit_cli::actions::apply::ApplyRunner;
-/// use confit_cli::actions::seams::Seams;
+/// use confit_cli::seams::Seams;
 /// use confit_core::document::{ManifestData, ManifestDocument};
 /// use confit_core::fs::{Filesystem, MemoryFs};
 /// use confit_core::ids::DocPath;
@@ -124,7 +117,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::actions::seams::Seams;
+    /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
     /// use confit_cli::fs::OsFs;
     /// use std::io::Cursor;
@@ -148,13 +141,9 @@ impl<'a> ApplyRunner<'a> {
     pub fn from_args(args: &ApplyArgs, seams: Seams<'a>) -> Result<Self> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
-        if let Some(name) = raw.strip_prefix('@') {
-            let slot_plan = load_named_slot(name, seams.fs)?;
-            return Self::from_slot(slot_plan, args.force, seams);
-        }
-        if let Some(rest) = raw.strip_prefix('%') {
-            let pick = parse_history_pick(raw, rest)?;
-            let slot_plan = load_history_pick(raw, pick, seams.fs)?;
+        if raw.starts_with('@') || raw.starts_with('%') {
+            let (slot_plan, _) =
+                resolve_slot(Some(raw), seams.fs).map_err(prefix_command("apply"))?;
             return Self::from_slot(slot_plan, args.force, seams);
         }
         if positional
@@ -234,7 +223,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::actions::seams::Seams;
+    /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
     /// use confit_cli::fs::OsFs;
     /// use std::io::Cursor;
@@ -293,18 +282,20 @@ impl<'a> ApplyRunner<'a> {
         };
         let baseline = reference.drift(&snapshot, &snapshot_tree, order);
         let rt = Runtime::current();
+        let changed = changed_paths(&built, &self.previous, &baseline, first_run);
         if self.preview {
+            let lifecycle = lifecycle_lines(&built.manifest.hooks, &self.previous.manifest.hooks);
+            let evaluated = built.hook_preview(&rt, fs, &changed)?;
             let report = Summary {
                 built: &built,
                 previous: &self.previous,
                 drift: &baseline,
                 first_run,
+                hook_lines: lifecycle.as_slice(),
+                hook_evaluated: evaluated.as_slice(),
             };
             let text = report.render();
             self.seams.print_line(text);
-            for line in built.hook_preview(&rt, fs)? {
-                self.seams.print_line(line);
-            }
         }
         if !self.force && !self.seams.confirm()? {
             return Err(Error::Plan(
@@ -354,7 +345,7 @@ impl<'a> ApplyRunner<'a> {
         self.seams.emit_writing_plan(built.manifest.documents.len());
         let stored = archive_previous(&built, fs, self.seams.progress.as_ref())?;
         prune_blobs(fs)?;
-        self.run_hooks(&built, &rt, fs)?;
+        self.run_hooks(&built, &rt, fs, &changed)?;
         Ok(ApplyReport {
             written: built.manifest.documents.len(),
             removed,
@@ -364,162 +355,311 @@ impl<'a> ApplyRunner<'a> {
 
     /// Runs built hooks after files, state, plus history land.
     ///
-    /// Each hook re-resolves, re-gates, skips on passing
-    /// pre-checks, spawns through the runner, verifies
-    /// post-checks, and appends captured bytes to the run log.
+    /// Changed gates answer against the apply-start set.
     /// Failures abort the rest.
-    fn run_hooks(&mut self, built: &Bundle, rt: &Runtime, fs: &dyn Filesystem) -> Result<()> {
+    fn run_hooks(
+        &mut self,
+        built: &Bundle,
+        rt: &Runtime,
+        fs: &dyn Filesystem,
+        changed: &BTreeSet<DocPath>,
+    ) -> Result<()> {
         let total = built.manifest.hooks.len();
         let real = OsRunner;
         let runner: &dyn HookRunner = match self.seams.hook_runner {
             Some(runner) => runner,
             None => &real,
         };
+        let ctx = HookCtx {
+            runner,
+            rt,
+            fs,
+            changed,
+        };
         for (index, hook) in built.manifest.hooks.iter().enumerate() {
             let position = index + 1;
-            let argv_text = hook.argv.join(" ");
-            if let Some(gate) = hook.when.as_ref()
-                && !evaluate(gate, rt, fs)
-            {
-                let line = format!(
-                    "warn: {argv_text} cannot run ({})",
-                    describe_condition(gate)
-                );
+            if let Some(line) = gate_line(hook, &ctx) {
                 self.seams.print_line(line);
                 continue;
             }
-            if !hook.checks.is_empty() && hook.checks.iter().all(|check| evaluate(check, rt, fs)) {
-                let line = format!("skipped: {argv_text} (checks pass)");
-                self.seams.print_line(line);
-                continue;
-            }
-            let binary = resolve_hook(hook, rt, fs).ok_or_else(|| {
-                let head = hook.argv.first().cloned().unwrap_or_default();
-                Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
-            })?;
-            let mut spawn: Vec<String> = vec![binary.display().to_string()];
-            spawn.extend(hook.argv.iter().skip(1).cloned());
-            let line = format!("hook {position} of {total}: {argv_text}");
-            self.seams.print_line(line.clone());
-            if let Some(sender) = self.seams.progress.as_ref() {
-                let _ = sender.send(Event::HookRunning {
-                    position,
-                    total,
-                    argv: argv_text.clone(),
-                });
-            }
-            let path_dirs: Vec<std::path::PathBuf> =
-                hook.path.iter().map(std::path::PathBuf::from).collect();
-            let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
-            if let Some(log) = self.seams.log_file.clone() {
-                append_hook_log(fs, &log, &line, &outcome.output)?;
-            }
-            if outcome.code != 0 {
-                return Err(Error::Plan(format!(
-                    "hook '{argv_text}' failed with code {}",
-                    outcome.code
-                )));
-            }
-            if !hook.checks.is_empty() {
-                let failed: Vec<String> = hook
+            if !hook.checks.is_empty()
+                && hook
                     .checks
                     .iter()
-                    .filter(|check| !evaluate(check, rt, fs))
-                    .map(describe_condition)
-                    .collect();
-                if !failed.is_empty() {
-                    log::warn!(
-                        "hook '{argv_text}' failed checks after run: {}",
-                        failed.join(", ")
-                    );
-                    return Err(Error::Plan(format!(
-                        "hook '{argv_text}' failed checks after run: {}",
-                        failed.join(", ")
-                    )));
-                }
+                    .all(|check| evaluate(check, ctx.rt, ctx.fs, ctx.changed))
+            {
+                let line = format!("skipped: {} (checks pass)", hook.argv.join(" "));
+                self.seams.print_line(line);
+                continue;
             }
-            log::debug!("hook {position} of {total} ran code={}", outcome.code);
+            self.spawn_hook(hook, position, total, &ctx)?;
         }
+        Ok(())
+    }
+
+    /// Runs one open hook through the runner.
+    ///
+    /// # Errors
+    ///
+    /// Unresolvable binaries plus nonzero codes plus unmet
+    /// post-checks fail as plan errors.
+    fn spawn_hook(
+        &mut self,
+        hook: &confit_core::hook::Hook,
+        position: usize,
+        total: usize,
+        ctx: &HookCtx<'_>,
+    ) -> Result<()> {
+        let argv_text = hook.argv.join(" ");
+        let binary = resolve_hook(hook, ctx.rt, ctx.fs).ok_or_else(|| {
+            let head = hook.argv.first().cloned().unwrap_or_default();
+            Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
+        })?;
+        let mut spawn: Vec<String> = vec![binary.display().to_string()];
+        spawn.extend(hook.argv.iter().skip(1).cloned());
+        let line = format!("hook {position} of {total}: {argv_text}");
+        self.seams.print_line(line.clone());
+        if let Some(sender) = self.seams.progress.as_ref() {
+            let _ = sender.send(Event::HookRunning {
+                position,
+                total,
+                argv: argv_text.clone(),
+            });
+        }
+        let path_dirs: Vec<std::path::PathBuf> =
+            hook.path.iter().map(std::path::PathBuf::from).collect();
+        let outcome = ctx.runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
+        if let Some(log) = self.seams.log_file.clone() {
+            append_hook_log(ctx.fs, &log, &line, &outcome.output)?;
+        }
+        if outcome.code != 0 {
+            return Err(Error::Plan(format!(
+                "hook '{argv_text}' failed with code {}",
+                outcome.code
+            )));
+        }
+        verify_post_checks(hook, ctx)?;
+        log::debug!("hook {position} of {total} ran code={}", outcome.code);
         Ok(())
     }
 }
 
-/// Parses one `%N` history pick.
-///
-/// # Arguments
-///
-/// * `raw` - the full picker text for error context.
-/// * `rest` - the digits after the `%` sigil.
-///
-/// # Returns
-///
-/// The 1-based pick newest-first from one.
-///
-/// # Errors
-///
-/// Non-numeric picks fail as plan errors.
-fn parse_history_pick(raw: &str, rest: &str) -> Result<usize> {
-    rest.parse().map_err(|_| {
-        Error::Plan(format!(
-            "apply: '{raw}' reads unsupported, want '%N' holding a number from 1"
-        ))
-    })
+/// Shared hook-run context for one apply run.
+struct HookCtx<'x> {
+    /// Runs hook subprocesses.
+    runner: &'x dyn HookRunner,
+    /// Holds the runtime facts under reading.
+    rt: &'x Runtime,
+    /// Holds the backend under stating.
+    fs: &'x dyn Filesystem,
+    /// Holds the changed document ids under reading.
+    changed: &'x BTreeSet<DocPath>,
 }
 
-/// Loads one history entry newest-first from one.
+/// Renders the skip line for the first closed gate, else none.
 ///
-/// # Arguments
-///
-/// * `raw` - the full picker text for error context.
-/// * `pick` - the 1-based pick newest-first from one.
-/// * `fs` - the backend under reading.
-///
-/// # Returns
-///
-/// The live plan holding binary bytes.
-///
-/// # Errors
-///
-/// Out-of-range picks fail naming the stored count. Load
-/// failures surface as plan or io errors.
-fn load_history_pick(raw: &str, pick: usize, fs: &dyn Filesystem) -> Result<Bundle> {
-    let dir = resolve_previous_dir()?;
-    let entries = stored_entries(&dir, fs)?;
-    let total = entries.len();
-    if pick < 1 || pick > total {
-        return Err(Error::Plan(format!(
-            "apply: '{raw}' reads out of range, holding {total} stored plans"
-        )));
+/// Closed requires warns inability, closed when skips un-need.
+fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String> {
+    let argv_text = hook.argv.join(" ");
+    if let Some(gate) = hook.requires.as_ref()
+        && !evaluate(gate, ctx.rt, ctx.fs, ctx.changed)
+    {
+        return Some(format!(
+            "warn: {argv_text} cannot run ({})",
+            describe_condition(gate)
+        ));
     }
-    entries
-        .into_iter()
-        .nth(pick - 1)
-        .map(|(_, plan)| plan)
-        .ok_or_else(|| {
-            Error::Plan(format!(
-                "apply: '{raw}' reads out of range, holding {total} stored plans"
-            ))
-        })
+    if let Some(gate) = hook.when.as_ref()
+        && !evaluate(gate, ctx.rt, ctx.fs, ctx.changed)
+    {
+        return Some(format!(
+            "skipped: {argv_text} (no need: {})",
+            describe_condition(gate)
+        ));
+    }
+    None
 }
 
-/// Loads one named slot plan.
-///
-/// # Arguments
-///
-/// * `name` - the slot name without the `@` sigil.
-/// * `fs` - the backend under reading.
-///
-/// # Returns
-///
-/// The live plan holding binary bytes.
+/// Fails naming post-checks one run leaves unmet.
 ///
 /// # Errors
 ///
-/// Absent slots plus load failures surface as plan or io errors.
-fn load_named_slot(name: &str, fs: &dyn Filesystem) -> Result<Bundle> {
-    let path = resolve_named_plan(name)?;
-    if !fs.exists(&path) {
-        return Err(Error::Plan(format!("apply: '@{name}' reads absent")));
+/// Unmet post-checks fail as plan errors naming the hook.
+fn verify_post_checks(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Result<()> {
+    if hook.checks.is_empty() {
+        return Ok(());
     }
-    load_state(Some(path.as_path()), fs)
+    let argv_text = hook.argv.join(" ");
+    let failed: Vec<String> = hook
+        .checks
+        .iter()
+        .filter(|check| !evaluate(check, ctx.rt, ctx.fs, ctx.changed))
+        .map(describe_condition)
+        .collect();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    log::warn!(
+        "hook '{argv_text}' failed checks after run: {}",
+        failed.join(", ")
+    );
+    Err(Error::Plan(format!(
+        "hook '{argv_text}' failed checks after run: {}",
+        failed.join(", ")
+    )))
+}
+
+/// Prefixes slot errors with the calling command name.
+///
+/// Core slot resolution reads command-neutral. Each action
+/// names itself once here instead of repeating dispatch.
+fn prefix_command(command: &'static str) -> impl FnOnce(Error) -> Error {
+    move |error| match error {
+        Error::Plan(detail) => Error::Plan(format!("{command}: {detail}")),
+        other => other,
+    }
+}
+
+/// Computes the changed document ids for one apply run.
+///
+/// # Arguments
+///
+/// * `built` - the plan under applying.
+/// * `previous` - the slot plan backing lifecycle marks.
+/// * `drifts` - the drift entries backing the preview.
+/// * `first_run` - true while the state slot reads absent.
+///
+/// # Returns
+///
+/// The changed document ids.
+fn changed_paths(
+    built: &Bundle,
+    previous: &Bundle,
+    drifts: &[Drift],
+    first_run: bool,
+) -> BTreeSet<DocPath> {
+    use confit_core::plan::DocumentStatus;
+
+    if first_run {
+        return built
+            .manifest
+            .documents
+            .iter()
+            .map(|document| document.path.clone())
+            .collect();
+    }
+    let mut out = BTreeSet::new();
+    for document in &built.manifest.documents {
+        if !matches!(document.status(previous), DocumentStatus::Unchanged) {
+            out.insert(document.path.clone());
+        }
+    }
+    for document in &built.manifest.documents {
+        let prefix = format!("{}/", document.path.as_str());
+        for drift in drifts {
+            let path = drift.path().as_str();
+            if path == document.path.as_str() || path.starts_with(&prefix) {
+                out.insert(document.path.clone());
+                break;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use confit_core::document::{ManifestData, ManifestDocument, ManifestMember};
+    use confit_core::plan::sha256_hex;
+
+    fn text_doc(path: &str, content: &str) -> ManifestDocument {
+        ManifestDocument::new(
+            DocPath::new(path),
+            ManifestData::Text {
+                content: content.to_string(),
+                mode: None,
+            },
+        )
+    }
+
+    fn with_hashes(documents: Vec<ManifestDocument>) -> Bundle {
+        let mut docs = documents;
+        for document in &mut docs {
+            if let Err(error) = document.fill_hash() {
+                panic!("hashes fill: {error}");
+            }
+        }
+        let mut previous = Bundle::empty();
+        previous.manifest.documents = docs;
+        previous
+    }
+
+    #[test]
+    fn changed_paths_first_run_holds_every_built_path() {
+        let built = match Bundle::build(vec![text_doc("a", "x"), text_doc("b", "y")], Vec::new()) {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let changed = changed_paths(&built, &Bundle::empty(), &[], true);
+        assert_eq!(changed.len(), 2);
+        assert!(changed.contains(&DocPath::new("a")));
+        assert!(changed.contains(&DocPath::new("b")));
+    }
+
+    #[test]
+    fn changed_paths_later_run_marks_drift_plus_rewrite() {
+        let previous = with_hashes(vec![
+            text_doc("quiet", "same"),
+            text_doc("drifted", "same"),
+            text_doc("rewritten", "old"),
+        ]);
+        let built = match Bundle::build(
+            vec![
+                text_doc("quiet", "same"),
+                text_doc("drifted", "same"),
+                text_doc("rewritten", "new"),
+            ],
+            Vec::new(),
+        ) {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let drifts = vec![Drift::Hunk {
+            path: DocPath::new("drifted"),
+            hunks: "diff".to_string(),
+        }];
+        let changed = changed_paths(&built, &previous, &drifts, false);
+        assert_eq!(changed.len(), 2);
+        assert!(changed.contains(&DocPath::new("drifted")));
+        assert!(changed.contains(&DocPath::new("rewritten")));
+        assert!(!changed.contains(&DocPath::new("quiet")));
+    }
+
+    #[test]
+    fn changed_paths_tree_member_drift_maps_to_parent() {
+        fn tree_doc() -> ManifestDocument {
+            ManifestDocument::new(
+                DocPath::new("fonts"),
+                ManifestData::Tree {
+                    members: vec![ManifestMember {
+                        relative: "member.ttf".into(),
+                        blob: sha256_hex(&[1]),
+                        mode: 0o644,
+                    }],
+                },
+            )
+        }
+        let previous = with_hashes(vec![tree_doc()]);
+        let built = match Bundle::build(vec![tree_doc()], Vec::new()) {
+            Ok(out) => out,
+            Err(error) => panic!("plan builds: {error}"),
+        };
+        let drifts = vec![Drift::Missing {
+            path: DocPath::new("fonts/member.ttf"),
+        }];
+        let changed = changed_paths(&built, &previous, &drifts, false);
+        assert_eq!(changed.len(), 1);
+        assert!(changed.contains(&DocPath::new("fonts")));
+    }
 }

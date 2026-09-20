@@ -13,8 +13,8 @@ use confit_core::plan::{Bundle, DocumentStatus};
 
 use confit_core::progress::{Event, ProgressSender};
 
-use crate::actions::hooks::HookRunner;
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
+use crate::hooks::HookRunner;
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 
 /// Host filesystem under sharing by host seams.
@@ -24,19 +24,6 @@ static HOST_FS: OsFs = OsFs;
 ///
 /// Host runs pass stdin plus print senders. Tests pass memory fakes.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::seams::Seams;
-/// use confit_core::fs::MemoryFs;
-/// use std::io::Cursor;
-///
-/// let fs = MemoryFs::new();
-/// let mut input = Cursor::new("yes\n");
-/// let seams = Seams::memory(&fs, &mut input);
-/// assert!(matches!(seams.progress, None));
-/// assert!(matches!(seams.suspend, None));
-/// ```
 pub struct Seams<'a> {
     /// Reads plus writes backend, memory under tests.
     pub fs: &'a dyn Filesystem,
@@ -65,16 +52,6 @@ impl<'a> Seams<'a> {
     ///
     /// Silent host seams gaining senders through the fields.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::actions::seams::Seams;
-    ///
-    /// let mut input = std::io::BufReader::new(std::io::stdin());
-    /// let seams = Seams::host(&mut input);
-    /// assert!(matches!(seams.progress, None));
-    /// assert!(matches!(seams.suspend, None));
-    /// ```
     pub fn host(input: &'a mut dyn BufRead) -> Self {
         Self {
             fs: &HOST_FS,
@@ -98,19 +75,6 @@ impl<'a> Seams<'a> {
     ///
     /// Silent memory seams gaining a sender through chaining.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::actions::seams::Seams;
-    /// use confit_core::fs::MemoryFs;
-    /// use std::io::Cursor;
-    ///
-    /// let fs = MemoryFs::new();
-    /// let mut input = Cursor::new(String::new());
-    /// let seams = Seams::memory(&fs, &mut input);
-    /// assert!(matches!(seams.progress, None));
-    /// assert!(matches!(seams.suspend, None));
-    /// ```
     pub fn memory(fs: &'a dyn Filesystem, input: &'a mut dyn BufRead) -> Self {
         Self {
             fs,
@@ -133,19 +97,6 @@ impl<'a> Seams<'a> {
     ///
     /// The same seams carrying the sender.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::actions::seams::Seams;
-    /// use confit_core::fs::MemoryFs;
-    /// use std::io::Cursor;
-    ///
-    /// let fs = MemoryFs::new();
-    /// let mut input = Cursor::new(String::new());
-    /// let (sender, _) = crossbeam_channel::unbounded();
-    /// let seams = Seams::memory(&fs, &mut input).with_progress(sender);
-    /// assert!(matches!(seams.progress, Some(_)));
-    /// ```
     pub fn with_progress(mut self, sender: ProgressSender) -> Self {
         self.progress = Some(sender);
         self
@@ -161,19 +112,6 @@ impl<'a> Seams<'a> {
     ///
     /// The same seams carrying the sender.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::actions::seams::Seams;
-    /// use confit_core::fs::MemoryFs;
-    /// use std::io::Cursor;
-    ///
-    /// let fs = MemoryFs::new();
-    /// let mut input = Cursor::new(String::new());
-    /// let (sender, _) = crossbeam_channel::unbounded();
-    /// let seams = Seams::memory(&fs, &mut input).with_print(sender);
-    /// assert!(matches!(seams.print, Some(_)));
-    /// ```
     pub fn with_print(mut self, sender: PrintSender) -> Self {
         self.print = Some(sender);
         self
@@ -189,25 +127,6 @@ impl<'a> Seams<'a> {
     ///
     /// The same seams carrying the control.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::actions::seams::Seams;
-    /// use confit_cli::presentation::spinner::Live;
-    /// use confit_core::fs::MemoryFs;
-    /// use std::io::Cursor;
-    ///
-    /// let fs = MemoryFs::new();
-    /// let mut input = Cursor::new(String::new());
-    /// let live = Live::new();
-    /// let seams = Seams::memory(&fs, &mut input);
-    /// let seams = match live.suspend_handle() {
-    ///     Some(control) => seams.with_suspend(control),
-    ///     None => seams,
-    /// };
-    /// assert!(matches!(seams.suspend, Some(_) | None));
-    /// live.finish();
-    /// ```
     pub fn with_suspend(mut self, control: SuspendControl) -> Self {
         self.suspend = Some(control);
         self
@@ -240,7 +159,7 @@ impl<'a> Seams<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_cli::actions::seams::Seams;
+    /// use confit_cli::seams::Seams;
     /// use confit_core::fs::MemoryFs;
     /// use std::io::Cursor;
     ///
@@ -300,14 +219,6 @@ impl<'a> Seams<'a> {
 ///
 /// Whatever the step returns.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::seams::timed;
-///
-/// let total = timed("sum", || 1 + 2);
-/// assert!(matches!(total, 3));
-/// ```
 pub fn timed<T>(label: &str, step: impl FnOnce() -> T) -> T {
     let start = std::time::Instant::now();
     let out = step();

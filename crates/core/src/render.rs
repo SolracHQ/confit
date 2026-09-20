@@ -5,8 +5,9 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use crate::condition::Condition;
 use crate::document::{
-    Condition, ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
+    ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
 };
 use crate::error::{Error, Result};
 
@@ -258,6 +259,10 @@ fn render_guard(guard: &Condition) -> String {
             let candidate = escape_argv(std::slice::from_ref(path));
             format!("[ -e {candidate} ]")
         }
+        // Changed never reaches shell guards: rc guards holding it fail
+        // as plan errors at build time. Render false so entries stay
+        // quiet if the invariant ever breaks.
+        Condition::Changed { .. } => "false".to_string(),
         Condition::All(items) if items.is_empty() => "true".to_string(),
         Condition::Any(items) if items.is_empty() => "false".to_string(),
         Condition::All(items) => join_guards(items, "&&"),

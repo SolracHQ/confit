@@ -3,11 +3,12 @@
 //! Named slot removal with orphan pruning.
 
 use confit_core::error::{Error, Result};
-use confit_core::store::{prune_blobs, resolve_named_plan};
+use confit_core::store::blobs::prune_blobs;
+use confit_core::store::slots::resolve_named_plan;
 
 use crate::cli::DeleteArgs;
 
-use super::seams::Seams;
+use crate::seams::Seams;
 
 /// Outcome of one delete run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +36,7 @@ pub struct DeleteReport {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use confit_cli::actions::seams::Seams;
+/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::DeleteArgs;
 /// use confit_cli::fs::OsFs;
 /// use std::io::Cursor;

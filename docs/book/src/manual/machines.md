@@ -79,4 +79,6 @@ confit apply backup.cb
 
 The bundle carries the full desired state. The new machine converges from that file alone. Install the binary, copy the file, apply it. Fresh machine, same setup.
 
+For the exact contract see [spec storage](../spec/storage.md).
+
 The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, drift, plus history.

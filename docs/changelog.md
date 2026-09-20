@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.8]
+
+Design spec: `docs/design/v0.8.md`.
+
+### Added
+
+- `confit.runtime.changed(path)` reads true while the preview for
+  `path` is anything but already-in-place, true on first runs. Hooks
+  carrying it skip quiet applies and run touching ones. Unknown paths
+  fail the plan naming the path, rc guards refuse the shape. The mise
+  plus nerd fonts plugins gate their hooks on it, so unrelated applies
+  stop re-running `mise install` plus `fc-cache`.
+- Plan shows hooks as data with lifecycle markers plus
+  unevaluated gates, so bundles carry a readable behavioral
+  contract across machines. Evaluation lines stay apply-only.
+- The summary renders titled sections holding drift notes,
+  resources, hooks, then counts. Headers carry `+`, `~`, `-`
+  sigils with detail lines nested beneath, empty sections stay
+  out, and the counts read one documents line plus one hooks
+  line while hooks move.
+- Hook gates render simplified infix with full parens, so merged
+  duplicate gates collapse to one branch instead of repeating it.
+- Hooks answer three questions in three slots. `requires` holds
+  capability, `when` holds need, `checks` keep result proof. A
+  closed `when` skips as unneeded instead of warning inability.
+  Profiles carrying capability leaves in `when` move them to
+  `requires`.
+
 ## [0.7] - 2026-09-19
 
 Design spec: `docs/design/v0.7.md`.

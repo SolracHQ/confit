@@ -60,7 +60,7 @@ fn delete_prunes_orphans_keeping_shared() {
     };
     let keep_dest = seed_named(&fs, "keep", &keep_plan);
     let drop_dest = seed_named(&fs, "drop", &drop_plan);
-    let pool = match confit_core::store::resolve_blobs_dir() {
+    let pool = match confit_core::store::blobs::resolve_blobs_dir() {
         Ok(pool) => pool,
         Err(error) => panic!("pool resolves: {error}"),
     };

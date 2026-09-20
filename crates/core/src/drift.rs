@@ -15,15 +15,6 @@ use crate::plan::{Bundle, opaque_label};
 /// Missing sides read as None, so an explicit null value
 /// stays distinct from an absent key.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::drift::Drift;
-/// use confit_core::ids::DocPath;
-///
-/// let drift = Drift::Missing { path: DocPath::new("x") };
-/// assert!(matches!(drift, Drift::Missing { .. }));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Drift {
     /// Structured or link leaf differs between recorded and disk.
@@ -59,6 +50,21 @@ pub enum Drift {
 }
 
 impl Drift {
+    /// Reads the drift path.
+    ///
+    /// # Returns
+    ///
+    /// The recorded path for key, hunk, missing, plus unreadable entries.
+    ///
+    pub fn path(&self) -> &DocPath {
+        match self {
+            Self::Key { path, .. }
+            | Self::Hunk { path, .. }
+            | Self::Missing { path }
+            | Self::Unreadable { path, .. } => path,
+        }
+    }
+
     /// Renders drift entries as display lines.
     ///
     /// Key edits read `~ path: key = old -> new`. Added keys
@@ -80,8 +86,23 @@ impl Drift {
     /// use confit_core::drift::Drift;
     /// use confit_core::ids::DocPath;
     ///
-    /// let entries = vec![Drift::Missing { path: DocPath::new("note") }];
-    /// assert!(matches!(Drift::lines(&entries).len(), 1));
+    /// let entries = vec![
+    ///     Drift::Key {
+    ///         path: DocPath::new("app.toml"),
+    ///         key: "tools.bat".to_string(),
+    ///         old: Some(serde_json::json!("old")),
+    ///         new: Some(serde_json::json!("new")),
+    ///     },
+    ///     Drift::Missing { path: DocPath::new("note") },
+    /// ];
+    /// assert_eq!(
+    ///     Drift::lines(&entries),
+    ///     vec![
+    ///         "~ app.toml: tools.bat = old -> new".to_string(),
+    ///         "note: manually deleted. changed outside config: add to config or the next apply loses them"
+    ///             .to_string(),
+    ///     ]
+    /// );
     /// ```
     pub fn lines(entries: &[Drift]) -> Vec<String> {
         let mut lines = Vec::new();
@@ -216,7 +237,7 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::drift::DriftOrder;
+    /// use confit_core::drift::{Drift, DriftOrder};
     /// use confit_core::ids::{DocPath, ReadOutcome};
     /// use confit_core::plan::Bundle;
     /// use std::collections::BTreeMap;
@@ -227,7 +248,13 @@ impl Bundle {
     ///     ManifestData::Text { content: "hi".into(), mode: None },
     /// )];
     /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst);
-    /// assert!(matches!(drifts.len(), 1));
+    /// assert_eq!(
+    ///     Drift::lines(&drifts),
+    ///     vec![
+    ///         "note: manually deleted. changed outside config: add to config or the next apply loses them"
+    ///             .to_string()
+    ///     ]
+    /// );
     /// ```
     pub fn drift(
         &self,

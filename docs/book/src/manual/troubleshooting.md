@@ -38,4 +38,6 @@ The log path prints after the run. Steps with passing checks stay skipped.
 vanished: manually deleted. changed outside config: add to config or the next apply loses them
 ```
 
+For the exact contract see [spec output](../spec/output.md).
+
 Common stops now have fixes. Next, [Reference](reference.md) lists every command shape.

@@ -76,7 +76,8 @@ Terminal surface over evaluation plus bundles.
 - `main` owns command dispatch plus report printing.
 - `cli` owns arg shapes for plan, apply, export, delete,
   init. Tildes expand across every path arg after parsing.
-- `actions` owns the flows (see `docs/flows`). Plan
+- `actions` owns the flows (see the plan, apply, plus init
+  spec pages). Plan
   evaluates, diffs, and stores payloads; apply previews,
   prompts, writes per kind, removes recorded orphans, writes
   state, and rotates history; export packs slots; delete

@@ -7,7 +7,6 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-chrono = "0.4.45"
 crossbeam-channel = "0.5.17"
 diffy = "0.5.2"
 dirs = "7.0.0"

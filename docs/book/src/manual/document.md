@@ -39,7 +39,12 @@ Drift compares bytes and reports sha plus size. Content stays out of the output.
 
 ## Rc
 
-The demo shell config uses this shape for its startup lines. Shell lines in three sections. Builders cover every line. `alias`, `env`, `prepend`, `eval`, `cmd`, `source`. Each builder takes `{ when = guard }` last. Sections order the render. `profile` first and always, `config` plus `final` behind the interactive guard:
+The demo shell config uses this shape for its startup lines. Shell lines live in three sections:
+
+- `profile` renders first and always runs.
+- `config` plus `final` render behind the interactive guard.
+
+Builders cover every line: `alias`, `env`, `prepend`, `eval`, `cmd`, `source`. Each builder takes `{ when = guard }` last:
 
 ```lua
 confit.document.rc.new({
@@ -87,5 +92,7 @@ end)
 ```
 
 The plan reads as one line either way. One add with the file count, silence on repeat runs, one update with the changed count. Member modes inherit the archive executable bit. An empty pick fails naming the filter.
+
+For the exact contract see [spec documents](../spec/documents.md).
 
 The demo file shapes now have names. Next, [Shell lines](shell-rc.md) covers how the demo renders startup files.

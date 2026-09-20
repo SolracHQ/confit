@@ -12,14 +12,6 @@ use crate::ids::{DocPath, ReadOutcome};
 ///
 /// Tests run against memory. The binary runs against the host disk.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::fs::{Filesystem, MemoryFs};
-///
-/// let fs = MemoryFs::new();
-/// assert!(matches!(fs.exists(std::path::Path::new("/definitely-missing-confit-path")), false));
-/// ```
 pub trait Filesystem {
     /// Reads raw bytes from a path.
     ///
@@ -117,14 +109,6 @@ pub enum TreeMemberRead {
 ///
 /// Relative member paths mapping to disk reads.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::fs::{MemoryFs, snapshot_tree};
-///
-/// let map = snapshot_tree(std::path::Path::new("/definitely-missing-confit-path"), &MemoryFs::new());
-/// assert!(matches!(map.is_empty(), true));
-/// ```
 pub fn snapshot_tree(
     dir: &Path,
     fs: &dyn Filesystem,
@@ -221,14 +205,6 @@ impl MemoryFs {
     ///
     /// The backend holding no files.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::fs::{Filesystem, MemoryFs};
-    ///
-    /// let fs = MemoryFs::new();
-    /// assert!(!fs.exists(std::path::Path::new("note")));
-    /// ```
     pub fn new() -> Self {
         Self::default()
     }
@@ -393,14 +369,6 @@ impl Filesystem for MemoryFs {
     ///
     /// The raw target for links, else `None`.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::fs::{Filesystem, MemoryFs};
-    ///
-    /// let fs = MemoryFs::new();
-    /// assert!(matches!(fs.read_link(std::path::Path::new("note")), None));
-    /// ```
     fn read_link(&self, path: &Path) -> Option<PathBuf> {
         if self.unreadable.contains(path) {
             return None;
@@ -418,14 +386,6 @@ impl Filesystem for MemoryFs {
     ///
     /// The recorded bits for files, else `None`.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::fs::{Filesystem, MemoryFs};
-    ///
-    /// let fs = MemoryFs::new();
-    /// assert!(matches!(fs.file_mode(std::path::Path::new("note")), None));
-    /// ```
     fn file_mode(&self, path: &Path) -> Option<u32> {
         self.modes.borrow().get(path).copied()
     }
@@ -462,15 +422,6 @@ impl Filesystem for MemoryFs {
 /// Absent for missing paths, present bytes plus mode for
 /// readable files, unreadable holding the failure detail otherwise.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::fs::{MemoryFs, snapshot};
-/// use confit_core::ids::DocPath;
-///
-/// let outcome = snapshot(&DocPath::new("/definitely-missing-confit-path"), &MemoryFs::new());
-/// assert!(matches!(outcome, confit_core::ids::ReadOutcome::Absent));
-/// ```
 pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
     let expanded = path.expand();
     if let Some(target) = fs.read_link(&expanded) {

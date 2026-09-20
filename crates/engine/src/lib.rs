@@ -33,23 +33,6 @@ mod surface;
 /// The fetcher override keeps tests off the network. The progress
 /// sender stays silent while holding `None`.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::EvalOpts;
-/// use std::path::PathBuf;
-///
-/// let opts = EvalOpts {
-///     root: PathBuf::from("."),
-///     plugins: PathBuf::from("plugins"),
-///     re_fetch: false,
-///     cache_dir: None,
-///     fetcher: None,
-///     progress: None,
-/// };
-/// assert!(matches!(opts.root.to_str(), Some(".")));
-/// assert!(matches!(opts.plugins.to_str(), Some("plugins")));
-/// ```
 #[derive(Clone, Default)]
 pub struct EvalOpts {
     /// Project root for resource reads plus module resolution.
@@ -87,18 +70,6 @@ impl std::fmt::Debug for EvalOpts {
 /// SHA-256 hex, one entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::Evaluation;
-///
-/// let evaluation = Evaluation {
-///     documents: Vec::new(),
-///     blobs: std::collections::BTreeMap::new(),
-///     hooks: Vec::new(),
-/// };
-/// assert!(matches!(evaluation.documents.len(), 0));
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
