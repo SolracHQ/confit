@@ -37,7 +37,7 @@ Apply reads profiles, bundles, and slots through one positional:
 confit plan laptop.lua --root .            # preview
 confit plan laptop.lua -o @laptop          # preview into a named slot
 confit apply laptop.lua                    # preview, prompt, write
-confit apply @laptop --force        # reviewed plan, no prompt
+confit apply @laptop --force        # reviewed manifest, no prompt
 confit apply %1                            # re-apply just-previous
 confit init myproject                      # scaffold, default .
 ```

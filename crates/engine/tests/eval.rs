@@ -833,6 +833,78 @@ confit.document.opaque("shared", string.char(0xFF, 0x00)),
     assert!(error.to_string().contains("more than once"));
 }
 
+#[test]
+fn patch_first_index_addresses_first_element() {
+    let profile = r#"
+local c = confit.config("c")
+c:add_document(confit.document.structured("json", { path = "app.json", data = { servers = { { host = "old" }, { host = "keep" } } } }))
+c:add_patch(confit.patch.structured("json", "app.json", function(data)
+  data:set("servers[1].host", "new")
+end))
+return { shells = { "bash" }, configs = { c } }
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "app.json");
+    let (_, data) = structured(&found);
+    assert_eq!(
+        data.get("servers"),
+        Some(&serde_json::json!([{"host": "new"}, {"host": "keep"}]))
+    );
+}
+
+#[test]
+fn patch_zero_index_fails_naming_path() {
+    let profile = r#"
+local c = confit.config("c")
+c:add_document(confit.document.structured("json", { path = "app.json", data = { servers = { { host = "old" } } } }))
+c:add_patch(confit.patch.structured("json", "app.json", function(data)
+  data:set("servers[0].host", "new")
+end))
+return { shells = { "bash" }, configs = { c } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    assert!(error.to_string().contains("servers[0].host"));
+}
+
+#[test]
+fn unmanaged_text_flag_rides_manifest() {
+    let profile = r#"
+return {
+  shells = { "bash" },
+  documents = {
+confit.document.text("note", "hi", { unmanaged = true }),
+  },
+  configs = { confit.config("tool") },
+}
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "note");
+    match &found.data {
+        ManifestData::Text { unmanaged, .. } => assert!(*unmanaged),
+        other => panic!("text expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn unmanaged_opaque_flag_rides_manifest() {
+    let profile = r#"
+return {
+  shells = { "bash" },
+  documents = {
+confit.document.opaque("bin/tool", string.char(0x41), { unmanaged = true }),
+  },
+  configs = { confit.config("tool") },
+}
+"#;
+    let documents = run_ok(&[], profile);
+    let found = by_path(&documents, "bin/tool");
+    match &found.data {
+        ManifestData::Opaque { unmanaged, .. } => assert!(*unmanaged),
+        other => panic!("opaque expected, got {other:?}"),
+    }
+}
+
 /// Builds one memory fetcher holding a single stub.
 fn stubbed(url: &str, body: &[u8]) -> std::sync::Arc<confit_engine::fetch::MemoryFetch> {
     let fake = std::sync::Arc::new(confit_engine::fetch::MemoryFetch::new());
@@ -2042,7 +2114,7 @@ return { shells = { "bash" }, configs = { installer, bat } }
         .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
         .unwrap_or_else(|| panic!("installer binary missing"));
     match &found.data {
-        ManifestData::Opaque { blob, mode } => {
+        ManifestData::Opaque { blob, mode, .. } => {
             assert_eq!(evaluation.blobs.get(blob), Some(&b"mise-binary".to_vec()));
             assert_eq!(mode, &Some(0o755));
         }

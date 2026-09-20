@@ -78,7 +78,7 @@ Hooks: 1 to add, 0 to change, 0 to destroy.
 ```
 
 Beyond packages, tools finish their own setup. One font call
-lands 96 files as one bundle line and refreshes the font cache:
+lands 96 files as one manifest line and refreshes the font cache:
 
 ```lua
 -- examples/3-dotfiles-tools/tools/fonts.lua
@@ -112,7 +112,7 @@ Hooks: 2 to add, 0 to change, 0 to destroy.
 | `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
 | `apply SOURCE` | previews, prompts on literal `yes`, writes files |
 | `export [PICKER]` | packs one slot into a portable bundle, prints the path |
-| `delete @name` | drops one named slot plus its orphaned pool bytes |
+| `delete @name` | drops one named slot plus its orphaned blobs |
 | `init [DIR]` | scaffolds a profile plus stubs, default `.` |
 
 `--root` defaults to the profile file parent directory.

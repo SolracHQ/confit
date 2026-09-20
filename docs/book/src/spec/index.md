@@ -43,7 +43,7 @@ Apply writes the bundle through the fixed slot.
 | ---- | ------------------------------- |
 | Live state | `confit/state.json` |
 | History | `confit/previous/{stamp}.json` |
-| Named plans | `confit/plans/{name}.json` |
+| Named slots | `confit/plans/{name}.json` |
 | Blob pool | `confit/blobs/{hash}` |
 
 Same profile plus same cache yields the same bundle.

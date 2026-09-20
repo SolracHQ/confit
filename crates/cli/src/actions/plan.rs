@@ -1,6 +1,6 @@
 //! Plan run
 //!
-//! Profile flags into built plans with drift.
+//! Profile flags into built bundles with drift.
 
 use std::path::{Path, PathBuf};
 
@@ -19,12 +19,12 @@ use crate::cli::PlanArgs;
 
 use crate::seams::{Seams, evaluate_shared, log_processed, timed};
 
-/// Outcome of one profile run with its previous plan.
+/// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
 pub struct PlanOutcome {
-    /// Holds the built plan with counts.
+    /// Holds the built bundle with counts.
     pub built: Bundle,
-    /// Holds the previous plan backing lifecycle marks.
+    /// Holds the previous manifest backing lifecycle marks.
     pub previous: Bundle,
     /// Holds disk edits leading the summary, desired versus
     /// disk on first runs.
@@ -33,11 +33,11 @@ pub struct PlanOutcome {
     pub first_run: bool,
     /// Holds hook lifecycle lines beside the summary.
     pub hook_lines: Vec<String>,
-    /// Holds the tmp plan path while no output destination passes.
+    /// Holds the tmp manifest path while no output destination passes.
     pub stored: Option<PathBuf>,
 }
 
-/// One plan run from plan flags to a built plan.
+/// One plan run from plan flags to a built bundle.
 ///
 /// # Examples
 ///
@@ -74,13 +74,13 @@ pub struct PlanRunner<'a> {
 }
 
 impl PlanRunner<'_> {
-    /// Evaluates the engine, loads previous plan, diffs drift,
-    /// builds the core plan, and writes the payload on demand
+    /// Evaluates the engine, loads previous manifest, diffs drift,
+    /// builds the core bundle, and writes the payload on demand
     /// through injected seams.
     ///
     /// # Returns
     ///
-    /// The built plan with its previous plan plus drift.
+    /// The built bundle with its previous manifest plus drift.
     ///
     /// # Errors
     ///
@@ -118,17 +118,18 @@ impl PlanRunner<'_> {
         });
         let hook_lines = lifecycle_lines(&built.manifest.hooks, &previous.manifest.hooks);
         if self.args.output.is_some() || self.store_tmp {
-            self.seams.emit_writing_plan(built.manifest.documents.len());
+            self.seams
+                .emit_writing_manifest(built.manifest.documents.len());
         }
         let stored = timed("write", || {
             match (self.args.output.as_deref(), self.store_tmp) {
                 (Some(dest), _) if is_named_output(dest) => {
-                    let resolved = crate::cli::resolve_plan_file(dest)?;
+                    let resolved = crate::cli::resolve_slot_file(dest)?;
                     write_manifest(&built, Some(&resolved), fs, self.seams.progress.as_ref())
                         .map(|()| None)
                 }
                 (Some(dest), _) => {
-                    let resolved = crate::cli::resolve_plan_file(dest)?;
+                    let resolved = crate::cli::resolve_slot_file(dest)?;
                     let dest = ensure_bundle_extension(&resolved);
                     write_bundle(&built, &dest, fs, self.seams.progress.as_ref()).map(|()| None)
                 }

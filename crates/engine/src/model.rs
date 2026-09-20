@@ -30,6 +30,8 @@ pub(crate) struct TextDecl {
     pub(crate) content: String,
     /// Unix permission bits, holding `None` for default handling.
     pub(crate) mode: Option<u32>,
+    /// Presence alone satisfies the document while true.
+    pub(crate) unmanaged: bool,
 }
 
 /// Declared symlink document.
@@ -50,6 +52,8 @@ pub(crate) struct OpaqueDecl {
     pub(crate) content: Vec<u8>,
     /// Unix permission bits, holding `None` for default handling.
     pub(crate) mode: Option<u32>,
+    /// True while presence alone satisfies the document.
+    pub(crate) unmanaged: bool,
 }
 
 /// Declared tree member holding destination slot plus bytes.

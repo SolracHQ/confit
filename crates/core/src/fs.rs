@@ -616,6 +616,7 @@ mod tests {
             ManifestData::Text {
                 content: "hi".into(),
                 mode: None,
+                unmanaged: false,
             },
         );
         match snapshot_document(&text, &fs) {

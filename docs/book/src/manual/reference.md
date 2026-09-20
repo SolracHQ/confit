@@ -14,8 +14,8 @@ confit init [DIR]                           # scaffold, default .
 
 Plan `-o` names the bundle file and gains `.cb` unless
 present. Omitted plan output runs preview-only. `@NAME` stores
-or loads a named slot under the user config folder. Named slots hold saved plans.
-Portable bundles hold `.cb` files.
+or loads a named slot under the user config folder. Named slots hold saved manifests.
+Portable bundles travel as `.cb` files.
 Empty names plus separators fail. A source reads `.lua` plus
 extensionless paths as a profile, `.cb` as a bundle file,
 `@NAME` as a named slot, `%N` as history newest-first from

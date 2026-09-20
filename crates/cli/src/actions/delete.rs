@@ -4,7 +4,7 @@
 
 use confit_core::error::{Error, Result};
 use confit_core::store::blobs::prune_blobs;
-use confit_core::store::slots::resolve_named_plan;
+use confit_core::store::slots::resolve_named_slot;
 
 use crate::cli::DeleteArgs;
 
@@ -54,7 +54,7 @@ pub fn run(args: &DeleteArgs, seams: Seams<'_>) -> Result<DeleteReport> {
             args.name
         )));
     };
-    let path = resolve_named_plan(name)?;
+    let path = resolve_named_slot(name)?;
     if !seams.fs.exists(&path) {
         return Err(Error::Plan(format!("delete: '@{name}' reads absent")));
     }

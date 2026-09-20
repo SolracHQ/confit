@@ -216,20 +216,22 @@ fn apply_history_first_restores_just_previous() {
         ManifestData::Text {
             content: "first\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("old plan builds: {error}"),
+        Err(error) => panic!("old bundle builds: {error}"),
     };
     let new = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
         ManifestData::Text {
             content: "second\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("new plan builds: {error}"),
+        Err(error) => panic!("new bundle builds: {error}"),
     };
     let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
@@ -281,20 +283,22 @@ fn apply_history_second_restores_older() {
         ManifestData::Text {
             content: "first\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("old plan builds: {error}"),
+        Err(error) => panic!("old bundle builds: {error}"),
     };
     let new = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
         ManifestData::Text {
             content: "second\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("new plan builds: {error}"),
+        Err(error) => panic!("new bundle builds: {error}"),
     };
     let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
@@ -337,10 +341,11 @@ fn apply_history_out_of_range_names_count() {
         ManifestData::Text {
             content: "only\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
@@ -393,10 +398,11 @@ fn apply_named_slot_restores() {
         ManifestData::Text {
             content: "named\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     match fs.write(Path::new("note"), b"hand edit\n") {
@@ -490,7 +496,7 @@ fn apply_cb_positional_loads_bundle() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     match confit_core::store::bundle::write_bundle(&built, Path::new("backup.cb"), &fs, None) {
         Ok(()) => {}
@@ -588,6 +594,7 @@ fn apply_second_profile_removes_recorded_orphans() {
             ManifestData::Text {
                 content: "hello again\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -622,7 +629,7 @@ fn apply_second_profile_removes_recorded_orphans() {
 }
 
 #[test]
-fn apply_emits_writing_plan_fact() {
+fn apply_emits_writing_manifest_fact() {
     use std::io::Cursor;
 
     pin_home();
@@ -648,15 +655,15 @@ fn apply_emits_writing_plan_fact() {
     assert!(
         seen.iter().any(|event| matches!(
             event,
-            confit_core::progress::Event::WritingPlan { documents: 4 }
+            confit_core::progress::Event::WritingManifest { documents: 4 }
         )),
-        "writing plan fires with document count"
+        "writing manifest fires with document count"
     );
     assert!(
         !seen
             .iter()
             .any(|event| matches!(event, confit_core::progress::Event::ReadingPlan { .. })),
-        "memory apply reads no plan files"
+        "memory apply reads no slot files"
     );
 }
 
@@ -669,11 +676,11 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     match confit_core::store::bundle::write_bundle(&built, Path::new("backup.cb"), &fs, None) {
         Ok(()) => {}
-        Err(error) => panic!("plan writes: {error}"),
+        Err(error) => panic!("manifest writes: {error}"),
     }
     let args = confit_cli::cli::ApplyArgs {
         source: PathBuf::from("backup.cb"),
@@ -689,7 +696,7 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
     let seams = confit_cli::seams::Seams::memory(&fs, &mut input);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
-        Err(error) => panic!("plan-file apply runs: {error}"),
+        Err(error) => panic!("slot-file apply runs: {error}"),
     };
     assert_eq!(report.written, 4);
     assert_eq!(report.removed, 0);
@@ -698,7 +705,7 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    assert!(fs.exists(&slot), "plan file apply writes fixed slot only");
+    assert!(fs.exists(&slot), "slot file apply writes fixed slot only");
     let entries = match confit_core::store::slots::list_previous(&fs) {
         Ok(entries) => entries,
         Err(error) => panic!("previous lists: {error}"),
@@ -723,6 +730,7 @@ fn two_profiles_share_one_slot_last_applied_wins() {
             ManifestData::Text {
                 content: "one\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )],
         Bundle::empty(),
@@ -747,6 +755,7 @@ fn two_profiles_share_one_slot_last_applied_wins() {
             ManifestData::Text {
                 content: "two\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )],
         previous,
@@ -782,20 +791,20 @@ fn named_plan_output_roundtrips_through_apply() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
-    let dest = match confit_cli::cli::resolve_plan_file(Path::new("@work")) {
+    let dest = match confit_cli::cli::resolve_slot_file(Path::new("@work")) {
         Ok(dest) => dest,
         Err(error) => panic!("named output resolves: {error}"),
     };
     assert!(dest.ends_with("confit/plans/work.json"));
     match confit_core::store::slots::write_manifest(&built, Some(&dest), &fs, None) {
         Ok(()) => {}
-        Err(error) => panic!("named plan writes: {error}"),
+        Err(error) => panic!("named slot writes: {error}"),
     }
     let reloaded = match confit_core::store::slots::load_state(Some(&dest), &fs) {
         Ok(reloaded) => reloaded,
-        Err(error) => panic!("named plan loads: {error}"),
+        Err(error) => panic!("named slot loads: {error}"),
     };
     assert_eq!(reloaded.manifest.documents.len(), 4);
     let args = confit_cli::cli::ApplyArgs {
@@ -811,7 +820,7 @@ fn named_plan_output_roundtrips_through_apply() {
     let seams = confit_cli::seams::Seams::memory(&fs, &mut input);
     let report = match confit_cli::actions::apply::ApplyRunner::run(&args, seams) {
         Ok(report) => report,
-        Err(error) => panic!("named plan applies: {error}"),
+        Err(error) => panic!("named slot applies: {error}"),
     };
     assert_eq!(report.written, 4);
     assert_eq!(memory_bytes(&fs, Path::new("note")), b"hello\n");
@@ -830,7 +839,7 @@ fn apply_bundle_populates_pool() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let bundle = PathBuf::from("proof.cb");
     match confit_core::store::bundle::write_bundle(&built, &bundle, &fs, None) {
@@ -897,6 +906,7 @@ fn apply_rotation_prunes_exclusive_blobs() {
                 ManifestData::Opaque {
                     blob: shared_sha.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -904,18 +914,21 @@ fn apply_rotation_prunes_exclusive_blobs() {
                 ManifestData::Opaque {
                     blob: unique_sha.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
         ];
-        let mut plan = match build(desired) {
-            Ok(plan) => plan,
-            Err(error) => panic!("plan builds: {error}"),
+        let mut manifest = match build(desired) {
+            Ok(manifest) => manifest,
+            Err(error) => panic!("bundle builds: {error}"),
         };
-        plan.blobs.insert(shared_sha.clone(), shared_bytes.clone());
-        plan.blobs.insert(unique_sha, unique_bytes);
+        manifest
+            .blobs
+            .insert(shared_sha.clone(), shared_bytes.clone());
+        manifest.blobs.insert(unique_sha, unique_bytes);
         let mut input = Cursor::new(String::new());
         let runner = confit_cli::actions::apply::ApplyRunner {
-            plan,
+            manifest,
             previous: Bundle::empty(),
             state: Some(slot.clone()),
             force: true,

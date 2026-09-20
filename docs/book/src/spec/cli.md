@@ -31,7 +31,7 @@ confit apply SOURCE [--force] [--root DIR] [--plugins DIR] [--re-fetch]
 ```
 
 SOURCE is a required positional. Values starting with `@` or
-`%` load a slot plan with preview plus prompts. Values ending
+`%` load a slot manifest with preview plus prompts. Values ending
 in `.cb` in any letter case load a bundle file and run from
 that file alone; the preview stays skipped. Remaining values
 evaluate as a profile path in any extension, extensionless
@@ -109,7 +109,7 @@ delete: '@{name}' reads absent
 ```
 
 Names behind the sigil follow the slot-name rules below. `@`
-alone fails as `plan name reads empty`.
+alone fails as `slot name reads empty`.
 
 ### init
 
@@ -149,7 +149,7 @@ stay literal.
 
 ## Pickers and slot names
 
-A picker names one stored plan. Omitted pickers read the
+A picker names one stored manifest. Omitted pickers read the
 applied slot. An absent applied slot fails as:
 
 ```sh
@@ -167,7 +167,7 @@ from 1. A non-number fails as:
 A pick past the stored count fails as:
 
 ```sh
-'{raw}' reads out of range, holding {total} stored plans
+'{raw}' reads out of range, holding {total} stored manifests
 ```
 
 Bare values fail as:
@@ -181,9 +181,9 @@ Apply prefixes each shape with `apply: `, export with
 separators. Refusals read:
 
 ```sh
-plan name reads empty
-plan name '{name}' holds separators
-plan name '{name}' reads unsupported
+slot name reads empty
+slot name '{name}' holds separators
+slot name '{name}' reads unsupported
 ```
 
 Empty names hit the first shape, separator carriers the

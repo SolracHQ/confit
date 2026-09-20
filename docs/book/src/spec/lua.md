@@ -48,7 +48,8 @@ confit.document.text(path, content, opts?)
 ```
 
 The call takes a path plus content plus optional opts.
-Opts holds `mode` only. The mode reads octal or symbolic.
+Opts holds `mode` plus `unmanaged`. The mode reads octal
+or symbolic. `unmanaged` marks existence-only documents.
 
 Preconditions hold path plus content strings. Plan
 errors name unknown opts fields plus bad modes.
@@ -72,7 +73,8 @@ confit.document.opaque(path, content, opts?)
 
 The call takes a path plus raw bytes plus optional opts.
 Lua strings carry the bytes without text conversion. Opts
-holds `mode` only.
+holds `mode` plus `unmanaged`. `unmanaged` marks
+existence-only documents.
 
 Preconditions hold path plus content strings. Plan errors
 name unknown opts fields plus bad modes.
@@ -258,7 +260,9 @@ The call takes a format plus a path plus a callback. The
 callback takes the live structured wrapper. The wrapper
 exposes `set` plus `append` only. `set` writes one dotted
 path. `append` extends one list. Paths hold dotted keys
-plus single indices. One path rides each call.
+plus single indices. List positions count from 1, so
+`servers[1].host` names the first server. `[0]` fails the
+plan naming the path. One path rides each call.
 
 Preconditions hold a known format plus a string path
 plus a function callback. Plan errors name unknown

@@ -271,8 +271,8 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize) {
         Event::ReadingPlan { path } => {
             spinner.set_message(format!("reading plan: {path}"));
         }
-        Event::WritingPlan { documents } => {
-            spinner.set_message(format!("writing plan for {documents} documents"));
+        Event::WritingManifest { documents } => {
+            spinner.set_message(format!("writing manifest for {documents} documents"));
         }
         Event::DocumentWritten { path } => {
             *writes += 1;

@@ -32,6 +32,16 @@ Design spec: `docs/design/v0.8.md`.
   behind the link. Dangling links read absent. A pre-existing
   symlink under a plain document unlinks first, leaving its
   target alone, then the fresh file lands as a normal write.
+- Text plus opaque documents take an `unmanaged` flag. Drift
+  skips the comparison for present unmanaged documents and
+  checks existence alone. Present ones skip the write while
+  their declaration matches the recorded manifest, rewritten
+  declarations land once, missing ones land from declared
+  content. `written` counts written documents.
+- Structured patch paths count from 1, so `servers[1].host`
+  names the first server. `servers[0]` fails the plan naming
+  the path. Drift keys plus summary lines echo the same
+  1-based shapes back.
 
 ## [0.7] - 2026-09-19
 

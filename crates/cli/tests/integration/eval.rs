@@ -16,14 +16,14 @@ fn fixture_plans_stay_deterministic() {
         let first = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
             Ok(documents) => match build(documents) {
                 Ok(built) => built,
-                Err(error) => panic!("{fixture} first plan builds: {error}"),
+                Err(error) => panic!("{fixture} first bundle builds: {error}"),
             },
             Err(error) => panic!("{fixture} first evaluation runs: {error}"),
         };
         let second = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
             Ok(documents) => match build(documents) {
                 Ok(built) => built,
-                Err(error) => panic!("{fixture} second plan builds: {error}"),
+                Err(error) => panic!("{fixture} second bundle builds: {error}"),
             },
             Err(error) => panic!("{fixture} second evaluation runs: {error}"),
         };
@@ -75,7 +75,7 @@ return { shells = { "bash" }, configs = { %s } }
         };
         match build(documents) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         }
     };
     let first = run(&forward);

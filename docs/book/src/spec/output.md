@@ -47,7 +47,7 @@ add sigil. Bodies vary by kind as follows:
   + tree (2 files)
 + ~/.bashrc: rc
   + alias cat = bat
-  + init[0] = eval "$(mise activate bash)"
+  + init[1] = eval "$(mise activate bash)"
 ```
 
 Update blocks open with `~` plus render per kind shapes from

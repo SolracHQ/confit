@@ -107,7 +107,7 @@ pub(crate) fn evaluate_fetch(
     .map(|evaluation| evaluation.documents)
 }
 
-/// Builds a plan off disk with an empty previous state.
+/// Builds a bundle off disk with an empty previous state.
 pub(crate) fn build(documents: Vec<ManifestDocument>) -> Result<confit_core::plan::Bundle, Error> {
     let mut built = confit_core::plan::Bundle::build(documents, Vec::new())?;
     let blobs = sample_blobs();
@@ -133,11 +133,11 @@ pub(crate) fn fill_hashes(documents: &mut [ManifestDocument]) {
     }
 }
 
-/// Serializes one built plan for comparison.
+/// Serializes one built manifest for comparison.
 pub(crate) fn plan_value(built: &confit_core::plan::Bundle) -> serde_json::Value {
     match serde_json::to_value(confit_core::store::manifest::Manifest::of(built)) {
         Ok(value) => value,
-        Err(error) => panic!("plan serializes: {error}"),
+        Err(error) => panic!("manifest serializes: {error}"),
     }
 }
 
@@ -176,6 +176,7 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
             ManifestData::Text {
                 content: "hello\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -196,6 +197,7 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
             ManifestData::Opaque {
                 blob: confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
                 mode: None,
+                unmanaged: false,
             },
         ),
     ]
@@ -218,12 +220,12 @@ pub(crate) fn apply_runner<'a>(
     preview: bool,
     seams: confit_cli::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let plan = match build(desired) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    let manifest = match build(desired) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     confit_cli::actions::apply::ApplyRunner {
-        plan,
+        manifest,
         previous,
         state,
         force,
@@ -327,20 +329,20 @@ pub(crate) fn hook_runner<'a>(
     seams.hook_runner = Some(fake);
     seams.log_file = log;
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
-    runner.plan = match Bundle::build(Vec::new(), hooks) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    runner.manifest = match Bundle::build(Vec::new(), hooks) {
+        Ok(bundle) => bundle,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     runner
 }
 
 /// Seeds the applied slot manifest plus pool on a memory backend.
-pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
+pub(crate) fn seed_slot(fs: &MemoryFs, manifest: &Bundle) -> PathBuf {
     let slot = match confit_core::store::slots::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    match confit_core::store::slots::write_manifest(plan, Some(&slot), fs, None) {
+    match confit_core::store::slots::write_manifest(manifest, Some(&slot), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("slot seeds: {error}"),
     }
@@ -348,12 +350,12 @@ pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
 }
 
 /// Seeds one named slot manifest plus pool on a memory backend.
-pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Bundle) -> PathBuf {
-    let dest = match confit_core::store::slots::resolve_named_plan(name) {
+pub(crate) fn seed_named(fs: &MemoryFs, name: &str, manifest: &Bundle) -> PathBuf {
+    let dest = match confit_core::store::slots::resolve_named_slot(name) {
         Ok(dest) => dest,
         Err(error) => panic!("named slot resolves: {error}"),
     };
-    match confit_core::store::slots::write_manifest(plan, Some(&dest), fs, None) {
+    match confit_core::store::slots::write_manifest(manifest, Some(&dest), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named slot seeds: {error}"),
     }

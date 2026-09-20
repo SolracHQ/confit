@@ -128,8 +128,8 @@ fn text_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Tab
     let (path_value, content_value, opts) = args;
     let path = path_value.req_str(CTOR, "path")?;
     let content = content_value.req_str(CTOR, "content")?;
-    let mode = ModeOpts::resolve(opts, CTOR)?;
-    DocumentTables::text(lua, path, content, mode)
+    let resolved = DocOpts::resolve(opts, CTOR)?;
+    DocumentTables::text(lua, path, content, resolved.mode, resolved.unmanaged)
 }
 
 /// Builds a symlink document table.
@@ -147,8 +147,8 @@ fn opaque_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<T
     let (path_value, content_value, opts) = args;
     let path = path_value.req_str(CTOR, "path")?;
     let content = content_value.req_bytes(CTOR, "content")?;
-    let mode = ModeOpts::resolve(opts, CTOR)?;
-    DocumentTables::opaque(lua, path, content, mode)
+    let resolved = DocOpts::resolve(opts, CTOR)?;
+    DocumentTables::opaque(lua, path, content, resolved.mode, resolved.unmanaged)
 }
 
 /// Document table builders holding domain validation.
@@ -207,15 +207,23 @@ impl DocumentTables {
     /// * `path` - destination path.
     /// * `content` - exact file text.
     /// * `mode` - unix permission bits, holding `None` for default handling.
+    /// * `unmanaged` - true while presence alone satisfies the document.
     ///
     /// # Returns
     ///
     /// Document table stamped with the text marker plus the mode marker.
     ///
-    fn text(lua: &Lua, path: String, content: String, mode: Option<u32>) -> mlua::Result<Table> {
+    fn text(
+        lua: &Lua,
+        path: String,
+        content: String,
+        mode: Option<u32>,
+        unmanaged: bool,
+    ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
         out.set("path", path)?;
         out.set("content", content)?;
+        out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "text", extra)?;
@@ -250,15 +258,23 @@ impl DocumentTables {
     /// * `path` - destination path.
     /// * `content` - raw file bytes.
     /// * `mode` - unix permission bits, holding `None` for default handling.
+    /// * `unmanaged` - true while presence alone satisfies the document.
     ///
     /// # Returns
     ///
     /// Document table stamped with the opaque marker plus the mode marker.
     ///
-    fn opaque(lua: &Lua, path: String, content: Vec<u8>, mode: Option<u32>) -> mlua::Result<Table> {
+    fn opaque(
+        lua: &Lua,
+        path: String,
+        content: Vec<u8>,
+        mode: Option<u32>,
+        unmanaged: bool,
+    ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
         out.set("path", path)?;
         out.set("content", lua.create_string(&content)?)?;
+        out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "opaque", extra)?;
@@ -266,32 +282,46 @@ impl DocumentTables {
     }
 }
 
-/// Mode opts resolver holding domain validation.
-struct ModeOpts;
+/// Document opts holding mode plus the unmanaged flag.
+struct DocOpts {
+    /// Unix permission bits, holding `None` for default handling.
+    mode: Option<u32>,
+    /// True while presence alone satisfies the document.
+    unmanaged: bool,
+}
 
-impl ModeOpts {
-    /// Resolves the unix permission bits from an opts value.
+impl DocOpts {
+    /// Resolves the document opts from an opts value.
     ///
     /// # Arguments
     ///
-    /// * `opts` - opts value holding nil, missing, or a table with a `mode` field.
+    /// * `opts` - opts value holding nil, missing, or a table with
+    ///   `mode` plus `unmanaged` fields.
     /// * `ctor` - error prefix naming the constructor.
     ///
     /// # Returns
     ///
-    /// Mode bits holding `None` for missing plus nil opts.
+    /// Mode bits plus the unmanaged flag, holding defaults for
+    /// missing plus nil opts.
     ///
     /// # Errors
     ///
     /// Non-table opts fail as plan errors. Unknown opts fields fail as plan errors.
     /// Non-string modes fail as plan errors. Unparsable modes fail as plan errors.
+    /// Non-boolean unmanaged flags fail as plan errors.
     ///
-    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Option<u32>> {
+    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Self> {
         let Some(opts) = opts else {
-            return Ok(None);
+            return Ok(Self {
+                mode: None,
+                unmanaged: false,
+            });
         };
         if opts.is_nil() {
-            return Ok(None);
+            return Ok(Self {
+                mode: None,
+                unmanaged: false,
+            });
         }
         let table = opts.req_table(ctor, "opts")?;
         for pair in table.pairs::<Value, Value>() {
@@ -301,20 +331,33 @@ impl ModeOpts {
                     "{ctor}: field 'opts' must hold string keys"
                 )));
             };
-            if name != "mode" {
+            if name != "mode" && name != "unmanaged" {
                 return Err(plan_error(format!(
                     "{ctor}: field 'opts' unknown field '{name}'"
                 )));
             }
         }
         let mode_value: Value = table.get("mode")?;
-        if mode_value.is_nil() {
-            return Ok(None);
-        }
-        let raw = mode_value.req_str(ctor, "mode")?;
-        confit_core::document::parse_mode(&raw)
-            .map(Some)
-            .map_err(|error| plan_error(format!("{ctor}: {error}")))
+        let mode = if mode_value.is_nil() {
+            None
+        } else {
+            let raw = mode_value.req_str(ctor, "mode")?;
+            Some(
+                confit_core::document::parse_mode(&raw)
+                    .map_err(|error| plan_error(format!("{ctor}: {error}")))?,
+            )
+        };
+        let unmanaged_value: Value = table.get("unmanaged")?;
+        let unmanaged = match unmanaged_value {
+            Value::Nil => false,
+            Value::Boolean(flag) => flag,
+            _ => {
+                return Err(plan_error(format!(
+                    "{ctor}: field 'unmanaged' must be a boolean"
+                )));
+            }
+        };
+        Ok(Self { mode, unmanaged })
     }
 }
 

@@ -12,15 +12,7 @@ use crate::progress::ProgressSender;
 use super::blobs::{Hydrator, store_blobs};
 use super::manifest::{HistoryEntry, Manifest, manifest_json};
 
-/// Loads previous plan, treating missing files as empty.
-///
-/// The manifest parses in two steps. A version probe runs
-/// first. Missing or invalid versions fail. Mismatched
-/// versions fail as unsupported. Hashes persist in the file
-/// and read trusted, so loads skip rendering. Binary bytes
-/// hydrate lazily: disk bytes matching a blob hash win
-/// before any pool read, so steady plans skip pool bytes.
-/// Missing pool blobs fail naming the hash.
+/// Loads previous manifest, treating missing files as empty.
 ///
 /// # Arguments
 ///
@@ -29,7 +21,7 @@ use super::manifest::{HistoryEntry, Manifest, manifest_json};
 ///
 /// # Returns
 ///
-/// The parsed plan, else empty for missing inputs.
+/// The parsed manifest, else empty for missing inputs.
 ///
 /// # Errors
 ///
@@ -44,7 +36,7 @@ use super::manifest::{HistoryEntry, Manifest, manifest_json};
 /// use confit_core::store::slots::load_state;
 ///
 /// let outcome = load_state(None, &MemoryFs::new());
-/// assert!(matches!(outcome, Ok(plan) if plan.manifest.documents.is_empty() && plan.manifest.version == BUNDLE_VERSION));
+/// assert!(matches!(outcome, Ok(bundle) if bundle.manifest.documents.is_empty() && bundle.manifest.version == BUNDLE_VERSION));
 /// ```
 pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
     let Some(file) = path else {
@@ -69,20 +61,20 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
         }
         None => {
             return Err(Error::Plan(format!(
-                "read state '{}': missing plan version",
+                "read state '{}': missing manifest version",
                 file.display()
             )));
         }
     }
     let stored: Manifest = serde_json::from_value(value)
         .map_err(|error| Error::Plan(format!("read state '{}': {error}", file.display())))?;
-    let plan = Hydrator::new(file, fs)?.hydrate(&stored)?;
+    let bundle = Hydrator::new(file, fs)?.hydrate(&stored)?;
     log::debug!(
         "read took {}ms for {}",
         read_start.elapsed().as_millis(),
         file.display()
     );
-    Ok(plan)
+    Ok(bundle)
 }
 
 /// Writes the manifest payload to a file or stdout.
@@ -93,7 +85,7 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// # Arguments
 ///
-/// * `plan` - the versioned desired state.
+/// * `bundle` - the versioned desired state.
 /// * `out` - the destination, holding `None` for stdout.
 /// * `fs` - the backend under writing.
 /// * `progress` - the sink for compression facts, holding `None` for silence.
@@ -113,17 +105,17 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::slots::write_manifest;
 ///
-/// let plan = Bundle::empty();
-/// assert!(matches!(write_manifest(&plan, None, &MemoryFs::new(), None), Ok(())));
+/// let bundle = Bundle::empty();
+/// assert!(matches!(write_manifest(&bundle, None, &MemoryFs::new(), None), Ok(())));
 /// ```
 pub fn write_manifest(
-    plan: &Bundle,
+    bundle: &Bundle,
     out: Option<&Path>,
     fs: &dyn Filesystem,
     progress: Option<&ProgressSender>,
 ) -> Result<()> {
-    store_blobs(plan, fs, progress)?;
-    let text = manifest_json(plan)?;
+    store_blobs(bundle, fs, progress)?;
+    let text = manifest_json(bundle)?;
     match out {
         Some(dest) => fs
             .write(dest, text.as_bytes())
@@ -138,7 +130,7 @@ pub fn write_manifest(
 /// Stored plans kept before rotation drops the oldest.
 const PREVIOUS_KEPT: usize = 5;
 
-/// Lists stored plans newest first with apply picks.
+/// Lists stored manifests newest first with apply picks.
 ///
 /// # Arguments
 ///
@@ -163,7 +155,7 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<HistoryEntry>> {
         .collect())
 }
 
-/// Reads stored plans newest first with their file paths.
+/// Reads stored manifests newest first with their file paths.
 ///
 /// Stamp names stay oldest-first on disk while presentation
 /// reverses, so `%1` names the just-previous entry.
@@ -179,7 +171,7 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<HistoryEntry>> {
 ///
 /// # Returns
 ///
-/// Stored plans with file paths in sorted order.
+/// Stored manifests with file paths in sorted order.
 ///
 /// # Errors
 ///
@@ -211,10 +203,10 @@ pub fn stored_entries(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<(PathBuf, B
             Ok(hydrator) => hydrator,
             Err(_) => continue,
         };
-        let Ok(plan) = hydrator.hydrate(&stored) else {
+        let Ok(bundle) = hydrator.hydrate(&stored) else {
             continue;
         };
-        out.push((file, plan));
+        out.push((file, bundle));
     }
     Ok(out)
 }
@@ -242,7 +234,7 @@ fn history_files(dir: &Path, fs: &dyn Filesystem) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Drops stored plans past the kept count, oldest first.
+/// Drops stored manifests past the kept count, oldest first.
 fn rotate_previous(dir: &Path, fs: &dyn Filesystem) -> Result<()> {
     let files = history_files(dir, fs)?;
     if files.len() > PREVIOUS_KEPT {
@@ -284,7 +276,7 @@ pub fn resolve_base_dir() -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// The folder holding stored plans.
+/// The folder holding stored manifests.
 ///
 /// # Errors
 ///
@@ -324,14 +316,14 @@ pub fn resolve_plans_dir() -> Result<PathBuf> {
     Ok(resolve_base_dir()?.join("plans"))
 }
 
-/// Resolves one named plan file under the plans folder.
+/// Resolves one named slot file under the plans folder.
 ///
 /// Names hold one file stem with no separators. Empty names,
 /// separator carriers, plus dot segments fail as plan errors.
 ///
 /// # Arguments
 ///
-/// * `name` - the plan name without the `@` sigil.
+/// * `name` - the slot name without the `@` sigil.
 ///
 /// # Returns
 ///
@@ -346,33 +338,33 @@ pub fn resolve_plans_dir() -> Result<PathBuf> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::store::slots::resolve_named_plan;
+/// use confit_core::store::slots::resolve_named_slot;
 ///
-/// let path = resolve_named_plan("work");
+/// let path = resolve_named_slot("work");
 /// assert!(matches!(path, Ok(path) if path.ends_with("confit/plans/work.json")));
 /// ```
-pub fn resolve_named_plan(name: &str) -> Result<PathBuf> {
+pub fn resolve_named_slot(name: &str) -> Result<PathBuf> {
     if name.is_empty() {
-        return Err(Error::Plan("plan name reads empty".to_string()));
+        return Err(Error::Plan("slot name reads empty".to_string()));
     }
     if name.contains('/') || name.contains('\\') {
-        return Err(Error::Plan(format!("plan name '{name}' holds separators")));
+        return Err(Error::Plan(format!("slot name '{name}' holds separators")));
     }
     if name == "." || name == ".." || name.contains('\0') {
-        return Err(Error::Plan(format!("plan name '{name}' reads unsupported")));
+        return Err(Error::Plan(format!("slot name '{name}' reads unsupported")));
     }
     if std::path::Path::new(name)
         .components()
         .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
-        return Err(Error::Plan(format!("plan name '{name}' reads unsupported")));
+        return Err(Error::Plan(format!("slot name '{name}' reads unsupported")));
     }
     Ok(resolve_plans_dir()?.join(format!("{name}.json")))
 }
 
 /// Builds the fixed live state slot.
 ///
-/// The slot holds the last applied plan. History files
+/// The slot holds the last applied manifest. History files
 /// live beside it under `previous` with stamp names.
 ///
 /// # Returns
@@ -395,7 +387,7 @@ pub fn default_state_path() -> Result<PathBuf> {
     Ok(resolve_base_dir()?.join("state.json"))
 }
 
-/// Stores one applied plan, rotating past the kept count.
+/// Stores one applied manifest, rotating past the kept count.
 ///
 /// Stamp names sort oldest first. Colliding stamps bump up
 /// by one until the name reads fresh. Referenced blobs land
@@ -403,13 +395,13 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// # Arguments
 ///
-/// * `plan` - the applied plan under storing.
+/// * `bundle` - the applied manifest under storing.
 /// * `fs` - the backend under writing.
 /// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
 /// # Returns
 ///
-/// The stored plan path backing apply of the past.
+/// The stored manifest path backing apply of the past.
 ///
 /// # Errors
 ///
@@ -426,11 +418,11 @@ pub fn default_state_path() -> Result<PathBuf> {
 /// assert!(matches!(outcome, Ok(_)));
 /// ```
 pub fn archive_previous(
-    plan: &Bundle,
+    bundle: &Bundle,
     fs: &dyn Filesystem,
     progress: Option<&ProgressSender>,
 ) -> Result<PathBuf> {
-    store_blobs(plan, fs, progress)?;
+    store_blobs(bundle, fs, progress)?;
     let dir = resolve_previous_dir()?;
     let mut stamp = system_nanos()?;
     let mut dest = dir.join(format!("{stamp}.json"));
@@ -438,13 +430,13 @@ pub fn archive_previous(
         stamp += 1;
         dest = dir.join(format!("{stamp}.json"));
     }
-    let text = manifest_json(plan)?;
+    let text = manifest_json(bundle)?;
     fs.write(&dest, text.as_bytes()).map_err(Error::from)?;
     rotate_previous(&dir, fs)?;
     Ok(dest)
 }
 
-/// One resolved slot picker, naming the slot behind the plan.
+/// One resolved slot picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotKind {
     /// Holds the applied slot.
@@ -455,7 +447,7 @@ pub enum SlotKind {
     History(usize),
 }
 
-/// Resolves one picker to its live plan plus slot kind.
+/// Resolves one picker to its live bundle plus slot kind.
 ///
 /// Absent pickers read the applied slot. `@name` reads the
 /// named slot. `%N` reads history newest-first from one.
@@ -471,7 +463,7 @@ pub enum SlotKind {
 ///
 /// # Returns
 ///
-/// The live plan holding binary bytes, plus the slot kind.
+/// The live bundle holding binary bytes, plus the slot kind.
 ///
 /// # Errors
 ///
@@ -485,16 +477,16 @@ pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle
                 "the applied slot reads absent, apply first".to_string(),
             ));
         }
-        let plan = load_state(Some(slot.as_path()), fs)?;
-        return Ok((plan, SlotKind::Applied));
+        let bundle = load_state(Some(slot.as_path()), fs)?;
+        return Ok((bundle, SlotKind::Applied));
     };
     if let Some(name) = raw.strip_prefix('@') {
-        let path = resolve_named_plan(name)?;
+        let path = resolve_named_slot(name)?;
         if !fs.exists(&path) {
             return Err(Error::Plan(format!("'@{name}' reads absent")));
         }
-        let plan = load_state(Some(path.as_path()), fs)?;
-        return Ok((plan, SlotKind::Named(name.to_string())));
+        let bundle = load_state(Some(path.as_path()), fs)?;
+        return Ok((bundle, SlotKind::Named(name.to_string())));
     }
     if let Some(rest) = raw.strip_prefix('%') {
         let pick: usize = rest.parse().map_err(|_| {
@@ -507,15 +499,15 @@ pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle
         let total = entries.len();
         if pick < 1 || pick > total {
             return Err(Error::Plan(format!(
-                "'{raw}' reads out of range, holding {total} stored plans"
+                "'{raw}' reads out of range, holding {total} stored manifests"
             )));
         }
-        let (_, plan) = entries.into_iter().nth(pick - 1).ok_or_else(|| {
+        let (_, bundle) = entries.into_iter().nth(pick - 1).ok_or_else(|| {
             Error::Plan(format!(
-                "'{raw}' reads out of range, holding {total} stored plans"
+                "'{raw}' reads out of range, holding {total} stored manifests"
             ))
         })?;
-        return Ok((plan, SlotKind::History(pick)));
+        return Ok((bundle, SlotKind::History(pick)));
     }
     Err(Error::Plan(format!(
         "'{raw}' reads unsupported, want '%N', '@name', or nothing"
@@ -528,10 +520,10 @@ mod tests {
     use crate::plan::Bundle;
 
     #[test]
-    fn named_plan_resolves_under_plans_dir() {
-        let path = match resolve_named_plan("work") {
+    fn named_slot_resolves_under_plans_dir() {
+        let path = match resolve_named_slot("work") {
             Ok(path) => path,
-            Err(error) => panic!("named plan resolves: {error}"),
+            Err(error) => panic!("named slot resolves: {error}"),
         };
         assert!(path.ends_with("confit/plans/work.json"));
     }
@@ -539,7 +531,7 @@ mod tests {
     #[test]
     fn named_plan_rejects_empty_separators_and_parent() {
         for name in ["", "a/b", "a\\b", ".", ".."] {
-            match resolve_named_plan(name) {
+            match resolve_named_slot(name) {
                 Ok(_) => panic!("{name:?} passes"),
                 Err(error) => assert!(!error.to_string().is_empty()),
             }
@@ -557,24 +549,25 @@ mod tests {
                 crate::document::ManifestData::Text {
                     content: "hi".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             )],
             Vec::new(),
         ) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
-        let dest = match resolve_named_plan("work") {
+        let dest = match resolve_named_slot("work") {
             Ok(dest) => dest,
-            Err(error) => panic!("named plan resolves: {error}"),
+            Err(error) => panic!("named slot resolves: {error}"),
         };
         match write_manifest(&built, Some(&dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("named plan writes: {error}"),
+            Err(error) => panic!("named slot writes: {error}"),
         }
         let loaded = match load_state(Some(&dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("named plan loads: {error}"),
+            Err(error) => panic!("named slot loads: {error}"),
         };
         assert_eq!(loaded.manifest.documents.len(), 1);
     }
@@ -598,16 +591,16 @@ mod tests {
         }];
         let built = match Bundle::build(Vec::new(), hooks) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("slot.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("manifest writes: {error}"),
         }
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("manifest loads: {error}"),
         };
         assert_eq!(loaded, built);
         assert_eq!(loaded.manifest.hooks.len(), 1);
@@ -652,19 +645,19 @@ mod tests {
         let fs = MemoryFs::new();
         let built = match Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
-        let dest = match resolve_named_plan("work") {
+        let dest = match resolve_named_slot("work") {
             Ok(dest) => dest,
-            Err(error) => panic!("named plan resolves: {error}"),
+            Err(error) => panic!("named slot resolves: {error}"),
         };
         match write_manifest(&built, Some(&dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("named plan writes: {error}"),
+            Err(error) => panic!("named slot writes: {error}"),
         }
         match resolve_slot(Some("@work"), &fs) {
-            Ok((plan, kind)) => {
-                assert_eq!(plan.manifest.documents.len(), 0);
+            Ok((bundle, kind)) => {
+                assert_eq!(bundle.manifest.documents.len(), 0);
                 assert_eq!(kind, SlotKind::Named("work".to_string()));
             }
             Err(error) => panic!("named slot resolves: {error}"),

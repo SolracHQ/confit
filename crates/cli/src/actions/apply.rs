@@ -36,7 +36,7 @@ pub struct ApplyReport {
     pub written: usize,
     /// Counts recorded orphans plus dropped tree members removed from disk.
     pub removed: usize,
-    /// Holds the stored plan path backing apply of the past.
+    /// Holds the stored manifest path backing apply of the past.
     pub stored: PathBuf,
 }
 
@@ -56,18 +56,18 @@ pub struct ApplyReport {
 ///
 /// let fs = MemoryFs::new();
 /// let mut input = Cursor::new("yes\n");
-/// let plan = match Bundle::build(
+/// let manifest = match Bundle::build(
 ///     vec![ManifestDocument::new(
 ///         DocPath::new("note"),
-///         ManifestData::Text { content: "hi".into(), mode: None },
+///         ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
 ///     )],
 ///     Vec::new(),
 /// ) {
-///     Ok(plan) => plan,
-///     Err(error) => panic!("plan builds: {error}"),
+///     Ok(manifest) => manifest,
+///     Err(error) => panic!("bundle builds: {error}"),
 /// };
 /// let runner = ApplyRunner {
-///     plan,
+///     manifest,
 ///     previous: Bundle::empty(),
 ///     state: None,
 ///     force: false,
@@ -78,11 +78,11 @@ pub struct ApplyReport {
 /// assert!(fs.exists(Path::new("note")));
 /// ```
 pub struct ApplyRunner<'a> {
-    /// Holds the desired plan under writing plus running.
-    pub plan: Bundle,
-    /// Holds the previous plan backing drift plus counts.
+    /// Holds the desired manifest under writing plus running.
+    pub manifest: Bundle,
+    /// Holds the previous manifest backing drift plus counts.
     pub previous: Bundle,
-    /// Holds the state file gaining the new plan, `None` skips.
+    /// Holds the state file gaining the new manifest, `None` skips.
     pub state: Option<PathBuf>,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
@@ -111,7 +111,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Evaluation plus plan load failures surface as plan
+    /// Evaluation plus manifest load failures surface as plan
     /// or io errors.
     ///
     /// # Examples
@@ -143,23 +143,23 @@ impl<'a> ApplyRunner<'a> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
         if raw.starts_with('@') || raw.starts_with('%') {
-            let (slot_plan, _) =
+            let (slot_manifest, _) =
                 resolve_slot(Some(raw), seams.fs).map_err(prefix_command("apply"))?;
-            return Self::from_slot(slot_plan, args.force, seams);
+            return Self::from_slot(slot_manifest, args.force, seams);
         }
         if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
             seams.emit_reading_plan(positional);
-            let file_plan = timed("apply plan load", || {
+            let file_manifest = timed("apply plan load", || {
                 load_bundle_input(positional, seams.fs)
             })?;
             let state_file = default_state_path()?;
             seams.emit_reading_plan(&state_file);
             let previous = load_state(Some(state_file.as_path()), seams.fs)?;
             return Ok(Self {
-                plan: file_plan,
+                manifest: file_manifest,
                 previous,
                 state: Some(state_file),
                 force: args.force,
@@ -177,10 +177,10 @@ impl<'a> ApplyRunner<'a> {
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
         let previous = load_state(Some(state_file.as_path()), seams.fs)?;
-        let mut plan = Bundle::build(evaluation.documents, evaluation.hooks)?;
-        plan.blobs = evaluation.blobs;
+        let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)?;
+        manifest.blobs = evaluation.blobs;
         Ok(Self {
-            plan,
+            manifest,
             previous,
             state: Some(state_file),
             force: args.force,
@@ -190,12 +190,12 @@ impl<'a> ApplyRunner<'a> {
     }
 
     /// Builds a slot-backed runner with preview plus prompts.
-    fn from_slot(slot_plan: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
+    fn from_slot(slot_manifest: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
         let previous = load_state(Some(state_file.as_path()), seams.fs)?;
         Ok(Self {
-            plan: slot_plan,
+            manifest: slot_manifest,
             previous,
             state: Some(state_file),
             force,
@@ -213,7 +213,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Returns
     ///
-    /// The write counts plus the stored plan path.
+    /// The write counts plus the stored manifest path.
     ///
     /// # Errors
     ///
@@ -254,11 +254,11 @@ impl<'a> ApplyRunner<'a> {
     /// The preview renders through presentation. Only the literal
     /// `yes` proceeds, anything else aborts with nothing written.
     /// A fresh snapshot before writing re-prompts on drift. Success
-    /// writes the state file plus one stored plan with rotation.
+    /// writes the state file plus one stored manifest with rotation.
     ///
     /// # Returns
     ///
-    /// The write counts plus the stored plan path.
+    /// The write counts plus the stored manifest path.
     ///
     /// # Errors
     ///
@@ -267,7 +267,7 @@ impl<'a> ApplyRunner<'a> {
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
         let fs: &dyn Filesystem = self.seams.fs;
-        let built = std::mem::replace(&mut self.plan, Bundle::empty());
+        let built = std::mem::replace(&mut self.manifest, Bundle::empty());
         log_processed(&built, &self.previous);
         let snapshot = |document: &ManifestDocument| snapshot_document(document, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
@@ -325,7 +325,13 @@ impl<'a> ApplyRunner<'a> {
         } else {
             None
         };
-        write_documents(&built.manifest.documents, &built.blobs, fs, notify)?;
+        let written = write_documents(
+            &built.manifest.documents,
+            &built.blobs,
+            fs,
+            notify,
+            &changed,
+        )?;
         let removed = remove_orphans(
             &self.previous.manifest.documents,
             &built.manifest.documents,
@@ -338,17 +344,19 @@ impl<'a> ApplyRunner<'a> {
                 fs,
             )?;
         if self.state.is_some() {
-            self.seams.emit_writing_plan(built.manifest.documents.len());
+            self.seams
+                .emit_writing_manifest(built.manifest.documents.len());
         }
         if let Some(state) = self.state.as_deref() {
             write_manifest(&built, Some(state), fs, self.seams.progress.as_ref())?;
         }
-        self.seams.emit_writing_plan(built.manifest.documents.len());
+        self.seams
+            .emit_writing_manifest(built.manifest.documents.len());
         let stored = archive_previous(&built, fs, self.seams.progress.as_ref())?;
         prune_blobs(fs)?;
         self.run_hooks(&built, &rt, fs, &changed)?;
         Ok(ApplyReport {
-            written: built.manifest.documents.len(),
+            written,
             removed,
             stored,
         })
@@ -525,8 +533,8 @@ fn prefix_command(command: &'static str) -> impl FnOnce(Error) -> Error {
 ///
 /// # Arguments
 ///
-/// * `built` - the plan under applying.
-/// * `previous` - the slot plan backing lifecycle marks.
+/// * `built` - the manifest under applying.
+/// * `previous` - the slot manifest backing lifecycle marks.
 /// * `drifts` - the drift entries backing the preview.
 /// * `first_run` - true while the state slot reads absent.
 ///
@@ -580,6 +588,7 @@ mod tests {
             ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )
     }
@@ -600,7 +609,7 @@ mod tests {
     fn changed_paths_first_run_holds_every_built_path() {
         let built = match Bundle::build(vec![text_doc("a", "x"), text_doc("b", "y")], Vec::new()) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let changed = changed_paths(&built, &Bundle::empty(), &[], true);
         assert_eq!(changed.len(), 2);
@@ -624,7 +633,7 @@ mod tests {
             Vec::new(),
         ) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let drifts = vec![Drift::Hunk {
             path: DocPath::new("drifted"),
@@ -654,7 +663,7 @@ mod tests {
         let previous = with_hashes(vec![tree_doc()]);
         let built = match Bundle::build(vec![tree_doc()], Vec::new()) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let drifts = vec![Drift::Missing {
             path: DocPath::new("fonts/member.ttf"),

@@ -8,7 +8,7 @@ fn export_applied_slot_writes_auto_bundle() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_slot(&fs, &built);
     let args = confit_cli::cli::ExportArgs {
@@ -42,7 +42,7 @@ fn export_named_slot_writes_auto_bundle() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let args = confit_cli::cli::ExportArgs {
@@ -77,20 +77,22 @@ fn export_history_slots_write_auto_bundles() {
         ManifestData::Text {
             content: "old\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("old plan builds: {error}"),
+        Err(error) => panic!("old bundle builds: {error}"),
     };
     let new = match build(vec![ManifestDocument::new(
         DocPath::new("history-new"),
         ManifestData::Text {
             content: "new\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("new plan builds: {error}"),
+        Err(error) => panic!("new bundle builds: {error}"),
     };
     let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
@@ -172,7 +174,7 @@ fn export_output_imposes_cb_suffix() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let bare_args = confit_cli::cli::ExportArgs {
@@ -214,7 +216,7 @@ fn export_output_imposes_cb_suffix() {
 fn export_bare_path_picker_refuses() {
     pin_home();
     let fs = MemoryFs::new();
-    for raw in ["backup.cb", "backup", "plan.json"] {
+    for raw in ["backup.cb", "backup", "slot.json"] {
         let args = confit_cli::cli::ExportArgs {
             picker: Some(raw.to_string()),
             output: None,
@@ -242,10 +244,11 @@ fn export_manifest_prints_pretty_json_without_base64() {
         ManifestData::Opaque {
             blob: confit_core::plan::sha256_hex(&raw),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let args = confit_cli::cli::ExportArgs {

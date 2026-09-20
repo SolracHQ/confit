@@ -46,6 +46,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
             ManifestData::Text {
                 content: "hello\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -53,6 +54,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
             ManifestData::Text {
                 content: "bye".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
     ];
@@ -123,7 +125,7 @@ fn plan_shows_old_to_new_on_updates() {
     )];
     let built = match Bundle::build(desired, Vec::new()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     assert_eq!(built.summary(&previous).update, 1);
     let report = confit_cli::presentation::summary::Summary {
@@ -165,6 +167,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
             ManifestData::Text {
                 content: "kept\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -172,6 +175,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
             ManifestData::Text {
                 content: "desired\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -179,12 +183,13 @@ fn first_run_preview_shows_impact_plus_in_place() {
             ManifestData::Text {
                 content: "fresh\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
     ];
     let built = match Bundle::build(desired.clone(), Vec::new()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let drift = built.drift(
         &|document| snapshot_document(document, &fs),
@@ -258,6 +263,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         ManifestData::Text {
             content: "recorded\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )];
     fill_hashes(&mut recorded_docs);
@@ -293,12 +299,13 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
             ManifestData::Text {
                 content: "recorded\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )],
         Vec::new(),
     ) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let report = confit_cli::presentation::summary::Summary {
         built: &built,
@@ -348,6 +355,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
             ManifestData::Text {
                 content: "recorded\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )],
         previous,
@@ -378,11 +386,12 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         ManifestData::Text {
             content: "desired\n".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )];
     let built = match Bundle::build(desired.clone(), Vec::new()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let drifts = built.drift(
         &|document| snapshot_document(document, &fs),

@@ -217,6 +217,7 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
             ManifestData::Text {
                 content: "hi\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )]
     };
@@ -231,9 +232,9 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
     fill_hashes(&mut recorded);
     let mut previous = Bundle::empty();
     previous.manifest.documents = recorded;
-    let plan = match Bundle::build(desired(), vec![hook()]) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    let manifest = match Bundle::build(desired(), vec![hook()]) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let mut input = Cursor::new(String::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
@@ -241,7 +242,7 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let runner = confit_cli::actions::apply::ApplyRunner {
-        plan,
+        manifest,
         previous,
         state: None,
         force: true,
@@ -265,9 +266,9 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
     );
 
     let fs = hook_fs();
-    let plan = match Bundle::build(desired(), vec![hook()]) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    let manifest = match Bundle::build(desired(), vec![hook()]) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let mut input = Cursor::new(String::new());
     let fake =
@@ -279,7 +280,7 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let runner = confit_cli::actions::apply::ApplyRunner {
-        plan,
+        manifest,
         previous: Bundle::empty(),
         state: None,
         force: true,
@@ -317,9 +318,9 @@ fn requires_closed_apply_warns_without_spawning() {
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
-    runner.plan = match Bundle::build(Vec::new(), vec![hook]) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     match runner.execute() {
         Ok(_) => {}
@@ -357,9 +358,9 @@ fn when_closed_apply_skips_without_spawning() {
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
-    runner.plan = match Bundle::build(Vec::new(), vec![hook]) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     match runner.execute() {
         Ok(_) => {}
@@ -399,15 +400,15 @@ fn print_lines_keep_hook_order_as_data() {
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
-    runner.plan = match Bundle::build(
+    runner.manifest = match Bundle::build(
         Vec::new(),
         vec![
             hook_for(&["tool", "first"], &["/fakebin"], None, vec![]),
             hook_for(&["tool", "second"], &["/fakebin"], None, vec![]),
         ],
     ) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     match runner.execute() {
         Ok(_) => {}

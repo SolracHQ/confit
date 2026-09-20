@@ -34,7 +34,7 @@ const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 ///
 /// # Arguments
 ///
-/// * `plan` - the live plan under exporting.
+/// * `bundle` - the live bundle under exporting.
 /// * `dest` - the bundle file under writing.
 /// * `fs` - the backend under writing.
 /// * `progress` - the sink for compression facts, holding `None` for silence.
@@ -59,19 +59,19 @@ const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 /// assert!(matches!(outcome, Ok(())));
 /// ```
 pub fn write_bundle(
-    plan: &Bundle,
+    bundle: &Bundle,
     dest: &Path,
     fs: &dyn Filesystem,
     progress: Option<&ProgressSender>,
 ) -> Result<()> {
-    let stored = Manifest::of(plan);
+    let stored = Manifest::of(bundle);
     let manifest = serde_json::to_vec_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
     let encoder =
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(BUNDLE_GZIP_LEVEL));
     let mut builder = tar::Builder::new(encoder);
     append_bundle_entry(&mut builder, BUNDLE_MANIFEST, &manifest, dest)?;
-    let blobs: Vec<(String, Vec<u8>)> = collect_blobs(plan)
+    let blobs: Vec<(String, Vec<u8>)> = collect_blobs(bundle)
         .into_iter()
         .map(|(sha, bytes)| (sha, bytes.to_vec()))
         .collect();
@@ -141,7 +141,7 @@ fn append_bundle_entry(
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
 }
 
-/// Reads one portable bundle into a live plan.
+/// Reads one portable bundle into a live bundle.
 ///
 /// Blob entries verify against their names before hydrating.
 /// Missing blobs fail naming the hash.
@@ -153,7 +153,7 @@ fn append_bundle_entry(
 ///
 /// # Returns
 ///
-/// The live plan holding binary bytes.
+/// The live bundle holding binary bytes.
 ///
 /// # Errors
 ///
@@ -170,7 +170,7 @@ fn append_bundle_entry(
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.tgz");
 /// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs, None), Ok(())));
-/// assert!(matches!(read_bundle(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
+/// assert!(matches!(read_bundle(dest, &fs), Ok(bundle) if bundle.manifest.documents.is_empty()));
 /// ```
 pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
     let bytes = fs
@@ -271,7 +271,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
     })
 }
 
-/// Loads one plan input holding either a bundle or a manifest.
+/// Loads one input holding either a bundle or a manifest.
 ///
 /// Bundle files carry the `.cb` extension and hydrate from
 /// the archive alone. Every other path reads as a slot
@@ -280,12 +280,12 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// # Arguments
 ///
-/// * `path` - the resolved plan file under reading.
+/// * `path` - the resolved slot file under reading.
 /// * `fs` - the backend under reading.
 ///
 /// # Returns
 ///
-/// The live plan holding binary bytes.
+/// The live bundle holding binary bytes.
 ///
 /// # Errors
 ///
@@ -301,7 +301,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 /// let fs = MemoryFs::new();
 /// let dest = std::path::Path::new("bundle.cb");
 /// assert!(matches!(write_bundle(&Bundle::empty(), dest, &fs, None), Ok(())));
-/// assert!(matches!(load_bundle_input(dest, &fs), Ok(plan) if plan.manifest.documents.is_empty()));
+/// assert!(matches!(load_bundle_input(dest, &fs), Ok(bundle) if bundle.manifest.documents.is_empty()));
 /// ```
 pub fn load_bundle_input(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
     if path
@@ -311,9 +311,9 @@ pub fn load_bundle_input(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
         return read_bundle(path, fs);
     }
     match load_state(Some(path), fs) {
-        Ok(plan) => Ok(plan),
+        Ok(bundle) => Ok(bundle),
         Err(first) => match read_bundle(path, fs) {
-            Ok(plan) => Ok(plan),
+            Ok(bundle) => Ok(bundle),
             Err(_) => Err(first),
         },
     }
@@ -399,6 +399,7 @@ mod tests {
                 ManifestData::Opaque {
                     blob: compressible_blob.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -406,6 +407,7 @@ mod tests {
                 ManifestData::Opaque {
                     blob: noisy_blob.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -428,7 +430,7 @@ mod tests {
         ];
         let mut built = match Bundle::build(documents, Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         built
             .blobs
@@ -436,10 +438,10 @@ mod tests {
         built.blobs.insert(noisy_blob.clone(), noisy.clone());
         built.blobs.insert(empty_blob.clone(), empty.clone());
         let fs = MemoryFs::new();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("slot.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("manifest writes: {error}"),
         }
         let pool = match resolve_blobs_dir() {
             Ok(pool) => pool,
@@ -450,7 +452,7 @@ mod tests {
         }
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("manifest loads: {error}"),
         };
         assert_eq!(loaded, built);
         let bundle = std::path::Path::new("bundle.tgz");
@@ -474,7 +476,7 @@ mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("slot.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
             Err(error) => panic!("first plan writes: {error}"),

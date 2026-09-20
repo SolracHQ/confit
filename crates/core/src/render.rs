@@ -45,7 +45,7 @@ impl ManifestDocument {
     ///
     /// let document = ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.render(&BTreeMap::new()), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
@@ -95,7 +95,7 @@ impl ManifestDocument {
     /// blobs.insert("abc".to_string(), vec![0xFF, 0x00]);
     /// let document = ManifestDocument::new(
     ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
+    ///     ManifestData::Opaque { blob: "abc".into(), mode: None, unmanaged: false },
     /// );
     /// assert!(matches!(document.bytes(&blobs), Ok(bytes) if bytes == vec![0xFF, 0x00]));
     /// ```

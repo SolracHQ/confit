@@ -86,7 +86,7 @@ after the build.
 
 The slot lives at `{config}/confit/state.json`. The run loads
 this slot before hashing, so fresh hashes meet recorded hashes
-right away. A missing file reads as an empty plan plus marks
+right away. A missing file reads as an empty manifest plus marks
 the first run.
 
 ### Version probe

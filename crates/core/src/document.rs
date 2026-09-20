@@ -404,6 +404,9 @@ pub enum ManifestData {
         /// Holds unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
+        /// Holds true while presence alone satisfies the document.
+        #[serde(default)]
+        unmanaged: bool,
     },
     /// Describes a symlink placement.
     Link {
@@ -413,12 +416,19 @@ pub enum ManifestData {
     /// Holds the rc data object.
     Rc(RcData),
     /// Holds one pool blob reference plus its mode.
+    ///
+    /// The unmanaged flag marks presence-only documents.
+    /// Present unmanaged documents stay quiet whatever the
+    /// bytes. Missing unmanaged documents read as missing.
     Opaque {
         /// Holds the SHA-256 hex over raw file bytes.
         blob: String,
         /// Holds unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
+        /// Holds true while presence alone satisfies the document.
+        #[serde(default)]
+        unmanaged: bool,
     },
     /// Holds one managed file set under a destination folder.
     Tree {
@@ -459,13 +469,29 @@ impl ManifestData {
     /// ```rust
     /// use confit_core::document::ManifestData;
     ///
-    /// let data = ManifestData::Text { content: "hi".into(), mode: Some(0o755) };
+    /// let data = ManifestData::Text { content: "hi".into(), mode: Some(0o755), unmanaged: false};
     /// assert!(matches!(data.mode(), Some(0o755)));
     /// ```
     pub fn mode(&self) -> Option<u32> {
         match self {
             Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
+        }
+    }
+
+    /// Reads the unmanaged flag for this payload.
+    ///
+    /// Text plus opaque payloads carry the flag. Every
+    /// other payload reads as false.
+    ///
+    /// # Returns
+    ///
+    /// True while presence alone satisfies the document.
+    ///
+    pub fn unmanaged(&self) -> bool {
+        match self {
+            Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
+            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => false,
         }
     }
 
@@ -571,7 +597,7 @@ impl ManifestDocument {
     ///
     /// let stored = ManifestDocument::new(
     ///     DocPath::new("x"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert_eq!(stored.key(), "text:x");
     /// ```

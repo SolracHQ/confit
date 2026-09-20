@@ -1,6 +1,6 @@
 # Apply
 
-`confit apply SOURCE` carries one desired plan to disk through a
+`confit apply SOURCE` carries one desired manifest to disk through a
 guarded sequence. The source decides the load path. Every path
 shares the preview, the prompts, the write order, plus the hook
 run. The flow reads:
@@ -18,7 +18,7 @@ apply reads no profile '{path}'
 ```
 
 Evaluation runs through the engine under the shared flags. The
-fixed slot loads as the previous plan. The build fills hashes
+fixed slot loads as the previous manifest. The build fills hashes
 plus sorts documents by path. The preview renders.
 
 ### Bundle source
@@ -28,7 +28,7 @@ suffix match reads case-insensitive. The archive hydrates from
 its own bytes alone, so the run stands free of profiles. Stored
 hashes read trusted, so the run renders nothing. This branch
 moves from load straight to prompts. The fixed slot still loads as the
-previous plan, plus prompts still guard the writes.
+previous manifest, plus prompts still guard the writes.
 
 ### Named slot source
 
@@ -56,7 +56,7 @@ apply: '{raw}' reads unsupported, want '%N' holding a number from 1
 An out-of-range pick fails naming the stored count:
 
 ```
-apply: '{raw}' reads out of range, holding {total} stored plans
+apply: '{raw}' reads out of range, holding {total} stored manifests
 ```
 
 The preview renders. A past apply records a fresh history
@@ -90,9 +90,9 @@ Documents: 1 to add, 0 to change, 1 to destroy.
 ```
 
 While the fixed slot reads absent, the run counts as first. The
-drift reference reads the desired plan, the order reads
+drift reference reads the desired manifest, the order reads
 disk-first, plus the preview frames impact as desired versus
-disk. Past the first run the reference reads the previous plan
+disk. Past the first run the reference reads the previous manifest
 with recorded-first order.
 
 ### Prompts
@@ -124,7 +124,9 @@ kind:
 
 - Text, structured, plus rc documents render through the core
   renderer.
-- Opaque documents write raw blob bytes.
+- Opaque documents write raw blob bytes. Present unmanaged
+  documents skip the write while their declaration matches
+  the recorded manifest.
 - Tree documents write each member to its joined path with
   per-member modes.
 - Link documents land as symlinks.
@@ -149,7 +151,7 @@ land.
 
 The report counts the run:
 
-- `written` counts built documents.
+- `written` counts written documents.
 - `removed` counts orphans plus dropped members.
 - `stored` holds the fresh archive path.
 

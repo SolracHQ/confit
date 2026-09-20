@@ -31,9 +31,10 @@ The demo kitty install uses this shape for unpacked archive members. Binary byte
 ```lua
 confit.document.opaque(path, content)
 confit.document.opaque(path, content, { mode = "755" })
+confit.document.opaque(path, content, { unmanaged = true })
 ```
 
-Text documents take the same opt. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes.
+Text documents take the same opts. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes. `unmanaged` marks existence-only files like self-updating tools: present bytes read as already in place, missing ones land from declared content, rewritten declarations land once.
 
 Drift compares bytes and reports sha plus size. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
 
@@ -91,7 +92,7 @@ local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(
 end)
 ```
 
-The plan reads as one line either way. One add with the file count, silence on repeat runs, one update with the changed count. Member modes inherit the archive executable bit. An empty pick fails naming the filter.
+The manifest reads as one line either way. One add with the file count, silence on repeat runs, one update with the changed count. Member modes inherit the archive executable bit. An empty pick fails naming the filter.
 
 For the exact contract see [spec documents](../spec/documents.md).
 

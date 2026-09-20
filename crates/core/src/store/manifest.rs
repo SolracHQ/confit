@@ -9,7 +9,7 @@ use crate::plan::Bundle;
 
 use serde::{Deserialize, Serialize};
 
-/// One stored plan entry for the apply-past listing.
+/// One stored manifest entry for the apply-past listing.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -49,8 +49,8 @@ impl Manifest {
     ///
     /// The manifest for plan files plus bundles.
     ///
-    pub fn of(plan: &Bundle) -> Self {
-        plan.manifest.clone()
+    pub fn of(bundle: &Bundle) -> Self {
+        bundle.manifest.clone()
     }
 
     /// Reads one persisted manifest back as itself.
@@ -90,11 +90,11 @@ impl Manifest {
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::manifest::manifest_json;
 ///
-/// let plan = Bundle::empty();
-/// assert!(matches!(manifest_json(&plan), Ok(text) if text.contains("documents")));
+/// let bundle = Bundle::empty();
+/// assert!(matches!(manifest_json(&bundle), Ok(text) if text.contains("documents")));
 /// ```
-pub fn manifest_json(plan: &Bundle) -> Result<String> {
-    let stored = Manifest::of(plan);
+pub fn manifest_json(bundle: &Bundle) -> Result<String> {
+    let stored = Manifest::of(bundle);
     serde_json::to_string_pretty(&stored)
         .map_err(|error| Error::Plan(format!("render plan: {error}")))
 }
@@ -117,7 +117,7 @@ mod tests {
         let opaque_blob = crate::plan::sha256_hex(&opaque_bytes);
         let mut blobs = BTreeMap::new();
         blobs.insert(opaque_blob.clone(), opaque_bytes);
-        let plan = Bundle {
+        let bundle = Bundle {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
                 documents: vec![
@@ -126,6 +126,7 @@ mod tests {
                         ManifestData::Text {
                             content: "héllo \"quoted\"\n".to_string(),
                             mode: None,
+                            unmanaged: false,
                         },
                     ),
                     ManifestDocument::new(
@@ -133,6 +134,7 @@ mod tests {
                         ManifestData::Opaque {
                             blob: opaque_blob,
                             mode: None,
+                            unmanaged: false,
                         },
                     ),
                     ManifestDocument::new(
@@ -154,11 +156,11 @@ mod tests {
             },
             blobs,
         };
-        let parallel = match manifest_json(&plan) {
+        let parallel = match manifest_json(&bundle) {
             Ok(text) => text,
             Err(error) => panic!("parallel serializes: {error}"),
         };
-        let sequential = match serde_json::to_string_pretty(&Manifest::of(&plan)) {
+        let sequential = match serde_json::to_string_pretty(&Manifest::of(&bundle)) {
             Ok(text) => text,
             Err(error) => panic!("sequential serializes: {error}"),
         };

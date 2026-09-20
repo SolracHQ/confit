@@ -679,6 +679,7 @@ fn assemble_text_link(
             ManifestData::Text {
                 content: item.content.clone(),
                 mode: item.mode,
+                unmanaged: item.unmanaged,
             },
             "profile".to_string(),
         ));
@@ -693,7 +694,7 @@ fn assemble_text_link(
     }
     for item in &declared.opaques {
         grouped.entry(item.path.clone()).or_default().push((
-            opaque_data(&item.content, item.mode, blobs),
+            opaque_data(&item.content, item.mode, item.unmanaged, blobs),
             "profile".to_string(),
         ));
     }
@@ -709,6 +710,7 @@ fn assemble_text_link(
                 ManifestData::Text {
                     content: item.content.clone(),
                     mode: item.mode,
+                    unmanaged: item.unmanaged,
                 },
                 config.name.clone(),
             ));
@@ -723,7 +725,7 @@ fn assemble_text_link(
         }
         for item in &config.opaques {
             grouped.entry(item.path.clone()).or_default().push((
-                opaque_data(&item.content, item.mode, blobs),
+                opaque_data(&item.content, item.mode, item.unmanaged, blobs),
                 config.name.clone(),
             ));
         }
@@ -750,16 +752,24 @@ fn assemble_text_link(
 }
 
 /// Builds one opaque payload stashing raw bytes in the blob map.
+///
+/// The unmanaged flag rides beside the blob, outside the data
+/// hash, so toggling it with identical bytes shows no update line.
 fn opaque_data(
     content: &[u8],
     mode: Option<u32>,
+    unmanaged: bool,
     blobs: &mut BTreeMap<String, Vec<u8>>,
 ) -> ManifestData {
     let blob = confit_core::plan::sha256_hex(content);
     blobs
         .entry(blob.clone())
         .or_insert_with(|| content.to_vec());
-    ManifestData::Opaque { blob, mode }
+    ManifestData::Opaque {
+        blob,
+        mode,
+        unmanaged,
+    }
 }
 
 /// Builds one tree payload stashing member bytes in the blob map.

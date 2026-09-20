@@ -18,6 +18,7 @@ fn delete_prunes_orphans_keeping_shared() {
             ManifestData::Opaque {
                 blob: shared_sha.clone(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -25,6 +26,7 @@ fn delete_prunes_orphans_keeping_shared() {
             ManifestData::Opaque {
                 blob: keep_sha.clone(),
                 mode: None,
+                unmanaged: false,
             },
         ),
     ]) {
@@ -33,7 +35,7 @@ fn delete_prunes_orphans_keeping_shared() {
             built.blobs.insert(keep_sha.clone(), keep_bytes.clone());
             built
         }
-        Err(error) => panic!("keep plan builds: {error}"),
+        Err(error) => panic!("keep bundle builds: {error}"),
     };
     let drop_plan = match build(vec![
         ManifestDocument::new(
@@ -41,6 +43,7 @@ fn delete_prunes_orphans_keeping_shared() {
             ManifestData::Opaque {
                 blob: shared_sha.clone(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -48,6 +51,7 @@ fn delete_prunes_orphans_keeping_shared() {
             ManifestData::Opaque {
                 blob: drop_sha.clone(),
                 mode: None,
+                unmanaged: false,
             },
         ),
     ]) {
@@ -56,7 +60,7 @@ fn delete_prunes_orphans_keeping_shared() {
             built.blobs.insert(drop_sha.clone(), drop_bytes.clone());
             built
         }
-        Err(error) => panic!("drop plan builds: {error}"),
+        Err(error) => panic!("drop bundle builds: {error}"),
     };
     let keep_dest = seed_named(&fs, "keep", &keep_plan);
     let drop_dest = seed_named(&fs, "drop", &drop_plan);

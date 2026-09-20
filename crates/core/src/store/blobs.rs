@@ -86,7 +86,7 @@ pub(crate) fn gzip_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// Decoder plus hash mismatch failures surface as plan
+/// Decoder plus hash mismatch failures surface as bundle
 /// errors naming the hash.
 pub(crate) fn gunzip_bytes(bytes: &[u8], sha: &str) -> Result<Vec<u8>> {
     let mut decoder = flate2::read::GzDecoder::new(bytes);
@@ -130,13 +130,14 @@ pub(crate) fn check_blob_id(sha: &str) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `plan` - the bundle holding blob bytes.
+/// * `bundle` - the bundle holding blob bytes.
 ///
 /// # Returns
 ///
 /// Content hashes mapping to raw bytes in sorted order.
-pub(crate) fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
-    plan.blobs
+pub(crate) fn collect_blobs(bundle: &Bundle) -> BTreeMap<String, &[u8]> {
+    bundle
+        .blobs
         .iter()
         .map(|(sha, bytes)| (sha.clone(), bytes.as_slice()))
         .collect()
@@ -149,7 +150,7 @@ pub(crate) fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
 ///
 /// # Arguments
 ///
-/// * `plan` - the live plan holding binary bytes.
+/// * `bundle` - the live bundle holding binary bytes.
 /// * `fs` - the backend under writing.
 /// * `progress` - the sink for compression facts, holding `None` for silence.
 ///
@@ -161,13 +162,13 @@ pub(crate) fn collect_blobs(plan: &Bundle) -> BTreeMap<String, &[u8]> {
 ///
 /// Compression plus write failures surface as plan errors.
 pub(crate) fn store_blobs(
-    plan: &Bundle,
+    bundle: &Bundle,
     fs: &dyn Filesystem,
     progress: Option<&ProgressSender>,
 ) -> Result<()> {
     let dir = resolve_blobs_dir()?;
     let mut missing: Vec<(String, Vec<u8>)> = Vec::new();
-    for (sha, bytes) in collect_blobs(plan) {
+    for (sha, bytes) in collect_blobs(bundle) {
         let dest = dir.join(&sha);
         if fs.exists(&dest) {
             continue;
@@ -414,7 +415,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::plan::Bundle;
     use crate::store::slots::{
-        default_state_path, load_state, resolve_named_plan, resolve_previous_dir, write_manifest,
+        default_state_path, load_state, resolve_named_slot, resolve_previous_dir, write_manifest,
     };
 
     pub(crate) fn mixed_plan() -> Bundle {
@@ -430,6 +431,7 @@ pub(crate) mod tests {
                 ManifestData::Text {
                     content: "hi".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -437,6 +439,7 @@ pub(crate) mod tests {
                 ManifestData::Opaque {
                     blob: opaque_blob.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -459,7 +462,7 @@ pub(crate) mod tests {
         ];
         let mut built = match Bundle::build(documents, Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         built.blobs.insert(opaque_blob, vec![0xFF, 0x00, 0x41]);
         built.blobs.insert(a_blob, vec![1, 2, 3]);
@@ -503,14 +506,14 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
         let blobs = pool_blobs(&fs);
@@ -549,6 +552,7 @@ pub(crate) mod tests {
                 ManifestData::Opaque {
                     blob: shared_blob.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -556,6 +560,7 @@ pub(crate) mod tests {
                 ManifestData::Opaque {
                     blob: shared_blob.clone(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -571,20 +576,20 @@ pub(crate) mod tests {
         ];
         let mut built = match Bundle::build(documents, Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         built.blobs.insert(shared_blob, shared.clone());
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         let blobs = pool_blobs(&fs);
         assert_eq!(blobs.len(), 1);
         assert_eq!(gunzip_blob(&fs, &blobs[0]), shared);
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
     }
@@ -603,12 +608,13 @@ pub(crate) mod tests {
                     ManifestData::Opaque {
                         blob: blob.clone(),
                         mode: None,
+                        unmanaged: false,
                     },
                 )],
                 Vec::new(),
             ) {
                 Ok(built) => built,
-                Err(error) => panic!("plan builds: {error}"),
+                Err(error) => panic!("bundle builds: {error}"),
             };
             built.blobs.insert(blob, vec![byte]);
             built
@@ -633,7 +639,7 @@ pub(crate) mod tests {
             Ok(()) => {}
             Err(error) => panic!("history writes: {error}"),
         }
-        let named = match resolve_named_plan("work") {
+        let named = match resolve_named_slot("work") {
             Ok(named) => named,
             Err(error) => panic!("named resolves: {error}"),
         };
@@ -673,10 +679,10 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         match fs.write(std::path::Path::new("bin"), &[0xFF, 0x00, 0x41]) {
             Ok(()) => {}
@@ -699,7 +705,7 @@ pub(crate) mod tests {
         assert!(pool_blobs(&fs).is_empty());
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
     }
@@ -710,10 +716,10 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         match fs.write(std::path::Path::new("bin"), b"stale") {
             Ok(()) => {}
@@ -725,7 +731,7 @@ pub(crate) mod tests {
         }
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
     }
@@ -737,10 +743,10 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         let sha = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
         let pool = match resolve_blobs_dir() {
@@ -775,10 +781,10 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         let sha = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
         let pool = match resolve_blobs_dir() {
@@ -806,11 +812,11 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
         match write_manifest(&built, Some(dest), &fs, Some(&sender)) {
             Ok(()) => {}
-            Err(error) => panic!("plan writes: {error}"),
+            Err(error) => panic!("bundle writes: {error}"),
         }
         drop(sender);
         let mut started: Vec<(usize, u64)> = Vec::new();
@@ -847,7 +853,7 @@ pub(crate) mod tests {
         assert_eq!(compressed_bytes, raw_bytes);
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
     }
@@ -859,22 +865,22 @@ pub(crate) mod tests {
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
-        let dest = std::path::Path::new("plan.json");
+        let dest = std::path::Path::new("bundle.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
-            Err(error) => panic!("first plan writes: {error}"),
+            Err(error) => panic!("first bundle writes: {error}"),
         }
         let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
         match write_manifest(&built, Some(dest), &fs, Some(&sender)) {
             Ok(()) => {}
-            Err(error) => panic!("second plan writes: {error}"),
+            Err(error) => panic!("second bundle writes: {error}"),
         }
         drop(sender);
         let events: Vec<Event> = receiver.iter().collect();
         assert!(events.is_empty(), "second run stays silent: {events:?}");
         let loaded = match load_state(Some(dest), &fs) {
             Ok(loaded) => loaded,
-            Err(error) => panic!("plan loads: {error}"),
+            Err(error) => panic!("bundle loads: {error}"),
         };
         assert_eq!(loaded, built);
     }

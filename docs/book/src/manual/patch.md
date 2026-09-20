@@ -57,12 +57,12 @@ The prepend lands before the init eval, every run.
 
 ## Key language
 
-Structured writes address dotted keys. Dots walk tables, one `[N]` per segment walks lists starting at 0:
+Structured writes address dotted keys. Dots walk tables, one `[N]` per segment walks lists counting from 1:
 
 ```lua
 data:set("server.host", "example.com")
 data:set("tools.bat", "latest")
-data:set("servers[0].host", "example.com")
+data:set("servers[1].host", "example.com")
 data:append("plugins", "tail")
 ```
 

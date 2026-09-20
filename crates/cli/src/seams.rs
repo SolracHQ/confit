@@ -198,9 +198,9 @@ impl<'a> Seams<'a> {
     }
 
     /// Emits one plan-writing fact while a sender passes.
-    pub fn emit_writing_plan(&self, documents: usize) {
+    pub fn emit_writing_manifest(&self, documents: usize) {
         if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::WritingPlan { documents });
+            let _ = sender.send(Event::WritingManifest { documents });
         }
     }
 }

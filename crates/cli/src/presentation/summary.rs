@@ -1,6 +1,6 @@
 //! Summary
 //!
-//! Stderr summary over built plans.
+//! Stderr summary over built bundles.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -107,7 +107,7 @@ impl Default for Painter {
     }
 }
 
-/// One stderr summary over a built plan plus its previous plan.
+/// One stderr summary over a built bundle plus its previous manifest.
 ///
 /// Titled sections carry sigiled headers, empty sections stay
 /// out. First runs frame drift as desired versus disk.
@@ -122,13 +122,13 @@ impl Default for Painter {
 ///
 /// let document = ManifestDocument::new(
 ///     DocPath::new("note"),
-///     ManifestData::Text { content: "hi".into(), mode: None },
+///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
 /// );
 /// let built = Bundle::build(vec![document], Vec::new());
 /// let previous = Bundle::empty();
 /// let summary = match built {
 ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false, hook_lines: &[], hook_evaluated: &[] },
-///     Err(error) => panic!("plan builds: {error}"),
+///     Err(error) => panic!("bundle builds: {error}"),
 /// };
 /// let text = summary.render();
 /// assert!(text.contains("+ note: text"));
@@ -137,11 +137,11 @@ impl Default for Painter {
 /// ```
 #[derive(Debug)]
 pub struct Summary<'a> {
-    /// Holds the built plan under display.
+    /// Holds the built bundle under display.
     pub built: &'a Bundle,
-    /// Holds the previous plan for lifecycle marks.
+    /// Holds the previous manifest for lifecycle marks.
     pub previous: &'a Bundle,
-    /// Holds the plan versus disk edits leading the text.
+    /// Holds the manifest versus disk edits leading the text.
     pub drift: &'a [Drift],
     /// Holds true while the state slot reads absent.
     pub first_run: bool,
@@ -232,13 +232,13 @@ impl Summary<'_> {
     /// use confit_core::ids::DocPath;
     /// use confit_core::plan::Bundle;
     ///
-    /// let first = ManifestDocument::new(DocPath::new("a"), ManifestData::Text { content: "a".into(), mode: None });
-    /// let second = ManifestDocument::new(DocPath::new("b"), ManifestData::Text { content: "b".into(), mode: None });
+    /// let first = ManifestDocument::new(DocPath::new("a"), ManifestData::Text { content: "a".into(), mode: None, unmanaged: false});
+    /// let second = ManifestDocument::new(DocPath::new("b"), ManifestData::Text { content: "b".into(), mode: None, unmanaged: false});
     /// let built = Bundle::build(vec![first, second], Vec::new());
     /// let previous = Bundle::empty();
     /// let summary = match built {
     ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false, hook_lines: &[], hook_evaluated: &[] },
-    ///     Err(error) => panic!("plan builds: {error}"),
+    ///     Err(error) => panic!("bundle builds: {error}"),
     /// };
     /// assert_eq!(
     ///     summary.summary_lines(),
@@ -387,7 +387,7 @@ impl Summary<'_> {
         }
     }
 
-    /// Renders delete headers for previous keys missing from the plan.
+    /// Renders delete headers for previous keys missing from the manifest.
     fn delete_headers(&self) -> Vec<String> {
         let seen: BTreeSet<String> = self
             .built
@@ -671,7 +671,7 @@ fn collect_value(key: &str, value: &serde_json::Value) -> Vec<(String, String)> 
         serde_json::Value::Array(items) => {
             let mut out = Vec::new();
             for (index, item) in items.iter().enumerate() {
-                out.extend(collect_value(&format!("{key}[{index}]"), item));
+                out.extend(collect_value(&format!("{key}[{}]", index + 1), item));
             }
             out
         }
@@ -761,7 +761,7 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
         }
         serde_json::Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
-                out.extend(flatten_json(&format!("{key}[{index}]"), item));
+                out.extend(flatten_json(&format!("{key}[{}]", index + 1), item));
             }
         }
         _ => {
@@ -929,7 +929,7 @@ fn rc_update_lines(
     painted_hunk_lines(painter, &hunks)
 }
 
-/// Splits a plan key into kind plus path halves.
+/// Splits a manifest key into kind plus path halves.
 fn split_key(key: &str) -> (&str, &str) {
     match key.find(':') {
         Some(index) => (&key[..index], &key[index + 1..]),
@@ -953,6 +953,7 @@ mod tests {
             ManifestData::Opaque {
                 blob: old_blob.clone(),
                 mode: None,
+                unmanaged: false,
             },
         )];
         for document in &mut previous_docs {
@@ -968,11 +969,12 @@ mod tests {
             ManifestData::Opaque {
                 blob: new_blob.clone(),
                 mode: None,
+                unmanaged: false,
             },
         );
         let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         built.blobs.insert(new_blob, vec![0xFF, 0x01]);
         let report = Summary {
@@ -999,6 +1001,7 @@ mod tests {
             ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )];
         for document in &mut previous_docs {
@@ -1014,11 +1017,12 @@ mod tests {
             ManifestData::Opaque {
                 blob: blob.clone(),
                 mode: None,
+                unmanaged: false,
             },
         );
         let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         built.blobs.insert(blob, vec![0xFF, 0x00]);
         let report = Summary {
@@ -1044,6 +1048,7 @@ mod tests {
             ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )];
         for document in &mut previous_docs {
@@ -1058,11 +1063,12 @@ mod tests {
             ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         );
         let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let drift = vec![Drift::Missing {
             path: DocPath::new("note"),
@@ -1089,6 +1095,7 @@ mod tests {
                 ManifestData::Text {
                     content: "kept".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -1096,6 +1103,7 @@ mod tests {
                 ManifestData::Text {
                     content: "old".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
         ];
@@ -1112,6 +1120,7 @@ mod tests {
                 ManifestData::Text {
                     content: "kept".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
             ManifestDocument::new(
@@ -1119,12 +1128,13 @@ mod tests {
                 ManifestData::Text {
                     content: "new".to_string(),
                     mode: None,
+                    unmanaged: false,
                 },
             ),
         ];
         let built = match confit_core::plan::Bundle::build(desired, Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1175,7 +1185,7 @@ mod tests {
         );
         let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1202,7 +1212,7 @@ mod tests {
         );
         let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1222,7 +1232,7 @@ mod tests {
         let previous = tree_previous(vec![tree_member("a.ttf", 1)]);
         let built = match confit_core::plan::Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1249,6 +1259,7 @@ mod tests {
                     ManifestData::Text {
                         content: "kept".to_string(),
                         mode: None,
+                        unmanaged: false,
                     },
                 ),
                 ManifestDocument::new(
@@ -1256,6 +1267,7 @@ mod tests {
                     ManifestData::Text {
                         content: "fresh".to_string(),
                         mode: None,
+                        unmanaged: false,
                     },
                 ),
                 ManifestDocument::new(
@@ -1278,13 +1290,14 @@ mod tests {
                     ManifestData::Text {
                         content: "desired\n".to_string(),
                         mode: None,
+                        unmanaged: false,
                     },
                 ),
             ],
             Vec::new(),
         ) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let previous = Bundle::empty();
         let drift = vec![
@@ -1393,7 +1406,7 @@ mod tests {
         let previous = tree_previous(vec![tree_member("a.ttf", 1)]);
         let built = match confit_core::plan::Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1413,7 +1426,7 @@ mod tests {
         let previous = Bundle::empty();
         let built = match Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let hook_lines = vec![
             "+ mise install".to_string(),
@@ -1452,7 +1465,7 @@ mod tests {
         let previous = Bundle::empty();
         let built = match Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let hook_lines = vec!["~ mise install".to_string()];
         let report = Summary {
@@ -1477,7 +1490,7 @@ mod tests {
         let previous = Bundle::empty();
         let built = match Bundle::build(Vec::new(), Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1494,6 +1507,60 @@ mod tests {
         );
         assert!(!text.contains("Hooks"), "empty hooks stay quiet: {text}");
         assert!(text.contains("Summary"), "summary always closes: {text}");
+    }
+
+    #[test]
+    fn structured_arrays_render_one_based_keys() {
+        use confit_core::document::StructuredFormat;
+
+        fn servers(hosts: &[&str]) -> ManifestDocument {
+            let items: Vec<serde_json::Value> = hosts
+                .iter()
+                .map(|host| serde_json::json!({"host": host}))
+                .collect();
+            ManifestDocument::new(
+                DocPath::new("app.json"),
+                ManifestData::Structured {
+                    format: StructuredFormat::Json,
+                    data: [("servers".to_string(), serde_json::Value::Array(items))]
+                        .into_iter()
+                        .collect(),
+                },
+            )
+        }
+
+        let previous = hashed_docs(vec![servers(&["a", "b"])]);
+        let fresh = ManifestDocument::new(
+            DocPath::new("fresh.json"),
+            ManifestData::Structured {
+                format: StructuredFormat::Json,
+                data: [("servers".to_string(), serde_json::json!([{"host": "a"}]))]
+                    .into_iter()
+                    .collect(),
+            },
+        );
+        let built = match Bundle::build(vec![servers(&["a", "c"]), fresh], Vec::new()) {
+            Ok(built) => built,
+            Err(error) => panic!("bundle builds: {error}"),
+        };
+        let report = Summary {
+            built: &built,
+            previous: &previous,
+            drift: &[],
+            first_run: false,
+            hook_lines: &[],
+            hook_evaluated: &[],
+        };
+        let text = report.render();
+        assert!(
+            text.contains("~ servers[2].host = b -> c"),
+            "updates count from one: {text}"
+        );
+        assert!(
+            text.contains("+ servers[1].host = a"),
+            "creates count from one: {text}"
+        );
+        assert!(!text.contains("[0]"), "no zero key leaks: {text}");
     }
 
     fn hashed_docs(documents: Vec<ManifestDocument>) -> Bundle {
@@ -1514,6 +1581,7 @@ mod tests {
             ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )
     }
@@ -1541,7 +1609,7 @@ mod tests {
         let previous = hashed_docs(vec![text_document("note", "recorded\n")]);
         let built = match Bundle::build(vec![text_document("note", "recorded\n")], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let drift = previous.drift(
             &|_| ReadOutcome::Present {
@@ -1638,7 +1706,7 @@ mod tests {
         let previous = hashed_docs(vec![text_document("note", "hi")]);
         let built = match Bundle::build(vec![text_document("note", "hi")], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let drift = vec![
             Drift::Key {
@@ -1712,7 +1780,7 @@ mod tests {
         let previous = hashed_docs(vec![recorded]);
         let built = match Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1764,7 +1832,7 @@ mod tests {
         let previous = hashed_docs(vec![rc_document("~/.bashrc", profile.clone())]);
         let built = match Bundle::build(vec![rc_document("~/.bashrc", profile)], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,
@@ -1820,7 +1888,7 @@ mod tests {
         let previous = hashed_docs(vec![recorded]);
         let built = match Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let report = Summary {
             built: &built,

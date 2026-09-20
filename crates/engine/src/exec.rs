@@ -582,7 +582,7 @@ impl<'a> LiveTable<'a> {
                 list.set(next, lua_value)?;
                 let mut owned = owners.borrow_mut();
                 let mut leaves = BTreeMap::new();
-                flatten_json(json, &format!("{full}[{}]", next - 1), &mut leaves);
+                flatten_json(json, &format!("{full}[{}]", next), &mut leaves);
                 for leaf in leaves.keys() {
                     owned.insert(leaf.clone(), owner.to_string());
                 }

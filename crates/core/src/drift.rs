@@ -1,6 +1,6 @@
 //! Drift
 //!
-//! Comparison results between recorded plans and disk.
+//! Comparison results between recorded manifests and disk.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -233,7 +233,7 @@ impl Bundle {
     /// let mut previous = Bundle::empty();
     /// previous.manifest.documents = vec![ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// )];
     /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst);
     /// assert_eq!(
@@ -287,7 +287,8 @@ impl ManifestDocument {
     ///
     /// Modes compare only while the recorded document carries
     /// one. Recorded None skips the mode check, keeping umask
-    /// default files quiet.
+    /// default files quiet. Present unmanaged documents stay
+    /// quiet whatever the bytes.
     ///
     /// # Arguments
     ///
@@ -325,7 +326,14 @@ impl ManifestDocument {
                     push_hunk(&self.path, first, second)
                 }
             }
-            ManifestData::Text { .. } | ManifestData::Rc(_) => {
+            ManifestData::Text { unmanaged, .. } => {
+                if *unmanaged || recorded == disk {
+                    Vec::new()
+                } else {
+                    push_hunk(&self.path, first, second)
+                }
+            }
+            ManifestData::Rc(_) => {
                 if recorded != disk {
                     push_hunk(&self.path, first, second)
                 } else {
@@ -355,8 +363,10 @@ impl ManifestDocument {
                     Vec::new()
                 }
             }
-            ManifestData::Opaque { .. } => {
-                if recorded != disk {
+            ManifestData::Opaque { unmanaged, .. } => {
+                if *unmanaged || recorded == disk {
+                    Vec::new()
+                } else {
                     let (old, new) = match order {
                         DriftOrder::RecordedFirst => (
                             serde_json::Value::String(opaque_label(recorded)),
@@ -373,8 +383,6 @@ impl ManifestDocument {
                         old: Some(old),
                         new: Some(new),
                     }]
-                } else {
-                    Vec::new()
                 }
             }
             ManifestData::Tree { .. } => Vec::new(),
@@ -588,6 +596,8 @@ fn flatten_table(table: &Table, prefix: &str, out: &mut BTreeMap<String, serde_j
 }
 
 /// Flattens one value into dotted leaf entries.
+///
+/// Array positions echo from 1, so printed keys match typed paths.
 fn flatten_value(
     key: &str,
     value: &serde_json::Value,
@@ -601,7 +611,7 @@ fn flatten_value(
         }
         serde_json::Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
-                flatten_value(&format!("{key}[{index}]"), item, out);
+                flatten_value(&format!("{key}[{}]", index + 1), item, out);
             }
         }
         _ => {
@@ -621,6 +631,7 @@ mod tests {
             ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )
     }
@@ -645,6 +656,18 @@ mod tests {
             ManifestData::Opaque {
                 blob: crate::plan::sha256_hex(bytes),
                 mode: None,
+                unmanaged: false,
+            },
+        )
+    }
+
+    fn unmanaged_doc(path: &str, bytes: &[u8]) -> ManifestDocument {
+        ManifestDocument::new(
+            DocPath::new(path),
+            ManifestData::Opaque {
+                blob: crate::plan::sha256_hex(bytes),
+                mode: None,
+                unmanaged: true,
             },
         )
     }
@@ -915,6 +938,93 @@ mod tests {
             DriftOrder::RecordedFirst,
         );
         assert!(drifts.is_empty());
+    }
+
+    #[test]
+    fn unmanaged_opaque_drift_stays_quiet_on_changed_bytes() {
+        let recorded = with_blobs(
+            vec![unmanaged_doc("bin", &[0xFF, 0x00])],
+            opaque_blobs(&[&[0xFF, 0x00]]),
+        );
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: vec![0xFF, 0x01],
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert!(drifts.is_empty());
+        assert!(Drift::lines(&drifts).is_empty());
+    }
+
+    #[test]
+    fn unmanaged_text_drift_stays_quiet_on_changed_bytes() {
+        let recorded = with_hashes(vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "declared".into(),
+                mode: None,
+                unmanaged: true,
+            },
+        )]);
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: b"hand-edited".to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert!(drifts.is_empty());
+    }
+
+    #[test]
+    fn unmanaged_opaque_drift_reports_missing_when_absent() {
+        let recorded = with_blobs(
+            vec![unmanaged_doc("bin", &[0xFF, 0x00])],
+            opaque_blobs(&[&[0xFF, 0x00]]),
+        );
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Absent,
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert!(matches!(drifts.as_slice(), [Drift::Missing { .. }]));
+    }
+
+    #[test]
+    fn drift_keys_count_arrays_from_one() {
+        let recorded = with_hashes(vec![ManifestDocument::new(
+            DocPath::new("app.json"),
+            ManifestData::Structured {
+                format: StructuredFormat::Json,
+                data: [(
+                    "servers".to_string(),
+                    serde_json::json!([{"host": "a"}, {"host": "b"}]),
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )]);
+        let disk = br#"{"servers": [{"host": "a"}, {"host": "c"}]}"#;
+        let drifts = recorded.drift(
+            &|_| ReadOutcome::Present {
+                bytes: disk.to_vec(),
+                mode: None,
+            },
+            &|_| BTreeMap::new(),
+            DriftOrder::RecordedFirst,
+        );
+        assert_eq!(drifts.len(), 1);
+        match &drifts[0] {
+            Drift::Key { key, old, new, .. } => {
+                assert_eq!(key, "servers[2].host");
+                assert_eq!(old, &Some(serde_json::json!("b")));
+                assert_eq!(new, &Some(serde_json::json!("c")));
+            }
+            _ => panic!("array drift uses indexed keys"),
+        }
     }
 
     #[test]

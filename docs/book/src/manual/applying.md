@@ -54,11 +54,11 @@ names every change.
 
 ## One state per user
 
-Bundle and state share the exact shape on purpose. A state
-file holds the bundle that already applied. One user holds one
+Manifest and state share the exact shape on purpose. A state
+file holds the manifest that already applied. One user holds one
 applied result, and one state slot mirrors it, so every
 apply diffs against the same recorded result. Reach for
-saved bundles when switching profiles. A rendered bundle replays
+saved manifests when switching profiles. A rendered manifest replays
 through the positional, evaluation plus fetching costs stay
 paid, and the switch stays trivial and fast. Experiments
 apply a rendered file.

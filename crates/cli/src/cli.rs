@@ -44,15 +44,15 @@ pub struct Cli {
 /// ```
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Evaluate the profile, diff against previous state, write the plan.
+    /// Evaluate the profile, diff against previous state, write the output.
     Plan(PlanArgs),
-    /// Preview the plan, confirm, and create every document in place.
+    /// Preview the manifest, confirm, and create every document in place.
     Apply(ApplyArgs),
     /// Scaffold one profile plus stubs in the target folder.
     Init(InitArgs),
     /// Pack one slot into a portable bundle file or print its manifest.
     Export(ExportArgs),
-    /// Drop one named slot plus its orphaned pool bytes.
+    /// Drop one named slot plus its orphaned blobs.
     Delete(DeleteArgs),
 }
 
@@ -305,18 +305,18 @@ pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> Pat
     plugins.clone().unwrap_or_else(|| root.join("plugins"))
 }
 
-/// Resolves one plan file path with `@` sugar.
+/// Resolves one slot file path with `@` sugar.
 ///
 /// Values starting with `@` strip the sigil and resolve under
 /// the plans folder. Explicit paths pass through unchanged.
 ///
 /// # Arguments
 ///
-/// * `raw` - the output or plan value under resolving.
+/// * `raw` - the output or input value under resolving.
 ///
 /// # Returns
 ///
-/// The named plan path for `@` values, else the input unchanged.
+/// The named slot path for `@` values, else the input unchanged.
 ///
 /// # Errors
 ///
@@ -326,21 +326,21 @@ pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> Pat
 /// # Examples
 ///
 /// ```rust
-/// use confit_cli::cli::resolve_plan_file;
+/// use confit_cli::cli::resolve_slot_file;
 /// use std::path::Path;
 ///
-/// assert!(matches!(resolve_plan_file(Path::new("plan.json")), Ok(path) if path == Path::new("plan.json")));
+/// assert!(matches!(resolve_slot_file(Path::new("slot.json")), Ok(path) if path == Path::new("slot.json")));
 /// assert!(matches!(
-///     resolve_plan_file(Path::new("@work")),
+///     resolve_slot_file(Path::new("@work")),
 ///     Ok(path) if path.ends_with("confit/plans/work.json")
 /// ));
 /// ```
-pub fn resolve_plan_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::error::Error> {
+pub fn resolve_slot_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::error::Error> {
     let Some(text) = raw.to_str() else {
         return Ok(raw.to_path_buf());
     };
     let Some(name) = text.strip_prefix('@') else {
         return Ok(raw.to_path_buf());
     };
-    confit_core::store::slots::resolve_named_plan(name)
+    confit_core::store::slots::resolve_named_slot(name)
 }

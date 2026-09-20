@@ -21,9 +21,9 @@ Slot names hold one file stem. Empty names fail, separator
 carriers fail, plus dot segments fail, each as a plan error:
 
 ```
-plan name reads empty
-plan name '{name}' holds separators
-plan name '{name}' reads unsupported
+slot name reads empty
+slot name '{name}' holds separators
+slot name '{name}' reads unsupported
 ```
 
 ### Folder roles
@@ -94,7 +94,7 @@ state version {v} reads unsupported, want 7
 Missing versions fail naming the file:
 
 ```
-read state '{file}': missing plan version
+read state '{file}': missing manifest version
 ```
 
 Bundle reads apply the same gate:

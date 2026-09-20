@@ -22,6 +22,7 @@ local StructuredArgs = {}
 
 ---@class DocumentModeOpts
 ---@field mode? string # Unix mode as octal like "755" or symbolic like "rwxr-xr-x".
+---@field unmanaged? boolean # Presence-only check for opaque documents; present files stay quiet.
 -- Options for confit.document.text plus confit.document.opaque. Unknown keys are plan errors.
 local DocumentModeOpts = {}
 
@@ -76,7 +77,7 @@ function DocumentNs.link(path, target) end
 -- Builds an opaque document table holding raw bytes.
 ---@param path string # Destination path.
 ---@param content string # Raw file bytes, e.g. from resources.load_bytes.
----@param opts DocumentModeOpts? # Optional mode, octal like "755" or symbolic like "rwxr-xr-x".
+---@param opts DocumentModeOpts? # Optional mode plus unmanaged flag for presence-only files.
 ---@return Document
 function DocumentNs.opaque(path, content, opts) end
 

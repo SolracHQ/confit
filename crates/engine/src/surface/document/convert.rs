@@ -45,10 +45,12 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             let path = table.req_str(ctx, "path")?;
             let content = table.req_str(ctx, "content")?;
             let mode = read_mode(table, ctx)?;
+            let unmanaged = read_unmanaged(table, ctx)?;
             Ok(Declared::Text(TextDecl {
                 path,
                 content,
                 mode,
+                unmanaged,
             }))
         }
         "link" => {
@@ -60,10 +62,12 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             let path = table.req_str(ctx, "path")?;
             let content = table.req_bytes(ctx, "content")?;
             let mode = read_mode(table, ctx)?;
+            let unmanaged = read_unmanaged(table, ctx)?;
             Ok(Declared::Opaque(OpaqueDecl {
                 path,
                 content,
                 mode,
+                unmanaged,
             }))
         }
         "tree" => {
@@ -148,6 +152,32 @@ fn read_mode(table: &Table, ctx: &str) -> mlua::Result<Option<u32>> {
     text.parse::<u32>()
         .map(Some)
         .map_err(|_| plan_error(format!("{ctx}: field 'mode' holds a corrupt stamp")))
+}
+
+/// Reads the unmanaged flag from a document table.
+///
+/// # Arguments
+///
+/// * `table` - document table carrying the unmanaged field.
+/// * `ctx` - error prefix naming the constructor.
+///
+/// # Returns
+///
+/// The flag, holding false for missing fields.
+///
+/// # Errors
+///
+/// Non-boolean flags fail as plan errors.
+///
+fn read_unmanaged(table: &Table, ctx: &str) -> mlua::Result<bool> {
+    let value: Value = table.get("unmanaged")?;
+    match value {
+        Value::Nil => Ok(false),
+        Value::Boolean(flag) => Ok(flag),
+        _ => Err(plan_error(format!(
+            "{ctx}: field 'unmanaged' must be a boolean"
+        ))),
+    }
 }
 
 /// Converts one section bucket rc entry table into registration form.

@@ -1,8 +1,8 @@
 flowchart TD
     A[Expand tildes, sniff source shape] --> B{Source shape}
-    B -- profile path --> C[Evaluate profile, build desired plan]
+    B -- profile path --> C[Evaluate profile, build desired manifest]
     B -- path with cb suffix --> D[Read bundle archive alone]
-    B -- at-name or percent-N --> E[Resolve slot, load stored plan]
+    B -- at-name or percent-N --> E[Resolve slot, load stored manifest]
     C --> F[Read the fixed slot state]
     D --> F
     E --> F

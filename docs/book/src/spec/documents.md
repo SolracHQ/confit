@@ -41,8 +41,10 @@ confit.patch.structured("toml", path, function(data)
 end):priority(confit.priority.HIGH)
 ```
 
-Paths hold dotted keys plus single indices. One path rides
-each call. A `set` past the list tail fails. An `append`
+Paths hold dotted keys plus single indices. List positions
+count from 1, so `servers[1]` names the first entry. One
+path rides each call. `[0]` fails the plan naming the
+path. A `set` past the list tail fails. An `append`
 onto a non-list leaf fails. A write through a scalar leaf
 fails as blocked. A patch naming another format than the
 base fails as a format mismatch. Patches with no base
@@ -63,7 +65,7 @@ reads as lowercase hex.
 #### Drift shape
 
 Recorded plus disk tables diff leaf by leaf. Dotted keys
-name leaves. Indices ride brackets. Changed leaves carry
+name leaves. Indices ride brackets counting from 1. Changed leaves carry
 old plus new values. Added leaves carry new values only.
 Removed leaves carry old values only. An explicit null
 stays distinct from an absent key. Disk bytes outside the
@@ -72,7 +74,7 @@ format fall back to a hunk.
 #### Apply behavior
 
 Apply writes rendered bytes to the expanded path. Recorded
-paths absent from the plan delete. Kind changes outside
+paths absent from the manifest delete. Kind changes outside
 opaque read as one create plus one delete.
 
 ### Text
@@ -84,9 +86,10 @@ confit.document.text(path, content, { mode = "644" })
 ```
 
 The call takes a path plus content plus optional opts. Opts
-holds `mode` only. The mode reads octal like `755` or
-symbolic like `rwxr-xr-x`. A missing mode leaves the file
-mode to the process umask.
+holds `mode` plus `unmanaged`. The mode reads octal like
+`755` or symbolic like `rwxr-xr-x`. A missing mode leaves
+the file mode to the process umask. `unmanaged` marks
+existence-only documents, sharing the opaque rule.
 
 #### Merge rule
 
@@ -96,7 +99,9 @@ owners.
 
 #### Render rule
 
-Content passes through byte for byte.
+Content passes through byte for byte. Present unmanaged
+documents skip the write while their declaration matches
+the recorded manifest, rewritten ones land once.
 
 #### Hash rule
 
@@ -131,7 +136,7 @@ confit.document.rc.new({
 The base holds section buckets only. Keys name `profile`,
 `config`, or `final`. Each key stays optional. Values hold
 lists of rc entry tables. Bare entries outside `rc.new`
-fail. One plan holds one rc base. A repeat fails naming
+fail. One manifest holds one rc base. A repeat fails naming
 both owners.
 
 #### Merge rule
@@ -171,7 +176,7 @@ Modes never attach to rc documents.
 
 Apply writes each per-shell file to its shell path. The
 `{{shell}}` slot materializes per shell before the write.
-Recorded shell files absent from the plan delete.
+Recorded shell files absent from the manifest delete.
 
 ### Link
 
@@ -216,7 +221,11 @@ confit.document.opaque(path, content, { mode = "755" })
 ```
 
 The call takes a path plus raw bytes plus optional opts.
-Opts holds `mode` only. Byte sources carry `load_bytes`
+Opts holds `mode` plus `unmanaged`. `unmanaged` marks
+existence-only documents, present bytes read as already
+in place whatever their content. The flag rides outside
+the data hash, so toggling it with identical bytes shows
+no plan line. Byte sources carry `load_bytes`
 plus archive callbacks plus fetch bodies.
 
 #### Merge rule
@@ -226,7 +235,9 @@ document. A repeat fails naming both owners.
 
 #### Render rule
 
-Raw blob bytes land on disk unchanged.
+Raw blob bytes land on disk unchanged. Present unmanaged
+documents skip the write while their declaration matches
+the recorded manifest, rewritten ones land once.
 
 #### Hash rule
 

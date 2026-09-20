@@ -9,17 +9,18 @@ fn plan_file_feeds_state_roundtrip() {
         ManifestData::Text {
             content: "hi".to_string(),
             mode: None,
+            unmanaged: false,
         },
     )]) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let text = match confit_core::store::manifest::manifest_json(&built) {
         Ok(text) => text,
         Err(error) => panic!("plan serializes: {error}"),
     };
     let fs = MemoryFs::new();
-    match fs.write(Path::new("plan.json"), text.as_bytes()) {
+    match fs.write(Path::new("slot.json"), text.as_bytes()) {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
     }
@@ -40,6 +41,7 @@ fn plan_file_feeds_state_roundtrip() {
             ManifestData::Text {
                 content: "hi".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )],
         Vec::new(),
@@ -262,7 +264,7 @@ return { shells = { "bash" }, configs = { tool } }
 fn named_plan_rejects_bare_separator_and_parent() {
     pin_home();
     for raw in ["@", "@a/b", "@.."] {
-        match confit_cli::cli::resolve_plan_file(Path::new(raw)) {
+        match confit_cli::cli::resolve_slot_file(Path::new(raw)) {
             Ok(_) => panic!("{raw:?} passes"),
             Err(error) => assert!(!error.to_string().is_empty()),
         }
@@ -277,7 +279,7 @@ fn plan_file_output_roundtrips_as_bundle() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let dest = Path::new("proof.cb");
     match confit_core::store::bundle::write_bundle(&built, dest, &fs, None) {
@@ -306,7 +308,7 @@ fn plan_manifest_json_roundtrips() {
     pin_home();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     let text = match confit_core::store::manifest::manifest_json(&built) {
         Ok(text) => text,
@@ -332,9 +334,9 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
     let fs = MemoryFs::new();
     let built = match build(sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
-    let dest = match confit_cli::cli::resolve_plan_file(Path::new("@work")) {
+    let dest = match confit_cli::cli::resolve_slot_file(Path::new("@work")) {
         Ok(dest) => dest,
         Err(error) => panic!("named output resolves: {error}"),
     };
@@ -410,9 +412,9 @@ return { shells = { "bash" }, configs = { tool } }
     assert!(
         seen.iter().any(|event| matches!(
             event,
-            confit_core::progress::Event::WritingPlan { documents: 1 }
+            confit_core::progress::Event::WritingManifest { documents: 1 }
         )),
-        "writing plan reaches the injected sink"
+        "writing manifest reaches the injected sink"
     );
     assert!(
         fs.exists(Path::new("seam-out-order-pin.cb")),
@@ -470,7 +472,7 @@ return { shells = { "bash" }, configs = { tool } }
         Err(error) => panic!("named plan runs on memory seams: {error}"),
     };
     assert_eq!(outcome.built.manifest.documents.len(), 1);
-    let slot = match confit_cli::cli::resolve_plan_file(Path::new("@seam-slot-order-pin")) {
+    let slot = match confit_cli::cli::resolve_slot_file(Path::new("@seam-slot-order-pin")) {
         Ok(slot) => slot,
         Err(error) => panic!("named output resolves: {error}"),
     };
@@ -495,7 +497,7 @@ fn live_headless_finish_joins_twice() {
     let live = confit_cli::presentation::spinner::Live::new();
     if let Some(sender) = live.sink() {
         let _ = sender.send(confit_core::progress::Event::Hashing);
-        let _ = sender.send(confit_core::progress::Event::WritingPlan { documents: 1 });
+        let _ = sender.send(confit_core::progress::Event::WritingManifest { documents: 1 });
     }
     live.finish();
     live.finish();

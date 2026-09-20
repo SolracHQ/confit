@@ -17,7 +17,7 @@ Unreadable paths report the path plus the failure detail.
 
 Disk bytes parse by format, with json, toml, plus yaml
 supported. Tables flatten to dotted leaves, with arrays
-gaining `[index]` segments. Changed keys carry old plus new
+gaining `[index]` segments counting from 1. Changed keys carry old plus new
 values. Added keys carry new alone. Removed keys carry old
 alone. An explicit null renders as `null`, distinct from a
 missing key. Disk bytes past parsing fall back to a text hunk
@@ -26,7 +26,8 @@ in current side order.
 ### Text
 
 Byte inequality renders one unified hunk between recorded plus
-disk bytes. Equal bytes render zero entries. File markers
+disk bytes. Present unmanaged documents compare nothing.
+Equal bytes render zero entries. File markers
 strip before display on every path.
 
 ### Rc
@@ -49,7 +50,9 @@ links read absent, the content they named is gone.
 
 ### Opaque
 
-Raw bytes compare directly. Edits surface under the `content`
+Raw bytes compare directly. Present unmanaged documents
+compare nothing, present bytes read as already in place.
+Edits surface under the `content`
 key. Both values read hash plus size labels in this shape:
 
 ```
