@@ -34,7 +34,7 @@ local theme = confit.plugin.solrac.theme
 
 Four plugins ship embedded.
 
-`solrachq.mise` installs tools plus wires their shell lines. The demo uses it to install `bat` plus a rust toolchain. `mise.package` takes a table. `name` stays required, omitted `version` writes `latest`, omitted `bin` proves the shim under the package name, `aliases` maps alias names to expansions, sorted by name, each guarded on the binary, `rc_builder` optional, `options` carries backend tool options (strings, numbers, booleans, or arrays of those) folding into the shared TOML beside the version. Each package folds its version into the shared TOML, declares the shared `mise install` hook, and requires the installer config. `mise.init` returns that installer. The mise binary composed from fetch plus unpack plus an opaque document, plus the activation patch with the PATH prepend plus the init eval. An explicit version wins, omitted resolves the latest tag. Profiles list the installer once beside the packages. The demo profile ends with this shape:
+`solrachq.mise` installs tools and wires their shell lines. The demo uses it to install `bat` and a rust toolchain. `mise.package` takes a table. `name` stays required, omitted `version` writes `latest`, omitted `bin` proves the shim under the package name, `aliases` maps alias names to expansions, sorted by name, each guarded on the binary, `rc_builder` optional, `options` carries backend tool options (strings, numbers, booleans, or arrays of those) folding into the shared TOML beside the version. Each package folds its version into the shared TOML, declares the shared `mise install` hook, and requires the installer config. `mise.init` returns that installer. The mise binary composed from fetch, unpack, an opaque document, the activation patch with the PATH prepend and the init eval. An explicit version wins, omitted resolves the latest tag. Profiles list the installer once beside the packages. The demo profile ends with this shape:
 
 ```lua
 local bat = mise.package({
@@ -77,7 +77,7 @@ local page = confit.plugin.solrachq.template(path, {
 tool:add_document(page)
 ```
 
-`solrachq.nerd_fonts` installs nerd fonts plus refreshes the font cache. `font` takes the font name plus an optional version, omitted resolves the latest release. Each font builds one tree document flattened under its own `fonts/{name}` folder, then declares the `fc-cache -f` hook scoped to that folder. Each font carries its own hook argv, so every font refresh runs on its own. The hook carries no checks, a cache rebuild holds no stable disk proof, so it fires every apply while `fc-cache` resolves:
+`solrachq.nerd_fonts` installs nerd fonts and refreshes the font cache. `font` takes the font name and an optional version, omitted resolves the latest release. Each font builds one tree document flattened under its own `fonts/{name}` folder, then declares the `fc-cache -f` hook scoped to that folder. Each font carries its own hook argv, so every font refresh runs on its own. The hook carries no checks, a cache rebuild holds no stable disk proof, so it fires every apply while `fc-cache` resolves:
 
 ```lua
 local nerd_fonts = confit.plugin.solrachq.nerd_fonts
@@ -86,7 +86,7 @@ local fonts = nerd_fonts.font("JetBrainsMono", "3.5.1")
 
 ## Naming internal configs
 
-Plugin authors name internal configs `plugin:{user}/{name}:{capability}`. The shape reads as plugin scope, author plus plugin, capability. Internal configs stay clear of user configs, and require errors point at a name the author owns:
+Plugin authors name internal configs `plugin:{user}/{name}:{capability}`. The shape reads as plugin scope, author and plugin, capability. Internal configs stay clear of user configs, and require errors point at a name the author owns:
 
 ```lua
 -- inside mise.package, before returning the config
@@ -97,4 +97,4 @@ User code keeps clear of require. The plugin injects it, and a profile missing t
 
 For the exact contract see [spec lua](../spec/lua.md).
 
-The demo now installs versioned tools through plugins. Next, [Machines](machines.md) splits the demo across laptop plus server.
+The demo now installs versioned tools through plugins. Next, [Machines](machines.md) splits the demo across laptop and server.

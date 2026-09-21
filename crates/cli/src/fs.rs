@@ -24,7 +24,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing files plus permission failures surface as io errors.
+    /// Missing files and permission failures surface as io errors.
     ///
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
         std::fs::read(path)
@@ -43,7 +43,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     ///
     /// # Examples
     ///
@@ -79,7 +79,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     ///
     /// # Examples
     ///
@@ -112,7 +112,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     ///
     /// # Examples
     ///
@@ -149,7 +149,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing directories plus permission failures surface as io errors.
+    /// Missing directories and permission failures surface as io errors.
     ///
     fn list_dir(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
@@ -171,7 +171,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     ///
     fn remove(&self, path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)
@@ -212,7 +212,7 @@ impl Filesystem for OsFs {
     /// # Returns
     ///
     /// The permission bits for files, else `None` for
-    /// symlinks plus missing paths.
+    /// symlinks and missing paths.
     ///
     fn file_mode(&self, path: &Path) -> Option<u32> {
         use std::os::unix::fs::PermissionsExt;
@@ -225,13 +225,8 @@ impl Filesystem for OsFs {
 
     /// Reports host path presence.
     ///
-    /// # Arguments
-    ///
-    /// * `path` - the path under testing.
-    ///
-    /// # Returns
-    ///
-    /// True while the path exists.
+    /// Dangling symlinks read as absent. Unreadable paths read
+    /// as absent.
     ///
     fn exists(&self, path: &Path) -> bool {
         path.exists()
@@ -241,7 +236,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing files plus permission failures surface as io errors.
+    /// Missing files and permission failures surface as io errors.
     fn reader(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read>> {
         Ok(Box::new(std::io::BufReader::new(std::fs::File::open(
             path,
@@ -252,7 +247,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     fn writer(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Write + '_>> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -270,7 +265,7 @@ impl Filesystem for OsFs {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn file_len(&self, path: &Path) -> std::io::Result<u64> {
         if let Some(target) = self.read_link(path) {
             return Ok(target.as_os_str().as_encoded_bytes().len() as u64);

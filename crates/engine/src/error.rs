@@ -1,6 +1,6 @@
 //! Error
 //!
-//! Plan domain errors plus nested plan lookup.
+//! Plan domain errors and nested plan lookup.
 
 /// Builds a core plan domain error from a message.
 pub(crate) fn plan(message: impl Into<String>) -> confit_core::error::Error {

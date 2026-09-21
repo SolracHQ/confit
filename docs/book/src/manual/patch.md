@@ -16,7 +16,7 @@ starship:add_patch(confit.patch.structured("toml", path, function(data)
 end))
 ```
 
-The rc callback receives a handle with `add(section, entry)`. The structured callback receives a handle with `set(path, value)` plus `append(path, value)`. Each handle exposes its own verbs. The wrong verb means a missing method, not a runtime surprise.
+The rc callback receives a handle with `add(section, entry)`. The structured callback receives a handle with `set(path, value)` and `append(path, value)`. Each handle exposes its own verbs. The wrong verb means a missing method, not a runtime surprise.
 
 ## Priority
 
@@ -30,7 +30,7 @@ shell:add_patch(
 )
 ```
 
-The order is stable. Same priority follows config declaration order. Only priority plus declaration order decide.
+The order is stable. Same priority follows config declaration order. Only priority and declaration order decide.
 
 ## Conflict
 
@@ -44,7 +44,7 @@ collision on alias "ll": "eza" overwritten, "shell" wins
 
 ## Many changes, one patch
 
-One callback holds many changes, and they run in call order. Relative order survives, so tools needing subsequent steps express them in one patch. The demo tool config uses one patch for its PATH line plus its init eval:
+One callback holds many changes, and they run in call order. Relative order survives, so tools needing subsequent steps express them in one patch. The demo tool config uses one patch for its PATH line and its init eval:
 
 ```lua
 tool:add_patch(confit.patch.rc(function(doc)

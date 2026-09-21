@@ -1,6 +1,6 @@
 //! Document
 //!
-//! Document plus rc entry tables for Lua.
+//! Document and rc entry tables for Lua.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,7 @@ pub(crate) enum Declared {
     Rc(Vec<RcEntryDecl>),
 }
 
-/// Installs the document plus rc namespaces on a state.
+/// Installs the document and rc namespaces on a state.
 pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
     let lua = &session.lua;
     let confit = confit_table(lua)?;
@@ -134,7 +134,7 @@ fn install_rc(lua: &Lua, namespace: &Table) -> mlua::Result<()> {
     namespace.set("rc", rc)
 }
 
-/// Builds a structured document table from format plus args.
+/// Builds a structured document table from format and args.
 fn structured_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.structured";
     let (format_value, args_value) = args;
@@ -183,14 +183,14 @@ fn opaque_impl(
 struct DocumentTables;
 
 impl DocumentTables {
-    /// Builds a structured document table from format plus args.
+    /// Builds a structured document table from format and args.
     ///
     /// # Arguments
     ///
     /// * `lua` - state owning the output table.
     /// * `ctor` - error prefix naming the constructor.
     /// * `format_name` - raw format name under parsing.
-    /// * `args` - args table holding path plus data values.
+    /// * `args` - args table holding path and data values.
     ///
     /// # Returns
     ///
@@ -239,7 +239,7 @@ impl DocumentTables {
     ///
     /// # Returns
     ///
-    /// Document table stamped with the text marker plus the mode marker.
+    /// Document table stamped with the text marker and the mode marker.
     ///
     fn text(
         lua: &Lua,
@@ -290,7 +290,7 @@ impl DocumentTables {
     ///
     /// # Returns
     ///
-    /// Document table stamped with the opaque marker plus the mode marker.
+    /// Document table stamped with the opaque marker and the mode marker.
     ///
     fn opaque(
         lua: &Lua,
@@ -310,7 +310,7 @@ impl DocumentTables {
     }
 }
 
-/// Document opts holding mode plus the unmanaged flag.
+/// Document opts holding mode and the unmanaged flag.
 struct DocOpts {
     /// Unix permission bits, holding `None` for default handling.
     mode: Option<u32>,
@@ -324,13 +324,13 @@ impl DocOpts {
     /// # Arguments
     ///
     /// * `opts` - opts value holding nil, missing, or a table with
-    ///   `mode` plus `unmanaged` fields.
+    ///   `mode` and `unmanaged` fields.
     /// * `ctor` - error prefix naming the constructor.
     ///
     /// # Returns
     ///
-    /// Mode bits plus the unmanaged flag, holding defaults for
-    /// missing plus nil opts.
+    /// Mode bits, the unmanaged flag, holding defaults for
+    /// missing and nil opts.
     ///
     /// # Errors
     ///
@@ -389,7 +389,7 @@ impl DocOpts {
     }
 }
 
-/// Unpacks one archive through a per-member callback.
+/// Parses `compressed` args and delegates to `CompressedDocs::build`.
 fn compressed_impl(
     lua: &Lua,
     root: &Path,
@@ -540,10 +540,10 @@ impl TreeDocs {
     ///
     /// # Errors
     ///
-    /// Empty archive paths plus empty destinations fail as plan
+    /// Empty archive paths and empty destinations fail as plan
     /// errors. Unreadable archives fail as plan errors.
     /// Non-string callback returns fail as plan errors. Empty,
-    /// absolute, plus dot-dot relative paths fail as plan
+    /// absolute, and dot-dot relative paths fail as plan
     /// errors. Repeated relative paths fail as plan errors.
     /// Empty picks fail as plan errors naming the filter.
     ///
@@ -731,7 +731,7 @@ fn rc_env_impl(lua: &Lua, args: (Value, Value, Value)) -> mlua::Result<Table> {
     RcEntries::env(lua, name, value, when)
 }
 
-/// Builds one rc path prepend entry table from dir or var plus dir.
+/// Builds one rc path prepend entry table from dir or var and dir.
 fn rc_prepend_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.prepend";
     let collected: Vec<Value> = args.into_iter().collect();
@@ -863,7 +863,7 @@ impl RcEntries {
         Self::tagged(lua, shape, inner, when)
     }
 
-    /// Wraps one op inner table plus guard into an entry table.
+    /// Wraps one op inner table and guard into an entry table.
     ///
     /// # Arguments
     ///

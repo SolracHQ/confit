@@ -2,11 +2,11 @@
 
 You stand at `~/confit-demo` with tools installed through plugins. This chapter splits the demo across two machines. This is the payoff for the whole book.
 
-One shared pool of configs, one profile per machine. The laptop profile declares laptop tools, the server profile declares server tools, both load the same shared files. A fresh machine needs only the binary plus the project folder.
+One shared pool of configs, one profile per machine. The laptop profile declares laptop tools, the server profile declares server tools, both load the same shared files. A fresh machine needs only the binary and the project folder.
 
 ## One profile per machine
 
-Keep the demo folder with one profile per machine plus shared tool files beside them:
+Keep the demo folder with one profile per machine and shared tool files beside them:
 
 ```text
 ~/confit-demo/
@@ -16,7 +16,7 @@ Keep the demo folder with one profile per machine plus shared tool files beside 
     shared.lua
 ```
 
-Each profile returns shells plus documents plus configs. Shared tools load through `require` under the root. The root defaults to the profile folder, so sibling files resolve out of the box. The demo laptop profile reads:
+Each profile returns shells, documents, and configs. Shared tools load through `require` under the root. The root defaults to the profile folder, so sibling files resolve out of the box. The demo laptop profile reads:
 
 ```lua
 local shared = require("tools.shared")
@@ -51,11 +51,11 @@ confit apply @laptop
 confit apply @server
 ```
 
-Every switch diffs against the same applied result, so drift stays honest. Empty names plus separators fail, so keep slot names to simple words.
+Every switch diffs against the same applied result, so drift stays honest. Empty names and separators fail, so keep slot names to simple words.
 
 ## Reinstall from scratch
 
-A clean machine needs the binary plus the project folder. Bring both, then apply the profile for that machine:
+A clean machine needs the binary and the project folder. Bring both, then apply the profile for that machine:
 
 ```sh
 confit apply laptop.lua
@@ -81,4 +81,4 @@ The bundle carries the full desired state. The new machine converges from that f
 
 For the exact contract see [spec storage](../spec/storage.md).
 
-The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, drift, plus history.
+The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, drift, and history.

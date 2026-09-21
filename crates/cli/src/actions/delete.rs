@@ -26,11 +26,11 @@ pub struct DeleteReport {
 ///
 /// # Returns
 ///
-/// The deleted slot name plus the pruned blob count.
+/// The deleted slot name and the pruned blob count.
 ///
 /// # Errors
 ///
-/// Non-`@name` values plus absent slots plus removal
+/// Non-`@name` values, absent slots, and removal
 /// failures surface as plan or io errors.
 ///
 /// # Examples

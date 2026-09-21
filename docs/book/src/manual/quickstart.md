@@ -35,13 +35,13 @@ mkdir ~/confit-demo
 confit init ~/confit-demo
 ```
 
-`init` writes one profile plus editor stubs. It stops when the folder already holds a profile or stubs. Such folders stay untouched. It prints one line with the profile path plus the file count:
+`init` writes one profile and editor stubs. It stops when the folder already holds a profile or stubs. Such folders stay untouched. It prints one line with the profile path and the file count:
 
 ```text
 init: /home/you/confit-demo/profile.lua (15 files)
 ```
 
-Open `profile.lua` and read it fully. It declares one shell config with one alias plus one shell eval. Small file, good starting point for edits.
+Open `profile.lua` and read it fully. It declares one shell config with one alias and one shell eval. Small file, good starting point for edits.
 
 ## First plan
 
@@ -51,13 +51,13 @@ Preview the change before anything lands:
 confit plan ~/confit-demo/profile.lua
 ```
 
-`plan` reads the profile and compares it with the files on disk. It prints the diff plus a summary. It writes nothing to home paths. The summary names adds plus files already in place:
+`plan` reads the profile and compares it with the files on disk. It prints the diff and a summary. It writes nothing to home paths. The summary names adds and files already in place:
 
 ```text
 Bundle: 1 to add, 0 already in place.
 ```
 
-It also prints the preview path plus the log path. The root defaults to the profile folder, so sibling files load through `require` out of the box.
+It also prints the preview path and the log path. The root defaults to the profile folder, so sibling files load through `require` out of the box.
 
 ## First apply
 
@@ -67,7 +67,7 @@ Write the change:
 confit apply ~/confit-demo/profile.lua
 ```
 
-`apply` previews first, then asks. Only the literal `yes` writes. It prints the summary plus the prompt:
+`apply` previews first, then asks. Only the literal `yes` writes. It prints the summary and the prompt:
 
 ```text
 Bundle: 1 to add, 0 already in place.
@@ -94,4 +94,4 @@ Open a new shell and run `ll`.
 
 ## Where to go next
 
-The demo works with one shell and one alias. Next, [Profile](profile.md) grows it to two shells plus a shared tool file.
+The demo works with one shell and one alias. Next, [Profile](profile.md) grows it to two shells and a shared tool file.

@@ -17,13 +17,7 @@ use crate::store::blobs::{BlobRef, read_blob_bytes};
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
 impl ManifestDocument {
-    /// Renders one document to exact on-disk bytes.
-    ///
-    /// Structured payloads serialize through their format.
-    /// Text payloads pass content through. Link payloads pass the
-    /// target through. Rc payloads render shell text. Opaque
-    /// payloads fail, reads use `bytes` instead. Tree payloads
-    /// fail, reads use `bytes` instead.
+    /// Renders one document with inline payloads to exact on-disk bytes.
     ///
     /// # Arguments
     ///
@@ -31,12 +25,12 @@ impl ManifestDocument {
     ///
     /// # Returns
     ///
-    /// Exact bytes landing on disk for the document.
+    /// Exact rendered bytes from inline payloads.
     ///
     /// # Errors
     ///
-    /// Opaque plus tree reads plus serializer failures fail as
-    /// plan errors.
+    /// Opaque and tree payloads fail as plan errors. Serializer
+    /// failures fail as plan errors.
     ///
     /// # Examples
     ///
@@ -84,11 +78,11 @@ impl ManifestDocument {
     ///
     /// # Returns
     ///
-    /// Exact bytes landing on disk for the document.
+    /// Exact on-disk bytes with blob refs resolved.
     ///
     /// # Errors
     ///
-    /// Missing refs plus unreadable files plus serializer
+    /// Missing refs, unreadable files, and serializer
     /// failures fail as plan errors.
     ///
     /// # Examples
@@ -116,8 +110,8 @@ impl ManifestDocument {
 
 /// Renders inline payload bytes without blob access.
 ///
-/// Structured, text, link, plus rc payloads render. Opaque
-/// plus tree payloads fail, reads use `bytes` instead.
+/// Structured, text, link, and rc payloads render. Opaque
+/// and tree payloads fail, reads use `bytes` instead.
 ///
 /// # Arguments
 ///
@@ -129,7 +123,7 @@ impl ManifestDocument {
 ///
 /// # Errors
 ///
-/// Opaque plus tree payloads plus serializer failures fail
+/// Opaque, tree payloads, and serializer failures fail
 /// as plan errors.
 pub(crate) fn render_inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
     match data {

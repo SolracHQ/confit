@@ -1,6 +1,6 @@
 //! Hooks run
 //!
-//! Hook subprocess seam with host plus memory backends.
+//! Hook subprocess seam with host and memory backends.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -11,13 +11,13 @@ use confit_core::error::{Error, Result};
 /// Outcome of one hook subprocess run.
 ///
 /// Code holds the process exit code, signal deaths read as 1.
-/// Output holds captured stdout plus stderr bytes in order.
+/// Output holds captured stdout and stderr bytes in order.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookRun {
     /// Holds the process exit code.
     pub code: i32,
-    /// Holds captured stdout plus stderr bytes in order.
+    /// Holds captured stdout and stderr bytes in order.
     pub output: Vec<u8>,
 }
 
@@ -27,21 +27,21 @@ pub struct HookRun {
 /// outcomes through the fake without spawning.
 ///
 pub trait HookRunner {
-    /// Runs one hook argv with extended PATH plus a timeout.
+    /// Runs one hook argv with extended PATH and a timeout.
     ///
     /// # Arguments
     ///
-    /// * `argv` - the resolved binary plus arguments in order.
+    /// * `argv` - the resolved binary and arguments in order.
     /// * `path_dirs` - the PATH extension dirs for the subprocess alone.
     /// * `timeout_secs` - the run cap in seconds.
     ///
     /// # Returns
     ///
-    /// The exit code plus captured bytes.
+    /// The exit code and captured bytes.
     ///
     /// # Errors
     ///
-    /// Spawn plus wait failures surface as plan errors. Timeouts
+    /// Spawn and wait failures surface as plan errors. Timeouts
     /// surface as their own plan error.
     fn run(&self, argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<HookRun>;
 }
@@ -51,7 +51,7 @@ pub trait HookRunner {
 pub struct OsRunner;
 
 impl HookRunner for OsRunner {
-    /// Spawns one hook argv with extended PATH plus a timeout.
+    /// Spawns one hook argv with extended PATH and a timeout.
     ///
     /// The first argv entry runs directly with no shell in
     /// between. Path dirs prepend the inherited PATH for the
@@ -142,7 +142,7 @@ fn extended_path(dirs: &[PathBuf]) -> std::ffi::OsString {
 /// One recorded fake runner call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeCall {
-    /// Holds the resolved binary plus arguments in order.
+    /// Holds the resolved binary and arguments in order.
     pub argv: Vec<String>,
     /// Holds the PATH extension dirs under the run.
     pub path_dirs: Vec<PathBuf>,
@@ -150,7 +150,7 @@ pub struct FakeCall {
     pub timeout_secs: u64,
 }
 
-/// Memory hook runner recording calls plus replaying outcomes.
+/// Memory hook runner recording calls and replaying outcomes.
 ///
 /// Tests script one outcome per expected call. Exhausted
 /// scripts panic, so missing calls surface loudly.
@@ -172,7 +172,7 @@ impl FakeRunner {
     ///
     /// # Returns
     ///
-    /// The fake holding no calls plus the script.
+    /// The fake holding no calls and the script.
     pub fn new(outcomes: VecDeque<Result<HookRun>>) -> Self {
         Self {
             calls: std::cell::RefCell::new(Vec::new()),
@@ -208,7 +208,7 @@ impl HookRunner for FakeRunner {
     }
 }
 
-/// Appends one hook header plus captured bytes to the run log.
+/// Appends one hook header and captured bytes to the run log.
 ///
 /// Missing log files start fresh. Backend write failures
 /// surface as io errors.
@@ -226,7 +226,7 @@ impl HookRunner for FakeRunner {
 ///
 /// # Errors
 ///
-/// Read plus write failures surface as io errors.
+/// Read and write failures surface as io errors.
 pub fn append_hook_log(
     fs: &dyn confit_core::fs::Filesystem,
     log: &Path,

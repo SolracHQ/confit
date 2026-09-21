@@ -37,7 +37,7 @@ use confit_core::progress::Event;
 pub struct ApplyReport {
     /// Counts documents written to disk.
     pub written: usize,
-    /// Counts recorded orphans plus dropped tree members removed from disk.
+    /// Counts recorded orphans and dropped tree members removed from disk.
     pub removed: usize,
     /// Holds the stored manifest path backing apply of the past.
     pub stored: PathBuf,
@@ -81,9 +81,9 @@ pub struct ApplyReport {
 /// assert!(fs.exists(Path::new("note")));
 /// ```
 pub struct ApplyRunner<'a> {
-    /// Holds the desired manifest under writing plus running.
+    /// Holds the desired manifest under writing and running.
     pub manifest: Bundle,
-    /// Holds the previous manifest backing drift plus counts.
+    /// Holds the previous manifest backing drift and counts.
     pub previous: Bundle,
     /// Holds the state file gaining the new manifest, `None` skips.
     pub state: Option<PathBuf>,
@@ -91,7 +91,7 @@ pub struct ApplyRunner<'a> {
     pub force: bool,
     /// Renders the preview through presentation first.
     pub preview: bool,
-    /// Holds the injected filesystem plus prompts plus sink.
+    /// Holds the injected filesystem, prompts, and sink.
     pub seams: Seams<'a>,
 }
 
@@ -106,15 +106,15 @@ impl<'a> ApplyRunner<'a> {
     /// # Arguments
     ///
     /// * `args` - the apply flags under running.
-    /// * `seams` - the injected filesystem plus prompts plus sink.
+    /// * `seams` - the injected filesystem, prompts, and sink.
     ///
     /// # Returns
     ///
-    /// The runner holding desired documents plus run flags.
+    /// The runner holding desired documents and run flags.
     ///
     /// # Errors
     ///
-    /// Evaluation plus manifest load failures surface as plan
+    /// Evaluation and manifest load failures surface as plan
     /// or io errors.
     ///
     /// # Examples
@@ -192,7 +192,7 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Builds a slot-backed runner with preview plus prompts.
+    /// Builds a slot-backed runner with preview and prompts.
     fn from_slot(slot_manifest: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
         let state_file = default_state_path()?;
         seams.emit_reading_plan(&state_file);
@@ -207,20 +207,20 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Reads flags plus runs the full apply flow on injected seams.
+    /// Reads flags and runs the full apply flow on injected seams.
     ///
     /// # Arguments
     ///
     /// * `args` - the apply flags under running.
-    /// * `seams` - the injected filesystem plus prompts plus sink.
+    /// * `seams` - the injected filesystem, prompts, and sink.
     ///
     /// # Returns
     ///
-    /// The write counts plus the stored manifest path.
+    /// The write counts and the stored manifest path.
     ///
     /// # Errors
     ///
-    /// Evaluation plus prompt plus write failures surface as
+    /// Evaluation, prompt, and write failures surface as
     /// plan or io errors. A non-`yes` answer aborts as a plan error.
     ///
     /// # Examples
@@ -252,20 +252,20 @@ impl<'a> ApplyRunner<'a> {
         Self::from_args(args, seams)?.execute()
     }
 
-    /// Applies desired documents with preview plus prompts plus rotation.
+    /// Applies desired documents with preview, prompts, and rotation.
     ///
     /// The preview renders through presentation. Only the literal
     /// `yes` proceeds, anything else aborts with nothing written.
     /// A fresh snapshot before writing re-prompts on drift. Success
-    /// writes the state file plus one stored manifest with rotation.
+    /// writes the state file and one stored manifest with rotation.
     ///
     /// # Returns
     ///
-    /// The write counts plus the stored manifest path.
+    /// The write counts and the stored manifest path.
     ///
     /// # Errors
     ///
-    /// Build plus prompt plus write failures surface as plan or
+    /// Build, prompt, and write failures surface as plan or
     /// io errors. A non-`yes` answer aborts as a plan error.
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
@@ -365,7 +365,7 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Runs built hooks after files, state, plus history land.
+    /// Runs built hooks after files, state, and history land.
     ///
     /// Changed gates answer against the apply-start set.
     /// Failures abort the rest.
@@ -413,7 +413,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Unresolvable binaries plus nonzero codes plus unmet
+    /// Unresolvable binaries, nonzero codes, and unmet
     /// post-checks fail as plan errors.
     fn spawn_hook(
         &mut self,

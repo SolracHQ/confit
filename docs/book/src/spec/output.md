@@ -2,7 +2,7 @@
 
 The summary renders titled sections in fixed order. Drift
 notes lead. Resources follow. Hooks trail resources. Summary
-plus counts close the text. Sections holding zero lines skip
+and counts close the text. Sections holding zero lines skip
 their title. Titles read as follows:
 
 ```
@@ -31,7 +31,7 @@ grammar from the drift page.
 
 ## Resources section
 
-Create blocks open with `+` plus list full bodies under the
+Create blocks open with `+` and list full bodies under the
 add sigil. Bodies vary by kind as follows:
 
 ```
@@ -50,8 +50,8 @@ add sigil. Bodies vary by kind as follows:
   + init[1] = eval "$(mise activate bash)"
 ```
 
-Update blocks open with `~` plus render per kind shapes from
-the drift page. Delete blocks close with `-` plus carry zero
+Update blocks open with `~` and render per kind shapes from
+the drift page. Delete blocks close with `-` and carry zero
 bodies:
 
 ```
@@ -77,33 +77,33 @@ render zero lines:
 Detail lines nest under two spaces, so top level sigils
 alone drive hook counts.
 
-## Sigils plus color
+## Sigils and color
 
 `+` marks additions with green paint. `~` marks changes with
-yellow paint. `-` marks removals with red paint. Headers plus
+yellow paint. `-` marks removals with red paint. Headers and
 counts carry bold paint. Paint applies while stderr runs as a
 terminal with `NO_COLOR` unset. The check runs once per
 summary. Piped output stays plain text.
 
 ## Stdout against stderr
 
-Result lines stay pipeable on stdout. Transient plus
+Result lines stay pipeable on stdout. Transient and
 diagnostic lines ride stderr. Routing reads as follows:
 
 | Line                     | Stream |
 | ------------------------ | ------ |
-| Summary text plus counts | stdout |
-| Spinner plus progress    | stderr |
+| Summary text and counts | stdout |
+| Spinner and progress    | stderr |
 | Prompts                  | stderr |
 | `log: {path}`            | stderr |
 
-Prompts park widgets plus write to stderr, so stdout keeps
+Prompts park widgets and write to stderr, so stdout keeps
 carrying pipeable lines through answers.
 
 ## Log line
 
-`log: {path}` prints to stderr on every plan plus apply run
-through success plus failure paths alike. The default path reads
+`log: {path}` prints to stderr on every plan and apply run
+through success and failure paths alike. The default path reads
 `{temp}/confit-{pid}.log`. The log file flag overrides the
 path with tilde expansion. Collision warnings plus debug
 facts land in that file through the log channel.
@@ -117,7 +117,7 @@ yielding. Each yield logs one warning line in this shape:
 collision on {label} "{name}": "{owner}" overwritten, "{winner}" wins
 ```
 
-Rc plus structured collisions share the shape with kind
+Rc and structured collisions share the shape with kind
 fitting labels. Winners surface in the log file alone with
 zero summary lines spent on losers.
 

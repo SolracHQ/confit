@@ -1,6 +1,6 @@
 # Scaffold a project
 
-The init command fills a target folder with one profile plus
+The init command fills a target folder with one profile and
 editor stubs. DIR defaults to the current folder. One leading
 `~` expands against the home folder before parsing.
 
@@ -15,8 +15,8 @@ stub path joins under the same DIR.
 ### Clash check
 
 The check stats the `stubs` folder first, then the profile
-path plus every stub path in write order. A present path
-aborts the run before any write lands. The exact message plus
+path and every stub path in write order. A present path
+aborts the run before any write lands. The exact message and
 the full path list live under Clash matrix.
 
 ### Write profile
@@ -34,8 +34,8 @@ path list lives under Clash matrix.
 
 ### Report
 
-The run reports the profile path plus the written file count.
-The count covers the profile plus every stub.
+The run reports the profile path and the written file count.
+The count covers the profile and every stub.
 
 ## Clash matrix
 
@@ -72,17 +72,17 @@ reports the folder path. Remaining paths report in write
 order with the profile first. The check completes before the
 profile write. The abort
 exits 1 under the plan-error prefix, so stderr reads
-`confit: plan error: ` plus the message.
+`confit: plan error: ` and the message.
 
 ## Stdout
 
-Stdout answers with one line holding the profile path plus the
+Stdout answers with one line holding the profile path and the
 file count:
 
 ```sh
 init: {profile} ({n} files)
 ```
 
-The current scaffold writes 15 files: the profile plus 14
+The current scaffold writes 15 files: the profile and 14
 stubs. The run completes in one pass: parse, check, write,
 report. Stderr stays quiet.

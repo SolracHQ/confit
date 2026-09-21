@@ -46,7 +46,7 @@ pub(crate) enum Area {
 
 /// Executor running patch callbacks against live tables.
 ///
-/// The Lua state plus the progress sender travel together, so execution
+/// The Lua state and the progress sender travel together, so execution
 /// methods read them from self.
 ///
 pub(crate) struct Executor<'a> {
@@ -61,15 +61,13 @@ pub(crate) struct Executor<'a> {
 }
 
 impl Executor<'_> {
-    /// Sorts patches by priority desc plus declaration order asc.
+    /// Sorts patches by priority desc and declaration order asc.
     ///
     /// # Arguments
     ///
     /// * `items` - patch handles in declaration order.
     ///
-    /// # Returns
-    ///
-    /// Unit, with handles in execution order.
+    /// Sorts in place into execution order.
     ///
     pub(crate) fn sort_patches(items: &mut [&StoredPatch]) {
         items.sort_by(|left, right| {
@@ -92,7 +90,7 @@ impl Executor<'_> {
     ///
     /// # Returns
     ///
-    /// Unit after each callback runs plus progress facts emit.
+    /// Unit after each callback runs and progress facts emit.
     ///
     /// # Errors
     ///
@@ -207,7 +205,7 @@ impl Executor<'_> {
 
 /// Live table view pairing one table with its Lua state.
 ///
-/// The state plus the table travel together, so navigation methods
+/// The state and the table travel together, so navigation methods
 /// read them from self.
 ///
 pub(crate) struct LiveTable<'a> {
@@ -227,7 +225,7 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Returns
     ///
-    /// View borrowing the state plus owning the table handle.
+    /// View borrowing the state and owning the table handle.
     ///
     fn new(lua: &'a Lua, table: Table, ctx: &str) -> Self {
         Self {
@@ -382,7 +380,7 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Returns
     ///
-    /// True for nil plus empty plus dense integer keyed tables.
+    /// True for nil, empty, and dense integer keyed tables.
     ///
     fn is_live_list(&self, value: &Value) -> bool {
         match value {
@@ -640,7 +638,7 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Returns
     ///
-    /// Plan error naming the path plus the non-list leaf.
+    /// Plan error naming the path and the non-list leaf.
     ///
     fn non_list_error(&self, full: &str) -> mlua::Error {
         plan_error(format!(
@@ -684,7 +682,7 @@ impl RcPatch {
     /// # Arguments
     ///
     /// * `lua` - state owning the live table.
-    /// * `args` - section plus entry values.
+    /// * `args` - section and entry values.
     ///
     /// # Returns
     ///
@@ -720,7 +718,7 @@ impl RcPatch {
 
 /// Structured patch handle handed to `confit.patch.structured` callbacks.
 ///
-/// Exposes `set` plus `append` only. The rc verb does not exist here.
+/// Exposes `set` and `append` only. The rc verb does not exist here.
 struct StructuredPatch {
     /// Live document state under mutation.
     live: LiveDoc,
@@ -748,7 +746,7 @@ impl StructuredPatch {
     ///
     /// * `lua` - state owning the live table.
     /// * `append` - list extension holding true for `append`.
-    /// * `args` - path plus value values.
+    /// * `args` - path and value values.
     ///
     /// # Returns
     ///

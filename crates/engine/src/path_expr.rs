@@ -1,6 +1,6 @@
 //! Path expr
 //!
-//! Patch path parsing plus JSON flattening.
+//! Patch path parsing and JSON flattening.
 
 use serde_json::Value as Json;
 
@@ -22,7 +22,7 @@ pub(crate) struct Segment {
 ///
 /// # Errors
 ///
-/// Plan errors name empty paths plus bad segments plus `[0]`.
+/// Plan errors name empty paths, bad segments, and `[0]`.
 pub(crate) fn parse_path(path: &str, caller: &str) -> mlua::Result<Vec<Segment>> {
     if path.is_empty() {
         return Err(plan_error(format!("{caller}: invalid path '': empty path")));

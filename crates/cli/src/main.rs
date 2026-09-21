@@ -88,7 +88,7 @@ fn run_plan_like(
     Ok(())
 }
 
-/// Runs apply with preview plus prompts on host seams.
+/// Runs apply with preview and prompts on host seams.
 fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
@@ -134,7 +134,7 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_core::error::Result<
     Ok(())
 }
 
-/// Runs delete dropping one named slot plus orphan blobs.
+/// Runs delete dropping one named slot and orphan blobs.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_core::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let seams = confit_cli::seams::Seams::host(&mut input);

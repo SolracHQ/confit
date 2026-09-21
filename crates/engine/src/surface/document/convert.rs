@@ -1,6 +1,6 @@
 //! Convert
 //!
-//! Lua-to-model converters for documents plus rc entries.
+//! Lua-to-model converters for documents and rc entries.
 
 use mlua::{Table, Value};
 use serde_json::Value as Json;
@@ -210,7 +210,7 @@ fn op_key(json: &Json, ctx: &str) -> mlua::Result<&'static str> {
     found.ok_or_else(|| plan_error(format!("{ctx} unknown rc entry kind")))
 }
 
-/// Derives the slot key plus display name for one entry.
+/// Derives the slot key and display name for one entry.
 pub(crate) fn entry_slot(
     json: &Json,
     section: &str,

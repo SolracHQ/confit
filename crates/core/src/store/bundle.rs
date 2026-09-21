@@ -27,7 +27,7 @@ const BUNDLE_MANIFEST: &str = "manifest.json";
 /// Bundle blob folder prefix inside the archive.
 const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
-/// Writes one portable bundle holding the manifest plus referenced blobs.
+/// Writes one portable bundle holding the manifest and referenced blobs.
 ///
 /// The tar.gz archive holds `manifest.json` first, then one
 /// `blobs/<sha>` gzip entry per referenced blob in sorted
@@ -46,7 +46,7 @@ const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 ///
 /// # Errors
 ///
-/// Compression, archive, plus write failures surface as
+/// Compression, archive, and write failures surface as
 /// plan errors.
 ///
 /// # Examples
@@ -160,8 +160,8 @@ fn append_bundle_entry(
 ///
 /// # Errors
 ///
-/// Unreadable files plus bad archives plus version mismatch
-/// plus missing blobs fail as plan errors.
+/// Unreadable files, bad archives, version mismatch
+/// and missing blobs fail as plan errors.
 ///
 /// # Examples
 ///
@@ -304,7 +304,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// # Errors
 ///
-/// Unreadable files plus bad payloads fail as plan errors.
+/// Unreadable files and bad payloads fail as plan errors.
 ///
 /// # Examples
 ///

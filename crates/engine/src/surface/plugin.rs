@@ -1,6 +1,6 @@
 //! Plugin
 //!
-//! Lazy user plugin namespaces plus embedded defaults.
+//! Lazy user plugin namespaces and embedded defaults.
 
 use std::path::{Path, PathBuf};
 

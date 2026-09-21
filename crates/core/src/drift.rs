@@ -56,7 +56,7 @@ impl Drift {
     ///
     /// # Returns
     ///
-    /// The recorded path for key, hunk, missing, plus unreadable entries.
+    /// The recorded path for key, hunk, missing, and unreadable entries.
     ///
     pub fn path(&self) -> &DocPath {
         match self {
@@ -306,7 +306,7 @@ impl ManifestDocument {
     ///
     /// # Returns
     ///
-    /// Drift entries for the path, empty while bytes plus
+    /// Drift entries for the path, empty while bytes and
     /// recorded modes agree.
     pub(crate) fn disk_drift(
         &self,
@@ -421,7 +421,7 @@ impl ManifestDocument {
     ///
     /// Members compare by relative path against the disk
     /// reads. Missing members report missing under their
-    /// joined path. Changed bytes report hash plus size
+    /// joined path. Changed bytes report hash and size
     /// labels under the member key. Changed modes report
     /// under the member mode key. Disk extras stay quiet,
     /// hand-placed files never drift.
@@ -520,7 +520,7 @@ fn leaf_text(value: &serde_json::Value) -> String {
 
 /// Builds render-ready hunk content from first text to second text.
 ///
-/// File markers never leave this function. The `-` plus `+`
+/// File markers never leave this function. The `-` and `+`
 /// sides carry the direction, so headers add nothing.
 ///
 /// # Arguments
@@ -530,7 +530,7 @@ fn leaf_text(value: &serde_json::Value) -> String {
 ///
 /// # Returns
 ///
-/// Content lines alone, additions plus removals plus context.
+/// Content lines alone, additions, removals, and context.
 fn content_hunk(first: &str, second: &str) -> String {
     diffy::create_patch(first, second)
         .to_string()

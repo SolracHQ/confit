@@ -1,6 +1,6 @@
 //! Presentation
 //!
-//! Terminal summary plus progress spinner.
+//! Terminal summary and progress spinner.
 
 pub mod spinner;
 pub mod summary;

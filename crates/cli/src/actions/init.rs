@@ -12,7 +12,7 @@ use crate::cli::InitArgs;
 /// Starter profile text written by init.
 ///
 /// Ships from `resources/profile.lua` beside the crate. One shell
-/// config holds one alias patch to config plus one eval patch
+/// config holds one alias patch to config and one eval patch
 /// to final. Comments guide first use.
 const PROFILE_TEXT: &str = include_str!("../../resources/profile.lua");
 
@@ -85,7 +85,7 @@ const STUB_FILES: &[(&str, &str)] = &[
 pub struct InitReport {
     /// Holds the scaffolded profile path.
     pub profile: PathBuf,
-    /// Counts files written, profile plus stubs.
+    /// Counts files written, profile, and stubs.
     pub written: usize,
 }
 
@@ -109,18 +109,18 @@ pub struct InitReport {
 pub struct InitRunner<'a> {
     /// Holds the init flags under running.
     pub args: &'a InitArgs,
-    /// Holds the backend under reading plus writing.
+    /// Holds the backend under reading and writing.
     pub fs: &'a dyn Filesystem,
 }
 
 impl InitRunner<'_> {
-    /// Writes one profile holding one rc document plus editor
+    /// Writes one profile holding one rc document and editor
     /// stubs copied from the binary. Present profile or stubs abort
     /// with nothing written.
     ///
     /// # Returns
     ///
-    /// The scaffolded profile path plus the written file count.
+    /// The scaffolded profile path and the written file count.
     ///
     /// # Errors
     ///

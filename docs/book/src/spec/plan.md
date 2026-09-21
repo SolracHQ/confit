@@ -1,18 +1,18 @@
 # Plan
 
 `confit plan PROFILE` turns one profile file into desired state,
-compares that state against the recorded slot plus disk, writes a
-portable payload, plus prints a summary. The profile path rides
-positionally. Shared flags tune root, plugins, plus refetch. The
+compares that state against the recorded slot and disk, writes a
+portable payload, and prints a summary. The profile path rides
+positionally. Shared flags tune root, plugins, and refetch. The
 flow moves through eight stages in order:
 
-- Load profile resolves paths plus flags.
+- Load profile resolves paths and flags.
 - Evaluate runs the framework over the profile.
 - Patches execute callbacks in priority order.
 - Merge hooks folds shared hooks into single runs.
-- Hash fills content hashes plus sorts documents.
+- Hash fills content hashes and sorts documents.
 - Load previous reads the recorded slot.
-- Diff compares desired against recorded plus disk.
+- Diff compares desired against recorded and disk.
 - Write bundle stores the payload.
 
 ## Load profile
@@ -20,15 +20,15 @@ flow moves through eight stages in order:
 ### Flag parsing
 
 Flags parse before sibling work starts. Tildes expand inside the
-profile path plus the output path. The root flag defaults to the
+profile path and the output path. The root flag defaults to the
 profile parent folder. The plugins flag defaults to `plugins`
 under root. Refetch defaults to reuse of cached sources.
 
 ### Profile handoff
 
-The engine reads the profile file plus runs it under Lua with a
+The engine reads the profile file and runs it under Lua with a
 narrow standard library. A scoped require serves profile
-relatives. The returned table coerces to a profile plus passes
+relatives. The returned table coerces to a profile and passes
 validation before documents assemble.
 
 ## Evaluate
@@ -36,7 +36,7 @@ validation before documents assemble.
 ### Document assembly
 
 Configs contribute documents in declaration order. Structured
-documents assemble first. Text plus link documents follow. Rc
+documents assemble first. Text and link documents follow. Rc
 documents close the assembly. Blob refs collect beside the
 manifest under content hashes through the run.
 
@@ -58,14 +58,14 @@ its live document table in that order.
 ### Collision wins
 
 Each colliding slot keeps its first writer. Later writers yield
-the slot plus log one collision warning to the log file. Patch
+the slot and log one collision warning to the log file. Patch
 progress reports done against total through the run.
 
 ## Merge Hooks
 
 ### Shared runs
 
-Declared hooks merge by shared argv plus path. First seen order
+Declared hooks merge by shared argv and path. First seen order
 wins each slot. Requires gates join with AND. When gates join
 with OR. Checks concatenate in order. Timeout keeps the max.
 Single hooks pass through with bare shape kept.
@@ -86,7 +86,7 @@ after the build.
 
 The slot lives at `{config}/confit/state.json`. The run loads
 this slot before hashing, so fresh hashes meet recorded hashes
-right away. A missing file reads as an empty manifest plus marks
+right away. A missing file reads as an empty manifest and marks
 the first run.
 
 ### Version probe
@@ -97,7 +97,7 @@ A present file parses in two steps:
 - Manifest cast runs second. Unknown fields fail the load.
 
 Hashes persist
-in the file plus read trusted, so loads skip rendering.
+in the file and read trusted, so loads skip rendering.
 
 ## Diff
 
@@ -114,13 +114,13 @@ Counts compare desired hashes against recorded hashes. New keys
 read create. Changed hashes read update. Recorded-only keys
 read delete. Mode edits read update while hashes agree, since
 hashes cover bytes alone. Opaque kind changes read update in
-both directions. Other kind changes read create plus delete.
+both directions. Other kind changes read create and delete.
 
 ### Hook lines
 
 Hook lifecycle lines derive beside the summary in plan order
 with removals trailing. Finished documents log one debug line
-each carrying path, kind, plus lifecycle status.
+each carrying path, kind, and lifecycle status.
 
 ## Write Bundle
 
@@ -135,12 +135,12 @@ Referenced blobs alone ship inside.
 
 ### Named slot output
 
-`@name` strips the sigil plus resolves under
+`@name` strips the sigil and resolves under
 `{config}/confit/plans/{name}.json`. The run writes the
 manifest form there with pool blobs stored first, so the slot
 stays resolvable after the write. Slot outputs keep their own
 name with zero suffix imposed. Empty names, separator
-carriers, plus dot segments fail as plan errors.
+carriers, and dot segments fail as plan errors.
 
 ## Outputs
 
@@ -151,10 +151,10 @@ The two destinations compare as follows:
   as manifest JSON.
 
 Omitted output runs preview-only. Stdout carries the summary.
-Stderr carries the spinner plus the `log:` path.
+Stderr carries the spinner and the `log:` path.
 
 ## Zero home writes
 
 Snapshots read managed destinations through expanded paths.
-Plan reads destinations and writes the payload plus the log
+Plan reads destinations and writes the payload and the log
 file alone. Documents land on disk through apply alone.

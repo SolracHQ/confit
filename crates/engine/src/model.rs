@@ -1,6 +1,6 @@
 //! Model
 //!
-//! Private declaration plus patch types behind evaluation.
+//! Private declaration and patch types behind evaluation.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use crate::level::Level;
 use confit_core::document::StructuredFormat;
 use confit_core::hook::Hook;
 
-/// Declared structured document from profile plus configs.
+/// Declared structured document from profile and configs.
 #[derive(Debug, Clone)]
 pub(crate) struct StructuredDecl {
     /// Destination path.
@@ -57,7 +57,7 @@ pub(crate) struct OpaqueDecl {
     pub(crate) unmanaged: bool,
 }
 
-/// Declared tree member holding destination slot plus source.
+/// Declared tree member holding destination slot and source.
 #[derive(Debug, Clone)]
 pub(crate) struct TreeMemberDecl {
     /// Destination-relative member path.
@@ -77,7 +77,7 @@ pub(crate) struct TreeDecl {
     pub(crate) members: Vec<TreeMemberDecl>,
 }
 
-/// Declared rc entry with its section plus canonical JSON form.
+/// Declared rc entry with its section and canonical JSON form.
 #[derive(Debug, Clone)]
 pub(crate) struct RcEntryDecl {
     /// Section holding the entry: profile, config, or final.

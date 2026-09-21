@@ -1,6 +1,6 @@
 //! Fs
 //!
-//! Effect seam for file reads plus writes.
+//! Effect seam for file reads and writes.
 
 use std::path::{Path, PathBuf};
 
@@ -16,14 +16,14 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing files plus permission failures surface as io errors.
+    /// Missing files and permission failures surface as io errors.
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>>;
 
     /// Writes bytes to a path, creating parents as needed.
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
 
     /// Sets unix permission bits on a path.
@@ -33,7 +33,7 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn set_mode(&self, path: &Path, mode: u32) -> std::io::Result<()>;
 
     /// Creates a symlink at `link` pointing at `target`.
@@ -42,31 +42,31 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     fn symlink(&self, link: &Path, target: &Path) -> std::io::Result<()>;
 
     /// Lists immediate children of a directory as full paths.
     ///
     /// # Errors
     ///
-    /// Missing directories plus permission failures surface as io errors.
+    /// Missing directories and permission failures surface as io errors.
     fn list_dir(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>>;
 
     /// Removes one file or symlink path.
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn remove(&self, path: &Path) -> std::io::Result<()>;
 
     /// Reads one symlink target without following it.
     ///
-    /// Plain files plus missing paths read as `None`.
+    /// Plain files and missing paths read as `None`.
     fn read_link(&self, path: &Path) -> Option<PathBuf>;
 
     /// Reads unix permission bits without following content.
     ///
-    /// Symlinks plus missing paths read as `None`.
+    /// Symlinks and missing paths read as `None`.
     fn file_mode(&self, path: &Path) -> Option<u32>;
 
     /// Reports path presence.
@@ -78,7 +78,7 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn reader(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read>>;
 
     /// Opens a streaming writer for a path, creating parents as needed.
@@ -87,7 +87,7 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing parents plus permission failures surface as io errors.
+    /// Missing parents and permission failures surface as io errors.
     fn writer(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Write + '_>>;
 
     /// Reports the byte length `read` would return for a path.
@@ -96,14 +96,14 @@ pub trait Filesystem {
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn file_len(&self, path: &Path) -> std::io::Result<u64>;
 
     /// Copies one path to another through streams, reporting bytes moved.
     ///
     /// # Errors
     ///
-    /// Missing sources plus unwritable destinations surface as io errors.
+    /// Missing sources and unwritable destinations surface as io errors.
     fn copy(&self, from: &Path, to: &Path) -> std::io::Result<u64> {
         let mut reader = self.reader(from)?;
         let mut writer = self.writer(to)?;
@@ -114,11 +114,11 @@ pub trait Filesystem {
 
     /// Hashes one path with sha256 through a stream.
     ///
-    /// Reports the lowercase hex digest plus the hashed byte count.
+    /// Reports the lowercase hex digest and the hashed byte count.
     ///
     /// # Errors
     ///
-    /// Missing paths plus permission failures surface as io errors.
+    /// Missing paths and permission failures surface as io errors.
     fn hash_file(&self, path: &Path) -> std::io::Result<(String, u64)> {
         use sha2::Digest as _;
 

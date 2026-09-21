@@ -1,6 +1,6 @@
 //! Hook
 //!
-//! Post-config step declarations over argv plus opts.
+//! Post-config step declarations over argv and opts.
 
 use mlua::{Function, Lua, Table, Value};
 use serde_json::Value as Json;
@@ -19,7 +19,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Builds one hook declaration table from argv plus opts.
+/// Builds one hook declaration table from argv and opts.
 fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.hook.run";
     let (argv_value, opts_value) = args;

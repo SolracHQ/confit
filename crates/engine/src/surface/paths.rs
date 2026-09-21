@@ -1,6 +1,6 @@
 //! Paths
 //!
-//! Home plus config plus data plus confroot joins.
+//! Home, config, data, and confroot joins.
 
 use std::path::{Path, PathBuf};
 

@@ -133,12 +133,12 @@ pub enum RcOp {
     },
     /// Evaluates command output through eval.
     Eval {
-        /// Holds the command plus arguments in order.
+        /// Holds the command and arguments in order.
         argv: Vec<String>,
     },
     /// Runs a plain command line.
     Cmd {
-        /// Holds the command plus arguments in order.
+        /// Holds the command and arguments in order.
         argv: Vec<String>,
     },
     /// Sources a file into the shell.
@@ -239,7 +239,7 @@ pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
 
 /// Rc data holding three entry groups.
 ///
-/// Sections mark position plus guard. Any entry kind renders
+/// Sections mark position and guard. Any entry kind renders
 /// in any section. Profile opens the file. Config holds the
 /// interactive block. Final closes the file.
 ///
@@ -386,13 +386,13 @@ pub struct ManifestMember {
 /// Persisted document payload with binary bytes as references.
 ///
 /// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
-/// Text, structured, rc, plus link payloads stay inline.
-/// Opaque plus tree payloads hold pool blob references alone.
+/// Text, structured, rc, and link payloads stay inline.
+/// Opaque and tree payloads hold pool blob references alone.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestData {
-    /// Holds structured data plus its serialization format.
+    /// Holds structured data and its serialization format.
     Structured {
         /// Holds the serialization format.
         format: StructuredFormat,
@@ -417,7 +417,7 @@ pub enum ManifestData {
     },
     /// Holds the rc data object.
     Rc(RcData),
-    /// Holds one pool blob reference plus its mode.
+    /// Holds one pool blob reference and its mode.
     ///
     /// The unmanaged flag marks presence-only documents.
     /// Present unmanaged documents stay quiet whatever the
@@ -461,12 +461,12 @@ impl ManifestData {
 
     /// Reads the unix permission bits for this payload.
     ///
-    /// Text plus opaque payloads carry an optional mode.
+    /// Text and opaque payloads carry an optional mode.
     /// Every other payload reads as None.
     ///
     /// # Returns
     ///
-    /// The mode bits for text plus opaque payloads, else None.
+    /// The mode bits for text and opaque payloads, else None.
     ///
     /// # Examples
     ///
@@ -485,7 +485,7 @@ impl ManifestData {
 
     /// Reads the unmanaged flag for this payload.
     ///
-    /// Text plus opaque payloads carry the flag. Every
+    /// Text and opaque payloads carry the flag. Every
     /// other payload reads as false.
     ///
     /// # Returns
@@ -516,7 +516,7 @@ impl ManifestData {
     ///
     /// # Returns
     ///
-    /// The blob hashes for opaque plus tree payloads, else empty.
+    /// The blob hashes for opaque and tree payloads, else empty.
     ///
     pub fn blob_refs(&self) -> Vec<&str> {
         match self {
@@ -529,7 +529,7 @@ impl ManifestData {
     }
 }
 
-/// One persisted document holding metadata plus references.
+/// One persisted document holding metadata and references.
 ///
 /// The data hash covers rendered bytes, so plan diffs read
 /// trusted hashes without pool access.
@@ -576,18 +576,18 @@ impl ManifestDocument {
 
     /// Reads the unix permission bits for this document.
     ///
-    /// Text plus opaque payloads carry an optional mode.
+    /// Text and opaque payloads carry an optional mode.
     /// Every other payload reads as None.
     ///
     /// # Returns
     ///
-    /// The mode bits for text plus opaque payloads, else None.
+    /// The mode bits for text and opaque payloads, else None.
     ///
     pub fn mode(&self) -> Option<u32> {
         self.data.mode()
     }
 
-    /// Builds the kind plus path key for state lookups.
+    /// Builds the kind and path key for state lookups.
     ///
     /// # Returns
     ///
@@ -622,7 +622,7 @@ impl ManifestDocument {
 
 /// Counts changed members between two tree manifests.
 ///
-/// Added plus removed plus content-or-mode modified
+/// Added, removed, and content-or-mode modified
 /// members count. Order never counts, manifests sort
 /// by relative path before comparing.
 ///
@@ -678,7 +678,7 @@ pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
 ///
 /// Members sort by relative path, so declaration order
 /// never leaks into plan hashes. Each line holds the
-/// octal mode, the relative path, plus the member blob hash.
+/// octal mode, the relative path, and the member blob hash.
 ///
 /// # Arguments
 ///
@@ -715,7 +715,7 @@ pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Leading `d` plus wrong lengths plus bad characters fail
+/// Leading `d`, wrong lengths, and bad characters fail
 /// as plan errors.
 ///
 /// # Examples

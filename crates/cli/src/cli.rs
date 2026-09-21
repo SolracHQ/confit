@@ -48,15 +48,15 @@ pub enum Command {
     Plan(PlanArgs),
     /// Preview the manifest, confirm, and create every document in place.
     Apply(ApplyArgs),
-    /// Scaffold one profile plus stubs in the target folder.
+    /// Scaffold one profile and stubs in the target folder.
     Init(InitArgs),
     /// Pack one slot into a portable bundle file or print its manifest.
     Export(ExportArgs),
-    /// Drop one named slot plus its orphaned blobs.
+    /// Drop one named slot and its orphaned blobs.
     Delete(DeleteArgs),
 }
 
-/// Shared run flags carried by plan plus apply.
+/// Shared run flags carried by plan and apply.
 ///
 /// Profiles ride positionally: `plan` takes one, `apply`
 /// takes a source in every shape.
@@ -98,7 +98,7 @@ pub struct PlanArgs {
 
 /// Arguments for `confit apply`.
 ///
-/// The positional sniffs its shape: `.lua` plus extensionless
+/// The positional sniffs its shape: `.lua` and extensionless
 /// paths read a profile, `.cb` reads a bundle file, `@name`
 /// reads a named slot, `%N` reads history newest-first from one.
 ///
@@ -136,7 +136,7 @@ pub struct ApplyArgs {
 /// ```
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Target folder gaining the profile plus stubs. Omitted means the current folder.
+    /// Target folder gaining the profile and stubs. Omitted means the current folder.
     #[arg(default_value = ".")]
     pub dir: PathBuf,
 }
@@ -183,17 +183,14 @@ pub struct DeleteArgs {
 
 /// Expands one leading `~` against the OS home folder.
 ///
-/// Bare `~` plus `~/` prefixes resolve, everything else passes
-/// through untouched. Missing home folders pass through too,
-/// letting the caller fail with its own context.
-///
-/// # Arguments
-///
-/// * `path` - the raw arg path.
+/// Bare `~` and `~/` inputs resolve against the home folder.
+/// Other inputs pass through unchanged, letting the caller fail
+/// with its own context.
 ///
 /// # Returns
 ///
-/// The home-joined path, else the input unchanged.
+/// The resolved path for bare tilde inputs with a known home, else
+/// the input unchanged.
 ///
 pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
@@ -320,7 +317,7 @@ pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> Pat
 ///
 /// # Errors
 ///
-/// Empty names plus separator carriers plus dot segments fail
+/// Empty names, separator carriers, and dot segments fail
 /// as plan errors.
 ///
 /// # Examples

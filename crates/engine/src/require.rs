@@ -23,7 +23,7 @@ pub(crate) fn chunk_env(lua: &Lua, requirer: Function) -> mlua::Result<Table> {
 
 /// Scoped require owner holding the resolution triple.
 ///
-/// The current folder plus the jail root plus the caller scope travel
+/// The current folder, the jail root, and the caller scope travel
 /// together, so resolution methods read them from self.
 ///
 #[derive(Debug, Clone)]
@@ -134,7 +134,7 @@ impl Requirer {
         Ok(normalized)
     }
 
-    /// Normalizes one path lexically, resolving `.` plus `..`.
+    /// Normalizes one path lexically, resolving `.` and `..`.
     ///
     /// Returns None while `..` climbs above the path start.
     fn normalize(path: &Path) -> Option<PathBuf> {

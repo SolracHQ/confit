@@ -36,7 +36,7 @@ mod surface;
 ///
 #[derive(Clone, Default)]
 pub struct EvalOpts {
-    /// Project root for resource reads plus module resolution.
+    /// Project root for resource reads and module resolution.
     pub root: PathBuf,
     /// External plugin folder shaped `{user}/{name}/plugin.lua`.
     /// Missing folders read as embedded-only.
@@ -47,7 +47,7 @@ pub struct EvalOpts {
     pub cache_dir: Option<PathBuf>,
     /// Network source override for tests, holding `None` for HTTP.
     pub fetcher: Option<Arc<dyn Fetch>>,
-    /// Progress sender for fetch plus unpack plus patch facts.
+    /// Progress sender for fetch, unpack, and patch facts.
     pub progress: Option<ProgressSender>,
 }
 
@@ -64,10 +64,10 @@ impl std::fmt::Debug for EvalOpts {
     }
 }
 
-/// Finished evaluation holding documents plus blobs plus hooks.
+/// Finished evaluation holding documents, blobs, and hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Blobs hold opaque plus tree member refs under
+/// order. Blobs hold opaque and tree member refs under
 /// SHA-256 hex, one entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
@@ -81,21 +81,21 @@ pub struct Evaluation {
     pub hooks: Vec<Hook>,
 }
 
-/// Evaluates one profile file into finished documents plus hooks.
+/// Evaluates one profile file into finished documents and hooks.
 ///
 /// # Arguments
 ///
 /// * `profile` - the profile file path.
-/// * `opts` - root plus plugin folder inputs.
+/// * `opts` - root and plugin folder inputs.
 ///
 /// # Returns
 ///
-/// Structured plus text plus link documents plus one rc document per
-/// shell, in deterministic order, plus merged hooks.
+/// Structured, text, link documents, one rc document per
+/// shell, in deterministic order, and merged hooks.
 ///
 /// # Errors
 ///
-/// Missing files fail as io errors. Bad shapes plus conflicts plus
+/// Missing files fail as io errors. Bad shapes, conflicts, and
 /// unreadable graphs fail as plan errors.
 ///
 /// # Examples

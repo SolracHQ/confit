@@ -231,6 +231,11 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
 }
 
 /// Builds an apply runner over memory fakes.
+///
+/// # Arguments
+///
+/// * `force` - skips the literal-yes prompt while true.
+/// * `preview` - renders the plan preview while true.
 pub(crate) fn apply_runner<'a>(
     desired: Vec<ManifestDocument>,
     previous: Bundle,

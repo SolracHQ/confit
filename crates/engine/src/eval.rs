@@ -1,6 +1,6 @@
 //! Eval
 //!
-//! Profile loading plus document assembly.
+//! Profile loading and document assembly.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -33,7 +33,7 @@ use confit_core::ids::DocPath;
 use confit_core::progress::{Event, ProgressSender};
 use confit_core::store::blobs::BlobRef;
 
-/// One evaluation holding the Lua state plus its context.
+/// One evaluation holding the Lua state and its context.
 ///
 /// The state, the resolution roots, the fetcher, and the progress
 /// sender travel together, so assembly methods read them from self
@@ -41,7 +41,7 @@ use confit_core::store::blobs::BlobRef;
 pub(crate) struct Session {
     /// Lua state carrying the confit surface.
     pub(crate) lua: Lua,
-    /// Require plus resource base.
+    /// Require and resource base.
     pub(crate) root: PathBuf,
     /// Fetch sidecar cache folder.
     pub(crate) cache: PathBuf,
@@ -60,7 +60,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    /// Runs one profile file into finished documents plus hooks.
+    /// Runs one profile file into finished documents and hooks.
     pub(crate) fn run(profile: &Path, opts: EvalOpts) -> Result<crate::Evaluation> {
         let start = std::time::Instant::now();
         let root = resolve_root(profile, &opts.root);
@@ -384,7 +384,7 @@ impl ProfileDeclared {
     }
 }
 
-/// One profile holding shells plus declarations plus configs.
+/// One profile holding shells, declarations, and configs.
 struct Profile {
     /// Shells under rendering.
     shells: Vec<String>,
@@ -423,7 +423,7 @@ fn walk_requires(
 }
 
 impl Profile {
-    /// Reads shells plus documents plus configs from a profile table.
+    /// Reads shells, documents, and configs from a profile table.
     fn read(table: &Table, ctx: &str) -> Result<Self> {
         Ok(Self {
             shells: read_shells(table, ctx)?,
@@ -432,7 +432,7 @@ impl Profile {
         })
     }
 
-    /// Rejects repeated declarations across profile plus configs.
+    /// Rejects repeated declarations across profile and configs.
     fn check(&self, ctx: &str) -> Result<()> {
         let mut owners: BTreeMap<&str, &str> = BTreeMap::new();
         for item in &self.declared.structured {
@@ -502,7 +502,7 @@ impl Profile {
         out
     }
 
-    /// Assembles text plus link plus opaque documents in path order.
+    /// Assembles text, link, and opaque documents in path order.
     fn text_link(
         &self,
         ctx: &str,
@@ -672,7 +672,7 @@ fn exec_list(refs: &[&StoredPatch]) -> Vec<ExecPatch> {
         .collect()
 }
 
-/// Assembles text plus link plus opaque documents in path order.
+/// Assembles text, link, and opaque documents in path order.
 fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
@@ -767,7 +767,7 @@ const HASH_CHUNK: usize = 8 * 1024;
 ///
 /// # Errors
 ///
-/// Missing plus unreadable sources fail as io errors.
+/// Missing and unreadable sources fail as io errors.
 fn resolve_opaque(
     source: &Path,
     mode: Option<u32>,
@@ -788,11 +788,11 @@ fn resolve_opaque(
     })
 }
 
-/// Streams one source file into its content hash plus metadata size.
+/// Streams one source file into its content hash and metadata size.
 ///
 /// # Errors
 ///
-/// Missing plus unreadable sources fail as io errors.
+/// Missing and unreadable sources fail as io errors.
 fn hash_source(source: &Path) -> Result<(String, u64)> {
     let mut file = std::fs::File::open(source)?;
     let size = file.metadata()?.len();
@@ -820,7 +820,7 @@ fn hash_source(source: &Path) -> Result<(String, u64)> {
 ///
 /// # Errors
 ///
-/// Missing plus unreadable member files fail as io errors.
+/// Missing and unreadable member files fail as io errors.
 fn resolve_tree(
     members: &[crate::model::TreeMemberDecl],
     blobs: &mut BTreeMap<String, BlobRef>,

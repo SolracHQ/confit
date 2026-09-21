@@ -4,15 +4,15 @@ Three crates form the app, each holding one main
 responsibility.
 
 The engine converts a Lua profile into manifest documents
-plus blob bytes. The core manages state plus diffs across bundles, manifests,
+and blob bytes. The core manages state and diffs across bundles, manifests, 
 the pool, and rotation.
-The cli orchestrates both, calling engine plus core where
+The cli orchestrates both, calling engine and core where
 needed, and provides user experience across prompts, progress,
 previews, listings, scaffolding, and arg shapes.
 
 The call flow is `main` to `actions`, with `main` rendering
 reports through `presentation`. Effects hide behind traits
-(`Filesystem`, `Fetch`, progress sink). `main` plus `cli`
+(`Filesystem`, `Fetch`, progress sink). `main` and `cli`
 name nothing effectful. Test seams keep every crate hermetic:
 memory filesystem, memory fetcher, silent progress.
 
@@ -27,39 +27,39 @@ These three edges are the whole graph.
 
 ## confit-core
 
-Pure data plus render. Every function here runs as a unit test on data alone.
+Pure data and render. Every function here runs as a unit test on data alone.
 
-- `document` owns `ManifestDocument` plus `ManifestData`:
+- `document` owns `ManifestDocument` and `ManifestData`:
   structured, text, link, rc, opaque, tree. One path holds
-  one document. Paths expand tildes. Opaque plus tree
+  one document. Paths expand tildes. Opaque and tree
   payloads persist as blob refs in manifests, raw bytes
   in the bundle blob map.
-- `ids` owns `DocPath` plus `ReadOutcome` (present, absent,
+- `ids` owns `DocPath` and `ReadOutcome` (present, absent, 
   unreadable).
-- `plan` owns versioned `Bundle` (`manifest` plus `blobs`)
-  plus on-demand counts against previous bundles.
+- `plan` owns versioned `Bundle` (`manifest`, `blobs`),
+  and on-demand counts against previous bundles.
   The state slot holds the applied manifest.
 - `drift` owns `Drift` entries comparing recorded manifests
-  against disk, plus their display lines.
-- `render` owns shell-agnostic document bytes plus text.
+  against disk, and their display lines.
+- `render` owns shell-agnostic document bytes and text.
 - `error` owns the plan-or-io failure shape.
 
 ## confit-engine
 
-Lua profiles evaluate into manifest documents plus blobs
+Lua profiles evaluate into manifest documents and blobs
 through `evaluate(profile, EvalOpts)`. `EvalOpts` carries root, plugins, re-fetch, cache override,
 fetcher override, plus the progress sink. Overrides keep
-tests off the network plus the OS cache.
+tests off the network and the OS cache.
 
 - `surface` owns one namespace module per kind. Config,
   document, patch, shell, paths, resources, utils,
-  plugin. Resources jail reads to the project root plus the
+  plugin. Resources jail reads to the project root and the
   fetch cache. `require` jails module loads the same way.
-- `model` owns Config plus Patch handles, internal to the
+- `model` owns Config and Patch handles, internal to the
   crate. `level` owns priority sorting. `exec` owns the live
   wrappers across first-writer-wins slots, collision logging,
   and per-shell materialization.
-- `fetch` owns the `Fetch` trait with HTTP plus memory
+- `fetch` owns the `Fetch` trait with HTTP and memory
   sources. Sidecar shas guard the OS cache. Re-download
   fires on missing files, mismatched bytes, or re-fetch.
 - `progress` owns slow-run facts across fetch, unpack, patch,
@@ -71,29 +71,29 @@ tests off the network plus the OS cache.
 
 ## confit-cli
 
-Terminal surface over evaluation plus bundles.
+Terminal surface over evaluation and bundles.
 
-- `main` owns command dispatch plus report printing.
+- `main` owns command dispatch and report printing.
 - `cli` owns arg shapes for plan, apply, export, delete,
   init. Tildes expand across every path arg after parsing.
-- `actions` owns the flows (see the plan, apply, plus init
+- `actions` owns the flows (see the plan, apply, and init
   spec pages). Plan
   evaluates, diffs, and stores payloads; apply previews,
   prompts, writes per kind, removes recorded orphans, writes
   state, and rotates history; export packs slots; delete
-  drops named slots; init scaffolds profiles plus stubs
+  drops named slots; init scaffolds profiles and stubs
   from embedded text.
-- `fs` owns the `Filesystem` seam with OS plus memory
+- `fs` owns the `Filesystem` seam with OS and memory
   backends. Memory fakes keep tests hermetic.
-- `presentation` owns summaries, drift lines, plus report
-  text. Summaries cover moving documents plus counts.
+- `presentation` owns summaries, drift lines, and report
+  text. Summaries cover moving documents and counts.
 - Logging rides `fern` into one file per run. The global
   `--log-level` gates verbosity, warn by default.
 
 ## Data flow
 
-The profile evaluates to manifest documents plus blobs. The build diffs desired
-documents against the previous manifest plus disk snapshots,
+The profile evaluates to manifest documents and blobs. The build diffs desired
+documents against the previous manifest and disk snapshots, 
 hashing rendered bytes. The payload writes as pretty JSON,
 metadata always. Binary bytes gzip once into the shared
 pool under content hashes. Apply writes documents per kind, removes

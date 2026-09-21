@@ -61,7 +61,7 @@ pub enum Event {
         /// Plan file path under reading.
         path: String,
     },
-    /// Manifest payload serialization plus write entered.
+    /// Manifest payload serialization and write entered.
     WritingManifest {
         /// Document count under serializing.
         documents: usize,

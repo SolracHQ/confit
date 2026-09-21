@@ -27,11 +27,11 @@ confit takes inspiration from several tools. It keeps the best of each for these
 | confit | one user's files | Lua | preview first, idempotent files |
 | home-manager | one user's files through nix | Nix language | declarative user env, Nix store tax included |
 | chezmoi | dotfiles across machines | templates | template-driven file management |
-| ansible | fleets plus systems | YAML | playbook automation at scale |
+| ansible | fleets and systems | YAML | playbook automation at scale |
 | nix | whole systems | Nix language | reproducible system builds |
 | terraform | infrastructure | HCL | provisioned resources as state |
 | pulumi | infrastructure | real languages | provisioned resources in code |
 
 ## Why it exists
 
-I manage dotfiles across machines. I looked for tools that fit that work. I tried chezmoi first. It manages files through templates. I wanted Lua code shaping files plus profiles for each machine. I tried home-manager next. It manages user files with a real diff through Nix. I wanted a small binary with Lua alone. I tried Ansible next. It automates fleets through YAML playbooks. I wanted user-space files with a preview first. I tried custom scripts next. They shaped files with direct code. I wanted shared patterns with steady behavior across runs. I built confit for that work.
+I manage dotfiles across machines. I looked for tools that fit that work. I tried chezmoi first. It manages files through templates. I wanted Lua code shaping files and profiles for each machine. I tried home-manager next. It manages user files with a real diff through Nix. I wanted a small binary with Lua alone. I tried Ansible next. It automates fleets through YAML playbooks. I wanted user-space files with a preview first. I tried custom scripts next. They shaped files with direct code. I wanted shared patterns with steady behavior across runs. I built confit for that work.

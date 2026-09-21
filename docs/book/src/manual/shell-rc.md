@@ -15,7 +15,7 @@ One rc document renders once per shell. `{{shell}}` inside `eval` and `source` e
 Entries live in three sections:
 
 - `profile` lines render first and always run.
-- `config` plus `final` lines render after an interactive guard, so scripts stay quiet:
+- `config` and `final` lines render after an interactive guard, so scripts stay quiet:
 
 ```sh
 case $- in
@@ -24,7 +24,7 @@ case $- in
 esac
 ```
 
-Six builders cover every line. The demo shell config draws its alias plus its PATH line from this set:
+Six builders cover every line. The demo shell config draws its alias and its PATH line from this set:
 
 ```lua
 confit.document.rc.alias("ll", "ls -l")          -- alias ll=...
@@ -51,6 +51,6 @@ confit.document.rc.env("EDITOR", "hx", {
 })
 ```
 
-Guards compose. `env_eq` matches a variable, `env_set` tests presence, `in_path` tests a binary, `exists` tests a file, `all` plus `any` combine them.
+Guards compose. `env_eq` matches a variable, `env_set` tests presence, `in_path` tests a binary, `exists` tests a file, `all` and `any` combine them.
 
 The demo shells now render per shell with guards where it counts. Next, [Patch](patch.md) shows how demo configs share one file.

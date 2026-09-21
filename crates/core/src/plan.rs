@@ -19,7 +19,7 @@ pub const BUNDLE_VERSION: u32 = 7;
 
 /// Versioned desired state written by bundle builds.
 ///
-/// The manifest holds version, documents, plus
+/// The manifest holds version, documents, and
 /// hooks as the only document language. The blob map holds
 /// blob refs under content hashes beside it. The bundle
 /// holds no duplicate fields.
@@ -37,7 +37,7 @@ impl Bundle {
     ///
     /// # Returns
     ///
-    /// The bundle holding version plus empty documents.
+    /// The bundle holding version and empty documents.
     ///
     pub fn empty() -> Self {
         Self {
@@ -50,7 +50,7 @@ impl Bundle {
         }
     }
 
-    /// Finds one recorded document by its kind plus path key.
+    /// Finds one recorded document by its kind and path key.
     fn find_by_key(&self, key: &str) -> Option<&ManifestDocument> {
         self.manifest
             .documents
@@ -93,19 +93,14 @@ pub enum DocumentStatus {
 impl ManifestDocument {
     /// Reports the lifecycle status against a previous manifest.
     ///
-    /// Same-path kind changes to or from opaque read as update.
-    /// All other kind changes read as create plus delete through
-    /// the build counts. Mode changes read as update while
-    /// hashes agree, since hashes cover bytes only.
-    ///
     /// # Arguments
     ///
     /// * `previous` - the previous manifest with filled hashes.
     ///
     /// # Returns
     ///
-    /// Create for absent keys, update for differing hashes or
-    /// modes plus opaque kind changes, else unchanged.
+    /// Create for absent keys, update for differing hashes,
+    /// differing modes, or opaque kind changes, else unchanged.
     ///
     /// # Examples
     ///
@@ -205,7 +200,7 @@ impl ManifestDocument {
     }
 }
 
-/// Reads the hash plus size label for opaque bytes.
+/// Reads the hash and size label for opaque bytes.
 ///
 /// # Arguments
 ///
@@ -282,7 +277,7 @@ impl Bundle {
     /// Counts lifecycle states against a previous manifest.
     ///
     /// Opaque kind changes count as updates, other kind changes
-    /// count as create plus delete.
+    /// count as create and delete.
     ///
     /// # Arguments
     ///
@@ -290,7 +285,8 @@ impl Bundle {
     ///
     /// # Returns
     ///
-    /// Create, update, plus delete counts.    ///
+    /// Create, update, and delete counts.
+    ///
     /// # Examples
     ///
     /// ```rust

@@ -18,7 +18,7 @@ Three common stops and their fixes.
 
 **Cause.** A hook tool exits with a failure code.
 
-**Fix.** Read the run log, fix the tool, and re-run. The log holds one header line per hook plus its output:
+**Fix.** Read the run log, fix the tool, and re-run. The log holds one header line per hook and its output:
 
 ```text
 hook 1 of 1: tool --flag

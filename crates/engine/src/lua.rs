@@ -1,6 +1,6 @@
 //! Lua
 //!
-//! Lua plus JSON conversion plus marker helpers.
+//! Lua, JSON conversion, and marker helpers.
 
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ use serde_json::Value as Json;
 
 use crate::error::plan_error;
 
-/// Lua table shape plus conversion helpers.
+/// Lua table shape and conversion helpers.
 ///
 pub(crate) trait TableExt {
     /// Converts one Lua table into JSON.
@@ -28,18 +28,11 @@ pub(crate) trait TableExt {
     ///
     fn to_json(&self, ctx: &str) -> mlua::Result<Json>;
 
-    /// Reports a dense Lua array shape.
-    ///
-    /// Mirrors conversion: dense integer keys from 1 read as arrays,
-    /// everything else reads as objects.
-    ///
-    /// # Arguments
-    ///
-    /// * `table` - table under testing.
+    /// Reports the dense-array shape predicate used by conversion.
     ///
     /// # Returns
     ///
-    /// True for dense arrays. False for objects, empties, and errors.
+    /// True for dense arrays, else false.
     fn is_array(&self) -> bool;
 
     /// Reads one named string field from a table.
@@ -55,7 +48,7 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Missing plus non-string fields fail as plan errors.
+    /// Missing and non-string fields fail as plan errors.
     ///
     fn req_str(&self, ctx: &str, field: &str) -> mlua::Result<String>;
 
@@ -72,7 +65,7 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Missing plus non-table fields fail as plan errors.
+    /// Missing and non-table fields fail as plan errors.
     ///
     fn req_table(&self, ctx: &str, field: &str) -> mlua::Result<Table>;
 
@@ -261,7 +254,7 @@ pub(crate) trait JsonExt {
     ///
     /// # Arguments
     ///
-    /// * `lua` - state owning new strings plus tables.
+    /// * `lua` - state owning new strings and tables.
     /// * `ctx` - error prefix naming the caller.
     ///
     /// # Returns
@@ -476,7 +469,7 @@ fn lua_to_json_inner(value: Value, ctx: &str) -> mlua::Result<Json> {
 ///
 /// # Arguments
 ///
-/// * `entries` - collected key plus value pairs.
+/// * `entries` - collected key and value pairs.
 ///
 /// # Returns
 ///

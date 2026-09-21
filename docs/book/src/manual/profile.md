@@ -1,6 +1,6 @@
 # Profile
 
-You stand at `~/confit-demo` with one shell and one alias. This chapter adds a second shell plus a shared tool file.
+You stand at `~/confit-demo` with one shell and one alias. This chapter adds a second shell and a shared tool file.
 
 A profile composes a shared pool of configs into one user. Three fields compose a profile. `shells` lists the startup files to render. `documents` holds user-owned base files. `configs` holds the tool contributions.
 
@@ -13,7 +13,7 @@ The demo profile starts with `bash` alone. Add `zsh` beside it. Add one shared t
     tools.lua
 ```
 
-`profile.lua` now returns two shells plus two configs:
+`profile.lua` now returns two shells and two configs:
 
 ```lua
 local tools = require("tools.tools")
@@ -42,7 +42,7 @@ confit apply %1                            # re-apply just-previous
 confit init myproject                      # scaffold, default .
 ```
 
-`@name` saves a named slot for replay. Reference lists the saved shapes. `apply @name` replays it. Empty names plus separators fail. Switching profiles runs on named slots. Render each profile into its own name and replay by name:
+`@name` saves a named slot for replay. Reference lists the saved shapes. `apply @name` replays it. Empty names and separators fail. Switching profiles runs on named slots. Render each profile into its own name and replay by name:
 
 ```sh
 confit plan laptop.lua -o @laptop

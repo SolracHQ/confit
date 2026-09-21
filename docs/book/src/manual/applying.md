@@ -10,7 +10,7 @@ confit apply profile.lua
 ```
 
 A first run compares planned files against disk bytes and
-prints one line naming adds plus files already in place:
+prints one line naming adds and files already in place:
 
 ```text
 Bundle: 2 to add, 1 already in place.
@@ -27,8 +27,8 @@ place in the order, and its output lands in the run log.
 The log path prints after the run. Passing checks skip the
 hook, closed gates skip it, failures stop the rest.
 
-`require` resolves under the root, so profiles plus tools
-plus resources travel as one folder. The root defaults to
+`require` resolves under the root, so profiles, tools,
+and resources travel as one folder. The root defaults to
 the profile folder. `--root` moves it for shared layouts.
 
 When a file changed on disk since the last apply, confit says
@@ -59,7 +59,7 @@ file holds the manifest that already applied. One user holds one
 applied result, and one state slot mirrors it, so every
 apply diffs against the same recorded result. Reach for
 saved manifests when switching profiles. A rendered manifest replays
-through the positional, evaluation plus fetching costs stay
+through the positional, evaluation and fetching costs stay
 paid, and the switch stays trivial and fast. Experiments
 apply a rendered file.
 

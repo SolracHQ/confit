@@ -1,6 +1,6 @@
 //! Config
 //!
-//! Config userdata plus per-config contributions.
+//! Config userdata and per-config contributions.
 
 use mlua::{AnyUserData, Lua, MultiValue, Table, UserData, UserDataMethods, Value};
 

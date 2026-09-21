@@ -1,6 +1,6 @@
 //! Utils
 //!
-//! Template rendering plus table shape checks over Lua values.
+//! Template rendering and table shape checks over Lua values.
 
 use std::collections::BTreeMap;
 

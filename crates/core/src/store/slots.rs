@@ -1,6 +1,6 @@
 //! Slots
 //!
-//! State slot plus history rotation plus dir resolution.
+//! State slot, history rotation, and dir resolution.
 
 use std::path::{Path, PathBuf};
 
@@ -25,8 +25,8 @@ use super::manifest::{HistoryEntry, Manifest, manifest_json};
 ///
 /// # Errors
 ///
-/// Unreadable present files plus bad JSON plus version
-/// mismatch plus missing blobs fail as plan errors.
+/// Unreadable present files, bad JSON, version
+/// mismatch and missing blobs fail as plan errors.
 ///
 /// # Examples
 ///
@@ -96,7 +96,7 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// # Errors
 ///
-/// Serializer plus io failures surface as plan or io errors.
+/// Serializer and io failures surface as plan or io errors.
 ///
 /// # Examples
 ///
@@ -160,8 +160,8 @@ pub fn list_previous(fs: &dyn Filesystem) -> Result<Vec<HistoryEntry>> {
 /// Stamp names stay oldest-first on disk while presentation
 /// reverses, so `%1` names the just-previous entry.
 /// Manifests hydrate with the disk short-circuit, so steady
-/// entries skip pool reads. Unreadable files plus bad JSON
-/// plus stale versions plus unresolvable blobs skip quietly.
+/// entries skip pool reads. Unreadable files, bad JSON
+///, stale versions, and unresolvable blobs skip quietly.
 /// Missing folders read as empty.
 ///
 /// # Arguments
@@ -249,7 +249,7 @@ fn rotate_previous(dir: &Path, fs: &dyn Filesystem) -> Result<()> {
 ///
 /// # Returns
 ///
-/// The folder holding the slot plus history.
+/// The folder holding the slot and history.
 ///
 /// # Errors
 ///
@@ -319,7 +319,7 @@ pub fn resolve_plans_dir() -> Result<PathBuf> {
 /// Resolves one named slot file under the plans folder.
 ///
 /// Names hold one file stem with no separators. Empty names,
-/// separator carriers, plus dot segments fail as plan errors.
+/// separator carriers, and dot segments fail as plan errors.
 ///
 /// # Arguments
 ///
@@ -331,7 +331,7 @@ pub fn resolve_plans_dir() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Empty names plus separator carriers plus dot segments
+/// Empty names, separator carriers, and dot segments
 /// fail as plan errors. Folder resolution failures surface
 /// as plan errors.
 ///
@@ -405,7 +405,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Clock plus write failures surface as plan or io errors.
+/// Clock and write failures surface as plan or io errors.
 ///
 /// # Examples
 ///
@@ -447,11 +447,11 @@ pub enum SlotKind {
     History(usize),
 }
 
-/// Resolves one picker to its live bundle plus slot kind.
+/// Resolves one picker to its live bundle and slot kind.
 ///
 /// Absent pickers read the applied slot. `@name` reads the
 /// named slot. `%N` reads history newest-first from one.
-/// Named plus applied slots refuse while their files read
+/// Named and applied slots refuse while their files read
 /// absent. History refuses while the pick falls outside the
 /// listing. Bare values refuse, so paths never parse as slots.
 /// Callers prefix errors with their command name.
@@ -467,7 +467,7 @@ pub enum SlotKind {
 ///
 /// # Errors
 ///
-/// Absent slots plus malformed plus out-of-range picks plus
+/// Absent slots, malformed, out-of-range picks and
 /// load failures surface as plan or io errors.
 pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, SlotKind)> {
     let Some(raw) = picker else {

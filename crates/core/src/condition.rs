@@ -100,14 +100,13 @@ impl Condition {
 
     /// Returns the simplified form of one condition tree.
     ///
-    /// Flattens nested same-ops, drops duplicate members in stable
-    /// order, folds double negation, absorbs redundant branches, and
-    /// folds complementary pairs. Empty `All` reads true, empty `Any`
-    /// reads false, matching evaluation. Runs to a fixed point.
+    /// The output evaluates like the input with no redundant
+    /// shape left. Empty `All` reads true, empty `Any` reads
+    /// false, matching evaluation.
     ///
     /// # Returns
     ///
-    /// The equivalent tree with no redundant shape left.
+    /// The equivalent tree in idempotent normal form.
     ///
     /// # Examples
     ///
@@ -142,7 +141,7 @@ impl Condition {
     ///
     /// # Returns
     ///
-    /// The tree after one round of flattening plus folding.
+    /// The tree after one round of flattening and folding.
     fn simplify_step(&self) -> Self {
         match self {
             Self::Not(inner) => match inner.simplified() {

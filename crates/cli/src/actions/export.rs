@@ -50,12 +50,12 @@ pub struct ExportReport {
 pub struct ExportRunner<'a> {
     /// Holds the export flags under running.
     pub args: &'a ExportArgs,
-    /// Holds the injected filesystem plus output plus sink.
+    /// Holds the injected filesystem, output, and sink.
     pub seams: Seams<'a>,
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Reads flags plus runs the full export flow on injected seams.
+    /// Reads flags and runs the full export flow on injected seams.
     pub fn run(args: &'a ExportArgs, seams: Seams<'a>) -> Result<ExportReport> {
         Self { args, seams }.execute()
     }
@@ -74,8 +74,8 @@ impl<'a> ExportRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Picker plus load plus write failures surface as plan or
-    /// io errors. `-o` plus `--manifest` together refuse.
+    /// Picker, load, and write failures surface as plan or
+    /// io errors. `-o` and `--manifest` together refuse.
     pub fn execute(self) -> Result<ExportReport> {
         let args = self.args;
         let seams = self.seams;
@@ -110,7 +110,7 @@ impl<'a> ExportRunner<'a> {
     }
 }
 
-/// Resolves one picker to its live bundle plus auto bundle name.
+/// Resolves one picker to its live bundle and auto bundle name.
 ///
 /// Slot errors carry the export command name.
 ///
@@ -126,7 +126,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Errors
 ///
-/// Absent slots plus malformed plus out-of-range picks plus
+/// Absent slots, malformed, out-of-range picks and
 /// load failures surface as plan or io errors.
 ///
 /// # Examples

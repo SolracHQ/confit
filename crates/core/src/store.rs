@@ -1,6 +1,6 @@
 //! Store
 //!
-//! Manifests plus blob pool plus document writes plus history rotation.
+//! Manifests, blob pool, document writes, and history rotation.
 
 pub mod blobs;
 pub mod bundle;
@@ -23,8 +23,8 @@ use crate::store::blobs::{BlobRef, BlobSource};
 /// first, leaving its target alone, then the fresh regular
 /// file lands in its place. Present unmanaged documents
 /// stay untouched while their declaration matches the
-/// recorded manifest, missing plus rewritten ones write
-/// normally. Opaque plus tree bytes resolve pool-first, then
+/// recorded manifest, missing, and rewritten ones write
+/// normally. Opaque and tree bytes resolve pool-first, then
 /// stream to disk without holding whole files.
 ///
 /// # Arguments
@@ -41,7 +41,7 @@ use crate::store::blobs::{BlobRef, BlobSource};
 ///
 /// # Errors
 ///
-/// Render plus io failures surface as plan or io errors.
+/// Render and io failures surface as plan or io errors.
 ///
 /// # Examples
 ///
@@ -145,7 +145,7 @@ pub fn write_documents(
 ///
 /// # Errors
 ///
-/// Dangling hashes plus unreadable sources plus unwritable
+/// Dangling hashes, unreadable sources, and unwritable
 /// destinations fail as plan or io errors.
 fn copy_blob(
     sha: &str,
@@ -188,8 +188,8 @@ fn copy_blob(
 ///
 /// # Errors
 ///
-/// Missing refs plus unreadable sources plus unwritable
-/// destinations plus mode failures surface as plan or io
+/// Missing refs, unreadable sources, unwritable
+/// destinations and mode failures surface as plan or io
 /// errors carrying the member path.
 fn write_tree_members(
     dest: &std::path::Path,

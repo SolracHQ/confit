@@ -2,7 +2,7 @@
 
 Two comparisons drive plan. State against disk reports manual
 edits behind recorded paths. Plan against state reports
-lifecycle moves between recorded plus desired documents. A
+lifecycle moves between recorded and desired documents. A
 missing state slot switches the run to first run mode, where
 desired documents meet disk bytes directly.
 
@@ -11,13 +11,13 @@ desired documents meet disk bytes directly.
 The run renders each recorded document, then snapshots its
 path from disk. Paths expand before disk reads. Entries arrive
 in recorded path order. Absent paths report manual deletion.
-Unreadable paths report the path plus the failure detail.
+Unreadable paths report the path and the failure detail.
 
 ### Structured
 
-Disk bytes parse by format, with json, toml, plus yaml
+Disk bytes parse by format, with json, toml, and yaml
 supported. Tables flatten to dotted leaves, with arrays
-gaining `[index]` segments counting from 1. Changed keys carry old plus new
+gaining `[index]` segments counting from 1. Changed keys carry old and new
 values. Added keys carry new alone. Removed keys carry old
 alone. An explicit null renders as `null`, distinct from a
 missing key. Disk bytes past parsing fall back to a text hunk
@@ -25,7 +25,7 @@ in current side order.
 
 ### Text
 
-Byte inequality renders one unified hunk between recorded plus
+Byte inequality renders one unified hunk between recorded and
 disk bytes. Present unmanaged documents compare nothing.
 Equal bytes render zero entries. File markers
 strip before display on every path.
@@ -39,12 +39,12 @@ current side order. Equal renders stay quiet like text.
 
 Disk bytes read as a UTF-8 target string. The recorded target
 compares against that string. Edits use `target` as the key
-with old plus new values.
+with old and new values.
 
 ### Links on disk
 
 Disk symlinks resolve before non-link comparisons, so opaque,
-text, rc, plus structured documents compare the bytes behind
+text, rc, and structured documents compare the bytes behind
 the link. Relative targets resolve beside the link. Dangling
 links read absent, the content they named is gone.
 
@@ -53,7 +53,7 @@ links read absent, the content they named is gone.
 Raw bytes compare directly. Present unmanaged documents
 compare nothing, present bytes read as already in place.
 Edits surface under the `content`
-key. Both values read hash plus size labels in this shape:
+key. Both values read hash and size labels in this shape:
 
 ```
 sha256:{hex} ({n} bytes)
@@ -63,7 +63,7 @@ sha256:{hex} ({n} bytes)
 
 The destination folder walks member by member in manifest
 order. Missing members report deletion under the joined
-destination path. Changed bytes report hash plus size labels
+destination path. Changed bytes report hash and size labels
 under the member key at the destination path. Changed modes
 report under `{member}:mode`. Drift covers recorded members
 alone.
@@ -83,7 +83,7 @@ create. Changed hashes read update. Recorded-only keys read
 delete. Hashes cover bytes alone with modes compared apart,
 so mode edits read update while hashes agree. Opaque kind
 changes read update in both directions with the superseded
-key skipping delete. Other kind changes read create plus
+key skipping delete. Other kind changes read create and
 delete.
 
 ### Structured leaves
@@ -116,7 +116,7 @@ Content edits render label to label under one line:
 ### Tree count
 
 Tree updates collapse to one counted line. Changed counts
-added plus removed plus modified members with order ignored:
+added, removed, and modified members with order ignored:
 
 ```
   ~ tree ({changed} of {total} files changed)
@@ -161,7 +161,7 @@ first:
 ```
 
 Text hunks render disk first under the document header.
-Structured plus link plus opaque leaves read
+Structured, link, and opaque leaves read
 `~ {key} = {disk} -> {desired}`. Trees collapse to one
 counted line:
 
@@ -170,7 +170,7 @@ counted line:
   ~ tree (2 of 2 files changed)
 ```
 
-Documents holding zero entries render zero lines plus leave
+Documents holding zero entries render zero lines and leave
 the counts. First runs skip the drift section, with drift
 entries folding into resource blocks instead. Counts read
 as follows, with destroy pinned at zero:
@@ -195,12 +195,12 @@ cannot read '{path}': {reason}. changed outside config: add to
 config or the next apply loses them
 ```
 
-Hunk content lines drop `---`, `+++`, plus `@@` markers
+Hunk content lines drop `---`, `+++`, and `@@` markers
 before display. Removals print first with the red style,
 additions follow with the green style, context stays plain
 with the marker space dropped so code aligns. Scalars render
-with strings bare, numbers plus bools as JSON, null as
-`null`, arrays plus objects as compact JSON.
+with strings bare, numbers and bools as JSON, null as
+`null`, arrays and objects as compact JSON.
 
 Drift rides along with a successful run. Exit stays 0 while
 drift entries exist.

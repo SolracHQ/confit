@@ -1,12 +1,12 @@
 # Documents
 
-A document holds one destination plus one payload. The plan
+A document holds one destination and one payload. The plan
 builds one document per path. Hashes cover rendered bytes.
 Apply writes each document to its expanded path.
 
 | Kind | Payload | Path rule |
 | --- | --- | --- |
-| `structured` | data table plus format | one path holds one document |
+| `structured` | data table and format | one path holds one document |
 | `text` | exact file text | one path holds one document |
 | `rc` | three section buckets | one base fans out per shell |
 | `link` | link target | one path holds one document |
@@ -22,8 +22,8 @@ confit.document.structured("toml", { path = path, data = data })
 ```
 
 The format names one of `json`, `toml`, or `yaml` in any
-letter case. The args table holds `path` plus `data` only.
-The data table holds string keys plus JSON shaped values.
+letter case. The args table holds `path` and `data` only.
+The data table holds string keys and JSON shaped values.
 
 #### Merge rule
 
@@ -32,7 +32,7 @@ Declaration order breaks ties. The base seeds leaf owners
 under the declaring owner. Each `set` writes one dotted
 path. Each `append` extends one list. A later write to a
 slot another owner holds drops. One collision line names
-the format plus the path plus the winner.
+the format, the path, and the winner.
 
 ```lua
 confit.patch.structured("toml", path, function(data)
@@ -41,7 +41,7 @@ confit.patch.structured("toml", path, function(data)
 end):priority(confit.priority.HIGH)
 ```
 
-Paths hold dotted keys plus single indices. List positions
+Paths hold dotted keys and single indices. List positions
 count from 1, so `servers[1]` names the first entry. One
 path rides each call. `[0]` fails the plan naming the
 path. A `set` past the list tail fails. An `append`
@@ -64,9 +64,9 @@ reads as lowercase hex.
 
 #### Drift shape
 
-Recorded plus disk tables diff leaf by leaf. Dotted keys
+Recorded and disk tables diff leaf by leaf. Dotted keys
 name leaves. Indices ride brackets counting from 1. Changed leaves carry
-old plus new values. Added leaves carry new values only.
+old and new values. Added leaves carry new values only.
 Removed leaves carry old values only. An explicit null
 stays distinct from an absent key. Disk bytes outside the
 format fall back to a hunk.
@@ -75,7 +75,7 @@ format fall back to a hunk.
 
 Apply writes rendered bytes to the expanded path. Recorded
 paths absent from the manifest delete. Kind changes outside
-opaque read as one create plus one delete.
+opaque read as one create and one delete.
 
 ### Text
 
@@ -85,8 +85,8 @@ opaque read as one create plus one delete.
 confit.document.text(path, content, { mode = "644" })
 ```
 
-The call takes a path plus content plus optional opts. Opts
-holds `mode` plus `unmanaged`. The mode reads octal like
+The call takes a path and content plus optional opts. Opts
+holds `mode` and `unmanaged`. The mode reads octal like
 `755` or symbolic like `rwxr-xr-x`. A missing mode leaves
 the file mode to the process umask. `unmanaged` marks
 existence-only documents, sharing the opaque rule.
@@ -112,7 +112,7 @@ reads as lowercase hex.
 
 Changed content renders as one unified hunk. The hunk
 carries content lines only. The renderer strips file
-markers. A recorded mode plus a differing disk mode adds
+markers. A recorded mode and a differing disk mode adds
 a `mode` key entry.
 
 #### Apply behavior
@@ -142,7 +142,7 @@ both owners.
 #### Merge rule
 
 Patches run in pipeline order. Each `add` takes a section
-plus an entry. Unknown sections fail. Named slots keep
+and an entry. Unknown sections fail. Named slots keep
 the first writer. Exec entries accumulate. Added entries
 follow patch order.
 
@@ -186,7 +186,7 @@ Recorded shell files absent from the manifest delete.
 confit.document.link(path, target)
 ```
 
-The call takes a link path plus a target string.
+The call takes a link path and a target string.
 
 #### Merge rule
 
@@ -205,7 +205,7 @@ reads as lowercase hex.
 #### Drift shape
 
 A changed target reports under the `target` key with old
-plus new strings.
+and new strings.
 
 #### Apply behavior
 
@@ -220,15 +220,15 @@ mode never attaches to links.
 confit.document.opaque(path, source, { mode = "755" })
 ```
 
-The call takes a path plus a source path plus optional
+The call takes a path and a source path plus optional
 opts. Sources name project files root-relative, fetch
 cache files absolute, or extract member files absolute.
-Opts holds `mode` plus `unmanaged`.
+Opts holds `mode` and `unmanaged`.
 `unmanaged` marks existence-only documents, present bytes
 read as already in place whatever their content. The flag
 rides outside the data hash, so toggling it with identical
 bytes shows no plan line. Assembly streams the source file
-into the plan and records its hash plus size.
+into the plan and records its hash and size.
 
 #### Merge rule
 
@@ -250,15 +250,15 @@ lowercase hex.
 #### Drift shape
 
 Changed bytes report under the `content` key. Values carry
-hash plus size labels. Equal bytes stay quiet. A recorded
-mode plus a differing disk mode adds a `mode` key entry.
+hash and size labels. Equal bytes stay quiet. A recorded
+mode and a differing disk mode adds a `mode` key entry.
 
 #### Apply behavior
 
 Apply writes raw blob bytes to the expanded path. Apply
 sets the recorded mode after the bytes land. A kind change
 to or from opaque reads as an update. All other kind
-changes read as one create plus one delete.
+changes read as one create and one delete.
 
 ### Tree
 
@@ -273,9 +273,9 @@ confit.document.tree(archive, dest, function(name, info, member)
 end)
 ```
 
-The call takes an archive path plus a destination folder
-plus a picker. The picker takes member path plus info
-plus member file path. Info holds `size` plus `executable`. The
+The call takes an archive path, a destination folder,
+and a picker. The picker takes member path, info,
+and member file path. Info holds `size` and `executable`. The
 picker returns a destination-relative path per kept
 member. It returns nil per skip. A non-string return
 fails. An empty return fails. An absolute return fails.
@@ -300,7 +300,7 @@ Parents build on demand.
 
 The hash covers the canonical manifest with SHA-256. The
 manifest sorts by relative path. Each line holds octal
-mode plus relative path plus member blob hash. The digest
+mode, relative path, and member blob hash. The digest
 reads as lowercase hex.
 
 ```text
@@ -312,7 +312,7 @@ reads as lowercase hex.
 
 Drift walks the destination member by member. Missing
 members report missing under the joined path. Changed
-bytes report hash plus size labels under the member key.
+bytes report hash and size labels under the member key.
 Changed modes report under the `member:mode` key. Drift
 covers recorded members alone.
 
@@ -320,7 +320,7 @@ covers recorded members alone.
 
 Apply writes members to joined paths with per-member
 modes. Apply removes recorded members absent from the
-desired manifest. Hand-placed files plus the destination
+desired manifest. Hand-placed files and the destination
 folder stay.
 
 ### Shell rc
@@ -349,30 +349,30 @@ esac
 ```
 
 Slots decide collisions. Named entries share one slot per
-name plus guard across every section. One name under
+name and guard across every section. One name under
 another guard holds its own slot. The first writer wins
-per slot. A later write drops plus one collision line in
+per slot. A later write drops and one collision line in
 the log.
 
 ```text
 collision on alias "ll": "starship" overwritten, "bat" wins
 ```
 
-Exec entries carry no slot. `eval` plus `cmd` plus
+Exec entries carry no slot. `eval`, `cmd`, and
 `source` accumulate with no collision.
 
 | Entry kind | Builder | Slot |
 | --- | --- | --- |
-| `env` | `rc.env(name, value, opts?)` | name plus guard |
-| `path` | `rc.prepend(dir, opts?)` | name plus guard |
-| `alias` | `rc.alias(name, value, opts?)` | name plus guard |
+| `env` | `rc.env(name, value, opts?)` | name and guard |
+| `path` | `rc.prepend(dir, opts?)` | name and guard |
+| `alias` | `rc.alias(name, value, opts?)` | name and guard |
 | `eval` | `rc.eval(argv, opts?)` | none, accumulates |
 | `cmd` | `rc.cmd(argv, opts?)` | none, accumulates |
 | `source` | `rc.source(path, opts?)` | none, accumulates |
 
 Entry builders take `when` alone through opts. Unknown
 opts fields fail. `prepend` takes a dir alone for `PATH`
-or a var plus a dir. Init strings render the `{{shell}}`
+or a var and a dir. Init strings render the `{{shell}}`
 slot with the target shell name. One entry addresses
 every shell.
 
@@ -411,8 +411,8 @@ eval "$(starship init bash)"
 ### Archives
 
 `compressed` unpacks one archive into kept documents. The
-callback takes member path plus info plus member file
-path. Info holds `size` plus `executable`. The callback
+callback takes member path, info, and member file
+path. Info holds `size` and `executable`. The callback
 returns one document per kept member. It returns nil per
 skip. Other returns fail naming the constructor. Kept
 documents ride the profile `documents` array or
@@ -429,7 +429,7 @@ local kept = confit.document.compressed(archive, function(name, info, member)
 end)
 ```
 
-Byte routing follows magic plus name. Gzip bodies gunzip
+Byte routing follows magic and name. Gzip bodies gunzip
 first, then parse as tar with one single-file fallback.
 Names wanting tar skip the fallback. Zip bodies parse as
 zip. Other bodies parse as tar. Directory members skip.
@@ -448,8 +448,8 @@ fetch cache. Extract-absolute paths resolve under the
 extract root. Absolute paths outside both fail. Empty
 paths fail. Escapes above the root fail. Remote bytes
 ride `fetch_file` first. The cache path feeds
-`compressed` plus `tree` plus `load_bytes` directly.
-Member paths feed `opaque` plus `load_bytes` plus
+`compressed`, `tree` and `load_bytes` directly.
+Member paths feed `opaque`, `load_bytes` and
 `load_text` directly.
 
 ### Hashing
@@ -460,9 +460,10 @@ the blob reference. Tree hashes cover the canonical
 manifest instead. Tables hold fixed key order through the
 sorted map. Ordered lists keep declaration order.
 
-Blobs gzip at level 6 for pool plus bundle entries. The
+Blobs gzip at level 6 for pool and bundle entries. The
 outer bundle tar gzips at level 0. Manifest files hold
-pretty JSON with blob refs into the shared pool. Raw
+pretty JSON with blob hashes and sizes pointing into the
+shared pool. Raw
 bytes travel in the pool beside the manifests.
 
 Hashes persist in the file and load trusted. Loads skip

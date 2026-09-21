@@ -1,6 +1,6 @@
 //! Blobs
 //!
-//! Shared blob pool plus hydration.
+//! Shared blob pool and hydration.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -22,7 +22,7 @@ const BLOBS_DIR: &str = "blobs";
 /// Spill folder name under the process temp dir.
 const SPILL_DIR: &str = "confit-spill";
 
-/// Gzip level for pooled plus inner bundle blob bytes.
+/// Gzip level for pooled and inner bundle blob bytes.
 const BLOB_GZIP_LEVEL: u32 = 6;
 
 /// Blob hash length in lowercase hex chars.
@@ -148,8 +148,8 @@ pub(crate) fn blob_source(
 /// Reads verified raw bytes for one blob hash.
 ///
 /// Pool sources gunzip through verification, since pool files
-/// hold gzip bytes. Ref files read raw. Missing refs plus
-/// missing files plus corrupt pool entries fail naming the hash.
+/// hold gzip bytes. Ref files read raw. Missing refs,
+/// missing files and corrupt pool entries fail naming the hash.
 ///
 /// # Arguments
 ///
@@ -163,7 +163,7 @@ pub(crate) fn blob_source(
 ///
 /// # Errors
 ///
-/// Missing refs plus unreadable files plus hash mismatches
+/// Missing refs, unreadable files, and hash mismatches
 /// fail as plan errors naming the hash.
 pub(crate) fn read_blob_bytes(
     sha: &str,
@@ -183,11 +183,7 @@ pub(crate) fn read_blob_bytes(
     }
 }
 
-/// Compresses raw blob bytes for pool plus bundle storage.
-///
-/// # Arguments
-///
-/// * `bytes` - the raw bytes under compressing.
+/// Compresses raw blob bytes for pool and bundle storage.
 ///
 /// # Returns
 ///
@@ -220,7 +216,7 @@ pub(crate) fn gzip_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// Decoder plus hash mismatch failures surface as bundle
+/// Decoder and hash mismatch failures surface as bundle
 /// errors naming the hash.
 pub(crate) fn gunzip_bytes(bytes: &[u8], sha: &str) -> Result<Vec<u8>> {
     let mut decoder = flate2::read::GzDecoder::new(bytes);
@@ -276,7 +272,7 @@ pub(crate) fn check_blob_id(sha: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Missing sources plus compression plus write failures
+/// Missing sources, compression, and write failures
 /// surface as plan errors.
 pub(crate) fn store_blobs(
     bundle: &Bundle,
@@ -334,13 +330,13 @@ pub(crate) fn store_blobs(
     Ok(())
 }
 
-/// Pool blob resolver with disk short-circuit plus pool metadata.
+/// Pool blob resolver with disk short-circuit and pool metadata.
 ///
 /// Disk destinations matching a blob hash resolve straight
 /// to the disk file, hashing in chunks without holding bytes.
 /// Pool hits resolve to the pool file through its length
 /// alone. No edge reads content bytes, so hydration holds
-/// hashes, sizes, plus paths only.
+/// hashes, sizes, and paths only.
 pub(crate) struct Hydrator<'a> {
     /// Holds the manifest path for error context.
     source: PathBuf,
@@ -364,7 +360,7 @@ impl<'a> Hydrator<'a> {
     ///
     /// The manifest carries over intact as the only document
     /// language. Every referenced blob resolves through disk
-    /// short-circuit plus pool metadata into the ref map.
+    /// short-circuit and pool metadata into the ref map.
     /// Disk hits hash the destination file, pool hits read the
     /// pool file length, missing hashes fail naming the hash.
     pub(crate) fn hydrate(&mut self, stored: &Manifest) -> Result<Bundle> {
@@ -454,7 +450,7 @@ impl<'a> Hydrator<'a> {
     }
 }
 
-/// Drops pool blobs unreferenced by slot plus history plus named manifests.
+/// Drops pool blobs unreferenced by slot, history, and named manifests.
 ///
 /// # Arguments
 ///
@@ -466,7 +462,7 @@ impl<'a> Hydrator<'a> {
 ///
 /// # Errors
 ///
-/// Listing plus removal failures surface as plan or io errors.
+/// Listing and removal failures surface as plan or io errors.
 ///
 pub fn prune_blobs(fs: &dyn Filesystem) -> Result<usize> {
     let mut keep: BTreeSet<String> = BTreeSet::new();
@@ -504,7 +500,7 @@ pub fn prune_blobs(fs: &dyn Filesystem) -> Result<usize> {
 
 /// Collects blob refs from every manifest file in one folder.
 ///
-/// Unreadable plus unparsable files skip quietly, matching
+/// Unreadable and unparsable files skip quietly, matching
 /// history listing behavior.
 fn collect_dir_refs(dir: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<String>) -> Result<()> {
     let mut files = match fs.list_dir(dir) {
@@ -521,7 +517,7 @@ fn collect_dir_refs(dir: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<String>
 
 /// Collects blob refs from one manifest file without hydrating.
 ///
-/// Missing plus unparsable plus stale files add no refs.
+/// Missing, unparsable, and stale files add no refs.
 fn collect_manifest_refs(path: &Path, fs: &dyn Filesystem, keep: &mut BTreeSet<String>) {
     let bytes = match fs.read(path) {
         Ok(bytes) => bytes,
@@ -625,9 +621,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// Asserts manifest equality plus ref sha equality.
+    /// Asserts manifest equality and ref sha equality.
     ///
-    /// Ref paths plus sizes vary by resolution edge (spill,
+    /// Ref paths and sizes vary by resolution edge (spill,
     /// disk, pool), so equality runs on content identity alone.
     pub(crate) fn assert_same_content(built: &Bundle, loaded: &Bundle) {
         assert_eq!(loaded.manifest, built.manifest);

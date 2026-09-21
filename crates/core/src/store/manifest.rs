@@ -1,6 +1,6 @@
 //! Manifest
 //!
-//! Persisted plan model plus manifest JSON.
+//! Persisted plan model and manifest JSON.
 
 use crate::document::ManifestDocument;
 use crate::error::{Error, Result};
@@ -9,17 +9,16 @@ use crate::hook::Hook;
 use serde::{Deserialize, Serialize};
 
 /// One stored manifest entry for the apply-past listing.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEntry {
     /// Holds the listing position used as the apply `%N` pick.
     pub index: usize,
 }
 
-/// Persisted plan holding metadata plus blob references.
+/// Persisted plan holding metadata and blob references.
 ///
 /// Binary bytes live gzipped in the shared pool under
-/// content hashes. Text, structured, rc, plus link payloads
+/// content hashes. Text, structured, rc, and link payloads
 /// stay inline. Bundles carry this shape as `manifest.json`.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

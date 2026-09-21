@@ -1,6 +1,6 @@
 //! Archive
 //!
-//! Byte readers plus extract-once scratch for compressed archives.
+//! Byte readers and extract-once scratch for compressed archives.
 
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ const EXTRACT_DIR_NAME: &str = "confit-extract";
 /// Chunk size for streaming archive files into the content hash.
 const HASH_CHUNK: usize = 8 * 1024;
 
-/// Raw archive member with bytes plus mode.
+/// Raw archive member with bytes and mode.
 pub(crate) struct RawMember {
     /// Member path inside the archive.
     pub(crate) name: String,
@@ -36,7 +36,7 @@ pub(crate) fn extract_root() -> PathBuf {
 ///
 /// # Errors
 ///
-/// Missing plus unreadable files fail as plan errors.
+/// Missing and unreadable files fail as plan errors.
 pub(crate) fn archive_sha(full: &Path, rel: &str, ctor: &str) -> mlua::Result<String> {
     let mut file = std::fs::File::open(full)
         .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
@@ -59,10 +59,6 @@ pub(crate) fn archive_sha(full: &Path, rel: &str, ctor: &str) -> mlua::Result<St
 }
 
 /// Unpacks one archive once into its hash folder.
-///
-/// A present folder returns at once, so near runs reuse it.
-/// A fresh unpack lands in a `.part` folder renamed on
-/// completion, so a dead process leaves no half folder.
 ///
 /// # Errors
 ///
@@ -138,7 +134,7 @@ pub(crate) fn ensure_extracted(
 ///
 /// # Errors
 ///
-/// Empty plus absolute plus dot-dot members fail as plan errors.
+/// Empty, absolute, and dot-dot members fail as plan errors.
 fn check_member_path(name: &str, rel: &str, ctor: &str) -> mlua::Result<()> {
     if name.is_empty() {
         return Err(plan_error(format!(

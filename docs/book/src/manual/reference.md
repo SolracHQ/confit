@@ -16,7 +16,7 @@ Plan `-o` names the bundle file and gains `.cb` unless
 present. Omitted plan output runs preview-only. `@NAME` stores
 or loads a named slot under the user config folder. Named slots hold saved manifests.
 Portable bundles travel as `.cb` files.
-Empty names plus separators fail. A source reads `.lua` plus
+Empty names and separators fail. A source reads `.lua` and
 extensionless paths as a profile, `.cb` as a bundle file,
 `@NAME` as a named slot, `%N` as history newest-first from
 one.
@@ -26,7 +26,7 @@ from one, `@NAME` for a named slot, nothing for the applied
 slot. `-o` names the bundle file and gains `.cb` unless
 present. Omitted export output derives the name from the
 slot as `applied.cb`, `personal.cb`, or `prev-2.cb`. `-m`
-prints the manifest, not the file contents. `-o` plus
+prints the manifest, not the file contents. `-o` and
 `--manifest` refuse together.
 
 ## Documents

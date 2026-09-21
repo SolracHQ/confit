@@ -1,6 +1,6 @@
 //! Fetch
 //!
-//! Network access behind a trait plus cache path helpers.
+//! Network access behind a trait and cache path helpers.
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use sha2::Digest as _;
 
-/// Body cap shared by buffered plus streamed reads.
+/// Body cap shared by buffered and streamed reads.
 const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Chunk size for streamed cache writes.
@@ -42,18 +42,8 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Missing stubs plus transport failures fail as plan errors.
+    /// Missing stubs and transport failures fail as plan errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::{Fetch, MemoryFetch};
-    ///
-    /// let fake = MemoryFetch::new();
-    /// fake.insert("https://example.com/version", b"1");
-    /// let body = fake.fetch("https://example.com/version");
-    /// assert!(matches!(body, Ok(body) if body == b"1".to_vec()));
-    /// ```
     fn fetch(&self, url: &str) -> confit_core::error::Result<Vec<u8>>;
 
     /// Streams one URL body as a reader.
@@ -68,7 +58,7 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Missing stubs plus transport failures fail as plan errors.
+    /// Missing stubs and transport failures fail as plan errors.
     ///
     /// # Examples
     ///
@@ -124,11 +114,11 @@ impl Fetch for HttpFetch {
 ///
 #[derive(Debug, Default)]
 pub struct MemoryFetch {
-    /// Bodies plus call counts behind one lock.
+    /// Bodies and call counts behind one lock.
     inner: Mutex<MemoryInner>,
 }
 
-/// Bodies plus call counts for the memory source.
+/// Bodies and call counts for the memory source.
 #[derive(Debug, Default)]
 struct MemoryInner {
     /// Bodies keyed by URL.
@@ -232,7 +222,7 @@ impl Fetch for MemoryFetch {
 ///
 #[derive(Debug, Clone)]
 pub struct Cache {
-    /// Cache folder holding hashed bodies plus sidecars.
+    /// Cache folder holding hashed bodies and sidecars.
     dir: PathBuf,
 }
 
@@ -259,7 +249,7 @@ impl Cache {
     ///
     /// # Returns
     ///
-    /// The cached bytes, holding `None` for miss plus mismatch.
+    /// The cached bytes, holding `None` for miss and mismatch.
     ///
     pub fn lookup(&self, url: &str) -> Option<Vec<u8>> {
         let cached = cache_path(&self.dir, url);
@@ -273,7 +263,7 @@ impl Cache {
         }
     }
 
-    /// Writes bytes plus the sidecar digest for one URL.
+    /// Writes bytes and the sidecar digest for one URL.
     ///
     /// # Arguments
     ///
@@ -286,7 +276,7 @@ impl Cache {
     ///
     /// # Errors
     ///
-    /// Unwritable folders plus files fail as io errors.
+    /// Unwritable folders and files fail as io errors.
     ///
     pub fn store(&self, url: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
         let cached = cache_path(&self.dir, url);
@@ -300,7 +290,7 @@ impl Cache {
         Ok(cached)
     }
 
-    /// Writes a streamed body plus the sidecar digest for one URL.
+    /// Writes a streamed body and the sidecar digest for one URL.
     ///
     /// # Arguments
     ///
@@ -313,7 +303,7 @@ impl Cache {
     ///
     /// # Errors
     ///
-    /// Unwritable folders plus files fail as io errors. Read failures
+    /// Unwritable folders and files fail as io errors. Read failures
     /// on the body reader fail as io errors.
     ///
     pub fn store_stream(&self, url: &str, reader: impl std::io::Read) -> std::io::Result<PathBuf> {
@@ -377,8 +367,9 @@ pub fn cache_path(cache: &Path, url: &str) -> PathBuf {
 /// use confit_engine::fetch::sidecar_path;
 /// use std::path::Path;
 ///
-/// let sidecar = sidecar_path(Path::new("/cache/abc"));
-/// assert!(matches!(sidecar.to_string_lossy().ends_with(".sha"), true));
+/// let cached = Path::new("/cache/abc");
+/// let sidecar = sidecar_path(cached);
+/// assert_eq!(sidecar.parent(), cached.parent());
 /// ```
 pub fn sidecar_path(cached: &Path) -> PathBuf {
     let mut text = cached.as_os_str().to_owned();

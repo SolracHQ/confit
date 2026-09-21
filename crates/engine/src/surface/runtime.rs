@@ -91,7 +91,7 @@ impl LeafConds {
     ///
     /// * `lua` - state owning the output table.
     /// * `ctor` - error prefix naming the constructor.
-    /// * `opts` - opts table holding key plus value strings.
+    /// * `opts` - opts table holding key and value strings.
     ///
     /// # Returns
     ///
@@ -164,12 +164,7 @@ struct CondTables;
 impl CondTables {
     /// Wraps one string field into a one-shape condition table.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `shape` - condition shape naming the inner table.
-    /// * `field` - inner field name.
-    /// * `value` - inner field value.
+    /// The outer table holds one key naming the shape.
     ///
     /// # Returns
     ///

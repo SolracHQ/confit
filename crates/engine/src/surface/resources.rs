@@ -1,6 +1,6 @@
 //! Resources
 //!
-//! Root-relative file loads plus cached remote reads.
+//! Root-relative file loads and cached remote reads.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -69,7 +69,7 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
 }
 
 impl FetchState {
-    /// Loads one root-relative file through the matching decoder.
+    /// Forwards one loader call to `load_decoded` with its caller name.
     fn load_impl(&self, lua: &Lua, name: &'static str, path: Value) -> mlua::Result<Value> {
         let caller = match name {
             "load_toml" => "confit.resources.load_toml",
@@ -324,7 +324,7 @@ impl FetchState {
     ///
     /// # Returns
     ///
-    /// URL plus expected sha256 holding `None` for no check.
+    /// URL and expected sha256 holding `None` for no check.
     ///
     /// # Errors
     ///
@@ -373,7 +373,7 @@ impl FetchState {
         Ok((url, wanted))
     }
 
-    /// Returns cached bytes or downloads plus refreshes the sidecar.
+    /// Returns cached bytes or downloads and refreshes the sidecar.
     fn fetch_bytes(&self, caller: &str, url: &str) -> mlua::Result<Vec<u8>> {
         log::debug!("fetch start url={url}");
         if let Some(sender) = self.progress.as_ref() {
@@ -450,7 +450,7 @@ fn check_user_sha(caller: &str, url: &str, bytes: &[u8], wanted: Option<&str>) -
     Ok(())
 }
 
-/// Resolves project-relative plus cache-absolute plus extract-absolute reads.
+/// Resolves project-relative, cache-absolute, and extract-absolute reads.
 pub(crate) fn resolve_under_root(
     root: &Path,
     cache: &Path,

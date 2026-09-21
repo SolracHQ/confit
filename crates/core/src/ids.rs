@@ -85,7 +85,7 @@ impl From<&str> for DocPath {
 pub enum ReadOutcome {
     /// Empty path. The document awaits creation.
     Absent,
-    /// Disk bytes plus permission bits for the path.
+    /// Disk bytes and permission bits for the path.
     Present {
         /// Holds raw disk bytes for the path.
         bytes: Vec<u8>,
@@ -94,10 +94,6 @@ pub enum ReadOutcome {
         mode: Option<u32>,
     },
     /// Failing read. Carries the raw failure detail.
-    ///
-    /// # Arguments
-    ///
-    /// * `reason` - the failure detail from the read.
     Unreadable {
         /// Holds the raw failure detail from the read.
         reason: String,

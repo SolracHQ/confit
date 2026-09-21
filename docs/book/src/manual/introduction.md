@@ -1,6 +1,6 @@
 # Introduction
 
-confit is a user-space configuration as code tool. It keeps user config dynamic and reproducible. You declare configs in Lua as profiles. Profiles generate bundles. You apply a bundle at any moment to switch the machine to it. Every bundle diffs against the last apply plus the disk, so plan previews changes before apply writes files.
+confit is a user-space configuration as code tool. It keeps user config dynamic and reproducible. You declare configs in Lua as profiles. Profiles generate bundles. You apply a bundle at any moment to switch the machine to it. Every bundle diffs against the last apply and the disk, so plan previews changes before apply writes files.
 
 confit serves people who keep even their own configurations as configurations. People who format machines often. People who switch userspace setups per task with one command. People who hop distros and want one stable configuration.
 

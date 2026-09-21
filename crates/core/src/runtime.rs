@@ -1,6 +1,6 @@
 //! Runtime
 //!
-//! Host facts behind condition evaluation plus hook timeouts.
+//! Host facts behind condition evaluation and hook timeouts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Snapshots the host environment plus PATH dirs.
+    /// Snapshots the host environment and PATH dirs.
     ///
     /// Non-Unicode entries drop. Missing PATH reads as empty.
     ///
@@ -50,15 +50,15 @@ impl Runtime {
     }
 }
 
-/// Evaluates one condition against runtime facts plus the backend.
+/// Evaluates one condition against runtime facts and the backend.
 ///
 /// `in_path` joins each dir with the name, first existing
 /// executable wins. While the backend reports a mode, the
 /// `0o111` bit decides. Otherwise plain existence decides.
 /// `exists` expands a leading tilde through the OS home
-/// folder then stats. `env_eq` plus `env_set` read `vars`.
+/// folder then stats. `env_eq` and `env_set` read `vars`.
 /// `changed` reads membership in the changed-path set.
-/// `all` plus `any` plus `Not` recurse.
+/// `all`, `any` and `Not` recurse.
 ///
 /// # Arguments
 ///
@@ -173,7 +173,7 @@ pub fn find_binary(name: &str, dirs: &[PathBuf], fs: &dyn Filesystem) -> Option<
 ///
 /// # Errors
 ///
-/// Empty plus garbage plus wrong order fail with the text quoted.
+/// Empty, garbage, and wrong order fail with the text quoted.
 ///
 /// # Examples
 ///

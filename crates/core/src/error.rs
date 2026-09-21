@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Core failure shapes.
 ///
-/// Plan errors cover bad input plus conflicts plus render failures.
+/// Plan errors cover bad input, conflicts, and render failures.
 /// Io errors cover filesystem failures from the caller seam.
 ///
 #[derive(Debug, Error)]

@@ -11,7 +11,7 @@ use crate::ids::{DocPath, ReadOutcome};
 /// One managed file read from a tree destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeMemberRead {
-    /// Holds disk bytes plus permission bits for the member.
+    /// Holds disk bytes and permission bits for the member.
     Present {
         /// Holds the raw disk bytes.
         bytes: Vec<u8>,
@@ -117,7 +117,7 @@ fn walk_tree(
 ///
 /// # Returns
 ///
-/// Absent for missing paths, present bytes plus mode for
+/// Absent for missing paths, present bytes, and mode for
 /// readable files, unreadable holding the failure detail otherwise.
 ///
 pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
@@ -154,7 +154,7 @@ pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
 ///
 /// # Returns
 ///
-/// Absent for missing plus dangling paths, present bytes plus
+/// Absent for missing, dangling paths, present bytes and
 /// mode for readable files, unreadable holding the failure
 /// detail otherwise.
 ///
@@ -190,7 +190,7 @@ pub fn snapshot_content(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
 /// # Returns
 ///
 /// The absolute target for absolute text, else the joined
-/// plus normalized path beside the link.
+/// and normalized path beside the link.
 ///
 fn join_link_target(link: &Path, target: &Path) -> PathBuf {
     if target.is_absolute() {

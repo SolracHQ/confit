@@ -1,6 +1,6 @@
 //! Spinner
 //!
-//! Tty-gated progress renderer plus its sender.
+//! Tty-gated progress renderer and its sender.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -51,7 +51,7 @@ impl SuspendControl {
     ///
     /// # Errors
     ///
-    /// Stderr plus stdin failures surface as io errors.
+    /// Stderr and stdin failures surface as io errors.
     pub fn ask(&self, question: &str) -> std::io::Result<bool> {
         self.suspend(|| {
             use std::io::{BufRead as _, Write as _};
@@ -74,10 +74,10 @@ impl SuspendControl {
     }
 }
 
-/// One tty-gated renderer plus its senders.
+/// One tty-gated renderer and its senders.
 ///
-/// The thread owns the spinner and selects on facts plus prints
-/// plus shutdown. Prints land through `println`. Shutdown clears
+/// The thread owns the spinner and selects on facts, prints
+/// and shutdown. Prints land through `println`. Shutdown clears
 /// the single line. Finish signals shutdown, then joins the thread.
 ///
 pub struct Live {
@@ -173,7 +173,7 @@ impl Live {
         self.control.clone()
     }
 
-    /// Clears the widget plus joins the renderer once the run lands.
+    /// Clears the widget and joins the renderer once the run lands.
     ///
     /// Shutdown signals the thread, then joins it. Repeated calls
     /// stay quiet. A dead thread still clears the line.
@@ -210,7 +210,7 @@ impl Default for Live {
     }
 }
 
-/// Loops on facts plus prints until shutdown or close, then clears the widget.
+/// Loops on facts and prints until shutdown or close, then clears the widget.
 fn run(
     rx: crossbeam_channel::Receiver<Event>,
     prints: crossbeam_channel::Receiver<String>,

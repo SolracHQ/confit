@@ -2,9 +2,9 @@
 
 You stand at `~/confit-demo` with two shells and one shared tool file. This chapter adds kitty as a second config in the same folder.
 
-A config packages related documents plus the steps building them. One file per tool is the habit. Several configs in one file also reads fine. Save the kitty config as `~/confit-demo/tools/kitty.lua` and require it from the demo profile beside the tool config.
+A config packages related documents and the steps building them. One file per tool is the habit. Several configs in one file also reads fine. Save the kitty config as `~/confit-demo/tools/kitty.lua` and require it from the demo profile beside the tool config.
 
-The simplest config is a shell config. One rc base plus one alias patch:
+The simplest config is a shell config. One rc base and one alias patch:
 
 ```lua
 local shell = confit.config("shell")
@@ -78,9 +78,9 @@ local app = confit.document.compressed(tarball, function(path, info, member)
 end)
 ```
 
-Links plus desktop files from the previous section integrate the tree. The launch command waits for hooks. See Applying safely plus Reference hooks for the run model. Everything else in the guide works now.
+Links and desktop files from the previous section integrate the tree. The launch command waits for hooks. See Applying safely and Reference hooks for the run model. Everything else in the guide works now.
 
-Desktop integration follows the same shape. The guide links the binaries plus copies desktop files. confit owns the files it writes, so the desktop entries become text documents and the terminal list becomes a managed file:
+Desktop integration follows the same shape. The guide links the binaries and copies desktop files. confit owns the files it writes, so the desktop entries become text documents and the terminal list becomes a managed file:
 
 ```lua
 kitty:add_document(confit.document.link(
@@ -96,4 +96,4 @@ kitty:add_document(confit.document.text(
 
 Links track the kitty tree. The managed list declares kitty the terminal. `~/.config/xdg-terminals.list` stays a file like every other.
 
-The demo now manages a full tool with install steps plus integration files. Next, [Document](document.md) names each file shape the demo uses.
+The demo now manages a full tool with install steps and integration files. Next, [Document](document.md) names each file shape the demo uses.

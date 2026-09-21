@@ -1,6 +1,6 @@
 //! Confit core
 //!
-//! Pure document plus plan types with rendering and hashing.
+//! Pure document and plan types with rendering and hashing.
 
 #![deny(missing_docs)]
 

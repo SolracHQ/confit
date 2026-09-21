@@ -1,6 +1,6 @@
 //! Patch
 //!
-//! Patch handles plus priority levels for Lua.
+//! Patch handles and priority levels for Lua.
 
 use mlua::{Function, Lua, UserData, UserDataMethods, Value};
 
@@ -95,7 +95,7 @@ fn parse_level(value: Value) -> mlua::Result<Level> {
     })
 }
 
-/// Installs the patch plus priority namespaces on a state.
+/// Installs the patch and priority namespaces on a state.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let confit = confit_table(lua)?;
     let namespace = lua.create_table()?;

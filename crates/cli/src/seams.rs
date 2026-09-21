@@ -22,10 +22,10 @@ static HOST_FS: OsFs = OsFs;
 
 /// Injected effects under one command run.
 ///
-/// Host runs pass stdin plus print senders. Tests pass memory fakes.
+/// Host runs pass stdin and print senders. Tests pass memory fakes.
 ///
 pub struct Seams<'a> {
-    /// Reads plus writes backend, memory under tests.
+    /// Reads and writes backend, memory under tests.
     pub fs: &'a dyn Filesystem,
     /// Gains the confirmation answer, stdin on the host.
     pub input: &'a mut dyn BufRead,
@@ -68,7 +68,7 @@ impl<'a> Seams<'a> {
     ///
     /// # Arguments
     ///
-    /// * `fs` - the memory backend under reading plus writing.
+    /// * `fs` - the memory backend under reading and writing.
     /// * `input` - the answer source under prompting.
     ///
     /// # Returns
@@ -87,46 +87,19 @@ impl<'a> Seams<'a> {
         }
     }
 
-    /// Gains one engine sender while chaining.
-    ///
-    /// # Arguments
-    ///
-    /// * `sender` - the facts sender under the run.
-    ///
-    /// # Returns
-    ///
-    /// The same seams carrying the sender.
-    ///
+    /// Attaches the engine progress sender for chaining.
     pub fn with_progress(mut self, sender: ProgressSender) -> Self {
         self.progress = Some(sender);
         self
     }
 
-    /// Gains one print sender while chaining.
-    ///
-    /// # Arguments
-    ///
-    /// * `sender` - the stderr line sender under the run.
-    ///
-    /// # Returns
-    ///
-    /// The same seams carrying the sender.
-    ///
+    /// Attaches the stderr print sender for chaining.
     pub fn with_print(mut self, sender: PrintSender) -> Self {
         self.print = Some(sender);
         self
     }
 
-    /// Gains one suspend control while chaining.
-    ///
-    /// # Arguments
-    ///
-    /// * `control` - the widget control under prompts.
-    ///
-    /// # Returns
-    ///
-    /// The same seams carrying the control.
-    ///
+    /// Attaches the prompt suspend control for chaining.
     pub fn with_suspend(mut self, control: SuspendControl) -> Self {
         self.suspend = Some(control);
         self

@@ -72,7 +72,7 @@ pub struct PlanRunner<'a> {
     pub args: &'a PlanArgs,
     /// Stores the payload under tmp while no destination passes.
     pub store_tmp: bool,
-    /// Holds the injected filesystem plus output plus sink.
+    /// Holds the injected filesystem, output, and sink.
     pub seams: Seams<'a>,
 }
 
@@ -83,11 +83,11 @@ impl PlanRunner<'_> {
     ///
     /// # Returns
     ///
-    /// The built bundle with its previous manifest plus drift.
+    /// The built bundle with its previous manifest and drift.
     ///
     /// # Errors
     ///
-    /// Evaluation plus plan plus build plus write failures surface
+    /// Evaluation, plan, build, and write failures surface
     /// as plan or io errors.
     pub fn execute(self) -> Result<PlanOutcome> {
         let evaluation = evaluate_shared(

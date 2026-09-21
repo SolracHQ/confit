@@ -12,7 +12,7 @@ use crate::fs::Filesystem;
 use crate::ids::DocPath;
 use crate::runtime::{Runtime, evaluate, find_binary};
 
-/// One post-config step with gates plus checks.
+/// One post-config step with gates and checks.
 ///
 /// Argv executes directly with no shell in between. Path
 /// extends PATH for the hook subprocess alone. Requires gates
@@ -24,7 +24,7 @@ use crate::runtime::{Runtime, evaluate, find_binary};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {
-    /// Holds the command plus arguments in order.
+    /// Holds the command and arguments in order.
     pub argv: Vec<String>,
     /// Holds the PATH extension dirs for the subprocess alone.
     pub path: Vec<String>,
@@ -39,15 +39,11 @@ pub struct Hook {
     pub timeout_secs: u64,
 }
 
-/// Merges hooks sharing argv plus path into one run each.
+/// Merges hooks sharing argv and path into one run each.
 ///
-/// First-seen order wins. Requires gates join with AND:
-/// `All` of the two sides, flattening nested `All`. When
-/// gates join with OR: `Any` of the two sides, flattening
-/// nested `Any`. An ungated side keeps the merged hook
-/// ungated on that slot. Checks concatenate. Timeout
-/// takes the max. Single hooks pass through untouched, so
-/// the common case keeps its bare shape.
+/// First-seen order wins. Gates join across both sides, checks
+/// concatenate, timeout takes the max. Single hooks pass
+/// through untouched.
 ///
 /// # Arguments
 ///
@@ -119,14 +115,14 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
     }
 }
 
-/// Resolves one hook binary across hook path dirs plus runtime dirs.
+/// Resolves one hook binary across hook path dirs and runtime dirs.
 ///
 /// Hook path entries search first, runtime dirs follow. First
 /// existing executable wins with the `in_path` rule.
 ///
 /// # Arguments
 ///
-/// * `hook` - the hook holding argv plus path dirs.
+/// * `hook` - the hook holding argv and path dirs.
 /// * `rt` - the runtime facts under reading.
 /// * `fs` - the backend under stating.
 ///
@@ -323,9 +319,20 @@ pub fn describe_condition(cond: &Condition) -> String {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::hook::lifecycle_lines;
+/// use confit_core::hook::{Hook, lifecycle_lines};
 ///
-/// assert!(matches!(lifecycle_lines(&[], &[]).is_empty(), true));
+/// let hook = Hook {
+///     argv: vec!["mise".to_string()],
+///     path: vec![],
+///     requires: None,
+///     when: None,
+///     checks: vec![],
+///     timeout_secs: 60,
+/// };
+/// assert_eq!(
+///     lifecycle_lines(&[hook], &[]),
+///     vec!["+ mise".to_string()]
+/// );
 /// ```
 pub fn lifecycle_lines(current: &[Hook], previous: &[Hook]) -> Vec<String> {
     let mut lines = Vec::new();
@@ -380,7 +387,7 @@ pub fn lifecycle_lines(current: &[Hook], previous: &[Hook]) -> Vec<String> {
 
 /// Renders full gate lines for one added hook.
 ///
-/// Requires plus when print once while present, checks print
+/// Requires and when print once while present, checks print
 /// once per member, all marked new in slot order.
 fn full_gates(hook: &Hook, out: &mut Vec<String>) {
     if let Some(gate) = hook.requires.as_ref() {
@@ -417,7 +424,7 @@ fn diff_gate(slot: &str, old: Option<&Condition>, new: Option<&Condition>, out: 
     }
 }
 
-/// Renders added plus removed check lines by describe text.
+/// Renders added and removed check lines by describe text.
 ///
 /// Members compare as a bag, so duplicate gates diff by
 /// count. Removals print in previous order, additions print

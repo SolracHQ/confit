@@ -17,7 +17,7 @@ const UPDATE_STYLE: &str = "\x1b[33m";
 const ADD_STYLE: &str = "\x1b[32m";
 /// Red style for removed lines.
 const REMOVE_STYLE: &str = "\x1b[31m";
-/// Bold style for headers plus the closing counts.
+/// Bold style for headers and the closing counts.
 const HEADER_STYLE: &str = "\x1b[1m";
 /// Style reset suffix.
 const RESET: &str = "\x1b[0m";
@@ -26,7 +26,7 @@ const RESET: &str = "\x1b[0m";
 const DRIFT_TITLE: &str = "Changes outside Confit will be overwritten on next apply";
 /// Resources section title over document blocks.
 const RESOURCES_TITLE: &str = "Resources";
-/// Hooks section title over lifecycle plus evaluated lines.
+/// Hooks section title over lifecycle and evaluated lines.
 const HOOKS_TITLE: &str = "Hooks";
 /// Summary section title over the closing counts.
 const SUMMARY_TITLE: &str = "Summary";
@@ -46,7 +46,7 @@ pub enum Sigil {
 
 /// One terminal painter holding the color decision.
 ///
-/// The tty plus `NO_COLOR` check runs once under construction,
+/// The tty and `NO_COLOR` check runs once under construction,
 /// never per line. Piped output stays plain.
 ///
 /// # Examples
@@ -64,7 +64,7 @@ pub struct Painter {
 }
 
 impl Painter {
-    /// Reads the color decision from the terminal plus the environment.
+    /// Reads the color decision from the terminal and the environment.
     ///
     /// # Returns
     ///
@@ -107,7 +107,7 @@ impl Default for Painter {
     }
 }
 
-/// One stderr summary over a built bundle plus its previous manifest.
+/// One stderr summary over a built bundle and its previous manifest.
 ///
 /// Titled sections carry sigiled headers, empty sections stay
 /// out. First runs frame drift as desired versus disk.
@@ -187,6 +187,8 @@ impl Summary<'_> {
 
     /// Collects resource blocks for steady runs.
     ///
+    /// Skips unchanged documents.
+    ///
     /// # Returns
     ///
     /// The resource block lines without the section title.
@@ -222,7 +224,7 @@ impl Summary<'_> {
     ///
     /// # Returns
     ///
-    /// The documents line plus the hooks line while hooks move.
+    /// The documents line and the hooks line while hooks move.
     ///
     /// # Examples
     ///
@@ -268,14 +270,14 @@ impl Summary<'_> {
         out
     }
 
-    /// Counts first-run creates plus overwrites.
+    /// Counts first-run creates and overwrites.
     ///
     /// Documents holding no drift entries render no lines and
     /// leave the counts.
     ///
     /// # Returns
     ///
-    /// The create count plus the overwrite count.
+    /// The create count and the overwrite count.
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
@@ -297,7 +299,7 @@ impl Summary<'_> {
     ///
     /// # Returns
     ///
-    /// Resource blocks plus hooks plus the counts line.
+    /// Resource blocks, hooks, and the counts line.
     fn render_first_run(&self) -> String {
         let painter = Painter::new();
         let mut lines = Vec::new();
@@ -345,7 +347,7 @@ impl Summary<'_> {
         }
     }
 
-    /// Renders steady drift entries with grouped plus painted hunks.
+    /// Renders steady drift entries with grouped and painted hunks.
     fn steady_drift_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for entry in self.drift {
@@ -443,9 +445,7 @@ fn header_line(document: &ManifestDocument) -> String {
     format!("{}: {}", document.path.as_str(), doc_label(document))
 }
 
-/// Reads one document header carrying its lifecycle sigil.
-///
-/// Callers skip unchanged documents.
+/// Formats one document header with its lifecycle sigil.
 fn status_header(document: &ManifestDocument, status: DocumentStatus) -> String {
     let sigil = match status {
         DocumentStatus::Create => '+',
@@ -534,8 +534,8 @@ fn first_run_creates(document: &ManifestDocument, entries: &[&Drift]) -> bool {
 
 /// Renders one first-run update group with disk values first.
 ///
-/// Structured plus link plus opaque keys read disk to desired.
-/// Text plus rc hunks render verbatim with per-line paint.
+/// Structured, link, and opaque keys read disk to desired.
+/// Text and rc hunks render verbatim with per-line paint.
 /// Trees collapse to one changed member count.
 /// Unreadable paths name the replacement.
 fn first_run_updates(
@@ -743,9 +743,9 @@ fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
 
-/// Reads the hash plus size label for one opaque ref.
+/// Reads the hash and size label for one opaque ref.
 ///
-/// Refs carry the content hash plus byte count, so the label
+/// Refs carry the content hash and byte count, so the label
 /// matches `opaque_label` without reading blob bytes.
 fn opaque_ref_label(sha: &str, size: u64) -> String {
     format!("sha256:{sha} ({size} bytes)")
@@ -774,9 +774,9 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
 
 /// Collects update lines with old to new values.
 ///
-/// Structured plus link plus opaque plus tree lines read yellow
+/// Structured, link, opaque, and tree lines read yellow
 /// under the update sigil. Opaque labels read the recorded hash
-/// plus size, never blob bytes. Rc updates read as a recorded to
+/// and size, never blob bytes. Rc updates read as a recorded to
 /// desired text hunk with per-symbol paint.
 fn update_lines(
     painter: &Painter,
@@ -922,7 +922,7 @@ fn rc_update_lines(
     painted_hunk_lines(painter, &hunks)
 }
 
-/// Splits a manifest key into kind plus path halves.
+/// Splits a manifest key into kind and path halves.
 fn split_key(key: &str) -> (&str, &str) {
     match key.find(':') {
         Some(index) => (&key[..index], &key[index + 1..]),
