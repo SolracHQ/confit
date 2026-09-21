@@ -15,7 +15,7 @@ use confit_core::fs::{
 use confit_core::hook::{describe_condition, lifecycle_lines, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
-use confit_core::runtime::{Runtime, evaluate};
+use confit_core::runtime::Runtime;
 use confit_core::store::blobs::prune_blobs;
 use confit_core::store::bundle::load_bundle_input;
 use confit_core::store::slots::{
@@ -398,7 +398,7 @@ impl<'a> ApplyRunner<'a> {
                 && hook
                     .checks
                     .iter()
-                    .all(|check| evaluate(check, ctx.rt, ctx.fs, ctx.changed))
+                    .all(|check| ctx.rt.evaluate(check, ctx.fs, ctx.changed))
             {
                 let line = format!("skipped: {} (checks pass)", hook.argv.join(" "));
                 self.seams.print_line(line);
@@ -474,7 +474,7 @@ struct HookCtx<'x> {
 fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String> {
     let argv_text = hook.argv.join(" ");
     if let Some(gate) = hook.requires.as_ref()
-        && !evaluate(gate, ctx.rt, ctx.fs, ctx.changed)
+        && !ctx.rt.evaluate(gate, ctx.fs, ctx.changed)
     {
         return Some(format!(
             "warn: {argv_text} cannot run ({})",
@@ -482,7 +482,7 @@ fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String
         ));
     }
     if let Some(gate) = hook.when.as_ref()
-        && !evaluate(gate, ctx.rt, ctx.fs, ctx.changed)
+        && !ctx.rt.evaluate(gate, ctx.fs, ctx.changed)
     {
         return Some(format!(
             "skipped: {argv_text} (no need: {})",
@@ -505,7 +505,7 @@ fn verify_post_checks(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Resu
     let failed: Vec<String> = hook
         .checks
         .iter()
-        .filter(|check| !evaluate(check, ctx.rt, ctx.fs, ctx.changed))
+        .filter(|check| !ctx.rt.evaluate(check, ctx.fs, ctx.changed))
         .map(describe_condition)
         .collect();
     if failed.is_empty() {

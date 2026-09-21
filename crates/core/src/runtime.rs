@@ -48,71 +48,69 @@ impl Runtime {
             .unwrap_or_default();
         Self { vars, path_dirs }
     }
-}
 
-/// Evaluates one condition against runtime facts and the backend.
-///
-/// `in_path` joins each dir with the name, first existing
-/// executable wins. While the backend reports a mode, the
-/// `0o111` bit decides. Otherwise plain existence decides.
-/// `exists` expands a leading tilde through the OS home
-/// folder then stats. `env_eq` and `env_set` read `vars`.
-/// `changed` reads membership in the changed-path set.
-/// `all`, `any` and `Not` recurse.
-///
-/// # Arguments
-///
-/// * `cond` - the condition under testing.
-/// * `rt` - the runtime facts under reading.
-/// * `fs` - the backend under stating.
-/// * `changed` - the changed document ids under reading.
-///
-/// # Returns
-///
-/// True while the condition holds.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::condition::Condition;
-/// use confit_core::fs::memory::MemoryFs;
-/// use confit_core::runtime::{Runtime, evaluate};
-/// use std::collections::{BTreeMap, BTreeSet};
-///
-/// let rt = Runtime {
-///     vars: BTreeMap::from([("SHELL".to_string(), "bash".to_string())]),
-///     path_dirs: Vec::new(),
-/// };
-/// let cond = Condition::All(vec![
-///     Condition::EnvSet { key: "SHELL".into() },
-///     Condition::EnvEq { key: "SHELL".into(), value: "bash".into() },
-/// ]);
-/// assert_eq!(evaluate(&cond, &rt, &MemoryFs::new(), &BTreeSet::new()), true);
-/// assert_eq!(
-///     evaluate(
-///         &Condition::EnvSet { key: "MISSING".into() },
-///         &rt,
-///         &MemoryFs::new(),
-///         &BTreeSet::new()
-///     ),
-///     false
-/// );
-/// ```
-pub fn evaluate(
-    cond: &Condition,
-    rt: &Runtime,
-    fs: &dyn Filesystem,
-    changed: &BTreeSet<DocPath>,
-) -> bool {
-    match cond {
-        Condition::EnvEq { key, value } => rt.vars.get(key).is_some_and(|held| held == value),
-        Condition::EnvSet { key } => rt.vars.get(key).is_some_and(|held| !held.is_empty()),
-        Condition::InPath { name } => path_holds(name, rt, fs),
-        Condition::Exists { path } => fs.exists(&DocPath::new(path).expand()),
-        Condition::Changed { path } => changed.contains(&DocPath::new(path)),
-        Condition::All(items) => items.iter().all(|item| evaluate(item, rt, fs, changed)),
-        Condition::Any(items) => items.iter().any(|item| evaluate(item, rt, fs, changed)),
-        Condition::Not(inner) => !evaluate(inner, rt, fs, changed),
+    /// Evaluates one condition against runtime facts and the backend.
+    ///
+    /// `in_path` joins each dir with the name, first existing
+    /// executable wins. While the backend reports a mode, the
+    /// `0o111` bit decides. Otherwise plain existence decides.
+    /// `exists` expands a leading tilde through the OS home
+    /// folder then stats. `env_eq` and `env_set` read `vars`.
+    /// `changed` reads membership in the changed-path set.
+    /// `all`, `any` and `Not` recurse.
+    ///
+    /// # Arguments
+    ///
+    /// * `cond` - the condition under testing.
+    /// * `fs` - the backend under stating.
+    /// * `changed` - the changed document ids under reading.
+    ///
+    /// # Returns
+    ///
+    /// True while the condition holds.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_core::condition::Condition;
+    /// use confit_core::fs::memory::MemoryFs;
+    /// use confit_core::runtime::Runtime;
+    /// use std::collections::{BTreeMap, BTreeSet};
+    ///
+    /// let rt = Runtime {
+    ///     vars: BTreeMap::from([("SHELL".to_string(), "bash".to_string())]),
+    ///     path_dirs: Vec::new(),
+    /// };
+    /// let cond = Condition::All(vec![
+    ///     Condition::EnvSet { key: "SHELL".into() },
+    ///     Condition::EnvEq { key: "SHELL".into(), value: "bash".into() },
+    /// ]);
+    /// assert_eq!(rt.evaluate(&cond, &MemoryFs::new(), &BTreeSet::new()), true);
+    /// assert_eq!(
+    ///     rt.evaluate(
+    ///         &Condition::EnvSet { key: "MISSING".into() },
+    ///         &MemoryFs::new(),
+    ///         &BTreeSet::new()
+    ///     ),
+    ///     false
+    /// );
+    /// ```
+    pub fn evaluate(
+        &self,
+        cond: &Condition,
+        fs: &dyn Filesystem,
+        changed: &BTreeSet<DocPath>,
+    ) -> bool {
+        match cond {
+            Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
+            Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
+            Condition::InPath { name } => path_holds(name, self, fs),
+            Condition::Exists { path } => fs.exists(&DocPath::new(path).expand()),
+            Condition::Changed { path } => changed.contains(&DocPath::new(path)),
+            Condition::All(items) => items.iter().all(|item| self.evaluate(item, fs, changed)),
+            Condition::Any(items) => items.iter().any(|item| self.evaluate(item, fs, changed)),
+            Condition::Not(inner) => !self.evaluate(inner, fs, changed),
+        }
     }
 }
 
@@ -343,7 +341,7 @@ mod tests {
         ];
         for (cond, want) in cases {
             assert_eq!(
-                evaluate(&cond, &rt, &fs, &BTreeSet::new()),
+                rt.evaluate(&cond, &fs, &BTreeSet::new()),
                 want,
                 "condition {cond:?}"
             );
@@ -429,7 +427,7 @@ mod tests {
         ];
         for (cond, want) in cases {
             assert_eq!(
-                evaluate(&cond, &rt, &fs, &changed),
+                rt.evaluate(&cond, &fs, &changed),
                 want,
                 "condition {cond:?}"
             );
@@ -447,9 +445,8 @@ mod tests {
             vars: BTreeMap::new(),
             path_dirs: vec![PathBuf::from("/first"), PathBuf::from("/second")],
         };
-        assert!(evaluate(
+        assert!(rt.evaluate(
             &Condition::InPath { name: "dup".into() },
-            &rt,
             &fs,
             &BTreeSet::new()
         ));
@@ -459,11 +456,10 @@ mod tests {
     fn in_path_without_mode_reports_presence() {
         let fs = MemoryFs::new();
         let rt = test_runtime(&fs);
-        assert!(evaluate(
+        assert!(rt.evaluate(
             &Condition::InPath {
                 name: "tool".into()
             },
-            &rt,
             &fs,
             &BTreeSet::new()
         ));
@@ -471,11 +467,10 @@ mod tests {
             vars: BTreeMap::new(),
             path_dirs: vec![PathBuf::from("/opt")],
         };
-        assert!(evaluate(
+        assert!(bare.evaluate(
             &Condition::InPath {
                 name: "tool".into()
             },
-            &bare,
             &fs,
             &BTreeSet::new()
         ));
@@ -496,19 +491,17 @@ mod tests {
             vars: BTreeMap::new(),
             path_dirs: Vec::new(),
         };
-        let found = evaluate(
+        let found = rt.evaluate(
             &Condition::Exists {
                 path: "~/.local/bin/hook".into(),
             },
-            &rt,
             &fs,
             &BTreeSet::new(),
         );
-        let missing = evaluate(
+        let missing = rt.evaluate(
             &Condition::Exists {
                 path: "~/.local/bin/absent".into(),
             },
-            &rt,
             &fs,
             &BTreeSet::new(),
         );

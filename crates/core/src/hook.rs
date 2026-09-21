@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::condition::Condition;
 use crate::fs::Filesystem;
 use crate::ids::DocPath;
-use crate::runtime::{Runtime, evaluate, find_binary};
+use crate::runtime::{Runtime, find_binary};
 
 /// One post-config step with gates and checks.
 ///
@@ -176,7 +176,7 @@ fn checks_pass(
         && hook
             .checks
             .iter()
-            .all(|check| evaluate(check, rt, fs, changed))
+            .all(|check| rt.evaluate(check, fs, changed))
 }
 
 /// Reads one hook argv as display text.
@@ -228,7 +228,7 @@ pub fn preview_hook(
     changed: &BTreeSet<DocPath>,
 ) -> crate::error::Result<String> {
     if let Some(gate) = hook.requires.as_ref()
-        && !evaluate(gate, rt, fs, changed)
+        && !rt.evaluate(gate, fs, changed)
     {
         return Ok(format!(
             "warn: {} cannot run ({})",
@@ -237,7 +237,7 @@ pub fn preview_hook(
         ));
     }
     if let Some(gate) = hook.when.as_ref()
-        && !evaluate(gate, rt, fs, changed)
+        && !rt.evaluate(gate, fs, changed)
     {
         return Ok(format!(
             "skipped: {} (no need: {})",
