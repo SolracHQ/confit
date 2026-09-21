@@ -1714,6 +1714,24 @@ return { shells = { "bash" }, configs = { c } }
 }
 
 #[test]
+fn changed_unknown_requires_fails_naming_path() {
+    let profile = r#"
+local c = confit.config("c")
+c:add_document(confit.document.text("note", "hi"))
+c:add_hook(confit.hook.run({ "tool" }, { requires = confit.runtime.changed("elsewhere") }))
+return { shells = { "bash" }, configs = { c } }
+"#;
+    let error = run_err(&[], profile);
+    assert!(matches!(error, Error::Plan(_)));
+    let message = error.to_string();
+    assert!(
+        message.contains("confit.runtime.changed"),
+        "names the constructor: {message}"
+    );
+    assert!(message.contains("elsewhere"), "names the path: {message}");
+}
+
+#[test]
 fn changed_matching_dest_passes() {
     let profile = r#"
 local c = confit.config("c")

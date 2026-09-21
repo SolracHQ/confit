@@ -83,8 +83,8 @@ Terminal surface over evaluation and bundles.
   state, and rotates history; export packs slots; delete
   drops named slots; init scaffolds profiles and stubs
   from embedded text.
-- `fs` owns the `Filesystem` seam with OS and memory
-  backends. Memory fakes keep tests hermetic.
+- `fs` owns the `OsFs` host effect implementing the core `Filesystem` seam.
+  Memory fakes live in core and keep tests hermetic.
 - `presentation` owns summaries, drift lines, and report
   text. Summaries cover moving documents and counts.
 - Logging rides `fern` into one file per run. The global

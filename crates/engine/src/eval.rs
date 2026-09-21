@@ -173,6 +173,9 @@ fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Res
         .collect();
     let mut paths = Vec::new();
     for hook in hooks {
+        if let Some(gate) = hook.requires.as_ref() {
+            gate.collect_changed(&mut paths);
+        }
         if let Some(gate) = hook.when.as_ref() {
             gate.collect_changed(&mut paths);
         }

@@ -217,6 +217,7 @@ dependencies = [
  "confit-core",
  "confit-engine",
  "crossbeam-channel",
+ "diffy",
  "dirs",
  "fern",
  "flate2",

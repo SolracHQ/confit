@@ -167,31 +167,6 @@ impl Drift {
     }
 }
 
-/// Builds one recorded-to-desired unified hunk for plan updates.
-///
-/// # Arguments
-///
-/// * `old` - the recorded text under display.
-/// * `new` - the desired text under display.
-///
-/// # Returns
-///
-/// Render-ready content lines from recorded to desired.
-/// File markers never leave this function.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::drift::recorded_hunk;
-///
-/// let hunks = recorded_hunk("old\n", "new\n");
-/// assert!(hunks.contains("-old"));
-/// assert!(hunks.contains("+new"));
-/// ```
-pub fn recorded_hunk(old: &str, new: &str) -> String {
-    content_hunk(old, new)
-}
-
 /// One drift side order selecting old/new assignment.
 ///
 /// RecordedFirst keeps recorded bytes as old, disk as new.
@@ -1378,21 +1353,5 @@ mod tests {
             }
             _ => panic!("first-run order directs disk to desired"),
         }
-    }
-
-    #[test]
-    fn recorded_hunk_holds_content_without_markers() {
-        let hunks = recorded_hunk("old\n", "new\n");
-        assert!(
-            hunks.contains("-old"),
-            "rc hunk removes old content: {hunks}"
-        );
-        assert!(hunks.contains("+new"), "rc hunk adds new content: {hunks}");
-        assert!(
-            !hunks.lines().any(|line| {
-                line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
-            }),
-            "rc hunk renders no markers: {hunks}"
-        );
     }
 }

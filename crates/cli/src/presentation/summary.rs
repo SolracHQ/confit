@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use confit_core::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
-use confit_core::drift::{Drift, recorded_hunk};
+use confit_core::drift::Drift;
 use confit_core::ids::DocPath;
 use confit_core::plan::{Bundle, DocumentStatus};
 use confit_core::store::blobs::BlobRef;
@@ -891,6 +891,20 @@ fn update_fallback(painter: &Painter, document: &ManifestDocument) -> Vec<String
         .into_iter()
         .map(|body| painter.paint(Sigil::Update, &format!("  ~ {body}")))
         .collect()
+}
+
+/// Builds one recorded-to-desired unified hunk for plan updates.
+///
+/// File markers never leave this function.
+fn recorded_hunk(old: &str, new: &str) -> String {
+    diffy::create_patch(old, new)
+        .to_string()
+        .lines()
+        .filter(|line| {
+            !(line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Renders one rc update as a recorded to desired text hunk.
@@ -1797,7 +1811,7 @@ mod tests {
         assert!(text.contains("-"), "rc update removes old: {text}");
         assert!(text.contains("+"), "rc update adds new: {text}");
         let painter = Painter { color: true };
-        let hunks = confit_core::drift::recorded_hunk("old\n", "new\n");
+        let hunks = recorded_hunk("old\n", "new\n");
         let painted = painted_hunk_lines(&painter, &hunks);
         let mut saw_red = false;
         let mut saw_green = false;
@@ -1816,6 +1830,22 @@ mod tests {
         }
         assert!(saw_red, "rc paint covers removals");
         assert!(saw_green, "rc paint covers additions");
+    }
+
+    #[test]
+    fn recorded_hunk_holds_content_without_markers() {
+        let hunks = recorded_hunk("old\n", "new\n");
+        assert!(
+            hunks.contains("-old"),
+            "rc hunk removes old content: {hunks}"
+        );
+        assert!(hunks.contains("+new"), "rc hunk adds new content: {hunks}");
+        assert!(
+            !hunks.lines().any(|line| {
+                line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
+            }),
+            "rc hunk renders no markers: {hunks}"
+        );
     }
 
     #[test]
