@@ -229,12 +229,79 @@ fn read_checks(opts: &Table, ctor: &str) -> mlua::Result<Vec<Table>> {
     Ok(out)
 }
 
+/// Parses one Lua-shaped duration into seconds.
+///
+/// Bare digits read as seconds. Each unit holds at most once.
+///
+/// # Errors
+///
+/// Empty, garbage, and wrong order fail with the text quoted.
+fn parse_duration(text: &str) -> Result<u64, String> {
+    if text.is_empty() {
+        return Err(format!("invalid duration '{text}'"));
+    }
+    let mut total: u64 = 0;
+    let mut rank: u8 = 4;
+    let mut seen: u8 = 0;
+    let mut rest = text;
+    let mut consumed_any = false;
+    while !rest.is_empty() {
+        let digits = rest.len()
+            - rest
+                .trim_start_matches(|byte: char| byte.is_ascii_digit())
+                .len();
+        if digits == 0 {
+            return Err(format!("invalid duration '{text}'"));
+        }
+        let amount: u64 = match rest[..digits].parse() {
+            Ok(amount) => amount,
+            Err(_) => return Err(format!("invalid duration '{text}'")),
+        };
+        rest = &rest[digits..];
+        let (unit_rank, unit_bit, factor) = match rest.chars().next() {
+            Some('h') => (3, 0b100, 3_600),
+            Some('m') => (2, 0b010, 60),
+            Some('s') => (1, 0b001, 1),
+            _ => (0, 0b000, 1),
+        };
+        if unit_rank == 0 {
+            if consumed_any || !rest.is_empty() {
+                return Err(format!("invalid duration '{text}'"));
+            }
+            total = amount;
+            consumed_any = true;
+            rest = "";
+            continue;
+        }
+        if unit_rank >= rank || seen & unit_bit != 0 {
+            return Err(format!("invalid duration '{text}'"));
+        }
+        rank = unit_rank;
+        seen |= unit_bit;
+        let part = match amount.checked_mul(factor) {
+            Some(part) => part,
+            None => return Err(format!("invalid duration '{text}'")),
+        };
+        total = match total.checked_add(part) {
+            Some(total) => total,
+            None => return Err(format!("invalid duration '{text}'")),
+        };
+        rest = &rest[1..];
+        consumed_any = true;
+    }
+    if consumed_any {
+        Ok(total)
+    } else {
+        Err(format!("invalid duration '{text}'"))
+    }
+}
+
 /// Reads the timeout in seconds, defaulting to ten minutes.
 fn read_timeout(opts: &Table, ctor: &str) -> mlua::Result<u64> {
     const DEFAULT: &str = "10m";
     let value: Value = opts.get("timeout")?;
     if value.is_nil() {
-        return match confit_core::runtime::parse_duration(DEFAULT) {
+        return match parse_duration(DEFAULT) {
             Ok(secs) => Ok(secs),
             Err(error) => Err(plan_error(format!("{ctor}: {error}"))),
         };
@@ -244,8 +311,7 @@ fn read_timeout(opts: &Table, ctor: &str) -> mlua::Result<u64> {
             "{ctor}: field 'timeout' must be a duration string"
         )));
     };
-    confit_core::runtime::parse_duration(&text)
-        .map_err(|error| plan_error(format!("{ctor}: field 'timeout' {error}")))
+    parse_duration(&text).map_err(|error| plan_error(format!("{ctor}: field 'timeout' {error}")))
 }
 
 /// Converts one hook declaration table into core data.
@@ -334,4 +400,43 @@ pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_core
         checks,
         timeout_secs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_parser_cases() {
+        let cases = vec![
+            ("90", 90),
+            ("0", 0),
+            ("10s", 10),
+            ("10m", 600),
+            ("2h", 7_200),
+            ("1h10m10s", 4_210),
+            ("1h30m", 5_400),
+        ];
+        for (text, want) in cases {
+            match parse_duration(text) {
+                Ok(got) => assert_eq!(got, want, "duration {text:?}"),
+                Err(error) => panic!("duration {text:?} parses: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn duration_parser_failures_quote_text() {
+        for text in [
+            "", "nope", "h", "10x", "10s1h", "1m1h", "1h1h", "1h30", " 10m", "10m ",
+        ] {
+            match parse_duration(text) {
+                Ok(got) => panic!("duration {text:?} passes with {got}"),
+                Err(error) => assert!(
+                    error.contains(text) && error.contains('\''),
+                    "failure quotes text: {error}"
+                ),
+            }
+        }
+    }
 }
