@@ -17,7 +17,7 @@ use confit_core::progress::{Event, ProgressSender};
 pub(crate) mod archive;
 pub(crate) mod convert;
 
-use self::archive::read_members;
+use self::archive::{ensure_extracted, read_members};
 
 /// Declared document in registration form.
 pub(crate) enum Declared {
@@ -27,7 +27,7 @@ pub(crate) enum Declared {
     Text(TextDecl),
     /// Link declaration.
     Link(LinkDecl),
-    /// Opaque declaration holding raw bytes.
+    /// Opaque declaration holding a source path.
     Opaque(OpaqueDecl),
     /// Tree declaration holding one managed file set.
     Tree(TreeDecl),
@@ -52,26 +52,47 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
         "link",
         lua.create_function(|lua, args: (Value, Value)| link_impl(lua, args))?,
     )?;
+    let opaque_root: PathBuf = session.root.clone();
+    let opaque_cache: PathBuf = session.cache.clone();
+    let opaque_extract: PathBuf = session.extract.clone();
     namespace.set(
         "opaque",
-        lua.create_function(|lua, args: (Value, Value, Option<Value>)| opaque_impl(lua, args))?,
+        lua.create_function(move |lua, args: (Value, Value, Option<Value>)| {
+            opaque_impl(lua, &opaque_root, &opaque_cache, &opaque_extract, args)
+        })?,
     )?;
     let comp_root: PathBuf = session.root.clone();
     let comp_cache: PathBuf = session.cache.clone();
+    let comp_extract: PathBuf = session.extract.clone();
     let comp_progress = session.progress.clone();
     namespace.set(
         "compressed",
         lua.create_function(move |lua, args: (Value, Value)| {
-            compressed_impl(lua, &comp_root, &comp_cache, args, comp_progress.clone())
+            compressed_impl(
+                lua,
+                &comp_root,
+                &comp_cache,
+                &comp_extract,
+                args,
+                comp_progress.clone(),
+            )
         })?,
     )?;
     let tree_root: PathBuf = session.root.clone();
     let tree_cache: PathBuf = session.cache.clone();
+    let tree_extract: PathBuf = session.extract.clone();
     let tree_progress = session.progress.clone();
     namespace.set(
         "tree",
         lua.create_function(move |lua, args: (Value, Value, Value)| {
-            tree_impl(lua, &tree_root, &tree_cache, args, tree_progress.clone())
+            tree_impl(
+                lua,
+                &tree_root,
+                &tree_cache,
+                &tree_extract,
+                args,
+                tree_progress.clone(),
+            )
         })?,
     )?;
     install_rc(lua, &namespace)?;
@@ -128,8 +149,8 @@ fn text_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Tab
     let (path_value, content_value, opts) = args;
     let path = path_value.req_str(CTOR, "path")?;
     let content = content_value.req_str(CTOR, "content")?;
-    let mode = ModeOpts::resolve(opts, CTOR)?;
-    DocumentTables::text(lua, path, content, mode)
+    let resolved = DocOpts::resolve(opts, CTOR)?;
+    DocumentTables::text(lua, path, content, resolved.mode, resolved.unmanaged)
 }
 
 /// Builds a symlink document table.
@@ -141,14 +162,21 @@ fn link_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     DocumentTables::link(lua, path, target)
 }
 
-/// Builds an opaque document table holding raw bytes.
-fn opaque_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Table> {
+/// Builds an opaque document table holding a source path.
+fn opaque_impl(
+    lua: &Lua,
+    root: &Path,
+    cache: &Path,
+    extract: &Path,
+    args: (Value, Value, Option<Value>),
+) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.opaque";
-    let (path_value, content_value, opts) = args;
+    let (path_value, source_value, opts) = args;
     let path = path_value.req_str(CTOR, "path")?;
-    let content = content_value.req_bytes(CTOR, "content")?;
-    let mode = ModeOpts::resolve(opts, CTOR)?;
-    DocumentTables::opaque(lua, path, content, mode)
+    let rel = source_value.req_str(CTOR, "source")?;
+    let source = super::resources::resolve_under_root(root, cache, extract, &rel, CTOR)?;
+    let resolved = DocOpts::resolve(opts, CTOR)?;
+    DocumentTables::opaque(lua, path, source, resolved.mode, resolved.unmanaged)
 }
 
 /// Document table builders holding domain validation.
@@ -207,15 +235,23 @@ impl DocumentTables {
     /// * `path` - destination path.
     /// * `content` - exact file text.
     /// * `mode` - unix permission bits, holding `None` for default handling.
+    /// * `unmanaged` - true while presence alone satisfies the document.
     ///
     /// # Returns
     ///
     /// Document table stamped with the text marker plus the mode marker.
     ///
-    fn text(lua: &Lua, path: String, content: String, mode: Option<u32>) -> mlua::Result<Table> {
+    fn text(
+        lua: &Lua,
+        path: String,
+        content: String,
+        mode: Option<u32>,
+        unmanaged: bool,
+    ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
         out.set("path", path)?;
         out.set("content", content)?;
+        out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "text", extra)?;
@@ -242,23 +278,31 @@ impl DocumentTables {
         Ok(out)
     }
 
-    /// Builds an opaque document table holding raw bytes.
+    /// Builds an opaque document table holding a source path.
     ///
     /// # Arguments
     ///
     /// * `lua` - state owning the output table.
     /// * `path` - destination path.
-    /// * `content` - raw file bytes.
+    /// * `source` - absolute source file path.
     /// * `mode` - unix permission bits, holding `None` for default handling.
+    /// * `unmanaged` - true while presence alone satisfies the document.
     ///
     /// # Returns
     ///
     /// Document table stamped with the opaque marker plus the mode marker.
     ///
-    fn opaque(lua: &Lua, path: String, content: Vec<u8>, mode: Option<u32>) -> mlua::Result<Table> {
+    fn opaque(
+        lua: &Lua,
+        path: String,
+        source: PathBuf,
+        mode: Option<u32>,
+        unmanaged: bool,
+    ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
         out.set("path", path)?;
-        out.set("content", lua.create_string(&content)?)?;
+        out.set("source", source.to_string_lossy().as_ref())?;
+        out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "opaque", extra)?;
@@ -266,32 +310,46 @@ impl DocumentTables {
     }
 }
 
-/// Mode opts resolver holding domain validation.
-struct ModeOpts;
+/// Document opts holding mode plus the unmanaged flag.
+struct DocOpts {
+    /// Unix permission bits, holding `None` for default handling.
+    mode: Option<u32>,
+    /// True while presence alone satisfies the document.
+    unmanaged: bool,
+}
 
-impl ModeOpts {
-    /// Resolves the unix permission bits from an opts value.
+impl DocOpts {
+    /// Resolves the document opts from an opts value.
     ///
     /// # Arguments
     ///
-    /// * `opts` - opts value holding nil, missing, or a table with a `mode` field.
+    /// * `opts` - opts value holding nil, missing, or a table with
+    ///   `mode` plus `unmanaged` fields.
     /// * `ctor` - error prefix naming the constructor.
     ///
     /// # Returns
     ///
-    /// Mode bits holding `None` for missing plus nil opts.
+    /// Mode bits plus the unmanaged flag, holding defaults for
+    /// missing plus nil opts.
     ///
     /// # Errors
     ///
     /// Non-table opts fail as plan errors. Unknown opts fields fail as plan errors.
     /// Non-string modes fail as plan errors. Unparsable modes fail as plan errors.
+    /// Non-boolean unmanaged flags fail as plan errors.
     ///
-    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Option<u32>> {
+    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Self> {
         let Some(opts) = opts else {
-            return Ok(None);
+            return Ok(Self {
+                mode: None,
+                unmanaged: false,
+            });
         };
         if opts.is_nil() {
-            return Ok(None);
+            return Ok(Self {
+                mode: None,
+                unmanaged: false,
+            });
         }
         let table = opts.req_table(ctor, "opts")?;
         for pair in table.pairs::<Value, Value>() {
@@ -301,20 +359,33 @@ impl ModeOpts {
                     "{ctor}: field 'opts' must hold string keys"
                 )));
             };
-            if name != "mode" {
+            if name != "mode" && name != "unmanaged" {
                 return Err(plan_error(format!(
                     "{ctor}: field 'opts' unknown field '{name}'"
                 )));
             }
         }
         let mode_value: Value = table.get("mode")?;
-        if mode_value.is_nil() {
-            return Ok(None);
-        }
-        let raw = mode_value.req_str(ctor, "mode")?;
-        confit_core::document::parse_mode(&raw)
-            .map(Some)
-            .map_err(|error| plan_error(format!("{ctor}: {error}")))
+        let mode = if mode_value.is_nil() {
+            None
+        } else {
+            let raw = mode_value.req_str(ctor, "mode")?;
+            Some(
+                confit_core::document::parse_mode(&raw)
+                    .map_err(|error| plan_error(format!("{ctor}: {error}")))?,
+            )
+        };
+        let unmanaged_value: Value = table.get("unmanaged")?;
+        let unmanaged = match unmanaged_value {
+            Value::Nil => false,
+            Value::Boolean(flag) => flag,
+            _ => {
+                return Err(plan_error(format!(
+                    "{ctor}: field 'unmanaged' must be a boolean"
+                )));
+            }
+        };
+        Ok(Self { mode, unmanaged })
     }
 }
 
@@ -323,6 +394,7 @@ fn compressed_impl(
     lua: &Lua,
     root: &Path,
     cache: &Path,
+    extract: &Path,
     args: (Value, Value),
     progress: Option<ProgressSender>,
 ) -> mlua::Result<Table> {
@@ -330,7 +402,7 @@ fn compressed_impl(
     let (path_value, callback_value) = args;
     let rel = path_value.req_str(CTOR, "path")?;
     let callback = callback_value.req_func(CTOR, "callback")?;
-    CompressedDocs::build(lua, root, cache, CTOR, rel, callback, progress)
+    CompressedDocs::build(lua, root, cache, extract, CTOR, rel, callback, progress)
 }
 
 /// Archive unpacker holding domain validation.
@@ -344,6 +416,7 @@ impl CompressedDocs {
     /// * `lua` - state owning the output table.
     /// * `root` - project root for archive reads.
     /// * `cache` - cache folder for cache-absolute reads.
+    /// * `extract` - extract folder for member file paths.
     /// * `ctor` - error prefix naming the constructor.
     /// * `rel` - archive path under reading.
     /// * `callback` - per-member document picker.
@@ -363,6 +436,7 @@ impl CompressedDocs {
         lua: &Lua,
         root: &Path,
         cache: &Path,
+        extract: &Path,
         ctor: &str,
         rel: String,
         callback: Function,
@@ -373,8 +447,10 @@ impl CompressedDocs {
                 "{ctor}: field 'path' must not be empty"
             )));
         }
-        let full = super::resources::resolve_under_root(root, cache, &rel, ctor)?;
+        let full = super::resources::resolve_under_root(root, cache, extract, &rel, ctor)?;
         let start = std::time::Instant::now();
+        let sha = self::archive::archive_sha(&full, &rel, ctor)?;
+        let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
         let bytes = std::fs::read(&full)
             .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
         let members = read_members(&bytes, &rel, ctor)?;
@@ -385,8 +461,8 @@ impl CompressedDocs {
             let size = member.size.min(i64::MAX as u64) as i64;
             info.set("size", size)?;
             info.set("executable", member.executable)?;
-            let content = lua.create_string(&member.content)?;
-            let returned: Value = callback.call((member.name.as_str(), info, content))?;
+            let member_path = dir.join(&member.name).to_string_lossy().into_owned();
+            let returned: Value = callback.call((member.name.as_str(), info, member_path))?;
             if returned.is_nil() {
                 continue;
             }
@@ -425,6 +501,7 @@ fn tree_impl(
     lua: &Lua,
     root: &Path,
     cache: &Path,
+    extract: &Path,
     args: (Value, Value, Value),
     progress: Option<ProgressSender>,
 ) -> mlua::Result<Table> {
@@ -433,7 +510,9 @@ fn tree_impl(
     let rel = archive_value.req_str(CTOR, "archive")?;
     let dest = dest_value.req_str(CTOR, "dest")?;
     let callback = callback_value.req_func(CTOR, "callback")?;
-    TreeDocs::build(lua, root, cache, CTOR, rel, dest, callback, progress)
+    TreeDocs::build(
+        lua, root, cache, extract, CTOR, rel, dest, callback, progress,
+    )
 }
 
 /// Tree builder holding domain validation.
@@ -447,6 +526,7 @@ impl TreeDocs {
     /// * `lua` - state owning the output table.
     /// * `root` - project root for archive reads.
     /// * `cache` - cache folder for cache-absolute reads.
+    /// * `extract` - extract folder for member file paths.
     /// * `ctor` - error prefix naming the constructor.
     /// * `rel` - archive path under reading.
     /// * `dest` - destination folder holding the members.
@@ -472,6 +552,7 @@ impl TreeDocs {
         lua: &Lua,
         root: &Path,
         cache: &Path,
+        extract: &Path,
         ctor: &str,
         rel: String,
         dest: String,
@@ -488,19 +569,22 @@ impl TreeDocs {
                 "{ctor}: field 'dest' must not be empty"
             )));
         }
-        let full = super::resources::resolve_under_root(root, cache, &rel, ctor)?;
+        let full = super::resources::resolve_under_root(root, cache, extract, &rel, ctor)?;
         let start = std::time::Instant::now();
+        let sha = self::archive::archive_sha(&full, &rel, ctor)?;
+        let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
         let bytes = std::fs::read(&full)
             .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
         let members = read_members(&bytes, &rel, ctor)?;
-        let mut kept: Vec<(String, u32, Vec<u8>)> = Vec::new();
+        let mut kept: Vec<(String, u32, PathBuf)> = Vec::new();
         for member in &members {
             let info = lua.create_table()?;
             let size = member.size.min(i64::MAX as u64) as i64;
             info.set("size", size)?;
             info.set("executable", member.executable)?;
-            let content = lua.create_string(&member.content)?;
-            let returned: Value = callback.call((member.name.as_str(), info, content))?;
+            let member_path = dir.join(&member.name);
+            let member_arg = member_path.to_string_lossy().into_owned();
+            let returned: Value = callback.call((member.name.as_str(), info, member_arg))?;
             if returned.is_nil() {
                 continue;
             }
@@ -516,7 +600,7 @@ impl TreeDocs {
                 )));
             }
             let mode = if member.executable { 0o755 } else { 0o644 };
-            kept.push((relpath, mode, member.content.clone()));
+            kept.push((relpath, mode, member_path));
         }
         if kept.is_empty() {
             return Err(plan_error(format!(
@@ -525,11 +609,11 @@ impl TreeDocs {
         }
         kept.sort_by(|left, right| left.0.cmp(&right.0));
         let list = lua.create_table()?;
-        for (index, (relpath, mode, content)) in kept.iter().enumerate() {
+        for (index, (relpath, mode, source)) in kept.iter().enumerate() {
             let item = lua.create_table()?;
             item.set("rel", relpath.as_str())?;
             item.set("mode", i64::from(*mode))?;
-            item.set("content", lua.create_string(content)?)?;
+            item.set("source", source.to_string_lossy().as_ref())?;
             list.set(index + 1, item)?;
         }
         let out = lua.create_table()?;

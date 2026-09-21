@@ -11,29 +11,12 @@ use confit_core::progress::{Event, ProgressSender};
 ///
 /// Lines flow toward the renderer thread for ordered printing.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::spinner::PrintSender;
-///
-/// let (sender, receiver): (PrintSender, _) = crossbeam_channel::unbounded();
-/// assert!(matches!(sender.send("hi".to_string()), Ok(())));
-/// ```
 pub type PrintSender = crossbeam_channel::Sender<String>;
 
 /// Parks widget painting across prompts.
 ///
 /// Clones share one draw target. Prompts run inside `suspend`.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::spinner::Live;
-///
-/// let live = Live::new();
-/// assert!(matches!(live.suspend_handle(), Some(_) | None));
-/// live.finish();
-/// ```
 #[derive(Debug, Clone)]
 pub struct SuspendControl {
     /// Shared target holding the spinner on terminal runs.
@@ -97,15 +80,6 @@ impl SuspendControl {
 /// plus shutdown. Prints land through `println`. Shutdown clears
 /// the single line. Finish signals shutdown, then joins the thread.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::spinner::Live;
-///
-/// let live = Live::new();
-/// assert!(matches!(live.sink(), Some(_) | None));
-/// live.finish();
-/// ```
 pub struct Live {
     /// Facts under sending toward the renderer thread.
     tx: Option<ProgressSender>,
@@ -297,8 +271,8 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize) {
         Event::ReadingPlan { path } => {
             spinner.set_message(format!("reading plan: {path}"));
         }
-        Event::WritingPlan { documents } => {
-            spinner.set_message(format!("writing plan for {documents} documents"));
+        Event::WritingManifest { documents } => {
+            spinner.set_message(format!("writing manifest for {documents} documents"));
         }
         Event::DocumentWritten { path } => {
             *writes += 1;

@@ -5,25 +5,6 @@ Shipped ideas graduate off this page.
 
 ---
 
-Idea: Skip hooks when their documents match the applied slot plus the disk
-Importance: High
-Pain: Every time I apply the bundle, even when I dont change the fonts or mise tools hooks get triggered. Hooks should skip when their documents match both the applied slot and the disk. The applied slot holds the memory of the last run, and no slot means first run means everything changed. The check composes inside the conditions I already have.
-
-What I have in my head
-
-```lua
-config:add_hook(confit.hook.run({ "fc-cache", "-f", dest }, {
-  when = confit.runtime.all({
-    confit.runtime.in_path("fc-cache"),
-    confit.runtime.changed(dest),
-  }),
-}))
-```
-
-Document ids are paths and paths run long, typos hide in them. I worry about a name missing from the plan. I do not know yet how to handle it.
-
----
-
 Idea: Add plan time interactive variables
 Importance: Mid/Low
 Pain: Being able to have plan time facts could be good for dynamic behaviors as have exactly the same tools and language and fonts but maybe customize if use one starship theme or other, or a python version, small things, this is technically already cover by profiles but is a good to have so is not really a priority
@@ -52,6 +33,7 @@ Hardness can emerge from use instead of declarations. Hook `__index` on the fact
 
 Idea: Stop holding the whole run in memory
 Importance: Critical
+Status: Fully planned in v0.8. The memory section carries the whole pipeline.
 Pain: My dotfiles plan peaks at 1.7GB RSS in 6.6s and example 3 alone hits 1.3GB, and with the ram prices that is a big pain. We are using memory for use it not because we need it, I have almost everything in memory all the time.
 
 My suspects so far:
@@ -63,24 +45,6 @@ My suspects so far:
 What I have in my head
 
 Stop holding everything in memory. Stream when possible, make things lazy as possible. I have no idea how to solve it yet.
-
----
-
-Idea: Apply over pre-existing symlinks instead of half writing through them
-Importance: High
-Pain: My old dotfiles symlink starship.toml and mise.toml, and apply gets really confused when the file exists but is a symlink. It says wrote but does nothing, it does not remove the link, it just lands in a strange state. I delete them manually and re-run and it works, so something in the write path needs solving.
-
-My suspects so far:
-
-- The snapshot reads links without following them, and creating a link document replaces present files. So the app knows what a symlink is.
-- The plain file write path apparently does not. It probably opens through the link or past it, reports wrote, and the bytes never land where the plan thinks they did.
-- The drift side likely reads one thing while the write side does another, which is how you get a confident report plus a strange disk.
-
-What I have in my head
-
-Apply removes the link, writes the file, and the report names the replacement. Something like `~/.config/starship.toml: link replaced with file`.
-
-Plan follows the link and diffs the target bytes against my document, so the preview shows the real change. The preview names the link, not what sits behind it. On apply the link drops and the file lands.
 
 ---
 
@@ -96,32 +60,6 @@ config:add_hook(confit.hook.run({ "mise", "install" }, {
 }))
 ```
 Hooks already answer to argv everywhere, so dependencies name argv too. Cycles fail the plan. Declaration order still decides the rest.
-
----
-
-Idea: Index structured patch paths from 1 like Lua does
-Importance: High
-Pain: The key language addresses list items from 0, so `servers[0].host` names the first server. Lua counts from 1, and every public element should follow Lua quirks or users trip on the one place that does not. The code is one parse spot plus the drift keys that echo it. My worry is the docs, they already name 0 based shapes in several pages.
-
-What I have in my head
-
-`servers[1].host` names the first server. A 0 index fails the plan naming the path. Drift keys print the same 1 based shapes users write.
-
----
-
-Idea: Mark resources unmanaged when I only care they exist
-Importance: High
-Pain: My mise binary autoupdates itself, so its bytes change behind my back. Today every drift sees a stranger and every apply rewrites a file that was fine. I want to mark it unmanaged, which means I only care if it exists or not. If it exists the sha gets ignored. If it does not exist it comes back from my snapshot on next apply. Simple and efficient. The dangerous part is communication, an unmanaged file must never render as already in place, because that line would be a lie the moment the bytes move. It needs its own marker in the preview plus one paragraph in the manual, or users learn to distrust every green line. This composes with the hook change card, both are the same stop redoing redundant work theme, and an unmanaged binary plus a version check hook is the whole mise story end to end.
-
-What I have in my head:
-
-```lua
-kitty:add_document(confit.document.opaque(path, content, { unmanaged = true }))
-```
-
-```text
-~/.local/bin/mise: unmanaged, exists
-```
 
 ---
 

@@ -80,11 +80,7 @@ fn init_scaffold_evaluates_to_one_rc() {
                 RcOp::Alias { name, .. } => assert_eq!(name, "ll"),
                 other => panic!("alias expected, got {other:?}"),
             }
-            assert_eq!(data.final_entries.len(), 1);
-            match &data.final_entries[0].op {
-                RcOp::Eval { argv } => assert_eq!(argv[0], "starship"),
-                other => panic!("eval expected, got {other:?}"),
-            }
+            assert!(data.final_entries.is_empty());
         }
         other => panic!("rc expected, got {other:?}"),
     }

@@ -6,9 +6,9 @@ fn export_applied_slot_writes_auto_bundle() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_slot(&fs, &built);
     let args = confit_cli::cli::ExportArgs {
@@ -27,7 +27,7 @@ fn export_applied_slot_writes_auto_bundle() {
         None => panic!("file export holds a dest"),
     };
     assert!(fs.exists(&dest), "bundle lands at the auto name");
-    let restored = match confit_core::store::read_bundle(&dest, &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(&dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -40,9 +40,9 @@ fn export_named_slot_writes_auto_bundle() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let args = confit_cli::cli::ExportArgs {
@@ -61,7 +61,7 @@ fn export_named_slot_writes_auto_bundle() {
         None => panic!("file export holds a dest"),
     };
     assert!(fs.exists(&dest), "bundle lands at the auto name");
-    let restored = match confit_core::store::read_bundle(&dest, &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(&dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -72,35 +72,45 @@ fn export_named_slot_writes_auto_bundle() {
 fn export_history_slots_write_auto_bundles() {
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![ManifestDocument::new(
-        DocPath::new("history-old"),
-        ManifestData::Text {
-            content: "old\n".to_string(),
-            mode: None,
-        },
-    )]) {
+    let old = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("history-old"),
+            ManifestData::Text {
+                content: "old\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
-        Err(error) => panic!("old plan builds: {error}"),
+        Err(error) => panic!("old bundle builds: {error}"),
     };
-    let new = match build(vec![ManifestDocument::new(
-        DocPath::new("history-new"),
-        ManifestData::Text {
-            content: "new\n".to_string(),
-            mode: None,
-        },
-    )]) {
+    let new = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("history-new"),
+            ManifestData::Text {
+                content: "new\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
-        Err(error) => panic!("new plan builds: {error}"),
+        Err(error) => panic!("new bundle builds: {error}"),
     };
-    let dir = match confit_core::store::resolve_previous_dir() {
+    let dir = match confit_core::store::slots::resolve_previous_dir() {
         Ok(dir) => dir,
         Err(error) => panic!("history dir resolves: {error}"),
     };
-    match confit_core::store::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None) {
+    match confit_core::store::slots::write_manifest(&old, Some(&dir.join("a-old.json")), &fs, None)
+    {
         Ok(()) => {}
         Err(error) => panic!("old entry seeds: {error}"),
     }
-    match confit_core::store::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None) {
+    match confit_core::store::slots::write_manifest(&new, Some(&dir.join("b-new.json")), &fs, None)
+    {
         Ok(()) => {}
         Err(error) => panic!("new entry seeds: {error}"),
     }
@@ -118,7 +128,7 @@ fn export_history_slots_write_auto_bundles() {
         Some(dest) => dest,
         None => panic!("file export holds a dest"),
     };
-    let first_restored = match confit_core::store::read_bundle(&first_dest, &fs) {
+    let first_restored = match confit_core::store::bundle::read_bundle(&first_dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("newest bundle reads: {error}"),
     };
@@ -137,7 +147,7 @@ fn export_history_slots_write_auto_bundles() {
         Some(dest) => dest,
         None => panic!("file export holds a dest"),
     };
-    let second_restored = match confit_core::store::read_bundle(&second_dest, &fs) {
+    let second_restored = match confit_core::store::bundle::read_bundle(&second_dest, &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("older bundle reads: {error}"),
     };
@@ -168,9 +178,9 @@ fn export_output_imposes_cb_suffix() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let bare_args = confit_cli::cli::ExportArgs {
@@ -191,7 +201,7 @@ fn export_output_imposes_cb_suffix() {
         !fs.exists(Path::new("backup")),
         "bare output writes no suffixless file"
     );
-    let restored = match confit_core::store::read_bundle(Path::new("backup.cb"), &fs) {
+    let restored = match confit_core::store::bundle::read_bundle(Path::new("backup.cb"), &fs) {
         Ok(restored) => restored,
         Err(error) => panic!("bundle reads: {error}"),
     };
@@ -212,7 +222,7 @@ fn export_output_imposes_cb_suffix() {
 fn export_bare_path_picker_refuses() {
     pin_home();
     let fs = MemoryFs::new();
-    for raw in ["backup.cb", "backup", "plan.json"] {
+    for raw in ["backup.cb", "backup", "slot.json"] {
         let args = confit_cli::cli::ExportArgs {
             picker: Some(raw.to_string()),
             output: None,
@@ -235,15 +245,20 @@ fn export_manifest_prints_pretty_json_without_base64() {
     pin_home();
     let fs = MemoryFs::new();
     let raw = vec![0xFF, 0x00, 0x80, 0x41];
-    let built = match build(vec![ManifestDocument::new(
-        DocPath::new("bin"),
-        ManifestData::Opaque {
-            blob: confit_core::plan::sha256_hex(&raw),
-            mode: None,
-        },
-    )]) {
+    let built = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("bin"),
+            ManifestData::Opaque {
+                blob: confit_core::ids::sha256_hex(&raw),
+                size: raw.len() as u64,
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
-        Err(error) => panic!("plan builds: {error}"),
+        Err(error) => panic!("bundle builds: {error}"),
     };
     seed_named(&fs, "personal", &built);
     let args = confit_cli::cli::ExportArgs {
@@ -269,7 +284,7 @@ fn export_manifest_prints_pretty_json_without_base64() {
         !text.contains("content"),
         "manifest holds refs, no inline bytes: {text}"
     );
-    let manifest: confit_core::store::Manifest = match serde_json::from_str(&text) {
+    let manifest: confit_core::store::manifest::Manifest = match serde_json::from_str(&text) {
         Ok(manifest) => manifest,
         Err(error) => panic!("manifest parses: {error}"),
     };
@@ -278,7 +293,7 @@ fn export_manifest_prints_pretty_json_without_base64() {
     match &manifest.documents[0].data {
         confit_core::document::ManifestData::Opaque { blob, .. } => assert_eq!(
             blob,
-            &confit_core::plan::sha256_hex(&raw),
+            &confit_core::ids::sha256_hex(&raw),
             "blob ref names the payload hash"
         ),
         other => panic!("opaque ref expected, got {other:?}"),

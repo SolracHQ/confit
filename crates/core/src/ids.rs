@@ -5,20 +5,13 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 /// Document path with home expansion.
 ///
 /// Paths carry a leading tilde for home relative targets.
 /// Expansion resolves the tilde against the home folder.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::ids::DocPath;
-///
-/// let path = DocPath::new("/etc/hosts");
-/// assert!(matches!(path.as_str(), "/etc/hosts"));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DocPath(String);
@@ -34,14 +27,6 @@ impl DocPath {
     ///
     /// The path for plan keys and warnings.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let path = DocPath::new("~/.bashrc");
-    /// assert!(matches!(path.as_str(), "~/.bashrc"));
-    /// ```
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
@@ -52,14 +37,6 @@ impl DocPath {
     ///
     /// The raw path text with any tilde intact.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let path = DocPath::new("~/.bashrc");
-    /// assert!(matches!(path.as_str(), "~/.bashrc"));
-    /// ```
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -71,14 +48,6 @@ impl DocPath {
     /// The expanded path. Plain paths pass through intact.
     /// Tilde paths without a home folder pass through intact.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let path = DocPath::new("/etc/hosts");
-    /// assert!(matches!(path.expand().to_str(), Some("/etc/hosts")));
-    /// ```
     pub fn expand(&self) -> PathBuf {
         let raw = self.as_str();
         let Some(rest) = raw.strip_prefix('~') else {
@@ -112,14 +81,6 @@ impl From<&str> for DocPath {
 /// The caller reads the path and reports the outcome.
 /// Core stays free of filesystem access.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::ids::ReadOutcome;
-///
-/// let outcome = ReadOutcome::Absent;
-/// assert!(matches!(outcome, ReadOutcome::Absent));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOutcome {
     /// Empty path. The document awaits creation.
@@ -141,6 +102,34 @@ pub enum ReadOutcome {
         /// Holds the raw failure detail from the read.
         reason: String,
     },
+}
+
+/// Computes lowercase hex SHA-256 over bytes.
+///
+/// Content hashes identify blobs the way paths identify
+/// destinations.
+///
+/// # Arguments
+///
+/// * `bytes` - the input bytes.
+///
+/// # Returns
+///
+/// Lowercase hex digest.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::ids::sha256_hex;
+///
+/// let digest = sha256_hex(b"abc");
+/// assert!(matches!(digest.starts_with("ba7816"), true));
+/// ```
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(test)]

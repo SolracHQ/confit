@@ -4,9 +4,11 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use confit_core::document::{ManifestData, ManifestDocument};
 pub(crate) use confit_core::drift::DriftOrder;
 pub(crate) use confit_core::error::Error;
-pub(crate) use confit_core::fs::MemoryFs;
+pub(crate) use confit_core::fs::Filesystem;
+pub(crate) use confit_core::fs::memory::MemoryFs;
 pub(crate) use confit_core::ids::{DocPath, ReadOutcome};
 pub(crate) use confit_core::plan::{BUNDLE_VERSION, Bundle};
+pub(crate) use confit_core::store::blobs::BlobRef;
 
 /// Points at the workspace examples folder from the cli crate dir.
 pub(crate) fn examples_root() -> PathBuf {
@@ -107,21 +109,45 @@ pub(crate) fn evaluate_fetch(
     .map(|evaluation| evaluation.documents)
 }
 
-/// Builds a plan off disk with an empty previous state.
-pub(crate) fn build(documents: Vec<ManifestDocument>) -> Result<confit_core::plan::Bundle, Error> {
+/// Builds a bundle off disk with an empty previous state.
+///
+/// Referenced sample blobs attach as spill refs mirrored into
+/// the backend, so storing streams from real spill files while
+/// pool-first reads resolve on memory fakes.
+pub(crate) fn build(
+    fs: &dyn Filesystem,
+    documents: Vec<ManifestDocument>,
+) -> Result<confit_core::plan::Bundle, Error> {
     let mut built = confit_core::plan::Bundle::build(documents, Vec::new())?;
-    let blobs = sample_blobs();
-    for (sha, bytes) in &blobs {
-        if built
-            .manifest
-            .documents
-            .iter()
-            .any(|document| document.data.blob_refs().contains(&sha.as_str()))
-        {
-            built.blobs.insert(sha.clone(), bytes.clone());
-        }
+    let raw = vec![0xFF, 0x00, 0x80, 0x41];
+    let sha = confit_core::ids::sha256_hex(&raw);
+    if built
+        .manifest
+        .documents
+        .iter()
+        .any(|document| document.data.blob_refs().contains(&sha.as_str()))
+    {
+        built.blobs.insert(sha.clone(), spill_ref(fs, &raw));
     }
     Ok(built)
+}
+
+/// Spills raw bytes to scratch plus mirrors them into the backend.
+///
+/// Storing streams from the real spill file while pool-first
+/// reads resolve through the mirror on memory fakes.
+pub(crate) fn spill_ref(fs: &dyn Filesystem, bytes: &[u8]) -> BlobRef {
+    let sha = confit_core::ids::sha256_hex(bytes);
+    let path = confit_core::store::blobs::spill_bytes(bytes);
+    match fs.write(&path, bytes) {
+        Ok(()) => {}
+        Err(error) => panic!("spill mirrors {}: {error}", path.display()),
+    }
+    BlobRef {
+        sha,
+        size: bytes.len() as u64,
+        path,
+    }
 }
 
 /// Fills data hashes or panics with context.
@@ -133,16 +159,12 @@ pub(crate) fn fill_hashes(documents: &mut [ManifestDocument]) {
     }
 }
 
-/// Serializes one built plan with the timestamp blanked for comparison.
+/// Serializes one built manifest for comparison.
 pub(crate) fn plan_value(built: &confit_core::plan::Bundle) -> serde_json::Value {
-    let mut value = match serde_json::to_value(confit_core::store::Manifest::of(built)) {
+    match serde_json::to_value(&built.manifest) {
         Ok(value) => value,
-        Err(error) => panic!("plan serializes: {error}"),
-    };
-    if let Some(created) = value.get_mut("created_at") {
-        *created = serde_json::Value::String(String::new());
+        Err(error) => panic!("manifest serializes: {error}"),
     }
-    value
 }
 
 /// Writes one profile file into a temp root.
@@ -180,6 +202,7 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
             ManifestData::Text {
                 content: "hello\n".to_string(),
                 mode: None,
+                unmanaged: false,
             },
         ),
         ManifestDocument::new(
@@ -198,19 +221,13 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
         ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
-                blob: confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+                blob: confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+                size: 4,
                 mode: None,
+                unmanaged: false,
             },
         ),
     ]
-}
-
-/// Builds the blob map backing the sample opaque document.
-pub(crate) fn sample_blobs() -> std::collections::BTreeMap<String, Vec<u8>> {
-    std::collections::BTreeMap::from([(
-        confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
-        vec![0xFF, 0x00, 0x80, 0x41],
-    )])
 }
 
 /// Builds an apply runner over memory fakes.
@@ -220,14 +237,14 @@ pub(crate) fn apply_runner<'a>(
     state: Option<PathBuf>,
     force: bool,
     preview: bool,
-    seams: confit_cli::actions::seams::Seams<'a>,
+    seams: confit_cli::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let plan = match build(desired) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    let manifest = match build(seams.fs, desired) {
+        Ok(manifest) => manifest,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     confit_cli::actions::apply::ApplyRunner {
-        plan,
+        manifest,
         previous,
         state,
         force,
@@ -286,12 +303,13 @@ impl std::io::BufRead for DriftInjector<'_> {
 pub(crate) fn hook_for(
     argv: &[&str],
     path: &[&str],
-    when: Option<confit_core::document::Condition>,
-    checks: Vec<confit_core::document::Condition>,
+    when: Option<confit_core::condition::Condition>,
+    checks: Vec<confit_core::condition::Condition>,
 ) -> confit_core::hook::Hook {
     confit_core::hook::Hook {
         argv: argv.iter().map(|item| item.to_string()).collect(),
         path: path.iter().map(|item| item.to_string()).collect(),
+        requires: None,
         when,
         checks,
         timeout_secs: 600,
@@ -322,28 +340,28 @@ pub(crate) fn hook_fs() -> MemoryFs {
 pub(crate) fn hook_runner<'a>(
     fs: &'a MemoryFs,
     input: &'a mut Cursor<Vec<u8>>,
-    fake: &'a confit_cli::actions::hooks::FakeRunner,
+    fake: &'a confit_cli::hooks::FakeRunner,
     log: Option<PathBuf>,
     hooks: Vec<confit_core::hook::Hook>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let mut seams = confit_cli::actions::seams::Seams::memory(fs, input);
+    let mut seams = confit_cli::seams::Seams::memory(fs, input);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
-    runner.plan = match Bundle::build(Vec::new(), hooks) {
-        Ok(plan) => plan,
-        Err(error) => panic!("plan builds: {error}"),
+    runner.manifest = match Bundle::build(Vec::new(), hooks) {
+        Ok(bundle) => bundle,
+        Err(error) => panic!("bundle builds: {error}"),
     };
     runner
 }
 
 /// Seeds the applied slot manifest plus pool on a memory backend.
-pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
-    let slot = match confit_core::store::default_state_path() {
+pub(crate) fn seed_slot(fs: &MemoryFs, manifest: &Bundle) -> PathBuf {
+    let slot = match confit_core::store::slots::default_state_path() {
         Ok(slot) => slot,
         Err(error) => panic!("slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&slot), fs, None) {
+    match confit_core::store::slots::write_manifest(manifest, Some(&slot), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("slot seeds: {error}"),
     }
@@ -351,12 +369,12 @@ pub(crate) fn seed_slot(fs: &MemoryFs, plan: &Bundle) -> PathBuf {
 }
 
 /// Seeds one named slot manifest plus pool on a memory backend.
-pub(crate) fn seed_named(fs: &MemoryFs, name: &str, plan: &Bundle) -> PathBuf {
-    let dest = match confit_core::store::resolve_named_plan(name) {
+pub(crate) fn seed_named(fs: &MemoryFs, name: &str, manifest: &Bundle) -> PathBuf {
+    let dest = match confit_core::store::slots::resolve_named_slot(name) {
         Ok(dest) => dest,
         Err(error) => panic!("named slot resolves: {error}"),
     };
-    match confit_core::store::write_manifest(plan, Some(&dest), fs, None) {
+    match confit_core::store::slots::write_manifest(manifest, Some(&dest), fs, None) {
         Ok(()) => {}
         Err(error) => panic!("named slot seeds: {error}"),
     }
@@ -371,7 +389,7 @@ pub(crate) fn run_export(
     let mut input = Cursor::new(String::new());
     confit_cli::actions::export::ExportRunner::run(
         args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input),
+        confit_cli::seams::Seams::memory(fs, &mut input),
     )
 }
 
@@ -381,8 +399,5 @@ pub(crate) fn run_delete(
     args: &confit_cli::cli::DeleteArgs,
 ) -> Result<confit_cli::actions::delete::DeleteReport, Error> {
     let mut input = Cursor::new(String::new());
-    confit_cli::actions::delete::run(
-        args,
-        confit_cli::actions::seams::Seams::memory(fs, &mut input),
-    )
+    confit_cli::actions::delete::run(args, confit_cli::seams::Seams::memory(fs, &mut input))
 }

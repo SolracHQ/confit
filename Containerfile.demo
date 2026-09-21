@@ -1,0 +1,41 @@
+# Demo image for the confit readme recording. Self contained recorder:
+# VHS plus ttyd plus ffmpeg plus Chromium for frame capture, a Nerd Font
+# for glyphs, plus the tools the demo profiles install themselves.
+# Built with: docker build -f Containerfile.demo -t confit-demo:latest .
+FROM quay.io/fedora/fedora-minimal:44
+
+RUN microdnf install -y shadow-utils bash coreutils findutils curl \
+    ca-certificates tar gzip xz fontconfig less file unzip chromium \
+    && microdnf clean all
+
+# VHS 0.8.0 records plus writes output files. Newer VHS releases render
+# nothing on current ffmpeg builds, so this pin stays until that changes.
+RUN curl -sL --max-time 300 -o /tmp/vhs.tgz \
+      https://github.com/charmbracelet/vhs/releases/download/v0.8.0/vhs_0.8.0_Linux_x86_64.tar.gz \
+    && tar xzf /tmp/vhs.tgz -C /tmp vhs_0.8.0_Linux_x86_64/vhs \
+    && mv /tmp/vhs_0.8.0_Linux_x86_64/vhs /usr/local/bin/vhs \
+    && rm -rf /tmp/vhs.tgz /tmp/vhs_0.8.0_Linux_x86_64 \
+    && curl -sL --max-time 300 -o /usr/local/bin/ttyd \
+      https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
+    && chmod +x /usr/local/bin/vhs /usr/local/bin/ttyd
+
+# Static ffmpeg build. Fedora proper ships no ffmpeg.
+RUN curl -sL --max-time 600 -o /tmp/ffmpeg.tar.xz \
+      https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+    && tar xJf /tmp/ffmpeg.tar.xz -C /tmp --wildcards '*/ffmpeg' \
+    && mv /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg \
+    && rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-*-amd64-static
+
+# Nerd Font for eza icons plus starship glyphs in the recording.
+RUN curl -sL --max-time 300 -o /tmp/jbmono.zip \
+      https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/JetBrainsMono.zip \
+    && mkdir -p /usr/share/fonts/nerd \
+    && unzip -o -q /tmp/jbmono.zip -d /usr/share/fonts/nerd \
+    && rm /tmp/jbmono.zip \
+    && fc-cache -f /usr/share/fonts/nerd
+
+RUN useradd -m -s /bin/bash demo
+USER demo
+WORKDIR /home/demo
+
+CMD ["sleep", "infinity"]

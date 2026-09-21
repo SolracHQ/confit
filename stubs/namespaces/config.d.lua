@@ -7,7 +7,7 @@
 -- add_hook, and require.
 local Config = {}
 
--- Creates a config handle collecting contributions for the plan.
+-- Creates a config handle collecting contributions for the bundle.
 ---@param name string # Config name, e.g. "bat". Must be unique per evaluation.
 ---@return Config
 function confit.config(name) end

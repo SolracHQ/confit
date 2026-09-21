@@ -16,9 +16,7 @@ local base = confit.document.rc.new({
     confit.document.rc.prepend(confit.path.home(".local/bin")),
   },
   config = {},
-  final = {
-    confit.document.rc.eval({ "starship", "init", "bash" }),
-  },
+  final = {},
 })
 
 -- Patches change documents. This one adds an alias to the

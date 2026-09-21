@@ -1,0 +1,29 @@
+flowchart TD
+    A[Expand tildes, sniff source shape] --> B{Source shape}
+    B -- profile path --> C[Evaluate profile, build desired manifest]
+    B -- path with cb suffix --> D[Read bundle archive alone]
+    B -- at-name or percent-N --> E[Resolve slot, load stored manifest]
+    C --> F[Read the fixed slot state]
+    D --> F
+    E --> F
+    F --> G[Baseline drift against disk]
+    G --> H{Preview wanted}
+    H -- profile and slots --> I[Render the preview]
+    H -- bundle file --> J[Skip preview]
+    I --> K{Force flag}
+    J --> K
+    K -- set --> L[Take a fresh drift snapshot]
+    K -- clear --> M[Prompt for yes]
+    M -- other answer --> N[Abort, disk untouched]
+    M -- yes --> L
+    L --> O{Drift moved}
+    O -- yes --> P[Print drift, prompt again]
+    O -- steady --> Q[Write desired documents]
+    P -- other answer --> N
+    P -- yes --> Q
+    Q --> R[Delete orphans plus dropped members]
+    R --> S[Store the fixed slot]
+    S --> T[Archive entry, rotate history]
+    T --> U[Prune orphaned pool blobs]
+    U --> V[Run hooks by plan order]
+    V --> W[Report counts plus archive path]

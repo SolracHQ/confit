@@ -4,11 +4,13 @@
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use serde_json::Value as Json;
+use sha2::{Digest as _, Sha256};
 
 use crate::EvalOpts;
 use crate::error::{find_plan, plan, plan_error};
@@ -29,6 +31,7 @@ use confit_core::error::{Error, Result};
 use confit_core::hook::{Hook, merge_hooks};
 use confit_core::ids::DocPath;
 use confit_core::progress::{Event, ProgressSender};
+use confit_core::store::blobs::BlobRef;
 
 /// One evaluation holding the Lua state plus its context.
 ///
@@ -42,6 +45,8 @@ pub(crate) struct Session {
     pub(crate) root: PathBuf,
     /// Fetch sidecar cache folder.
     pub(crate) cache: PathBuf,
+    /// Archive extract folder.
+    pub(crate) extract: PathBuf,
     /// Network source, HTTP by default.
     pub(crate) fetcher: Arc<dyn Fetch>,
     /// External plugin folder.
@@ -73,6 +78,7 @@ impl Session {
             lua,
             root,
             cache,
+            extract: crate::surface::document::archive::extract_root(),
             fetcher,
             plugins: opts.plugins,
             re_fetch: opts.re_fetch,
@@ -110,7 +116,7 @@ impl Session {
         {
             let _ = sender.send(Event::PatchesStarted { patches: total });
         }
-        let mut blobs: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
         let mut out = session
             .assemble_structured(&profile, &patches, &profile_ctx)
             .map_err(wrap)?;
@@ -130,6 +136,7 @@ impl Session {
             declared.extend(config.hooks.iter().cloned());
         }
         let hooks = merge_hooks(declared);
+        validate_changed(&hooks, &out).map_err(wrap)?;
         Ok(crate::Evaluation {
             documents: out,
             blobs,
@@ -155,6 +162,32 @@ fn wrap(error: mlua::Error) -> Error {
         return plan(message);
     }
     plan(error.to_string())
+}
+
+/// Rejects changed gates naming documents outside the built set.
+fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Result<()> {
+    const CTOR: &str = "confit.runtime.changed";
+    let built: std::collections::BTreeSet<&str> = documents
+        .iter()
+        .map(|document| document.path.as_str())
+        .collect();
+    let mut paths = Vec::new();
+    for hook in hooks {
+        if let Some(gate) = hook.when.as_ref() {
+            gate.collect_changed(&mut paths);
+        }
+        for check in &hook.checks {
+            check.collect_changed(&mut paths);
+        }
+    }
+    for path in paths {
+        if !built.contains(path.as_str()) {
+            return Err(crate::error::plan_error(format!(
+                "{CTOR}: unknown document '{path}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Coerces the profile return into a table.
@@ -473,7 +506,7 @@ impl Profile {
     fn text_link(
         &self,
         ctx: &str,
-        blobs: &mut BTreeMap<String, Vec<u8>>,
+        blobs: &mut BTreeMap<String, BlobRef>,
     ) -> Result<Vec<ManifestDocument>> {
         assemble_text_link(&self.declared, &self.configs, ctx, blobs)
     }
@@ -644,7 +677,7 @@ fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
     ctx: &str,
-    blobs: &mut BTreeMap<String, Vec<u8>>,
+    blobs: &mut BTreeMap<String, BlobRef>,
 ) -> Result<Vec<ManifestDocument>> {
     let mut grouped: BTreeMap<String, Vec<(ManifestData, String)>> = BTreeMap::new();
     for item in &declared.texts {
@@ -652,6 +685,7 @@ fn assemble_text_link(
             ManifestData::Text {
                 content: item.content.clone(),
                 mode: item.mode,
+                unmanaged: item.unmanaged,
             },
             "profile".to_string(),
         ));
@@ -666,7 +700,7 @@ fn assemble_text_link(
     }
     for item in &declared.opaques {
         grouped.entry(item.path.clone()).or_default().push((
-            opaque_data(&item.content, item.mode, blobs),
+            resolve_opaque(&item.source, item.mode, item.unmanaged, blobs)?,
             "profile".to_string(),
         ));
     }
@@ -674,7 +708,7 @@ fn assemble_text_link(
         grouped
             .entry(item.path.clone())
             .or_default()
-            .push((tree_data(&item.members, blobs), "profile".to_string()));
+            .push((resolve_tree(&item.members, blobs)?, "profile".to_string()));
     }
     for config in configs {
         for item in &config.texts {
@@ -682,6 +716,7 @@ fn assemble_text_link(
                 ManifestData::Text {
                     content: item.content.clone(),
                     mode: item.mode,
+                    unmanaged: item.unmanaged,
                 },
                 config.name.clone(),
             ));
@@ -696,7 +731,7 @@ fn assemble_text_link(
         }
         for item in &config.opaques {
             grouped.entry(item.path.clone()).or_default().push((
-                opaque_data(&item.content, item.mode, blobs),
+                resolve_opaque(&item.source, item.mode, item.unmanaged, blobs)?,
                 config.name.clone(),
             ));
         }
@@ -704,7 +739,7 @@ fn assemble_text_link(
             grouped
                 .entry(item.path.clone())
                 .or_default()
-                .push((tree_data(&item.members, blobs), config.name.clone()));
+                .push((resolve_tree(&item.members, blobs)?, config.name.clone()));
         }
     }
     let mut out = Vec::with_capacity(grouped.len());
@@ -722,37 +757,90 @@ fn assemble_text_link(
     Ok(out)
 }
 
-/// Builds one opaque payload stashing raw bytes in the blob map.
-fn opaque_data(
-    content: &[u8],
+/// Chunk size for streaming source files into the content hash.
+const HASH_CHUNK: usize = 8 * 1024;
+
+/// Builds one opaque payload streaming its source file.
+///
+/// The unmanaged flag rides beside the blob, outside the data
+/// hash, so toggling it with identical bytes shows no update line.
+///
+/// # Errors
+///
+/// Missing plus unreadable sources fail as io errors.
+fn resolve_opaque(
+    source: &Path,
     mode: Option<u32>,
-    blobs: &mut BTreeMap<String, Vec<u8>>,
-) -> ManifestData {
-    let blob = confit_core::plan::sha256_hex(content);
-    blobs
-        .entry(blob.clone())
-        .or_insert_with(|| content.to_vec());
-    ManifestData::Opaque { blob, mode }
+    unmanaged: bool,
+    blobs: &mut BTreeMap<String, BlobRef>,
+) -> Result<ManifestData> {
+    let (blob, size) = hash_source(source)?;
+    blobs.entry(blob.clone()).or_insert_with(|| BlobRef {
+        sha: blob.clone(),
+        size,
+        path: source.to_path_buf(),
+    });
+    Ok(ManifestData::Opaque {
+        blob,
+        size,
+        mode,
+        unmanaged,
+    })
 }
 
-/// Builds one tree payload stashing member bytes in the blob map.
-fn tree_data(
+/// Streams one source file into its content hash plus metadata size.
+///
+/// # Errors
+///
+/// Missing plus unreadable sources fail as io errors.
+fn hash_source(source: &Path) -> Result<(String, u64)> {
+    let mut file = std::fs::File::open(source)?;
+    let size = file.metadata()?.len();
+    let mut hash = Sha256::new();
+    let mut chunk = [0u8; HASH_CHUNK];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&chunk[..read]);
+    }
+    let blob = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((blob, size))
+}
+
+/// Builds one tree payload streaming member files.
+///
+/// Member hashes cover the extracted files, uniform with
+/// opaque source handling.
+///
+/// # Errors
+///
+/// Missing plus unreadable member files fail as io errors.
+fn resolve_tree(
     members: &[crate::model::TreeMemberDecl],
-    blobs: &mut BTreeMap<String, Vec<u8>>,
-) -> ManifestData {
+    blobs: &mut BTreeMap<String, BlobRef>,
+) -> Result<ManifestData> {
     let mut out = Vec::with_capacity(members.len());
     for member in members {
-        let blob = confit_core::plan::sha256_hex(&member.content);
-        blobs
-            .entry(blob.clone())
-            .or_insert_with(|| member.content.clone());
+        let (blob, size) = hash_source(&member.source)?;
+        blobs.entry(blob.clone()).or_insert_with(|| BlobRef {
+            sha: blob.clone(),
+            size,
+            path: member.source.clone(),
+        });
         out.push(ManifestMember {
             relative: member.rel.clone(),
             blob,
+            size,
             mode: member.mode,
         });
     }
-    ManifestData::Tree { members: out }
+    Ok(ManifestData::Tree { members: out })
 }
 
 impl Session {

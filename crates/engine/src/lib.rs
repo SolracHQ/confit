@@ -11,6 +11,7 @@ use std::sync::Arc;
 use confit_core::document::ManifestDocument;
 use confit_core::hook::Hook;
 use confit_core::progress::ProgressSender;
+use confit_core::store::blobs::BlobRef;
 
 use crate::fetch::Fetch;
 
@@ -33,23 +34,6 @@ mod surface;
 /// The fetcher override keeps tests off the network. The progress
 /// sender stays silent while holding `None`.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::EvalOpts;
-/// use std::path::PathBuf;
-///
-/// let opts = EvalOpts {
-///     root: PathBuf::from("."),
-///     plugins: PathBuf::from("plugins"),
-///     re_fetch: false,
-///     cache_dir: None,
-///     fetcher: None,
-///     progress: None,
-/// };
-/// assert!(matches!(opts.root.to_str(), Some(".")));
-/// assert!(matches!(opts.plugins.to_str(), Some("plugins")));
-/// ```
 #[derive(Clone, Default)]
 pub struct EvalOpts {
     /// Project root for resource reads plus module resolution.
@@ -83,28 +67,16 @@ impl std::fmt::Debug for EvalOpts {
 /// Finished evaluation holding documents plus blobs plus hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Blobs hold raw opaque plus tree member bytes under
+/// order. Blobs hold opaque plus tree member refs under
 /// SHA-256 hex, one entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::Evaluation;
-///
-/// let evaluation = Evaluation {
-///     documents: Vec::new(),
-///     blobs: std::collections::BTreeMap::new(),
-///     hooks: Vec::new(),
-/// };
-/// assert!(matches!(evaluation.documents.len(), 0));
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
     pub documents: Vec<ManifestDocument>,
-    /// Holds raw blob bytes under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, Vec<u8>>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }

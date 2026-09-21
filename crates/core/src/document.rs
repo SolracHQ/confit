@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::condition::Condition;
 use crate::error::{Error, Result};
 use crate::ids::DocPath;
 
@@ -13,14 +14,6 @@ use crate::ids::DocPath;
 ///
 /// Fixed key order keeps equal tables on one bytes form.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::Table;
-///
-/// let table = Table::new();
-/// assert!(matches!(table.len(), 0));
-/// ```
 pub type Table = BTreeMap<String, serde_json::Value>;
 
 /// Serialization format for structured documents.
@@ -53,13 +46,6 @@ impl StructuredFormat {
     ///
     /// The format name for keys and log lines.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::StructuredFormat;
-    ///
-    /// assert!(matches!(StructuredFormat::Yaml.name(), "yaml"));
-    /// ```
     pub fn name(&self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -102,71 +88,10 @@ impl std::fmt::Display for StructuredFormat {
     }
 }
 
-/// Shell session predicate held as data.
-///
-/// The plan emits entries unconditionally. Each fresh shell session
-/// evaluates the guard and skips entries lacking their binary or state.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::Condition;
-///
-/// let first = Condition::InPath { name: "bat".into() };
-/// let second = Condition::InPath { name: "bat".into() };
-/// assert!(matches!(first == second, true));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Condition {
-    /// Holds equality between a shell variable and a value.
-    EnvEq {
-        /// Holds the variable name.
-        key: String,
-        /// Holds the expected value.
-        value: String,
-    },
-    /// Holds a set, non-empty variable assertion.
-    EnvSet {
-        /// Holds the variable name.
-        key: String,
-    },
-    /// Holds a binary on PATH assertion.
-    InPath {
-        /// Holds the binary name.
-        name: String,
-    },
-    /// Holds a path existence assertion.
-    Exists {
-        /// Holds the path under test.
-        path: String,
-    },
-    /// Holds a conjunction of nested conditions.
-    ///
-    /// Element order feeds equality.
-    All(Vec<Condition>),
-    /// Holds a disjunction of nested conditions.
-    ///
-    /// Element order feeds equality.
-    Any(Vec<Condition>),
-    /// Holds a negated nested condition.
-    ///
-    /// Serializes as `nop`.
-    #[serde(rename = "nop")]
-    Not(Box<Condition>),
-}
-
 /// Path list placement for setup entries.
 ///
 /// Prepend leads with the directory.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::PathOp;
-///
-/// assert!(matches!(PathOp::Prepend, PathOp::Prepend));
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PathOp {
@@ -180,14 +105,6 @@ pub enum PathOp {
 /// around its current value. Alias defines an alias.
 /// Eval, Cmd, and Source carry execution payloads.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::RcOp;
-///
-/// let op = RcOp::Alias { name: "ll".into(), expansion: "ls -l".into() };
-/// assert!(matches!(op, RcOp::Alias { .. }));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RcOp {
@@ -318,13 +235,6 @@ impl RcEntry {
 /// The engine validates Lua section keys against this list.
 /// Misspells fail as plan errors.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::RC_SECTION_NAMES;
-///
-/// assert!(matches!(RC_SECTION_NAMES.contains(&"config"), true));
-/// ```
 pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
 
 /// Rc data holding three entry groups.
@@ -333,14 +243,6 @@ pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
 /// in any section. Profile opens the file. Config holds the
 /// interactive block. Final closes the file.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::RcData;
-///
-/// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
-/// assert!(matches!(data.profile.len(), 0));
-/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RcData {
@@ -366,14 +268,6 @@ impl RcData {
     ///
     /// The rc data object.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::RcData;
-    ///
-    /// let data = RcData::new(Vec::new(), Vec::new(), Vec::new());
-    /// assert!(matches!(data.config.len(), 0));
-    /// ```
     pub fn new(profile: Vec<RcEntry>, config: Vec<RcEntry>, final_entries: Vec<RcEntry>) -> Self {
         Self {
             profile,
@@ -452,13 +346,6 @@ impl DocumentKind {
     ///
     /// The kind name for plan keys.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::DocumentKind;
-    ///
-    /// assert!(matches!(DocumentKind::Rc.name(), "rc"));
-    /// ```
     pub fn name(&self) -> &'static str {
         match self {
             Self::Structured => "structured",
@@ -483,14 +370,6 @@ impl std::fmt::Display for DocumentKind {
 /// hex in the shared pool. The mode stays inline beside the
 /// reference, so manifests read without pool access.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::ManifestMember;
-///
-/// let member = ManifestMember { relative: "font.ttf".into(), blob: "abc".into(), mode: 0o644 };
-/// assert!(matches!(member.relative.as_str(), "font.ttf"));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMember {
@@ -498,6 +377,8 @@ pub struct ManifestMember {
     pub relative: String,
     /// Holds the SHA-256 hex over raw member bytes.
     pub blob: String,
+    /// Holds the raw byte count of the member content.
+    pub size: u64,
     /// Holds unix permission bits for the member file.
     pub mode: u32,
 }
@@ -508,14 +389,6 @@ pub struct ManifestMember {
 /// Text, structured, rc, plus link payloads stay inline.
 /// Opaque plus tree payloads hold pool blob references alone.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::ManifestData;
-///
-/// let data = ManifestData::Text { content: "hi".into(), mode: None };
-/// assert!(matches!(data, ManifestData::Text { .. }));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestData {
@@ -533,6 +406,9 @@ pub enum ManifestData {
         /// Holds unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
+        /// Holds true while presence alone satisfies the document.
+        #[serde(default)]
+        unmanaged: bool,
     },
     /// Describes a symlink placement.
     Link {
@@ -542,12 +418,21 @@ pub enum ManifestData {
     /// Holds the rc data object.
     Rc(RcData),
     /// Holds one pool blob reference plus its mode.
+    ///
+    /// The unmanaged flag marks presence-only documents.
+    /// Present unmanaged documents stay quiet whatever the
+    /// bytes. Missing unmanaged documents read as missing.
     Opaque {
         /// Holds the SHA-256 hex over raw file bytes.
         blob: String,
+        /// Holds the raw byte count of the file content.
+        size: u64,
         /// Holds unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
+        /// Holds true while presence alone satisfies the document.
+        #[serde(default)]
+        unmanaged: bool,
     },
     /// Holds one managed file set under a destination folder.
     Tree {
@@ -563,14 +448,6 @@ impl ManifestData {
     ///
     /// The kind matching the payload variant.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{DocumentKind, ManifestData};
-    ///
-    /// let data = ManifestData::Text { content: "hi".into(), mode: None };
-    /// assert!(matches!(data.kind(), DocumentKind::Text));
-    /// ```
     pub fn kind(&self) -> DocumentKind {
         match self {
             Self::Structured { .. } => DocumentKind::Structured,
@@ -596,7 +473,7 @@ impl ManifestData {
     /// ```rust
     /// use confit_core::document::ManifestData;
     ///
-    /// let data = ManifestData::Text { content: "hi".into(), mode: Some(0o755) };
+    /// let data = ManifestData::Text { content: "hi".into(), mode: Some(0o755), unmanaged: false};
     /// assert!(matches!(data.mode(), Some(0o755)));
     /// ```
     pub fn mode(&self) -> Option<u32> {
@@ -606,20 +483,28 @@ impl ManifestData {
         }
     }
 
+    /// Reads the unmanaged flag for this payload.
+    ///
+    /// Text plus opaque payloads carry the flag. Every
+    /// other payload reads as false.
+    ///
+    /// # Returns
+    ///
+    /// True while presence alone satisfies the document.
+    ///
+    pub fn unmanaged(&self) -> bool {
+        match self {
+            Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
+            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => false,
+        }
+    }
+
     /// Reads the tree members for this payload.
     ///
     /// # Returns
     ///
     /// The member list for tree payloads, else None.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::ManifestData;
-    ///
-    /// let data = ManifestData::Tree { members: Vec::new() };
-    /// assert!(matches!(data.tree_members(), Some(_)));
-    /// ```
     pub fn tree_members(&self) -> Option<&[ManifestMember]> {
         match self {
             Self::Tree { members } => Some(members),
@@ -633,14 +518,6 @@ impl ManifestData {
     ///
     /// The blob hashes for opaque plus tree payloads, else empty.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::ManifestData;
-    ///
-    /// let data = ManifestData::Text { content: "hi".into(), mode: None };
-    /// assert!(matches!(data.blob_refs().is_empty(), true));
-    /// ```
     pub fn blob_refs(&self) -> Vec<&str> {
         match self {
             Self::Opaque { blob, .. } => vec![blob.as_str()],
@@ -657,18 +534,6 @@ impl ManifestData {
 /// The data hash covers rendered bytes, so plan diffs read
 /// trusted hashes without pool access.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::ids::DocPath;
-///
-/// let stored = ManifestDocument::new(
-///     DocPath::new("x"),
-///     ManifestData::Text { content: "hi".into(), mode: None },
-/// );
-/// assert!(matches!(stored.path.as_str(), "x"));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestDocument {
@@ -692,18 +557,6 @@ impl ManifestDocument {
     ///
     /// The document with an empty data hash.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let stored = ManifestDocument::new(
-    ///     DocPath::new("x"),
-    ///     ManifestData::Link { target: "dest".into() },
-    /// );
-    /// assert!(matches!(stored.data, ManifestData::Link { .. }));
-    /// ```
     pub fn new(path: DocPath, data: ManifestData) -> Self {
         Self {
             path,
@@ -730,18 +583,6 @@ impl ManifestDocument {
     ///
     /// The mode bits for text plus opaque payloads, else None.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let stored = ManifestDocument::new(
-    ///     DocPath::new("x"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
-    /// );
-    /// assert!(matches!(stored.mode(), None));
-    /// ```
     pub fn mode(&self) -> Option<u32> {
         self.data.mode()
     }
@@ -760,9 +601,9 @@ impl ManifestDocument {
     ///
     /// let stored = ManifestDocument::new(
     ///     DocPath::new("x"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
-    /// assert!(matches!(stored, stored if stored.key() == "text:x"));
+    /// assert_eq!(stored.key(), "text:x");
     /// ```
     pub fn key(&self) -> String {
         format!("{}:{}", self.data.kind().name(), self.path.as_str())
@@ -774,18 +615,6 @@ impl ManifestDocument {
     ///
     /// True for the opaque kind only.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let stored = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
-    /// );
-    /// assert!(matches!(stored.is_opaque(), true));
-    /// ```
     pub fn is_opaque(&self) -> bool {
         matches!(self.kind(), DocumentKind::Opaque)
     }
@@ -811,12 +640,12 @@ impl ManifestDocument {
 /// ```rust
 /// use confit_core::document::{ManifestMember, tree_changed};
 ///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: "aa".into(), mode: 0o644 }];
+/// let old = vec![ManifestMember { relative: "a".into(), blob: "aa".into(), size: 1, mode: 0o644 }];
 /// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: "bb".into(), mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: "cc".into(), mode: 0o644 },
+///     ManifestMember { relative: "a".into(), blob: "bb".into(), size: 1, mode: 0o644 },
+///     ManifestMember { relative: "b".into(), blob: "cc".into(), size: 1, mode: 0o644 },
 /// ];
-/// assert!(matches!(tree_changed(&old, &new), 2));
+/// assert_eq!(tree_changed(&old, &new), 2);
 /// ```
 pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
     use std::collections::BTreeMap;

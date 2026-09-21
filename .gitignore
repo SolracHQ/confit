@@ -1,4 +1,5 @@
 /target
 /opencode.json
-docs/manual/book
+docs/book/book
 .*/
+!.github/

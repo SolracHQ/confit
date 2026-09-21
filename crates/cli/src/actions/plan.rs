@@ -1,47 +1,52 @@
 //! Plan run
 //!
-//! Profile flags into built plans with drift.
+//! Profile flags into built bundles with drift.
 
 use std::path::{Path, PathBuf};
 
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::Result;
-use confit_core::fs::{Filesystem, snapshot, snapshot_tree};
+use confit_core::fs::{
+    Filesystem,
+    snapshot::{snapshot_document, snapshot_tree},
+};
 
+use confit_core::document::ManifestDocument;
+use confit_core::hook::lifecycle_lines;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
-use confit_core::runtime::Runtime;
-use confit_core::store::{load_state, write_bundle, write_manifest};
+use confit_core::store::bundle::write_bundle;
+use confit_core::store::slots::{load_state, write_manifest};
 
 use crate::cli::PlanArgs;
 
-use super::seams::{Seams, evaluate_shared, log_processed, timed};
+use crate::seams::{Seams, evaluate_shared, log_processed, timed};
 
-/// Outcome of one profile run with its previous plan.
+/// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
 pub struct PlanOutcome {
-    /// Holds the built plan with counts.
+    /// Holds the built bundle with counts.
     pub built: Bundle,
-    /// Holds the previous plan backing lifecycle marks.
+    /// Holds the previous manifest backing lifecycle marks.
     pub previous: Bundle,
     /// Holds disk edits leading the summary, desired versus
     /// disk on first runs.
     pub drift: Vec<Drift>,
     /// Holds true while the state slot file reads absent.
     pub first_run: bool,
-    /// Holds hook preview lines beside the summary.
+    /// Holds hook lifecycle lines beside the summary.
     pub hook_lines: Vec<String>,
-    /// Holds the tmp plan path while no output destination passes.
+    /// Holds the tmp manifest path while no output destination passes.
     pub stored: Option<PathBuf>,
 }
 
-/// One plan run from plan flags to a built plan.
+/// One plan run from plan flags to a built bundle.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::plan::PlanRunner;
-/// use confit_cli::actions::seams::Seams;
+/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::{PlanArgs, SharedArgs};
 /// use confit_cli::fs::OsFs;
 /// use std::io::Cursor;
@@ -72,13 +77,13 @@ pub struct PlanRunner<'a> {
 }
 
 impl PlanRunner<'_> {
-    /// Evaluates the engine, loads previous plan, diffs drift,
-    /// builds the core plan, and writes the payload on demand
+    /// Evaluates the engine, loads previous manifest, diffs drift,
+    /// builds the core bundle, and writes the payload on demand
     /// through injected seams.
     ///
     /// # Returns
     ///
-    /// The built plan with its previous plan plus drift.
+    /// The built bundle with its previous manifest plus drift.
     ///
     /// # Errors
     ///
@@ -91,12 +96,12 @@ impl PlanRunner<'_> {
             self.seams.progress.clone(),
         )?;
         let documents = evaluation.documents;
-        let state_file = confit_core::store::default_state_path()?;
+        let state_file = confit_core::store::slots::default_state_path()?;
         self.seams.emit_reading_plan(&state_file);
         let fs: &dyn Filesystem = self.seams.fs;
         let first_run = !fs.exists(&state_file);
         let previous = load_state(Some(&state_file), fs)?;
-        let snapshot = |path: &DocPath| snapshot(path, fs);
+        let snapshot = |document: &ManifestDocument| snapshot_document(document, fs);
         let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
         self.seams.emit_hashing();
         let mut built = timed("hash", || Bundle::build(documents, evaluation.hooks))?;
@@ -109,24 +114,25 @@ impl PlanRunner<'_> {
         };
         let drifts = timed("drift", || {
             if first_run {
-                built.drift(&snapshot, &snapshot_tree, order)
+                built.drift(&snapshot, &snapshot_tree, order, fs)
             } else {
-                previous.drift(&snapshot, &snapshot_tree, order)
+                previous.drift(&snapshot, &snapshot_tree, order, fs)
             }
         });
-        let hook_lines = built.hook_preview(&Runtime::current(), fs)?;
+        let hook_lines = lifecycle_lines(&built.manifest.hooks, &previous.manifest.hooks);
         if self.args.output.is_some() || self.store_tmp {
-            self.seams.emit_writing_plan(built.manifest.documents.len());
+            self.seams
+                .emit_writing_manifest(built.manifest.documents.len());
         }
         let stored = timed("write", || {
             match (self.args.output.as_deref(), self.store_tmp) {
                 (Some(dest), _) if is_named_output(dest) => {
-                    let resolved = crate::cli::resolve_plan_file(dest)?;
+                    let resolved = crate::cli::resolve_slot_file(dest)?;
                     write_manifest(&built, Some(&resolved), fs, self.seams.progress.as_ref())
                         .map(|()| None)
                 }
                 (Some(dest), _) => {
-                    let resolved = crate::cli::resolve_plan_file(dest)?;
+                    let resolved = crate::cli::resolve_slot_file(dest)?;
                     let dest = ensure_bundle_extension(&resolved);
                     write_bundle(&built, &dest, fs, self.seams.progress.as_ref()).map(|()| None)
                 }

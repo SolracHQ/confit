@@ -4,27 +4,10 @@
 
 /// Unbounded channel sender for progress facts.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::progress::Event;
-///
-/// let (sender, receiver) = crossbeam_channel::unbounded::<Event>();
-/// sender.send(Event::Hashing);
-/// assert!(matches!(receiver.try_recv(), Ok(Event::Hashing)));
-/// ```
 pub type ProgressSender = crossbeam_channel::Sender<Event>;
 
 /// Fact for one run step.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::progress::Event;
-///
-/// let event = Event::Hashing;
-/// assert!(matches!(event, Event::Hashing));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// Fetch started for one URL.
@@ -78,8 +61,8 @@ pub enum Event {
         /// Plan file path under reading.
         path: String,
     },
-    /// Plan payload serialization plus write entered.
-    WritingPlan {
+    /// Manifest payload serialization plus write entered.
+    WritingManifest {
         /// Document count under serializing.
         documents: usize,
     },

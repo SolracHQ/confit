@@ -162,7 +162,7 @@ end
 
 -- Builds the mise binary document from the release tarball.
 --
--- The tarball holds `mise/bin/mise`; the pick places it under the home
+-- The tarball holds `mise/bin/mise`. The pick places it under the home
 -- binary dir with mode `755`. A tarball holding the member any other
 -- number of times fails as a plan error.
 local function installer_binary(version)
@@ -173,9 +173,9 @@ local function installer_binary(version)
 		.. "-linux-x64.tar.gz"
 	local archive = confit.resources.fetch_file(url)
 	local bin_dir = confit.path.home(".local/bin")
-	local picked = confit.document.compressed(archive, function(path, _, content)
+	local picked = confit.document.compressed(archive, function(path, _, member_path)
 		if path == "mise/bin/mise" then
-			return confit.document.opaque(bin_dir .. "/mise", content, { mode = "755" })
+			return confit.document.opaque(bin_dir .. "/mise", member_path, { mode = "755" })
 		end
 	end)
 	if #picked ~= 1 then
@@ -308,7 +308,8 @@ local function package(opts)
 	config:require(INSTALL_CONFIG, REQUIRE_HINT)
 	config:add_hook(confit.hook.run({ "mise", "install" }, {
 		path = { confit.path.home(".local/bin") },
-		when = confit.runtime.in_path("mise"),
+		requires = confit.runtime.in_path("mise"),
+		when = confit.runtime.changed("~/.config/mise/config.toml"),
 		checks = { confit.runtime.exists(confit.path.data("mise/shims/" .. bin)) },
 	}))
 	if rc_builder ~= nil then

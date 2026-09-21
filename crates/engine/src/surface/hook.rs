@@ -42,6 +42,7 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     };
     check_opts_keys(&opts, CTOR)?;
     let path = read_path(&opts, CTOR)?;
+    let requires = read_requires(lua, &opts, CTOR)?;
     let when = read_when(lua, &opts, CTOR)?;
     let checks = read_checks(&opts, CTOR)?;
     let timeout_secs = read_timeout(&opts, CTOR)?;
@@ -57,6 +58,9 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
             path_table.set((position + 1) as i64, item.as_str())?;
         }
         table.set("path", path_table)?;
+    }
+    if let Some(guard) = requires {
+        table.set("requires", guard)?;
     }
     if let Some(guard) = when {
         table.set("when", guard)?;
@@ -75,7 +79,7 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
 
 /// Rejects unknown keys on the hook opts table.
 fn check_opts_keys(opts: &Table, ctor: &str) -> mlua::Result<()> {
-    const KNOWN: [&str; 4] = ["path", "when", "checks", "timeout"];
+    const KNOWN: [&str; 5] = ["path", "requires", "when", "checks", "timeout"];
     for pair in opts.pairs::<Value, Value>() {
         let (key, _) = pair?;
         let Some(name) = key.opt_str() else {
@@ -103,6 +107,28 @@ fn read_path(opts: &Table, ctor: &str) -> mlua::Result<Vec<String>> {
         .map_err(|_| plan_error(format!("{ctor}: field 'path' must be a dense string array")))
 }
 
+/// Reads the capability gate, defaulting to none.
+fn read_requires(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>> {
+    let value: Value = opts.get("requires")?;
+    if value.is_nil() {
+        return Ok(None);
+    }
+    if let Some(func) = value.clone().opt_func() {
+        return call_gate_function(lua, ctor, "requires", &func).map(Some);
+    }
+    let Some(table) = value.opt_table() else {
+        return Err(plan_error(format!(
+            "{ctor}: field 'requires' must be a condition table"
+        )));
+    };
+    let json = table
+        .to_json(&format!("{ctor}: field 'requires'"))
+        .map_err(|error| plan_error(format!("{ctor}: field 'requires' {error}")))?;
+    check_condition_json(&json, &format!("{ctor}: field 'requires'"))
+        .map_err(|detail| plan_error(format!("{ctor}: field 'requires' {detail}")))?;
+    Ok(Some(table))
+}
+
 /// Reads the run gate, defaulting to none.
 fn read_when(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>> {
     let value: Value = opts.get("when")?;
@@ -110,7 +136,7 @@ fn read_when(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>>
         return Ok(None);
     }
     if let Some(func) = value.clone().opt_func() {
-        return call_when_function(lua, ctor, &func).map(Some);
+        return call_gate_function(lua, ctor, "when", &func).map(Some);
     }
     let Some(table) = value.opt_table() else {
         return Err(plan_error(format!(
@@ -125,31 +151,33 @@ fn read_when(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>>
     Ok(Some(table))
 }
 
-/// Calls one `when` builder function with the runtime namespace.
-fn call_when_function(lua: &Lua, ctor: &str, func: &Function) -> mlua::Result<Table> {
+/// Calls one gate builder function with the runtime namespace.
+fn call_gate_function(lua: &Lua, ctor: &str, field: &str, func: &Function) -> mlua::Result<Table> {
     let missing = || {
         plan_error(format!(
-            "{ctor}: field 'when' needs the confit.runtime table"
+            "{ctor}: field '{field}' needs the confit.runtime table"
         ))
     };
     let confit: Value = lua.globals().get("confit")?;
-    let confit = confit.req_table(ctor, "when").map_err(|_| missing())?;
+    let confit = confit.req_table(ctor, field).map_err(|_| missing())?;
     let runtime: Value = confit.get("runtime")?;
-    let runtime = runtime.req_table(ctor, "when").map_err(|_| missing())?;
+    let runtime = runtime.req_table(ctor, field).map_err(|_| missing())?;
     let table = match func.call::<Table>(runtime) {
         Ok(table) => table,
         Err(error) => {
             if crate::error::find_plan(&error).is_some() {
                 return Err(error);
             }
-            return Err(plan_error(format!("{ctor}: field 'when' failed: {error}")));
+            return Err(plan_error(format!(
+                "{ctor}: field '{field}' failed: {error}"
+            )));
         }
     };
     let json = table
-        .to_json(&format!("{ctor}: field 'when'"))
-        .map_err(|error| plan_error(format!("{ctor}: field 'when' {error}")))?;
-    check_condition_json(&json, &format!("{ctor}: field 'when'"))
-        .map_err(|detail| plan_error(format!("{ctor}: field 'when' {detail}")))?;
+        .to_json(&format!("{ctor}: field '{field}'"))
+        .map_err(|error| plan_error(format!("{ctor}: field '{field}' {error}")))?;
+    check_condition_json(&json, &format!("{ctor}: field '{field}'"))
+        .map_err(|detail| plan_error(format!("{ctor}: field '{field}' {detail}")))?;
     Ok(table)
 }
 
@@ -262,6 +290,13 @@ pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_core
         )));
     }
     let path = strings("path")?;
+    let requires = match map.get("requires") {
+        None | Some(Json::Null) => None,
+        Some(cond) => Some(condition_from_json(
+            cond,
+            &format!("{ctx}: field 'requires'"),
+        )?),
+    };
     let when = match map.get("when") {
         None | Some(Json::Null) => None,
         Some(cond) => Some(condition_from_json(cond, &format!("{ctx}: field 'when'"))?),
@@ -294,6 +329,7 @@ pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_core
     Ok(Hook {
         argv,
         path,
+        requires,
         when,
         checks,
         timeout_secs,

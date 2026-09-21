@@ -3,6 +3,7 @@
 //! Private declaration plus patch types behind evaluation.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde_json::Value as Json;
 
@@ -30,6 +31,8 @@ pub(crate) struct TextDecl {
     pub(crate) content: String,
     /// Unix permission bits, holding `None` for default handling.
     pub(crate) mode: Option<u32>,
+    /// Presence alone satisfies the document while true.
+    pub(crate) unmanaged: bool,
 }
 
 /// Declared symlink document.
@@ -41,24 +44,26 @@ pub(crate) struct LinkDecl {
     pub(crate) target: String,
 }
 
-/// Declared opaque document holding raw bytes.
+/// Declared opaque document holding a source path.
 #[derive(Debug, Clone)]
 pub(crate) struct OpaqueDecl {
     /// Destination path.
     pub(crate) path: String,
-    /// Raw file bytes.
-    pub(crate) content: Vec<u8>,
+    /// Absolute source file path, resolved under root or cache.
+    pub(crate) source: PathBuf,
     /// Unix permission bits, holding `None` for default handling.
     pub(crate) mode: Option<u32>,
+    /// True while presence alone satisfies the document.
+    pub(crate) unmanaged: bool,
 }
 
-/// Declared tree member holding destination slot plus bytes.
+/// Declared tree member holding destination slot plus source.
 #[derive(Debug, Clone)]
 pub(crate) struct TreeMemberDecl {
     /// Destination-relative member path.
     pub(crate) rel: String,
-    /// Raw member bytes.
-    pub(crate) content: Vec<u8>,
+    /// Absolute extracted file path.
+    pub(crate) source: PathBuf,
     /// Unix permission bits from the archive member.
     pub(crate) mode: u32,
 }

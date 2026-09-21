@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.8]
+
+Design spec: `docs/design/v0.8.md`.
+
+### Added
+
+- `confit.runtime.changed(path)` reads true while the preview for
+  `path` is anything but already-in-place, true on first runs. Hooks
+  carrying it skip quiet applies and run touching ones. Unknown paths
+  fail the plan naming the path, rc guards refuse the shape. The mise
+  plus nerd fonts plugins gate their hooks on it, so unrelated applies
+  stop re-running `mise install` plus `fc-cache`.
+- Plan shows hooks as data with lifecycle markers plus
+  unevaluated gates, so bundles carry a readable behavioral
+  contract across machines. Evaluation lines stay apply-only.
+- The summary renders titled sections holding drift notes,
+  resources, hooks, then counts. Headers carry `+`, `~`, `-`
+  sigils with detail lines nested beneath, empty sections stay
+  out, and the counts read one documents line plus one hooks
+  line while hooks move.
+- Hook gates render simplified infix with full parens, so merged
+  duplicate gates collapse to one branch instead of repeating it.
+- Hooks answer three questions in three slots. `requires` holds
+  capability, `when` holds need, `checks` keep result proof. A
+  closed `when` skips as unneeded instead of warning inability.
+  Profiles carrying capability leaves in `when` move them to
+  `requires`.
+- Disk symlinks resolve before non-link comparisons, so opaque
+  plus text plus rc plus structured documents compare the bytes
+  behind the link. Dangling links read absent. A pre-existing
+  symlink under a plain document unlinks first, leaving its
+  target alone, then the fresh file lands as a normal write.
+- Text plus opaque documents take an `unmanaged` flag. Drift
+  skips the comparison for present unmanaged documents and
+  checks existence alone. Present ones skip the write while
+  their declaration matches the recorded manifest, rewritten
+  declarations land once, missing ones land from declared
+  content. `written` counts written documents.
+- Structured patch paths count from 1, so `servers[1].host`
+  names the first server. `servers[0]` fails the plan naming
+  the path. Drift keys plus summary lines echo the same
+  1-based shapes back.
+- Plan with no destination previews alone and writes nothing,
+  so the safe path runs cheaper than the apply it previews.
+  Explicit outputs mint artifacts on purpose, a file output
+  builds the portable bundle, a named output fills the slot.
+- Bytes live in files, memory holds hashes. `opaque` takes a
+  source path, archive callbacks receive member paths from an
+  extract-once temp root, and every consumer streams through
+  blob refs holding sha plus size plus path. Example 3 peaks
+  near 300 MB where it hit 1.5 GB, the plain preview lower.
+
 ## [0.7] - 2026-09-19
 
 Design spec: `docs/design/v0.7.md`.

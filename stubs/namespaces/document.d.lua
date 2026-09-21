@@ -22,6 +22,7 @@ local StructuredArgs = {}
 
 ---@class DocumentModeOpts
 ---@field mode? string # Unix mode as octal like "755" or symbolic like "rwxr-xr-x".
+---@field unmanaged? boolean # Presence-only check for opaque documents; present files stay quiet.
 -- Options for confit.document.text plus confit.document.opaque. Unknown keys are plan errors.
 local DocumentModeOpts = {}
 
@@ -34,7 +35,7 @@ local CompressedInfo = {}
 ---@class TreeMember
 ---@field rel string # Destination-relative member path in manifest order.
 ---@field mode integer # Unix permission bits inherited from the archive member.
----@field content string # Raw member bytes.
+---@field source string # Absolute extracted file path.
 -- Kept member for confit.document.tree documents. Profiles read
 -- members to name tree files, e.g. members[1].rel.
 local TreeMember = {}
@@ -73,23 +74,23 @@ function DocumentNs.text(path, content, opts) end
 ---@return Document
 function DocumentNs.link(path, target) end
 
--- Builds an opaque document table holding raw bytes.
+-- Builds an opaque document table holding a source path.
 ---@param path string # Destination path.
----@param content string # Raw file bytes, e.g. from resources.load_bytes.
----@param opts DocumentModeOpts? # Optional mode, octal like "755" or symbolic like "rwxr-xr-x".
+---@param source string # Source file path, project-relative or fetch-cache/extract absolute.
+---@param opts DocumentModeOpts? # Optional mode plus unmanaged flag for presence-only files.
 ---@return Document
-function DocumentNs.opaque(path, content, opts) end
+function DocumentNs.opaque(path, source, opts) end
 
 -- Unpacks one archive through a per-member callback.
 ---@param path string # Archive path, project-relative or fetched.
----@param callback fun(member: string, info: CompressedInfo, content: string): Document? # Keeps with a document, skips with nil.
+---@param callback fun(member: string, info: CompressedInfo, path: string): Document? # Keeps with a document, skips with nil. Path names the extracted member file.
 ---@return Document[] # Kept documents in archive order.
 function DocumentNs.compressed(path, callback) end
 
 -- Builds one tree document from an archive through a path picker.
 ---@param archive string # Archive path, project-relative or fetched.
 ---@param dest string # Destination folder holding the members.
----@param callback fun(member: string, info: CompressedInfo, content: string): string? # Keeps with a relative path, skips with nil.
+---@param callback fun(member: string, info: CompressedInfo, path: string): string? # Keeps with a relative path, skips with nil. Path names the extracted member file.
 ---@return TreeDocument # Single tree document holding the manifest.
 function DocumentNs.tree(archive, dest, callback) end
 

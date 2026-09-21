@@ -45,10 +45,12 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             let path = table.req_str(ctx, "path")?;
             let content = table.req_str(ctx, "content")?;
             let mode = read_mode(table, ctx)?;
+            let unmanaged = read_unmanaged(table, ctx)?;
             Ok(Declared::Text(TextDecl {
                 path,
                 content,
                 mode,
+                unmanaged,
             }))
         }
         "link" => {
@@ -58,12 +60,14 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
         }
         "opaque" => {
             let path = table.req_str(ctx, "path")?;
-            let content = table.req_bytes(ctx, "content")?;
+            let source = table.req_str(ctx, "source")?;
             let mode = read_mode(table, ctx)?;
+            let unmanaged = read_unmanaged(table, ctx)?;
             Ok(Declared::Opaque(OpaqueDecl {
                 path,
-                content,
+                source: std::path::PathBuf::from(source),
                 mode,
+                unmanaged,
             }))
         }
         "tree" => {
@@ -77,7 +81,7 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                     plan_error(format!("{ctx}: field 'members' must hold member tables"))
                 })?;
                 let rel = member.req_str(ctx, "rel")?;
-                let content = member.req_bytes(ctx, "content")?;
+                let source = member.req_str(ctx, "source")?;
                 let mode_value: Value = member.get("mode")?;
                 let mode = mode_value.req_int(ctx, "mode")?;
                 if !(0..=0o777).contains(&mode) {
@@ -87,7 +91,7 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                 }
                 members.push(TreeMemberDecl {
                     rel,
-                    content,
+                    source: std::path::PathBuf::from(source),
                     mode: mode as u32,
                 });
             }
@@ -148,6 +152,32 @@ fn read_mode(table: &Table, ctx: &str) -> mlua::Result<Option<u32>> {
     text.parse::<u32>()
         .map(Some)
         .map_err(|_| plan_error(format!("{ctx}: field 'mode' holds a corrupt stamp")))
+}
+
+/// Reads the unmanaged flag from a document table.
+///
+/// # Arguments
+///
+/// * `table` - document table carrying the unmanaged field.
+/// * `ctx` - error prefix naming the constructor.
+///
+/// # Returns
+///
+/// The flag, holding false for missing fields.
+///
+/// # Errors
+///
+/// Non-boolean flags fail as plan errors.
+///
+fn read_unmanaged(table: &Table, ctx: &str) -> mlua::Result<bool> {
+    let value: Value = table.get("unmanaged")?;
+    match value {
+        Value::Nil => Ok(false),
+        Value::Boolean(flag) => Ok(flag),
+        _ => Err(plan_error(format!(
+            "{ctx}: field 'unmanaged' must be a boolean"
+        ))),
+    }
 }
 
 /// Converts one section bucket rc entry table into registration form.
@@ -229,7 +259,15 @@ pub(crate) fn push_live_entry(
     };
     let when = match object.get("when") {
         None | Some(Json::Null) => None,
-        Some(raw) => Some(condition_from_json(raw, &format!("{ctx}: field 'when'"))?),
+        Some(raw) => {
+            let cond = condition_from_json(raw, &format!("{ctx}: field 'when'"))?;
+            if cond.holds_changed() {
+                return Err(plan_error(format!(
+                    "{ctx}: field 'when' holds 'changed' (hooks only)"
+                )));
+            }
+            Some(cond)
+        }
     };
     let key = op_key(
         json,

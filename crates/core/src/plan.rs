@@ -4,72 +4,46 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use sha2::Digest;
-
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
 use crate::fs::Filesystem;
 use crate::hook::{Hook, preview_hook};
+use crate::ids::{DocPath, sha256_hex};
 use crate::runtime::Runtime;
-use crate::store::Manifest;
+use crate::store::blobs::BlobRef;
+use crate::store::manifest::Manifest;
 
-/// Plan format version written by every plan build.
+/// Bundle format version written by every bundle build.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::BUNDLE_VERSION;
-///
-/// assert!(matches!(BUNDLE_VERSION, 6));
-/// ```
-pub const BUNDLE_VERSION: u32 = 6;
+pub const BUNDLE_VERSION: u32 = 7;
 
-/// Versioned desired state written by plan builds.
+/// Versioned desired state written by bundle builds.
 ///
-/// The manifest holds version, documents, timestamp, plus
+/// The manifest holds version, documents, plus
 /// hooks as the only document language. The blob map holds
-/// raw bytes under content hashes beside it. The bundle
+/// blob refs under content hashes beside it. The bundle
 /// holds no duplicate fields.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::Bundle;
-///
-/// let plan = Bundle::empty();
-/// assert!(matches!(plan.manifest.documents.len(), 0));
-/// assert!(matches!(plan.blobs.is_empty(), true));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     /// Holds the portable manifest as the only document language.
     pub manifest: Manifest,
-    /// Holds raw blob bytes under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, Vec<u8>>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
 }
 
 impl Bundle {
-    /// Builds an empty plan with the current version.
+    /// Builds an empty manifest with the current version.
     ///
     /// # Returns
     ///
-    /// The plan holding version plus empty documents plus empty timestamp.
+    /// The bundle holding version plus empty documents.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::plan::{BUNDLE_VERSION, Bundle};
-    ///
-    /// let plan = Bundle::empty();
-    /// assert!(matches!(plan.manifest.version, v if v == BUNDLE_VERSION));
-    /// assert!(matches!(plan.manifest.documents.len(), 0));
-    /// ```
     pub fn empty() -> Self {
         Self {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
                 documents: Vec::new(),
-                created_at: String::new(),
                 hooks: Vec::new(),
             },
             blobs: BTreeMap::new(),
@@ -94,21 +68,21 @@ impl Bundle {
     }
 }
 
-/// Lifecycle counts for one plan against a previous plan.
+/// Lifecycle counts for one bundle against a previous manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
-    /// Counts documents absent from the previous plan.
+    /// Counts documents absent from the previous manifest.
     pub create: usize,
     /// Counts documents with a differing data hash.
     pub update: usize,
-    /// Counts previous documents missing from the plan.
+    /// Counts previous documents missing from the manifest.
     pub delete: usize,
 }
 
-/// Per-document lifecycle status against previous plan.
+/// Per-document lifecycle status against previous manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentStatus {
-    /// Document absent from previous plan.
+    /// Document absent from previous manifest.
     Create,
     /// Document present with a differing data hash.
     Update,
@@ -117,7 +91,7 @@ pub enum DocumentStatus {
 }
 
 impl ManifestDocument {
-    /// Reports the lifecycle status against a previous plan.
+    /// Reports the lifecycle status against a previous manifest.
     ///
     /// Same-path kind changes to or from opaque read as update.
     /// All other kind changes read as create plus delete through
@@ -126,7 +100,7 @@ impl ManifestDocument {
     ///
     /// # Arguments
     ///
-    /// * `previous` - the previous plan with filled hashes.
+    /// * `previous` - the previous manifest with filled hashes.
     ///
     /// # Returns
     ///
@@ -142,7 +116,7 @@ impl ManifestDocument {
     ///
     /// let mut document = ManifestDocument::new(
     ///     DocPath::new("x"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
     /// assert!(matches!(document.status(&Bundle::empty()), DocumentStatus::Create));
@@ -186,7 +160,7 @@ impl ManifestDocument {
     ///
     /// let mut document = ManifestDocument::new(
     ///     DocPath::new("x"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
     /// assert!(matches!(document.data_hash.is_empty(), false));
@@ -222,22 +196,6 @@ impl ManifestDocument {
     ///
     /// True while an opaque same-path sibling exists in desired.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    ///
-    /// let recorded = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
-    /// );
-    /// let desired = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
-    /// );
-    /// assert!(matches!(recorded.superseded_by(&[desired]), true));
-    /// ```
     pub fn superseded_by(&self, desired: &[ManifestDocument]) -> bool {
         desired.iter().any(|document| {
             document.path == self.path
@@ -271,12 +229,12 @@ pub fn opaque_label(bytes: &[u8]) -> String {
 }
 
 impl Bundle {
-    /// Builds the desired state plan from documents.
+    /// Builds the desired state bundle from documents.
     ///
     /// Fills data hashes, then sorts documents by path. The
-    /// caller holds one document per path. Blob bytes ride
+    /// caller holds one document per path. Blob refs ride
     /// beside the manifest and fill during hydration. Counts
-    /// generate through `summary` against a previous plan.
+    /// generate through `summary` against a previous manifest.
     ///
     /// # Arguments
     ///
@@ -285,7 +243,7 @@ impl Bundle {
     ///
     /// # Returns
     ///
-    /// The built plan.
+    /// The built bundle.
     ///
     /// # Errors
     ///
@@ -300,11 +258,11 @@ impl Bundle {
     ///
     /// let document = ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// let outcome = Bundle::build(vec![document], Vec::new());
     /// let previous = Bundle::empty();
-    /// assert!(matches!(outcome, Ok(plan) if plan.summary(&previous).create == 1));
+    /// assert!(matches!(outcome, Ok(bundle) if bundle.summary(&previous).create == 1));
     /// ```
     pub fn build(mut documents: Vec<ManifestDocument>, hooks: Vec<Hook>) -> Result<Self> {
         for document in &mut documents {
@@ -315,21 +273,20 @@ impl Bundle {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
                 documents,
-                created_at: now_timestamp(),
                 hooks,
             },
             blobs: BTreeMap::new(),
         })
     }
 
-    /// Counts lifecycle states against a previous plan.
+    /// Counts lifecycle states against a previous manifest.
     ///
     /// Opaque kind changes count as updates, other kind changes
     /// count as create plus delete.
     ///
     /// # Arguments
     ///
-    /// * `previous` - the previous plan with filled hashes.
+    /// * `previous` - the previous manifest with filled hashes.
     ///
     /// # Returns
     ///
@@ -344,16 +301,16 @@ impl Bundle {
     /// let mut previous = Bundle::empty();
     /// previous.manifest.documents = vec![ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// )];
-    /// let plan = Bundle::build(
+    /// let bundle = Bundle::build(
     ///     vec![ManifestDocument::new(
     ///         DocPath::new("note"),
-    ///         ManifestData::Text { content: "changed".into(), mode: None },
+    ///         ManifestData::Text { content: "changed".into(), mode: None, unmanaged: false},
     ///     )],
     ///     Vec::new(),
     /// );
-    /// assert!(matches!(plan, Ok(plan) if plan.summary(&previous).update == 1));
+    /// assert!(matches!(bundle, Ok(bundle) if bundle.summary(&previous).update == 1));
     /// ```
     pub fn summary(&self, previous: &Bundle) -> Summary {
         let mut summary = Summary {
@@ -381,18 +338,11 @@ impl Bundle {
 
     /// Renders one preview line per hook in plan order.
     ///
-    /// Resolution runs first: `argv[0]` searches hook path
-    /// dirs plus runtime dirs, first hit wins. Runnable hooks
-    /// read `! run:` with the resolved binary. Satisfied
-    /// checks read `skipped:`. Closed gates read `warn:` with
-    /// the gate named. Recorded hooks drift through the same
-    /// lines: previous hooks re-evaluate checks each plan, so
-    /// a failed check reads as not applied beside drift lines.
-    ///
     /// # Arguments
     ///
     /// * `rt` - the runtime facts under reading.
     /// * `fs` - the backend under stating.
+    /// * `changed` - the changed document ids under reading.
     ///
     /// # Returns
     ///
@@ -406,50 +356,26 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_core::plan::Bundle;
-    /// use confit_core::fs::MemoryFs;
+    /// use confit_core::fs::memory::MemoryFs;
     /// use confit_core::runtime::Runtime;
+    /// use std::collections::BTreeSet;
     ///
     /// let rt = Runtime { vars: Default::default(), path_dirs: Vec::new() };
-    /// let lines = Bundle::empty().hook_preview(&rt, &MemoryFs::new());
+    /// let lines = Bundle::empty().hook_preview(&rt, &MemoryFs::new(), &BTreeSet::new());
     /// assert!(matches!(lines, Ok(lines) if lines.is_empty()));
     /// ```
-    pub fn hook_preview(&self, rt: &Runtime, fs: &dyn Filesystem) -> Result<Vec<String>> {
+    pub fn hook_preview(
+        &self,
+        rt: &Runtime,
+        fs: &dyn Filesystem,
+        changed: &BTreeSet<DocPath>,
+    ) -> Result<Vec<String>> {
         let mut lines = Vec::with_capacity(self.manifest.hooks.len());
         for hook in &self.manifest.hooks {
-            lines.push(preview_hook(hook, rt, fs)?);
+            lines.push(preview_hook(hook, rt, fs, changed)?);
         }
         Ok(lines)
     }
-}
-
-/// Computes lowercase hex SHA-256 over bytes.
-///
-/// # Arguments
-///
-/// * `bytes` - the input bytes.
-///
-/// # Returns
-///
-/// Lowercase hex digest.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::sha256_hex;
-///
-/// let digest = sha256_hex(b"abc");
-/// assert!(matches!(digest.starts_with("ba7816"), true));
-/// ```
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    sha2::Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-/// Reads the current UTC time as an RFC3339 timestamp.
-fn now_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]
@@ -464,6 +390,7 @@ mod tests {
             ManifestData::Text {
                 content: content.to_string(),
                 mode: None,
+                unmanaged: false,
             },
         )
     }
@@ -489,7 +416,7 @@ mod tests {
         let outcome = Bundle::build(desired, Vec::new());
         let built = match outcome {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let summary = built.summary(&previous);
         assert_eq!(summary.create, 1);
@@ -511,7 +438,7 @@ mod tests {
         let outcome = Bundle::build(vec![text_doc("b", "new")], Vec::new());
         let built = match outcome {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         assert_eq!(built.summary(&previous).update, 1);
         assert!(matches!(
@@ -524,8 +451,10 @@ mod tests {
         ManifestDocument::new(
             DocPath::new(path),
             ManifestData::Opaque {
-                blob: crate::plan::sha256_hex(bytes),
+                blob: sha256_hex(bytes),
+                size: bytes.len() as u64,
                 mode: None,
+                unmanaged: false,
             },
         )
     }
@@ -568,7 +497,7 @@ mod tests {
         }
         let built = match Bundle::build(vec![opaque_doc("bin", &[0xFF, 0x00])], Vec::new()) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let summary = built.summary(&previous);
         assert_eq!(summary.update, 1);
@@ -588,7 +517,7 @@ mod tests {
             Vec::new(),
         ) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         let summary = built.summary(&previous);
         assert_eq!(summary.create, 1);
@@ -602,23 +531,24 @@ mod tests {
         let hooks = vec![Hook {
             argv: vec!["mise".to_string()],
             path: Vec::new(),
+            requires: None,
             when: None,
             checks: Vec::new(),
             timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
         }];
         let built = match Bundle::build(Vec::new(), hooks) {
             Ok(out) => out,
-            Err(error) => panic!("plan builds: {error}"),
+            Err(error) => panic!("bundle builds: {error}"),
         };
         assert_eq!(built.manifest.version, BUNDLE_VERSION);
         assert_eq!(built.manifest.hooks.len(), 1);
         assert_eq!(built.manifest.hooks[0].argv, vec!["mise".to_string()]);
     }
 
-    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::MemoryFs) {
+    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::memory::MemoryFs) {
         use crate::fs::Filesystem;
 
-        let fs = crate::fs::MemoryFs::new();
+        let fs = crate::fs::memory::MemoryFs::new();
         let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
         let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
         let _ = fs.write(std::path::Path::new("/opt/probe"), b"run");
@@ -633,6 +563,7 @@ mod tests {
         crate::hook::Hook {
             argv: argv.iter().map(|item| item.to_string()).collect(),
             path: Vec::new(),
+            requires: None,
             when: None,
             checks: Vec::new(),
             timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
@@ -641,11 +572,11 @@ mod tests {
 
     #[test]
     fn hook_preview_renders_run_skip_warn_lines() {
-        use crate::document::Condition;
+        use crate::condition::Condition;
 
         let (rt, fs) = preview_runtime();
-        let mut plan = Bundle::empty();
-        plan.manifest.hooks = vec![
+        let mut bundle = Bundle::empty();
+        bundle.manifest.hooks = vec![
             preview_hook(&["tool", "--flag"]),
             crate::hook::Hook {
                 checks: vec![Condition::Exists {
@@ -660,7 +591,7 @@ mod tests {
                 ..preview_hook(&["tool"])
             },
         ];
-        let lines = match plan.hook_preview(&rt, &fs) {
+        let lines = match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -669,24 +600,24 @@ mod tests {
             vec![
                 "! run: /opt/tool --flag".to_string(),
                 "skipped: tool (checks pass)".to_string(),
-                "warn: tool cannot run (in_path(absent))".to_string(),
+                "skipped: tool (no need: in_path(absent))".to_string(),
             ]
         );
     }
 
     #[test]
     fn hook_preview_runs_on_failing_checks() {
-        use crate::document::Condition;
+        use crate::condition::Condition;
 
         let (rt, fs) = preview_runtime();
-        let mut plan = Bundle::empty();
-        plan.manifest.hooks = vec![crate::hook::Hook {
+        let mut bundle = Bundle::empty();
+        bundle.manifest.hooks = vec![crate::hook::Hook {
             checks: vec![Condition::Exists {
                 path: "/opt/absent".into(),
             }],
             ..preview_hook(&["tool"])
         }];
-        let lines = match plan.hook_preview(&rt, &fs) {
+        let lines = match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -696,9 +627,9 @@ mod tests {
     #[test]
     fn hook_preview_miss_fails_naming_hook() {
         let (rt, fs) = preview_runtime();
-        let mut plan = Bundle::empty();
-        plan.manifest.hooks = vec![preview_hook(&["absent", "install"])];
-        match plan.hook_preview(&rt, &fs) {
+        let mut bundle = Bundle::empty();
+        bundle.manifest.hooks = vec![preview_hook(&["absent", "install"])];
+        match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

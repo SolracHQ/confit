@@ -7,15 +7,14 @@ use std::path::PathBuf;
 use confit_core::error::{Error, Result};
 use confit_core::fs::Filesystem;
 use confit_core::plan::Bundle;
-use confit_core::store::{
-    default_state_path, load_state, manifest_json, resolve_named_plan, resolve_previous_dir,
-    stored_entries, write_bundle,
-};
+use confit_core::store::bundle::write_bundle;
+use confit_core::store::manifest::manifest_json;
+use confit_core::store::slots::{SlotKind, resolve_slot};
 
 use crate::actions::plan::ensure_bundle_extension;
 use crate::cli::ExportArgs;
 
-use super::seams::{Seams, timed};
+use crate::seams::{Seams, timed};
 
 /// Auto-name stem for exports of the applied slot.
 const APPLIED_STEM: &str = "applied";
@@ -37,7 +36,7 @@ pub struct ExportReport {
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::export::ExportRunner;
-/// use confit_cli::actions::seams::Seams;
+/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::ExportArgs;
 /// use confit_cli::fs::OsFs;
 /// use std::io::Cursor;
@@ -86,9 +85,11 @@ impl<'a> ExportRunner<'a> {
             ));
         }
         let fs: &dyn Filesystem = seams.fs;
-        let (plan, auto) = timed("export load", || resolve_slot(args.picker.as_deref(), fs))?;
+        let (bundle, auto) = timed("export load", || {
+            resolve_slot_bundle(args.picker.as_deref(), fs)
+        })?;
         if args.manifest {
-            let text = timed("export manifest", || manifest_json(&plan))?;
+            let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -98,9 +99,9 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => ensure_bundle_extension(raw),
             None => auto,
         };
-        seams.emit_writing_plan(plan.manifest.documents.len());
+        seams.emit_writing_manifest(bundle.manifest.documents.len());
         timed("export write", || {
-            write_bundle(&plan, &dest, fs, seams.progress.as_ref())
+            write_bundle(&bundle, &dest, fs, seams.progress.as_ref())
         })?;
         Ok(ExportReport {
             dest: Some(dest),
@@ -109,13 +110,9 @@ impl<'a> ExportRunner<'a> {
     }
 }
 
-/// Resolves one picker to its live plan plus auto bundle name.
+/// Resolves one picker to its live bundle plus auto bundle name.
 ///
-/// Absent pickers read the applied slot. `@name` reads the
-/// named slot. `%N` reads history newest-first from one. Named
-/// plus applied slots refuse while their files read absent.
-/// History refuses while the pick falls outside the listing.
-/// Bare values refuse, so paths never parse as slots.
+/// Slot errors carry the export command name.
 ///
 /// # Arguments
 ///
@@ -124,7 +121,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Returns
 ///
-/// The live plan holding binary bytes, plus the slot-derived
+/// The live bundle holding blob refs, plus the slot-derived
 /// bundle destination carrying `.cb`.
 ///
 /// # Errors
@@ -135,57 +132,25 @@ impl<'a> ExportRunner<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_cli::actions::export::resolve_slot;
-/// use confit_core::fs::MemoryFs;
+/// use confit_cli::actions::export::resolve_slot_bundle;
+/// use confit_core::fs::memory::MemoryFs;
 ///
 /// let fs = MemoryFs::new();
-/// assert!(matches!(resolve_slot(None, &fs), Err(_)));
-/// assert!(matches!(resolve_slot(Some("backup.cb"), &fs), Err(_)));
-/// assert!(matches!(resolve_slot(Some("%1"), &fs), Err(_)));
+/// assert!(matches!(resolve_slot_bundle(None, &fs), Err(_)));
+/// assert!(matches!(resolve_slot_bundle(Some("backup.cb"), &fs), Err(_)));
+/// assert!(matches!(resolve_slot_bundle(Some("%1"), &fs), Err(_)));
 /// ```
-pub fn resolve_slot(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, PathBuf)> {
-    let Some(raw) = picker else {
-        let slot = default_state_path()?;
-        if !fs.exists(&slot) {
-            return Err(Error::Plan(
-                "export: the applied slot reads absent, apply first".to_string(),
-            ));
-        }
-        let plan = load_state(Some(slot.as_path()), fs)?;
-        return Ok((plan, auto_dest(APPLIED_STEM)));
+pub fn resolve_slot_bundle(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, PathBuf)> {
+    let (bundle, kind) = resolve_slot(picker, fs).map_err(|error| match error {
+        Error::Plan(detail) => Error::Plan(format!("export: {detail}")),
+        other => other,
+    })?;
+    let stem = match kind {
+        SlotKind::Applied => APPLIED_STEM.to_string(),
+        SlotKind::Named(name) => name,
+        SlotKind::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
     };
-    if let Some(name) = raw.strip_prefix('@') {
-        let path = resolve_named_plan(name)?;
-        if !fs.exists(&path) {
-            return Err(Error::Plan(format!("export: '@{name}' reads absent")));
-        }
-        let plan = load_state(Some(path.as_path()), fs)?;
-        return Ok((plan, auto_dest(name)));
-    }
-    if let Some(rest) = raw.strip_prefix('%') {
-        let pick: usize = rest.parse().map_err(|_| {
-            Error::Plan(format!(
-                "export: '{raw}' reads unsupported, want '%N' holding a number from 1"
-            ))
-        })?;
-        let dir = resolve_previous_dir()?;
-        let entries = stored_entries(&dir, fs)?;
-        let total = entries.len();
-        if pick < 1 || pick > total {
-            return Err(Error::Plan(format!(
-                "export: '{raw}' reads out of range, holding {total} stored plans"
-            )));
-        }
-        let (_, plan) = entries.into_iter().nth(pick - 1).ok_or_else(|| {
-            Error::Plan(format!(
-                "export: '{raw}' reads out of range, holding {total} stored plans"
-            ))
-        })?;
-        return Ok((plan, auto_dest(&format!("{HISTORY_STEM_PREFIX}{pick}"))));
-    }
-    Err(Error::Plan(format!(
-        "export: '{raw}' reads unsupported, want '%N', '@name', or nothing"
-    )))
+    Ok((bundle, auto_dest(&stem)))
 }
 
 /// Builds one slot-derived bundle destination carrying `.cb`.

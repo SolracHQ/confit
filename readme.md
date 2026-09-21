@@ -5,6 +5,10 @@ space. One static binary to bootstrap user setups and maintain
 user-space files. Same job as a dotfiles setup, declarative,
 with a preview before anything gets touched.
 
+## Demo
+
+<video src="assets/confit-demo.mp4" controls width="100%"></video>
+
 ## Objectives
 
 - Idempotent changes. Applying twice gives the same result.
@@ -26,7 +30,7 @@ a slot into a portable bundle. `delete` drops a named slot.
 
 Slots hold manifests, one shared pool holds blobs under content hashes.
 First runs compare desired documents against disk bytes and report
-already in place counts. One spinner carries progress counters through
+creates plus overwrites. One spinner carries progress counters through
 hash plus compression plus fetch phases. Serde derives serve as the schema.
 
 Profiles declare documents plus configs. Configs hold documents plus
@@ -63,14 +67,18 @@ A plan run previews the change:
 
 ```sh
 $ confit plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool
-Bundle: 3 to add, 0 to change, 0 to destroy.
+Hooks
++ mise install
+  + requires (in_path(mise))
+  + when (changed(~/.config/mise/config.toml))
+  + checks (exists(/home/tester/.local/share/mise/shims/bat))
+Summary
+Documents: 1 to add, 1 to change, 0 to destroy.
+Hooks: 1 to add, 0 to change, 0 to destroy.
 ```
 
-> Note: bundles carry a `created_at` field in the manifest, so two runs differ in
-> that field alone. Everything else is byte-identical.
-
 Beyond packages, tools finish their own setup. One font call
-lands 96 files as one bundle line and refreshes the font cache:
+lands 96 files as one manifest line and refreshes the font cache:
 
 ```lua
 -- examples/3-dotfiles-tools/tools/fonts.lua
@@ -81,10 +89,15 @@ return nerd_fonts.font("JetBrainsMono", "3.5.1")
 
 ```sh
 $ confit plan examples/3-dotfiles-tools/profile.lua --root examples/3-dotfiles-tools
-~/.local/share/fonts/JetBrainsMono: tree
+Resources
++ /home/tester/.local/share/fonts/JetBrainsMono: tree
   + tree (96 files)
-! run: /usr/bin/fc-cache -f ~/.local/share/fonts/JetBrainsMono
-Bundle: 5 to add, 0 to change, 0 to destroy.
+Hooks
++ fc-cache -f /home/tester/.local/share/fonts/JetBrainsMono
+  + requires (in_path(fc-cache))
+Summary
+Documents: 3 to add, 1 to change, 0 to destroy.
+Hooks: 2 to add, 0 to change, 0 to destroy.
 ```
 
 | Fixture | Proves |
@@ -99,7 +112,7 @@ Bundle: 5 to add, 0 to change, 0 to destroy.
 | `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
 | `apply SOURCE` | previews, prompts on literal `yes`, writes files |
 | `export [PICKER]` | packs one slot into a portable bundle, prints the path |
-| `delete @name` | drops one named slot plus its orphaned pool bytes |
+| `delete @name` | drops one named slot plus its orphaned blobs |
 | `init [DIR]` | scaffolds a profile plus stubs, default `.` |
 
 `--root` defaults to the profile file parent directory.
@@ -110,7 +123,7 @@ a profile, `.cb` runs a bundle file, `@name` runs a named slot,
 Slots hold manifests, one pool holds blobs, history reads newest-first.
 `export` packs `%N` plus `@name` plus the applied slot into `.cb`,
 `-m` prints the manifest. First runs diff desired state against disk
-and close with already in place counts.
+and close with create plus overwrite counts.
 `just plan-example` smokes the basic fixture and writes only to
 `./target`.
 
@@ -121,8 +134,8 @@ cargo run -- --help
 just check   # fmt + clippy (-D warnings) + test
 ```
 
-The spec lives at `docs/spec.md` as the living record of what is implemented.
-The manual lives at `docs/manual/` as the user guide. Intent per version
+The manual plus the spec live as one book at `docs/book/`, published at
+[solrachq.github.io/confit](https://solrachq.github.io/confit/). Intent per version
 lives under `docs/design/`. Changes live in `docs/changelog.md`.
 
 Old setup lives at [SolracHQ/dotfiles](https://github.com/SolracHQ/dotfiles).

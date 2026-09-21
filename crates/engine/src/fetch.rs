@@ -27,7 +27,7 @@ const STREAM_BUF_BYTES: usize = 8 * 1024;
 /// let fake = MemoryFetch::new();
 /// fake.insert("https://example.com/version", b"1");
 /// let body = fake.fetch("https://example.com/version");
-/// assert!(matches!(body, Ok(_)));
+/// assert!(matches!(body, Ok(body) if body == b"1".to_vec()));
 /// ```
 pub trait Fetch: Send + Sync + std::fmt::Debug {
     /// Fetches one URL body as bytes.
@@ -52,7 +52,7 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     /// let fake = MemoryFetch::new();
     /// fake.insert("https://example.com/version", b"1");
     /// let body = fake.fetch("https://example.com/version");
-    /// assert!(matches!(body, Ok(_)));
+    /// assert!(matches!(body, Ok(body) if body == b"1".to_vec()));
     /// ```
     fn fetch(&self, url: &str) -> confit_core::error::Result<Vec<u8>>;
 
@@ -74,25 +74,23 @@ pub trait Fetch: Send + Sync + std::fmt::Debug {
     ///
     /// ```rust
     /// use confit_engine::fetch::{Fetch, MemoryFetch};
+    /// use std::io::Read as _;
     ///
     /// let fake = MemoryFetch::new();
     /// fake.insert("https://example.com/version", b"1");
     /// let reader = fake.fetch_stream("https://example.com/version");
-    /// assert!(matches!(reader, Ok(_)));
+    /// let mut body = Vec::new();
+    /// match reader {
+    ///     Ok(mut reader) => { let _ = reader.read_to_end(&mut body); }
+    ///     Err(error) => panic!("stream reads: {error}"),
+    /// }
+    /// assert_eq!(body, b"1".to_vec());
     /// ```
     fn fetch_stream(&self, url: &str) -> confit_core::error::Result<Box<dyn std::io::Read>>;
 }
 
 /// Blocking HTTP source for remote bytes.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::fetch::HttpFetch;
-///
-/// let source = HttpFetch;
-/// assert!(matches!(format!("{source:?}").as_str(), _));
-/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HttpFetch;
 
@@ -124,15 +122,6 @@ impl Fetch for HttpFetch {
 
 /// Memory source keyed by URL for tests.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::fetch::MemoryFetch;
-///
-/// let fake = MemoryFetch::new();
-/// fake.insert("https://example.com/version", b"1");
-/// assert!(matches!(fake.calls("https://example.com/version"), 0));
-/// ```
 #[derive(Debug, Default)]
 pub struct MemoryFetch {
     /// Bodies plus call counts behind one lock.
@@ -155,14 +144,6 @@ impl MemoryFetch {
     ///
     /// Empty source with zero stubs.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::MemoryFetch;
-    ///
-    /// let fake = MemoryFetch::new();
-    /// assert!(matches!(fake.calls("https://example.com/x"), 0));
-    /// ```
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(MemoryInner::default()),
@@ -180,15 +161,6 @@ impl MemoryFetch {
     ///
     /// Unit once the stub lands.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::MemoryFetch;
-    ///
-    /// let fake = MemoryFetch::new();
-    /// fake.insert("https://example.com/version", b"1");
-    /// assert!(matches!(fake.calls("https://example.com/version"), 0));
-    /// ```
     pub fn insert(&self, url: &str, body: &[u8]) {
         let mut guard = match self.inner.lock() {
             Ok(guard) => guard,
@@ -210,11 +182,12 @@ impl MemoryFetch {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_engine::fetch::MemoryFetch;
+    /// use confit_engine::fetch::{Fetch, MemoryFetch};
     ///
     /// let fake = MemoryFetch::new();
     /// fake.insert("https://example.com/version", b"1");
-    /// assert!(matches!(fake.calls("https://example.com/version"), 0));
+    /// assert!(matches!(fake.fetch("https://example.com/version"), Ok(_)));
+    /// assert_eq!(fake.calls("https://example.com/version"), 1);
     /// ```
     pub fn calls(&self, url: &str) -> usize {
         let guard = match self.inner.lock() {
@@ -257,15 +230,6 @@ impl Fetch for MemoryFetch {
 
 /// Owner for cached remote bytes on disk.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::fetch::Cache;
-/// use std::path::PathBuf;
-///
-/// let cache = Cache::new(PathBuf::from("/cache"));
-/// assert!(matches!(format!("{cache:?}").as_str(), _));
-/// ```
 #[derive(Debug, Clone)]
 pub struct Cache {
     /// Cache folder holding hashed bodies plus sidecars.
@@ -283,15 +247,6 @@ impl Cache {
     ///
     /// Owner holding the folder path.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::Cache;
-    /// use std::path::PathBuf;
-    ///
-    /// let cache = Cache::new(PathBuf::from("/cache"));
-    /// assert!(matches!(format!("{cache:?}").as_str(), _));
-    /// ```
     pub fn new(dir: PathBuf) -> Self {
         Self { dir }
     }
@@ -306,21 +261,12 @@ impl Cache {
     ///
     /// The cached bytes, holding `None` for miss plus mismatch.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::Cache;
-    /// use std::path::PathBuf;
-    ///
-    /// let cache = Cache::new(PathBuf::from("/cache"));
-    /// assert!(matches!(cache.lookup("https://example.com/x"), None));
-    /// ```
     pub fn lookup(&self, url: &str) -> Option<Vec<u8>> {
         let cached = cache_path(&self.dir, url);
         let sidecar = sidecar_path(&cached);
         let stored = std::fs::read(&cached).ok()?;
         let stored_sha = std::fs::read_to_string(&sidecar).ok()?;
-        if confit_core::plan::sha256_hex(&stored) == stored_sha.trim().to_lowercase() {
+        if confit_core::ids::sha256_hex(&stored) == stored_sha.trim().to_lowercase() {
             Some(stored)
         } else {
             None
@@ -342,15 +288,6 @@ impl Cache {
     ///
     /// Unwritable folders plus files fail as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::Cache;
-    /// use std::path::PathBuf;
-    ///
-    /// let cache = Cache::new(PathBuf::from("/cache"));
-    /// assert!(matches!(format!("{cache:?}").as_str(), _));
-    /// ```
     pub fn store(&self, url: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
         let cached = cache_path(&self.dir, url);
         let sidecar = sidecar_path(&cached);
@@ -358,7 +295,7 @@ impl Cache {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&cached, bytes)?;
-        let digest = confit_core::plan::sha256_hex(bytes);
+        let digest = confit_core::ids::sha256_hex(bytes);
         std::fs::write(&sidecar, digest.as_bytes())?;
         Ok(cached)
     }
@@ -379,15 +316,6 @@ impl Cache {
     /// Unwritable folders plus files fail as io errors. Read failures
     /// on the body reader fail as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_engine::fetch::Cache;
-    /// use std::path::PathBuf;
-    ///
-    /// let cache = Cache::new(PathBuf::from("/cache"));
-    /// assert!(matches!(format!("{cache:?}").as_str(), _));
-    /// ```
     pub fn store_stream(&self, url: &str, reader: impl std::io::Read) -> std::io::Result<PathBuf> {
         let cached = cache_path(&self.dir, url);
         let sidecar = sidecar_path(&cached);
@@ -429,17 +357,8 @@ impl Cache {
 ///
 /// Absolute cache file path for the URL.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::fetch::cache_path;
-/// use std::path::Path;
-///
-/// let path = cache_path(Path::new("/cache"), "https://example.com/x");
-/// assert!(matches!(path.starts_with("/cache"), true));
-/// ```
 pub fn cache_path(cache: &Path, url: &str) -> PathBuf {
-    cache.join(confit_core::plan::sha256_hex(url.as_bytes()))
+    cache.join(confit_core::ids::sha256_hex(url.as_bytes()))
 }
 
 /// Derives the sidecar path beside one cached file.
@@ -481,15 +400,6 @@ pub fn sidecar_path(cached: &Path) -> PathBuf {
 ///
 /// Missing OS cache folders fail as plan errors.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_engine::fetch::resolve_cache_dir;
-/// use std::path::Path;
-///
-/// let dir = resolve_cache_dir(Some(Path::new("/tmp/cache")));
-/// assert!(matches!(dir, Ok(_)));
-/// ```
 pub fn resolve_cache_dir(override_dir: Option<&Path>) -> confit_core::error::Result<PathBuf> {
     if let Some(dir) = override_dir {
         return Ok(dir.to_path_buf());

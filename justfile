@@ -38,8 +38,14 @@ plan-example:
 
 # Show the living spec as of a sealed tag.
 show-spec VERSION="0.1":
-  git show v{{VERSION}}:docs/spec.md
+  git show v{{VERSION}}:docs/book/src/spec/index.md
 
 # Full local verification.
 check:
   cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+
+# Bump all three crates to one version. The release flow tags from cli.
+set-version VERSION:
+  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml
+  cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
+  grep -h '^version' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml

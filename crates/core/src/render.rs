@@ -5,10 +5,13 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use crate::condition::Condition;
 use crate::document::{
-    Condition, ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
+    ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
 };
 use crate::error::{Error, Result};
+use crate::fs::Filesystem;
+use crate::store::blobs::{BlobRef, read_blob_bytes};
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -19,12 +22,12 @@ impl ManifestDocument {
     /// Structured payloads serialize through their format.
     /// Text payloads pass content through. Link payloads pass the
     /// target through. Rc payloads render shell text. Opaque
-    /// payloads read raw bytes from the blob map. Tree payloads
+    /// payloads fail, reads use `bytes` instead. Tree payloads
     /// fail, reads use `bytes` instead.
     ///
     /// # Arguments
     ///
-    /// * `blobs` - the raw blob bytes under content hashes.
+    /// * `blobs` - the blob refs under content hashes.
     ///
     /// # Returns
     ///
@@ -32,8 +35,8 @@ impl ManifestDocument {
     ///
     /// # Errors
     ///
-    /// Missing blobs plus opaque tree reads plus serializer
-    /// failures fail as plan errors.
+    /// Opaque plus tree reads plus serializer failures fail as
+    /// plan errors.
     ///
     /// # Examples
     ///
@@ -44,11 +47,11 @@ impl ManifestDocument {
     ///
     /// let document = ManifestDocument::new(
     ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None },
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.render(&BTreeMap::new()), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
-    pub fn render(&self, blobs: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    pub fn render(&self, _blobs: &BTreeMap<String, BlobRef>) -> Result<Vec<u8>> {
         match &self.data {
             ManifestData::Structured { format, data } => match format {
                 StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
@@ -58,7 +61,9 @@ impl ManifestDocument {
             ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
             ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
             ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
-            ManifestData::Opaque { blob, .. } => blob_bytes(blobs, blob),
+            ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
+                "render opaque '{blob}': blob bytes ride bundle refs, read through `bytes`"
+            ))),
             ManifestData::Tree { .. } => Err(Error::Plan(
                 "render tree: tree documents hold member bytes".to_string(),
             )),
@@ -67,13 +72,15 @@ impl ManifestDocument {
 
     /// Returns exact on-disk bytes for one document.
     ///
-    /// Opaque payloads return raw blob bytes. Tree payloads return
-    /// canonical manifest bytes for hashing, never disk bytes.
-    /// Every other payload renders through `render`.
+    /// Inline payloads render from the manifest without touching
+    /// the backend. Opaque payloads read pool-first through
+    /// their ref. Tree payloads return canonical manifest bytes
+    /// for hashing, never disk bytes.
     ///
     /// # Arguments
     ///
-    /// * `blobs` - the raw blob bytes under content hashes.
+    /// * `blobs` - the blob refs under content hashes.
+    /// * `fs` - the backend under reading.
     ///
     /// # Returns
     ///
@@ -81,50 +88,29 @@ impl ManifestDocument {
     ///
     /// # Errors
     ///
-    /// Missing blobs plus serializer failures fail as plan errors.
+    /// Missing refs plus unreadable files plus serializer
+    /// failures fail as plan errors.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
+    /// use confit_core::fs::memory::MemoryFs;
     /// use confit_core::ids::DocPath;
     /// use std::collections::BTreeMap;
     ///
-    /// let mut blobs = BTreeMap::new();
-    /// blobs.insert("abc".to_string(), vec![0xFF, 0x00]);
     /// let document = ManifestDocument::new(
-    ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None },
+    ///     DocPath::new("note"),
+    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
-    /// assert!(matches!(document.bytes(&blobs), Ok(bytes) if bytes == vec![0xFF, 0x00]));
+    /// assert!(matches!(document.bytes(&BTreeMap::new(), &MemoryFs::new()), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
-    pub fn bytes(&self, blobs: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    pub fn bytes(&self, blobs: &BTreeMap<String, BlobRef>, fs: &dyn Filesystem) -> Result<Vec<u8>> {
         match &self.data {
-            ManifestData::Opaque { blob, .. } => blob_bytes(blobs, blob),
+            ManifestData::Opaque { blob, .. } => read_blob_bytes(blob, blobs, fs),
             ManifestData::Tree { members } => Ok(crate::document::tree_manifest_bytes(members)),
             _ => self.render(blobs),
         }
-    }
-}
-
-/// Reads raw bytes for one blob reference.
-///
-/// # Arguments
-///
-/// * `blobs` - the raw blob bytes under content hashes.
-/// * `blob` - the SHA-256 hex under reading.
-///
-/// # Returns
-///
-/// The raw bytes.
-///
-/// # Errors
-///
-/// Missing references fail as plan errors naming the hash.
-fn blob_bytes(blobs: &BTreeMap<String, Vec<u8>>, blob: &str) -> Result<Vec<u8>> {
-    match blobs.get(blob) {
-        Some(bytes) => Ok(bytes.clone()),
-        None => Err(Error::Plan(format!("render opaque: missing blob '{blob}'"))),
     }
 }
 
@@ -156,7 +142,7 @@ pub(crate) fn render_inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
         ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
         ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
         ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
-            "render opaque '{blob}': blob bytes ride the bundle map"
+            "render opaque '{blob}': blob bytes ride bundle refs, read through `bytes`"
         ))),
         ManifestData::Tree { .. } => Err(Error::Plan(
             "render tree: tree documents hold member bytes".to_string(),
@@ -258,6 +244,10 @@ fn render_guard(guard: &Condition) -> String {
             let candidate = escape_argv(std::slice::from_ref(path));
             format!("[ -e {candidate} ]")
         }
+        // Changed never reaches shell guards: rc guards holding it fail
+        // as plan errors at build time. Render false so entries stay
+        // quiet if the invariant ever breaks.
+        Condition::Changed { .. } => "false".to_string(),
         Condition::All(items) if items.is_empty() => "true".to_string(),
         Condition::Any(items) if items.is_empty() => "false".to_string(),
         Condition::All(items) => join_guards(items, "&&"),

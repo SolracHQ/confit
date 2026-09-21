@@ -8,16 +8,6 @@ use std::path::{Path, PathBuf};
 use confit_core::fs::Filesystem;
 
 /// Host filesystem backend.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::fs::OsFs;
-/// use confit_core::fs::Filesystem;
-///
-/// let fs = OsFs;
-/// assert!(matches!(fs.exists(std::path::Path::new("/definitely-missing-confit-path")), false));
-/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OsFs;
 
@@ -36,15 +26,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing files plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.read(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
         std::fs::read(path)
     }
@@ -170,15 +151,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing directories plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.list_dir(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn list_dir(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         for entry in std::fs::read_dir(dir)? {
@@ -201,15 +173,6 @@ impl Filesystem for OsFs {
     ///
     /// Missing paths plus permission failures surface as io errors.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// let outcome = OsFs.remove(std::path::Path::new("/definitely-missing-confit-path"));
-    /// assert!(matches!(outcome, Err(_)));
-    /// ```
     fn remove(&self, path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)
     }
@@ -251,14 +214,6 @@ impl Filesystem for OsFs {
     /// The permission bits for files, else `None` for
     /// symlinks plus missing paths.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// assert!(matches!(OsFs.file_mode(std::path::Path::new("/definitely-missing-confit-path")), None));
-    /// ```
     fn file_mode(&self, path: &Path) -> Option<u32> {
         use std::os::unix::fs::PermissionsExt;
         let metadata = std::fs::symlink_metadata(path).ok()?;
@@ -278,15 +233,141 @@ impl Filesystem for OsFs {
     ///
     /// True while the path exists.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::fs::OsFs;
-    /// use confit_core::fs::Filesystem;
-    ///
-    /// assert!(matches!(OsFs.exists(std::path::Path::new("/definitely-missing-confit-path")), false));
-    /// ```
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    /// Opens a buffered reader for a host path.
+    ///
+    /// # Errors
+    ///
+    /// Missing files plus permission failures surface as io errors.
+    fn reader(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read>> {
+        Ok(Box::new(std::io::BufReader::new(std::fs::File::open(
+            path,
+        )?)))
+    }
+
+    /// Opens a buffered writer for a host path, creating parents as needed.
+    ///
+    /// # Errors
+    ///
+    /// Missing parents plus permission failures surface as io errors.
+    fn writer(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Write + '_>> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(Box::new(std::io::BufWriter::new(std::fs::File::create(
+            path,
+        )?)))
+    }
+
+    /// Reports the byte length `read` would return for a host path.
+    ///
+    /// Links measure their raw target text without following it.
+    ///
+    /// # Errors
+    ///
+    /// Missing paths plus permission failures surface as io errors.
+    fn file_len(&self, path: &Path) -> std::io::Result<u64> {
+        if let Some(target) = self.read_link(path) {
+            return Ok(target.as_os_str().as_encoded_bytes().len() as u64);
+        }
+        Ok(std::fs::File::open(path)?.metadata()?.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_roundtrips_bytes() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("tempdir builds: {error}"),
+        };
+        let from = dir.path().join("src.bin");
+        let to = dir.path().join("dst.bin");
+        match OsFs.write(&from, &[0xFF, 0x00, 0x41]) {
+            Ok(()) => {}
+            Err(error) => panic!("source writes: {error}"),
+        }
+        match OsFs.copy(&from, &to) {
+            Ok(moved) => assert_eq!(moved, 3),
+            Err(error) => panic!("copy runs: {error}"),
+        }
+        match OsFs.read(&to) {
+            Ok(bytes) => assert_eq!(bytes, vec![0xFF, 0x00, 0x41]),
+            Err(error) => panic!("destination reads: {error}"),
+        }
+    }
+
+    #[test]
+    fn hash_file_matches_sha256_hex_and_counts_bytes() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("tempdir builds: {error}"),
+        };
+        let path = dir.path().join("note.bin");
+        match OsFs.write(&path, b"abc") {
+            Ok(()) => {}
+            Err(error) => panic!("file writes: {error}"),
+        }
+        match OsFs.hash_file(&path) {
+            Ok((digest, len)) => {
+                assert_eq!(digest, confit_core::ids::sha256_hex(b"abc"));
+                assert_eq!(len, 3);
+            }
+            Err(error) => panic!("hash runs: {error}"),
+        }
+    }
+
+    #[test]
+    fn file_len_matches_content_and_missing_fails_not_found() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("tempdir builds: {error}"),
+        };
+        let path = dir.path().join("note.bin");
+        match OsFs.write(&path, b"hello") {
+            Ok(()) => {}
+            Err(error) => panic!("file writes: {error}"),
+        }
+        match OsFs.file_len(&path) {
+            Ok(len) => assert_eq!(len, 5),
+            Err(error) => panic!("length reads: {error}"),
+        }
+        match OsFs.file_len(&dir.path().join("missing.bin")) {
+            Ok(_) => panic!("missing length passes"),
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        }
+    }
+
+    #[test]
+    fn writer_creates_missing_parents() {
+        use std::io::Write as _;
+
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("tempdir builds: {error}"),
+        };
+        let path = dir.path().join("deep/nested/note.bin");
+        {
+            let mut writer = match OsFs.writer(&path) {
+                Ok(writer) => writer,
+                Err(error) => panic!("writer opens: {error}"),
+            };
+            match writer.write_all(b"hi") {
+                Ok(()) => {}
+                Err(error) => panic!("writer writes: {error}"),
+            }
+        }
+        match OsFs.read(&path) {
+            Ok(bytes) => assert_eq!(bytes, b"hi"),
+            Err(error) => panic!("written bytes read: {error}"),
+        }
     }
 }

@@ -4,6 +4,7 @@
 
 #![deny(missing_docs)]
 
+pub mod condition;
 pub mod document;
 pub mod drift;
 pub mod error;

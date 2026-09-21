@@ -7,60 +7,82 @@ fn delete_prunes_orphans_keeping_shared() {
     pin_home();
     let fs = MemoryFs::new();
     let shared_bytes = b"shared-confit-blob".to_vec();
-    let shared_sha = confit_core::plan::sha256_hex(&shared_bytes);
+    let shared_sha = confit_core::ids::sha256_hex(&shared_bytes);
     let keep_bytes = b"keep-confit-blob".to_vec();
-    let keep_sha = confit_core::plan::sha256_hex(&keep_bytes);
+    let keep_sha = confit_core::ids::sha256_hex(&keep_bytes);
     let drop_bytes = b"drop-confit-blob".to_vec();
-    let drop_sha = confit_core::plan::sha256_hex(&drop_bytes);
-    let keep_plan = match build(vec![
-        ManifestDocument::new(
-            DocPath::new("shared.bin"),
-            ManifestData::Opaque {
-                blob: shared_sha.clone(),
-                mode: None,
-            },
-        ),
-        ManifestDocument::new(
-            DocPath::new("keep.bin"),
-            ManifestData::Opaque {
-                blob: keep_sha.clone(),
-                mode: None,
-            },
-        ),
-    ]) {
+    let drop_sha = confit_core::ids::sha256_hex(&drop_bytes);
+    let keep_plan = match build(
+        &fs,
+        vec![
+            ManifestDocument::new(
+                DocPath::new("shared.bin"),
+                ManifestData::Opaque {
+                    blob: shared_sha.clone(),
+                    size: shared_bytes.len() as u64,
+                    mode: None,
+                    unmanaged: false,
+                },
+            ),
+            ManifestDocument::new(
+                DocPath::new("keep.bin"),
+                ManifestData::Opaque {
+                    blob: keep_sha.clone(),
+                    size: keep_bytes.len() as u64,
+                    mode: None,
+                    unmanaged: false,
+                },
+            ),
+        ],
+    ) {
         Ok(mut built) => {
-            built.blobs.insert(shared_sha.clone(), shared_bytes.clone());
-            built.blobs.insert(keep_sha.clone(), keep_bytes.clone());
+            built
+                .blobs
+                .insert(shared_sha.clone(), spill_ref(&fs, &shared_bytes));
+            built
+                .blobs
+                .insert(keep_sha.clone(), spill_ref(&fs, &keep_bytes));
             built
         }
-        Err(error) => panic!("keep plan builds: {error}"),
+        Err(error) => panic!("keep bundle builds: {error}"),
     };
-    let drop_plan = match build(vec![
-        ManifestDocument::new(
-            DocPath::new("shared.bin"),
-            ManifestData::Opaque {
-                blob: shared_sha.clone(),
-                mode: None,
-            },
-        ),
-        ManifestDocument::new(
-            DocPath::new("drop.bin"),
-            ManifestData::Opaque {
-                blob: drop_sha.clone(),
-                mode: None,
-            },
-        ),
-    ]) {
+    let drop_plan = match build(
+        &fs,
+        vec![
+            ManifestDocument::new(
+                DocPath::new("shared.bin"),
+                ManifestData::Opaque {
+                    blob: shared_sha.clone(),
+                    size: shared_bytes.len() as u64,
+                    mode: None,
+                    unmanaged: false,
+                },
+            ),
+            ManifestDocument::new(
+                DocPath::new("drop.bin"),
+                ManifestData::Opaque {
+                    blob: drop_sha.clone(),
+                    size: drop_bytes.len() as u64,
+                    mode: None,
+                    unmanaged: false,
+                },
+            ),
+        ],
+    ) {
         Ok(mut built) => {
-            built.blobs.insert(shared_sha.clone(), shared_bytes.clone());
-            built.blobs.insert(drop_sha.clone(), drop_bytes.clone());
+            built
+                .blobs
+                .insert(shared_sha.clone(), spill_ref(&fs, &shared_bytes));
+            built
+                .blobs
+                .insert(drop_sha.clone(), spill_ref(&fs, &drop_bytes));
             built
         }
-        Err(error) => panic!("drop plan builds: {error}"),
+        Err(error) => panic!("drop bundle builds: {error}"),
     };
     let keep_dest = seed_named(&fs, "keep", &keep_plan);
     let drop_dest = seed_named(&fs, "drop", &drop_plan);
-    let pool = match confit_core::store::resolve_blobs_dir() {
+    let pool = match confit_core::store::blobs::resolve_blobs_dir() {
         Ok(pool) => pool,
         Err(error) => panic!("pool resolves: {error}"),
     };

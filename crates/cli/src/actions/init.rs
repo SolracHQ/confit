@@ -77,15 +77,6 @@ const STUB_FILES: &[(&str, &str)] = &[
 
 /// Outcome of one init run.
 ///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::init::InitReport;
-/// use std::path::PathBuf;
-///
-/// let report = InitReport { profile: PathBuf::from("demo/profile.lua"), written: 14 };
-/// assert!(matches!(report.written, 14));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
     /// Holds the scaffolded profile path.
@@ -101,7 +92,7 @@ pub struct InitReport {
 /// ```rust
 /// use confit_cli::actions::init::InitRunner;
 /// use confit_cli::cli::InitArgs;
-/// use confit_core::fs::{Filesystem, MemoryFs};
+/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use std::path::{Path, PathBuf};
 ///
 /// let fs = MemoryFs::new();
