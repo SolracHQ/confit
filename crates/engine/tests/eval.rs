@@ -1703,6 +1703,46 @@ return { shells = { "bash" }, configs = { bat } }
 }
 
 #[test]
+fn eval_fills_honest_opaque_plus_tree_sizes() {
+    let archive = tar_gz_bytes(&[("pkg/alpha.ttf", b"alpha".as_slice(), 0o644)]);
+    let profile = r#"
+local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, content)
+  return path:match("([^/]+)$")
+end)
+return {
+  shells = { "bash" },
+  documents = {
+    fonts,
+    confit.document.opaque("bin/logo", string.char(0xFF, 0x00, 0x41)),
+  },
+  configs = { confit.config("tool") },
+}
+"#;
+    let evaluation = run_archive_eval("fonts.tar.gz", &archive, profile);
+    let opaque = by_path(&evaluation.documents, "bin/logo");
+    match &opaque.data {
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, 3);
+            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]));
+        }
+        other => panic!("opaque expected, got {other:?}"),
+    }
+    let tree = by_path(&evaluation.documents, "/fonts");
+    match &tree.data {
+        ManifestData::Tree { members } => {
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0].relative, "alpha.ttf");
+            assert_eq!(members[0].size, 5);
+            assert_eq!(
+                evaluation.blobs.get(&members[0].blob),
+                Some(&b"alpha".to_vec())
+            );
+        }
+        other => panic!("tree expected, got {other:?}"),
+    }
+}
+
+#[test]
 fn require_hint_renders_on_its_own_line() {
     let profile = r#"
 local bat = confit.config("bat")

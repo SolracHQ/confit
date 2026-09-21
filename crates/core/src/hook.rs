@@ -137,7 +137,7 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use confit_core::fs::{Filesystem, MemoryFs};
+/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use confit_core::hook::{Hook, resolve_hook};
 /// use confit_core::runtime::Runtime;
 ///
@@ -641,8 +641,8 @@ mod tests {
         );
     }
 
-    fn preview_state() -> (Runtime, crate::fs::MemoryFs) {
-        let fs = crate::fs::MemoryFs::new();
+    fn preview_state() -> (Runtime, crate::fs::memory::MemoryFs) {
+        let fs = crate::fs::memory::MemoryFs::new();
         let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
         let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
         let _ = fs.write(std::path::Path::new("/opt/probe"), b"done");

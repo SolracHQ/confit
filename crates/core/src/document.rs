@@ -377,6 +377,8 @@ pub struct ManifestMember {
     pub relative: String,
     /// Holds the SHA-256 hex over raw member bytes.
     pub blob: String,
+    /// Holds the raw byte count of the member content.
+    pub size: u64,
     /// Holds unix permission bits for the member file.
     pub mode: u32,
 }
@@ -423,6 +425,8 @@ pub enum ManifestData {
     Opaque {
         /// Holds the SHA-256 hex over raw file bytes.
         blob: String,
+        /// Holds the raw byte count of the file content.
+        size: u64,
         /// Holds unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
@@ -636,10 +640,10 @@ impl ManifestDocument {
 /// ```rust
 /// use confit_core::document::{ManifestMember, tree_changed};
 ///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: "aa".into(), mode: 0o644 }];
+/// let old = vec![ManifestMember { relative: "a".into(), blob: "aa".into(), size: 1, mode: 0o644 }];
 /// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: "bb".into(), mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: "cc".into(), mode: 0o644 },
+///     ManifestMember { relative: "a".into(), blob: "bb".into(), size: 1, mode: 0o644 },
+///     ManifestMember { relative: "b".into(), blob: "cc".into(), size: 1, mode: 0o644 },
 /// ];
 /// assert_eq!(tree_changed(&old, &new), 2);
 /// ```

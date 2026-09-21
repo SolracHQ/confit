@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::Result;
-use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
+use confit_core::fs::{
+    Filesystem,
+    snapshot::{snapshot_document, snapshot_tree},
+};
 
 use confit_core::document::ManifestDocument;
 use confit_core::hook::lifecycle_lines;

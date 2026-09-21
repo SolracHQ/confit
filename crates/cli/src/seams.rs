@@ -160,7 +160,7 @@ impl<'a> Seams<'a> {
     ///
     /// ```rust
     /// use confit_cli::seams::Seams;
-    /// use confit_core::fs::MemoryFs;
+    /// use confit_core::fs::memory::MemoryFs;
     /// use std::io::Cursor;
     ///
     /// let fs = MemoryFs::new();

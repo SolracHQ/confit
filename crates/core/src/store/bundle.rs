@@ -51,7 +51,7 @@ const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::bundle::write_bundle;
 ///
@@ -163,7 +163,7 @@ fn append_bundle_entry(
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::bundle::{read_bundle, write_bundle};
 ///
@@ -294,7 +294,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::bundle::{load_bundle_input, write_bundle};
 ///
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn bundle_roundtrip_restores_plan_with_referenced_blobs_only() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
@@ -368,7 +368,7 @@ mod tests {
         names.sort();
         let mut want = vec!["manifest.json".to_string()];
         for raw in [vec![0xFF, 0x00, 0x41], vec![1, 2, 3], vec![4, 5, 6]] {
-            want.push(format!("blobs/{}", crate::plan::sha256_hex(&raw)));
+            want.push(format!("blobs/{}", crate::ids::sha256_hex(&raw)));
         }
         want.sort();
         assert_eq!(names, want);
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn pool_plus_bundle_roundtrip_multi_blob() {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
         use crate::ids::DocPath;
 
         let compressible = vec![0x41; 2048];
@@ -390,14 +390,15 @@ mod tests {
             noisy.push((state >> 33) as u8);
         }
         let empty: Vec<u8> = Vec::new();
-        let compressible_blob = crate::plan::sha256_hex(&compressible);
-        let noisy_blob = crate::plan::sha256_hex(&noisy);
-        let empty_blob = crate::plan::sha256_hex(&empty);
+        let compressible_blob = crate::ids::sha256_hex(&compressible);
+        let noisy_blob = crate::ids::sha256_hex(&noisy);
+        let empty_blob = crate::ids::sha256_hex(&empty);
         let documents = vec![
             ManifestDocument::new(
                 DocPath::new("packed"),
                 ManifestData::Opaque {
                     blob: compressible_blob.clone(),
+                    size: 2048,
                     mode: None,
                     unmanaged: false,
                 },
@@ -406,6 +407,7 @@ mod tests {
                 DocPath::new("noisy"),
                 ManifestData::Opaque {
                     blob: noisy_blob.clone(),
+                    size: 1024,
                     mode: None,
                     unmanaged: false,
                 },
@@ -417,11 +419,13 @@ mod tests {
                         ManifestMember {
                             relative: "empty.ttf".into(),
                             blob: empty_blob.clone(),
+                            size: 0,
                             mode: 0o644,
                         },
                         ManifestMember {
                             relative: "copy.ttf".into(),
                             blob: compressible_blob.clone(),
+                            size: 2048,
                             mode: 0o644,
                         },
                     ],
@@ -471,7 +475,7 @@ mod tests {
 
     #[test]
     fn bundle_skips_present_pool_blobs_and_stays_sorted() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
         use std::io::Read as _;
 
         let fs = MemoryFs::new();

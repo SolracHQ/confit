@@ -75,7 +75,7 @@ impl Runtime {
 ///
 /// ```rust
 /// use confit_core::condition::Condition;
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::runtime::{Runtime, evaluate};
 /// use std::collections::{BTreeMap, BTreeSet};
 ///
@@ -247,7 +247,7 @@ pub fn parse_duration(text: &str) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::MemoryFs;
+    use crate::fs::memory::MemoryFs;
 
     fn test_runtime(fs: &MemoryFs) -> Runtime {
         use std::path::Path;

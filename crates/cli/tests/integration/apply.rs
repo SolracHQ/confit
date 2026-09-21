@@ -529,7 +529,7 @@ fn apply_cb_positional_loads_bundle() {
 
 #[test]
 fn apply_then_drift_stays_quiet() {
-    use confit_core::fs::{snapshot_document, snapshot_tree};
+    use confit_core::fs::snapshot::{snapshot_document, snapshot_tree};
 
     pin_home();
     let fs = MemoryFs::new();
@@ -876,7 +876,7 @@ fn apply_bundle_populates_pool() {
         memory_bytes(&fs, Path::new("bin")),
         vec![0xFF, 0x00, 0x80, 0x41]
     );
-    let sha = confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]);
+    let sha = confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]);
     assert!(
         fs.exists(&pool.join(&sha)),
         "applying a bundle populates the pool"
@@ -894,17 +894,18 @@ fn apply_rotation_prunes_exclusive_blobs() {
         Err(error) => panic!("slot resolves: {error}"),
     };
     let shared_bytes = b"shared-confit-blob".to_vec();
-    let shared_sha = confit_core::plan::sha256_hex(&shared_bytes);
+    let shared_sha = confit_core::ids::sha256_hex(&shared_bytes);
     let mut exclusive_shas = Vec::new();
     for generation in 0..6 {
         let unique_bytes = format!("unique-confit-blob-{generation}").into_bytes();
-        let unique_sha = confit_core::plan::sha256_hex(&unique_bytes);
+        let unique_sha = confit_core::ids::sha256_hex(&unique_bytes);
         exclusive_shas.push(unique_sha.clone());
         let desired = vec![
             ManifestDocument::new(
                 DocPath::new("shared.bin"),
                 ManifestData::Opaque {
                     blob: shared_sha.clone(),
+                    size: shared_bytes.len() as u64,
                     mode: None,
                     unmanaged: false,
                 },
@@ -913,6 +914,7 @@ fn apply_rotation_prunes_exclusive_blobs() {
                 DocPath::new("unique.bin"),
                 ManifestData::Opaque {
                     blob: unique_sha.clone(),
+                    size: unique_bytes.len() as u64,
                     mode: None,
                     unmanaged: false,
                 },

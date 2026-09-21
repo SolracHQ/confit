@@ -312,7 +312,7 @@ impl Summary<'_> {
             resources
                 .push(painter.paint(Sigil::Header, &format!("{sigil} {}", header_line(document))));
             if creates {
-                for body in entry_bodies(document, &self.built.blobs) {
+                for body in entry_bodies(document) {
                     resources.push(painter.paint(Sigil::Add, &format!("  + {body}")));
                 }
             } else {
@@ -333,7 +333,7 @@ impl Summary<'_> {
     /// Renders entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &ManifestDocument) -> Vec<String> {
         match document.status(self.previous) {
-            DocumentStatus::Create => entry_bodies(document, &self.built.blobs)
+            DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  + {body}")))
                 .collect(),
@@ -345,7 +345,7 @@ impl Summary<'_> {
                     &self.built.blobs,
                     &self.previous.blobs,
                 ),
-                None => update_fallback(painter, document, &self.built.blobs),
+                None => update_fallback(painter, document),
             },
             DocumentStatus::Unchanged => Vec::new(),
         }
@@ -702,7 +702,7 @@ fn named_text(op: &RcOp) -> String {
 }
 
 /// Collects plain entry bodies for one document.
-fn entry_bodies(document: &ManifestDocument, blobs: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+fn entry_bodies(document: &ManifestDocument) -> Vec<String> {
     match &document.data {
         ManifestData::Structured { data, .. } => table_leaves(data, "")
             .into_iter()
@@ -716,9 +716,8 @@ fn entry_bodies(document: &ManifestDocument, blobs: &BTreeMap<String, Vec<u8>>) 
             }
         }
         ManifestData::Link { target } => vec![target.clone()],
-        ManifestData::Opaque { blob, .. } => {
-            let len = blobs.get(blob).map(|bytes| bytes.len()).unwrap_or(0);
-            vec![format!("opaque ({} bytes)", len)]
+        ManifestData::Opaque { size, .. } => {
+            vec![format!("opaque ({size} bytes)")]
         }
         ManifestData::Tree { members } => vec![format!("tree ({} files)", members.len())],
         ManifestData::Rc(rc) => {
@@ -858,7 +857,7 @@ fn update_lines(
                             )]
                         }
                     }
-                    _ => update_fallback(painter, document, new_blobs),
+                    _ => update_fallback(painter, document),
                 }
             }
         }
@@ -881,20 +880,16 @@ fn update_lines(
                     document.data.kind().name()
                 ),
             )];
-            out.extend(update_fallback(painter, document, new_blobs));
+            out.extend(update_fallback(painter, document));
             out
         }
-        _ => update_fallback(painter, document, new_blobs),
+        _ => update_fallback(painter, document),
     }
 }
 
 /// Renders desired entry bodies under the update sigil.
-fn update_fallback(
-    painter: &Painter,
-    document: &ManifestDocument,
-    blobs: &BTreeMap<String, Vec<u8>>,
-) -> Vec<String> {
-    entry_bodies(document, blobs)
+fn update_fallback(painter: &Painter, document: &ManifestDocument) -> Vec<String> {
+    entry_bodies(document)
         .into_iter()
         .map(|body| painter.paint(Sigil::Update, &format!("  ~ {body}")))
         .collect()
@@ -914,11 +909,11 @@ fn rc_update_lines(
 ) -> Vec<String> {
     let old_bytes = match recorded.bytes(old_blobs) {
         Ok(bytes) => bytes,
-        Err(_) => return update_fallback(painter, document, new_blobs),
+        Err(_) => return update_fallback(painter, document),
     };
     let new_bytes = match document.bytes(new_blobs) {
         Ok(bytes) => bytes,
-        Err(_) => return update_fallback(painter, document, new_blobs),
+        Err(_) => return update_fallback(painter, document),
     };
     if old_bytes == new_bytes {
         return Vec::new();
@@ -946,12 +941,13 @@ mod tests {
     fn opaque_update_reuses_content_shape() {
         use confit_core::plan::opaque_label;
 
-        let old_blob = confit_core::plan::sha256_hex(&[0xFF, 0x00]);
-        let new_blob = confit_core::plan::sha256_hex(&[0xFF, 0x01]);
+        let old_blob = confit_core::ids::sha256_hex(&[0xFF, 0x00]);
+        let new_blob = confit_core::ids::sha256_hex(&[0xFF, 0x01]);
         let mut previous_docs = vec![ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: old_blob.clone(),
+                size: 2,
                 mode: None,
                 unmanaged: false,
             },
@@ -968,6 +964,7 @@ mod tests {
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: new_blob.clone(),
+                size: 2,
                 mode: None,
                 unmanaged: false,
             },
@@ -1011,11 +1008,12 @@ mod tests {
         }
         let mut previous = Bundle::empty();
         previous.manifest.documents = previous_docs;
-        let blob = confit_core::plan::sha256_hex(&[0xFF, 0x00]);
+        let blob = confit_core::ids::sha256_hex(&[0xFF, 0x00]);
         let desired = ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: blob.clone(),
+                size: 2,
                 mode: None,
                 unmanaged: false,
             },
@@ -1154,7 +1152,8 @@ mod tests {
     fn tree_member(relative: &str, byte: u8) -> confit_core::document::ManifestMember {
         confit_core::document::ManifestMember {
             relative: relative.to_string(),
-            blob: confit_core::plan::sha256_hex(&[byte]),
+            blob: confit_core::ids::sha256_hex(&[byte]),
+            size: 1,
             mode: 0o644,
         }
     }
@@ -1914,6 +1913,23 @@ mod tests {
         assert!(
             text.contains("CHANGED"),
             "changed entry renders the diff: {text}"
+        );
+    }
+
+    #[test]
+    fn opaque_label_renders_from_size_without_blobs() {
+        let document = ManifestDocument::new(
+            DocPath::new("bin"),
+            ManifestData::Opaque {
+                blob: "missing".to_string(),
+                size: 5,
+                mode: None,
+                unmanaged: false,
+            },
+        );
+        assert_eq!(
+            entry_bodies(&document),
+            vec!["opaque (5 bytes)".to_string()]
         );
     }
 }

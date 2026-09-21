@@ -114,7 +114,7 @@ mod tests {
         use crate::ids::DocPath;
 
         let opaque_bytes = vec![0xFF, 0x00, 0x41];
-        let opaque_blob = crate::plan::sha256_hex(&opaque_bytes);
+        let opaque_blob = crate::ids::sha256_hex(&opaque_bytes);
         let mut blobs = BTreeMap::new();
         blobs.insert(opaque_blob.clone(), opaque_bytes);
         let bundle = Bundle {
@@ -133,6 +133,7 @@ mod tests {
                         DocPath::new("bin"),
                         ManifestData::Opaque {
                             blob: opaque_blob,
+                            size: 3,
                             mode: None,
                             unmanaged: false,
                         },
@@ -172,7 +173,7 @@ mod tests {
 
     #[test]
     fn manifest_rejects_unknown_fields() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         let text =

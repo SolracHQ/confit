@@ -4,7 +4,7 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use confit_core::document::{ManifestData, ManifestDocument};
 pub(crate) use confit_core::drift::DriftOrder;
 pub(crate) use confit_core::error::Error;
-pub(crate) use confit_core::fs::MemoryFs;
+pub(crate) use confit_core::fs::memory::MemoryFs;
 pub(crate) use confit_core::ids::{DocPath, ReadOutcome};
 pub(crate) use confit_core::plan::{BUNDLE_VERSION, Bundle};
 
@@ -195,7 +195,8 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
         ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
-                blob: confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+                blob: confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+                size: 4,
                 mode: None,
                 unmanaged: false,
             },
@@ -206,7 +207,7 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
 /// Builds the blob map backing the sample opaque document.
 pub(crate) fn sample_blobs() -> std::collections::BTreeMap<String, Vec<u8>> {
     std::collections::BTreeMap::from([(
-        confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
+        confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
         vec![0xFF, 0x00, 0x80, 0x41],
     )])
 }

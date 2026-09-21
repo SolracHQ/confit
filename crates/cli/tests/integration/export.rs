@@ -242,7 +242,8 @@ fn export_manifest_prints_pretty_json_without_base64() {
     let built = match build(vec![ManifestDocument::new(
         DocPath::new("bin"),
         ManifestData::Opaque {
-            blob: confit_core::plan::sha256_hex(&raw),
+            blob: confit_core::ids::sha256_hex(&raw),
+            size: raw.len() as u64,
             mode: None,
             unmanaged: false,
         },
@@ -283,7 +284,7 @@ fn export_manifest_prints_pretty_json_without_base64() {
     match &manifest.documents[0].data {
         confit_core::document::ManifestData::Opaque { blob, .. } => assert_eq!(
             blob,
-            &confit_core::plan::sha256_hex(&raw),
+            &confit_core::ids::sha256_hex(&raw),
             "blob ref names the payload hash"
         ),
         other => panic!("opaque ref expected, got {other:?}"),

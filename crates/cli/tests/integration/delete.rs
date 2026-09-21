@@ -7,16 +7,17 @@ fn delete_prunes_orphans_keeping_shared() {
     pin_home();
     let fs = MemoryFs::new();
     let shared_bytes = b"shared-confit-blob".to_vec();
-    let shared_sha = confit_core::plan::sha256_hex(&shared_bytes);
+    let shared_sha = confit_core::ids::sha256_hex(&shared_bytes);
     let keep_bytes = b"keep-confit-blob".to_vec();
-    let keep_sha = confit_core::plan::sha256_hex(&keep_bytes);
+    let keep_sha = confit_core::ids::sha256_hex(&keep_bytes);
     let drop_bytes = b"drop-confit-blob".to_vec();
-    let drop_sha = confit_core::plan::sha256_hex(&drop_bytes);
+    let drop_sha = confit_core::ids::sha256_hex(&drop_bytes);
     let keep_plan = match build(vec![
         ManifestDocument::new(
             DocPath::new("shared.bin"),
             ManifestData::Opaque {
                 blob: shared_sha.clone(),
+                size: shared_bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },
@@ -25,6 +26,7 @@ fn delete_prunes_orphans_keeping_shared() {
             DocPath::new("keep.bin"),
             ManifestData::Opaque {
                 blob: keep_sha.clone(),
+                size: keep_bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },
@@ -42,6 +44,7 @@ fn delete_prunes_orphans_keeping_shared() {
             DocPath::new("shared.bin"),
             ManifestData::Opaque {
                 blob: shared_sha.clone(),
+                size: shared_bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },
@@ -50,6 +53,7 @@ fn delete_prunes_orphans_keeping_shared() {
             DocPath::new("drop.bin"),
             ManifestData::Opaque {
                 blob: drop_sha.clone(),
+                size: drop_bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },

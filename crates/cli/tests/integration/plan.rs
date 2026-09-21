@@ -2,7 +2,7 @@ use crate::common::*;
 
 #[test]
 fn plan_file_feeds_state_roundtrip() {
-    use confit_core::fs::{Filesystem, MemoryFs};
+    use confit_core::fs::{Filesystem, memory::MemoryFs};
 
     let built = match build(vec![ManifestDocument::new(
         DocPath::new("note"),
@@ -56,7 +56,7 @@ fn plan_file_feeds_state_roundtrip() {
 
 #[test]
 fn stale_state_version_fails_as_unsupported() {
-    use confit_core::fs::{Filesystem, MemoryFs};
+    use confit_core::fs::{Filesystem, memory::MemoryFs};
 
     let fs = MemoryFs::new();
     match fs.write(Path::new("state.json"), b"{\"version\":1,\"documents\":[]}") {
@@ -74,7 +74,7 @@ fn stale_state_version_fails_as_unsupported() {
 
 #[test]
 fn missing_state_version_fails_as_plan_error() {
-    use confit_core::fs::{Filesystem, MemoryFs};
+    use confit_core::fs::{Filesystem, memory::MemoryFs};
 
     let fs = MemoryFs::new();
     match fs.write(Path::new("state.json"), b"{\"documents\":[]}") {
@@ -353,7 +353,7 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
         Ok(pool) => pool,
         Err(error) => panic!("pool resolves: {error}"),
     };
-    let sha = confit_core::plan::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]);
+    let sha = confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]);
     assert!(fs.exists(&pool.join(&sha)), "slot writes store their blobs");
 }
 

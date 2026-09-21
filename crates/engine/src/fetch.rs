@@ -266,7 +266,7 @@ impl Cache {
         let sidecar = sidecar_path(&cached);
         let stored = std::fs::read(&cached).ok()?;
         let stored_sha = std::fs::read_to_string(&sidecar).ok()?;
-        if confit_core::plan::sha256_hex(&stored) == stored_sha.trim().to_lowercase() {
+        if confit_core::ids::sha256_hex(&stored) == stored_sha.trim().to_lowercase() {
             Some(stored)
         } else {
             None
@@ -295,7 +295,7 @@ impl Cache {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&cached, bytes)?;
-        let digest = confit_core::plan::sha256_hex(bytes);
+        let digest = confit_core::ids::sha256_hex(bytes);
         std::fs::write(&sidecar, digest.as_bytes())?;
         Ok(cached)
     }
@@ -358,7 +358,7 @@ impl Cache {
 /// Absolute cache file path for the URL.
 ///
 pub fn cache_path(cache: &Path, url: &str) -> PathBuf {
-    cache.join(confit_core::plan::sha256_hex(url.as_bytes()))
+    cache.join(confit_core::ids::sha256_hex(url.as_bytes()))
 }
 
 /// Derives the sidecar path beside one cached file.

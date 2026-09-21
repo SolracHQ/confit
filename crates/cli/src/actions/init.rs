@@ -92,7 +92,7 @@ pub struct InitReport {
 /// ```rust
 /// use confit_cli::actions::init::InitRunner;
 /// use confit_cli::cli::InitArgs;
-/// use confit_core::fs::{Filesystem, MemoryFs};
+/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use std::path::{Path, PathBuf};
 ///
 /// let fs = MemoryFs::new();

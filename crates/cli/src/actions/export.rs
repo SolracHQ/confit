@@ -133,7 +133,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// ```rust
 /// use confit_cli::actions::export::resolve_slot_bundle;
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 ///
 /// let fs = MemoryFs::new();
 /// assert!(matches!(resolve_slot_bundle(None, &fs), Err(_)));

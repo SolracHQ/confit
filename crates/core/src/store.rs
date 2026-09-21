@@ -44,7 +44,7 @@ use crate::ids::DocPath;
 ///
 /// ```rust
 /// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::fs::{Filesystem, MemoryFs};
+/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use confit_core::ids::DocPath;
 /// use confit_core::store::write_documents;
 /// use std::collections::{BTreeMap, BTreeSet};
@@ -275,12 +275,14 @@ mod tests {
                 members: vec![
                     ManifestMember {
                         relative: "kept.ttf".into(),
-                        blob: crate::plan::sha256_hex(&[1]),
+                        blob: crate::ids::sha256_hex(&[1]),
+                        size: 1,
                         mode: 0o644,
                     },
                     ManifestMember {
                         relative: "gone.ttf".into(),
-                        blob: crate::plan::sha256_hex(&[2]),
+                        blob: crate::ids::sha256_hex(&[2]),
+                        size: 1,
                         mode: 0o644,
                     },
                 ],
@@ -290,14 +292,14 @@ mod tests {
 
     fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
         BTreeMap::from([
-            (crate::plan::sha256_hex(&[1]), vec![1]),
-            (crate::plan::sha256_hex(&[2]), vec![2]),
+            (crate::ids::sha256_hex(&[1]), vec![1]),
+            (crate::ids::sha256_hex(&[2]), vec![2]),
         ])
     }
 
     #[test]
     fn write_tree_members_land_with_modes() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         assert!(
@@ -315,7 +317,7 @@ mod tests {
     #[test]
     fn plain_writes_replace_disk_links_leaving_targets() {
         use crate::document::{ManifestData, ManifestDocument};
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
@@ -355,15 +357,16 @@ mod tests {
 
     #[test]
     fn unmanaged_present_skips_write_keeping_bytes() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         assert!(fs.write(std::path::Path::new("bin"), b"old").is_ok());
-        let blob = crate::plan::sha256_hex(b"new");
+        let blob = crate::ids::sha256_hex(b"new");
         let documents = vec![ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: blob.clone(),
+                size: 3,
                 mode: None,
                 unmanaged: true,
             },
@@ -381,14 +384,15 @@ mod tests {
 
     #[test]
     fn unmanaged_absent_writes_declared_bytes() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
-        let blob = crate::plan::sha256_hex(b"fresh");
+        let blob = crate::ids::sha256_hex(b"fresh");
         let documents = vec![ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: blob.clone(),
+                size: 5,
                 mode: None,
                 unmanaged: true,
             },
@@ -407,13 +411,13 @@ mod tests {
     #[test]
     fn written_count_drops_skipped_docs() {
         use crate::document::{ManifestData, ManifestDocument};
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
         assert!(fs.write(std::path::Path::new("bin"), b"old").is_ok());
-        let kept_blob = crate::plan::sha256_hex(b"new");
-        let fresh_blob = crate::plan::sha256_hex(b"fresh");
+        let kept_blob = crate::ids::sha256_hex(b"new");
+        let fresh_blob = crate::ids::sha256_hex(b"fresh");
         let documents = vec![
             ManifestDocument::new(
                 DocPath::new("note"),
@@ -427,6 +431,7 @@ mod tests {
                 DocPath::new("bin"),
                 ManifestData::Opaque {
                     blob: kept_blob.clone(),
+                    size: 3,
                     mode: None,
                     unmanaged: true,
                 },
@@ -435,6 +440,7 @@ mod tests {
                 DocPath::new("tool"),
                 ManifestData::Opaque {
                     blob: fresh_blob.clone(),
+                    size: 5,
                     mode: None,
                     unmanaged: true,
                 },
@@ -458,16 +464,17 @@ mod tests {
 
     #[test]
     fn unmanaged_present_rewrites_once_on_declaration_change() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
         assert!(fs.write(std::path::Path::new("bin"), b"old").is_ok());
-        let blob = crate::plan::sha256_hex(b"new");
+        let blob = crate::ids::sha256_hex(b"new");
         let documents = vec![ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
                 blob: blob.clone(),
+                size: 3,
                 mode: None,
                 unmanaged: true,
             },
@@ -487,7 +494,7 @@ mod tests {
     #[test]
     fn unmanaged_text_stays_quiet_while_present() {
         use crate::document::{ManifestData, ManifestDocument};
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
@@ -516,7 +523,7 @@ mod tests {
     #[test]
     fn remove_tree_members_drops_only_dropped() {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         let fs = MemoryFs::new();
@@ -533,7 +540,8 @@ mod tests {
             ManifestData::Tree {
                 members: vec![ManifestMember {
                     relative: "kept.ttf".into(),
-                    blob: crate::plan::sha256_hex(&[1]),
+                    blob: crate::ids::sha256_hex(&[1]),
+                    size: 1,
                     mode: 0o644,
                 }],
             },
@@ -549,7 +557,7 @@ mod tests {
 
     #[test]
     fn remove_orphans_skips_tree_destinations() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         assert!(

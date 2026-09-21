@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 /// Document path with home expansion.
 ///
@@ -101,6 +102,34 @@ pub enum ReadOutcome {
         /// Holds the raw failure detail from the read.
         reason: String,
     },
+}
+
+/// Computes lowercase hex SHA-256 over bytes.
+///
+/// Content hashes identify blobs the way paths identify
+/// destinations.
+///
+/// # Arguments
+///
+/// * `bytes` - the input bytes.
+///
+/// # Returns
+///
+/// Lowercase hex digest.
+///
+/// # Examples
+///
+/// ```rust
+/// use confit_core::ids::sha256_hex;
+///
+/// let digest = sha256_hex(b"abc");
+/// assert!(matches!(digest.starts_with("ba7816"), true));
+/// ```
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(test)]

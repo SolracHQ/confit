@@ -761,12 +761,14 @@ fn opaque_data(
     unmanaged: bool,
     blobs: &mut BTreeMap<String, Vec<u8>>,
 ) -> ManifestData {
-    let blob = confit_core::plan::sha256_hex(content);
+    let blob = confit_core::ids::sha256_hex(content);
+    let size = content.len() as u64;
     blobs
         .entry(blob.clone())
         .or_insert_with(|| content.to_vec());
     ManifestData::Opaque {
         blob,
+        size,
         mode,
         unmanaged,
     }
@@ -779,13 +781,15 @@ fn tree_data(
 ) -> ManifestData {
     let mut out = Vec::with_capacity(members.len());
     for member in members {
-        let blob = confit_core::plan::sha256_hex(&member.content);
+        let blob = confit_core::ids::sha256_hex(&member.content);
+        let size = member.content.len() as u64;
         blobs
             .entry(blob.clone())
             .or_insert_with(|| member.content.clone());
         out.push(ManifestMember {
             relative: member.rel.clone(),
             blob,
+            size,
             mode: member.mode,
         });
     }

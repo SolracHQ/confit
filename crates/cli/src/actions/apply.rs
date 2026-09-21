@@ -8,7 +8,10 @@ use std::path::PathBuf;
 use confit_core::document::ManifestDocument;
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::{Error, Result};
-use confit_core::fs::{Filesystem, snapshot_document, snapshot_tree};
+use confit_core::fs::{
+    Filesystem,
+    snapshot::{snapshot_document, snapshot_tree},
+};
 use confit_core::hook::{describe_condition, lifecycle_lines, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
@@ -48,7 +51,7 @@ pub struct ApplyReport {
 /// use confit_cli::actions::apply::ApplyRunner;
 /// use confit_cli::seams::Seams;
 /// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::fs::{Filesystem, MemoryFs};
+/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use confit_core::ids::DocPath;
 /// use confit_core::plan::Bundle;
 /// use std::io::Cursor;
@@ -580,7 +583,7 @@ fn changed_paths(
 mod tests {
     use super::*;
     use confit_core::document::{ManifestData, ManifestDocument, ManifestMember};
-    use confit_core::plan::sha256_hex;
+    use confit_core::ids::sha256_hex;
 
     fn text_doc(path: &str, content: &str) -> ManifestDocument {
         ManifestDocument::new(
@@ -655,6 +658,7 @@ mod tests {
                     members: vec![ManifestMember {
                         relative: "member.ttf".into(),
                         blob: sha256_hex(&[1]),
+                        size: 1,
                         mode: 0o644,
                     }],
                 },

@@ -438,7 +438,7 @@ fn check_user_sha(caller: &str, url: &str, bytes: &[u8], wanted: Option<&str>) -
     let Some(expected) = wanted else {
         return Ok(());
     };
-    let actual = confit_core::plan::sha256_hex(bytes);
+    let actual = confit_core::ids::sha256_hex(bytes);
     if actual != expected.to_lowercase() {
         return Err(plan_error(format!(
             "{caller}: sha256 mismatch for '{url}': want {expected}, got {actual}"

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::{ManifestDocument, ManifestMember, StructuredFormat, Table};
-use crate::fs::TreeMemberRead;
+use crate::fs::snapshot::TreeMemberRead;
 use crate::ids::{DocPath, ReadOutcome};
 use crate::plan::{Bundle, opaque_label};
 
@@ -654,7 +654,8 @@ mod tests {
         ManifestDocument::new(
             DocPath::new(path),
             ManifestData::Opaque {
-                blob: crate::plan::sha256_hex(bytes),
+                blob: crate::ids::sha256_hex(bytes),
+                size: bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },
@@ -665,7 +666,8 @@ mod tests {
         ManifestDocument::new(
             DocPath::new(path),
             ManifestData::Opaque {
-                blob: crate::plan::sha256_hex(bytes),
+                blob: crate::ids::sha256_hex(bytes),
+                size: bytes.len() as u64,
                 mode: None,
                 unmanaged: true,
             },
@@ -692,13 +694,17 @@ mod tests {
     fn opaque_blobs(pairs: &[&[u8]]) -> BTreeMap<String, Vec<u8>> {
         pairs
             .iter()
-            .map(|bytes| (crate::plan::sha256_hex(bytes), bytes.to_vec()))
+            .map(|bytes| (crate::ids::sha256_hex(bytes), bytes.to_vec()))
             .collect()
     }
 
     #[test]
     fn non_link_docs_compare_behind_disk_links() {
-        use crate::fs::{Filesystem, MemoryFs, snapshot_document, snapshot_tree};
+        use crate::fs::{
+            Filesystem,
+            memory::MemoryFs,
+            snapshot::{snapshot_document, snapshot_tree},
+        };
 
         let fs = MemoryFs::new();
         assert!(fs.write(std::path::Path::new("behind"), b"hi").is_ok());
@@ -1068,17 +1074,20 @@ mod tests {
                 members: vec![
                     ManifestMember {
                         relative: "changed.ttf".into(),
-                        blob: crate::plan::sha256_hex(&[1]),
+                        blob: crate::ids::sha256_hex(&[1]),
+                        size: 1,
                         mode: 0o644,
                     },
                     ManifestMember {
                         relative: "gone.ttf".into(),
-                        blob: crate::plan::sha256_hex(&[2]),
+                        blob: crate::ids::sha256_hex(&[2]),
+                        size: 1,
                         mode: 0o644,
                     },
                     ManifestMember {
                         relative: "remode.ttf".into(),
-                        blob: crate::plan::sha256_hex(&[3]),
+                        blob: crate::ids::sha256_hex(&[3]),
+                        size: 1,
                         mode: 0o644,
                     },
                 ],
@@ -1088,14 +1097,14 @@ mod tests {
 
     fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
         BTreeMap::from([
-            (crate::plan::sha256_hex(&[1]), vec![1]),
-            (crate::plan::sha256_hex(&[2]), vec![2]),
-            (crate::plan::sha256_hex(&[3]), vec![3]),
+            (crate::ids::sha256_hex(&[1]), vec![1]),
+            (crate::ids::sha256_hex(&[2]), vec![2]),
+            (crate::ids::sha256_hex(&[3]), vec![3]),
         ])
     }
 
-    fn tree_disk() -> BTreeMap<String, crate::fs::TreeMemberRead> {
-        use crate::fs::TreeMemberRead;
+    fn tree_disk() -> BTreeMap<String, crate::fs::snapshot::TreeMemberRead> {
+        use crate::fs::snapshot::TreeMemberRead;
 
         BTreeMap::from([
             (
@@ -1142,7 +1151,7 @@ mod tests {
 
     #[test]
     fn tree_drift_stays_quiet_on_equal_manifest() {
-        use crate::fs::TreeMemberRead;
+        use crate::fs::snapshot::TreeMemberRead;
 
         let recorded = with_blobs(vec![tree_doc()], tree_blobs());
         let disk = BTreeMap::from([

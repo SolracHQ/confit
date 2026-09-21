@@ -4,13 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use sha2::Digest;
-
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
 use crate::fs::Filesystem;
 use crate::hook::{Hook, preview_hook};
-use crate::ids::DocPath;
+use crate::ids::{DocPath, sha256_hex};
 use crate::runtime::Runtime;
 use crate::store::manifest::Manifest;
 
@@ -357,7 +355,7 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_core::plan::Bundle;
-    /// use confit_core::fs::MemoryFs;
+    /// use confit_core::fs::memory::MemoryFs;
     /// use confit_core::runtime::Runtime;
     /// use std::collections::BTreeSet;
     ///
@@ -377,31 +375,6 @@ impl Bundle {
         }
         Ok(lines)
     }
-}
-
-/// Computes lowercase hex SHA-256 over bytes.
-///
-/// # Arguments
-///
-/// * `bytes` - the input bytes.
-///
-/// # Returns
-///
-/// Lowercase hex digest.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::plan::sha256_hex;
-///
-/// let digest = sha256_hex(b"abc");
-/// assert!(matches!(digest.starts_with("ba7816"), true));
-/// ```
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    sha2::Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]
@@ -477,7 +450,8 @@ mod tests {
         ManifestDocument::new(
             DocPath::new(path),
             ManifestData::Opaque {
-                blob: crate::plan::sha256_hex(bytes),
+                blob: sha256_hex(bytes),
+                size: bytes.len() as u64,
                 mode: None,
                 unmanaged: false,
             },
@@ -570,10 +544,10 @@ mod tests {
         assert_eq!(built.manifest.hooks[0].argv, vec!["mise".to_string()]);
     }
 
-    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::MemoryFs) {
+    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::memory::MemoryFs) {
         use crate::fs::Filesystem;
 
-        let fs = crate::fs::MemoryFs::new();
+        let fs = crate::fs::memory::MemoryFs::new();
         let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
         let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
         let _ = fs.write(std::path::Path::new("/opt/probe"), b"run");

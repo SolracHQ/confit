@@ -95,7 +95,7 @@ impl ManifestDocument {
     /// blobs.insert("abc".to_string(), vec![0xFF, 0x00]);
     /// let document = ManifestDocument::new(
     ///     DocPath::new("bin"),
-    ///     ManifestData::Opaque { blob: "abc".into(), mode: None, unmanaged: false },
+    ///     ManifestData::Opaque { blob: "abc".into(), size: 2, mode: None, unmanaged: false },
     /// );
     /// assert!(matches!(document.bytes(&blobs), Ok(bytes) if bytes == vec![0xFF, 0x00]));
     /// ```

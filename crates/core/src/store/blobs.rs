@@ -94,7 +94,7 @@ pub(crate) fn gunzip_bytes(bytes: &[u8], sha: &str) -> Result<Vec<u8>> {
     decoder
         .read_to_end(&mut raw)
         .map_err(|error| Error::Plan(format!("read blob '{sha}': {error}")))?;
-    if crate::plan::sha256_hex(&raw) != sha {
+    if crate::ids::sha256_hex(&raw) != sha {
         return Err(Error::Plan(format!("blob '{sha}' fails verification")));
     }
     Ok(raw)
@@ -300,7 +300,7 @@ impl<'a> Hydrator<'a> {
         }
         if let Some(dest) = disk
             && let Ok(bytes) = self.fs.read(dest)
-            && crate::plan::sha256_hex(&bytes) == sha
+            && crate::ids::sha256_hex(&bytes) == sha
         {
             return Ok(bytes);
         }
@@ -422,9 +422,9 @@ pub(crate) mod tests {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
 
-        let opaque_blob = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
-        let a_blob = crate::plan::sha256_hex(&[1, 2, 3]);
-        let b_blob = crate::plan::sha256_hex(&[4, 5, 6]);
+        let opaque_blob = crate::ids::sha256_hex(&[0xFF, 0x00, 0x41]);
+        let a_blob = crate::ids::sha256_hex(&[1, 2, 3]);
+        let b_blob = crate::ids::sha256_hex(&[4, 5, 6]);
         let documents = vec![
             ManifestDocument::new(
                 DocPath::new("note"),
@@ -438,6 +438,7 @@ pub(crate) mod tests {
                 DocPath::new("bin"),
                 ManifestData::Opaque {
                     blob: opaque_blob.clone(),
+                    size: 3,
                     mode: None,
                     unmanaged: false,
                 },
@@ -449,11 +450,13 @@ pub(crate) mod tests {
                         ManifestMember {
                             relative: "a.ttf".into(),
                             blob: a_blob.clone(),
+                            size: 3,
                             mode: 0o644,
                         },
                         ManifestMember {
                             relative: "b.ttf".into(),
                             blob: b_blob.clone(),
+                            size: 3,
                             mode: 0o644,
                         },
                     ],
@@ -470,7 +473,7 @@ pub(crate) mod tests {
         built
     }
 
-    pub(crate) fn pool_blobs(fs: &crate::fs::MemoryFs) -> Vec<std::path::PathBuf> {
+    pub(crate) fn pool_blobs(fs: &crate::fs::memory::MemoryFs) -> Vec<std::path::PathBuf> {
         let dir = match resolve_blobs_dir() {
             Ok(dir) => dir,
             Err(error) => panic!("blobs resolve: {error}"),
@@ -484,7 +487,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn gunzip_blob(fs: &crate::fs::MemoryFs, path: &std::path::Path) -> Vec<u8> {
+    fn gunzip_blob(fs: &crate::fs::memory::MemoryFs, path: &std::path::Path) -> Vec<u8> {
         use std::io::Read as _;
 
         let gzipped = match fs.read(path) {
@@ -502,7 +505,7 @@ pub(crate) mod tests {
 
     #[test]
     fn manifest_pool_roundtrip_through_memory_fs() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
@@ -543,14 +546,15 @@ pub(crate) mod tests {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
 
-        let fs = crate::fs::MemoryFs::new();
+        let fs = crate::fs::memory::MemoryFs::new();
         let shared = vec![9, 9, 9];
-        let shared_blob = crate::plan::sha256_hex(&shared);
+        let shared_blob = crate::ids::sha256_hex(&shared);
         let documents = vec![
             ManifestDocument::new(
                 DocPath::new("first"),
                 ManifestData::Opaque {
                     blob: shared_blob.clone(),
+                    size: 3,
                     mode: None,
                     unmanaged: false,
                 },
@@ -559,6 +563,7 @@ pub(crate) mod tests {
                 DocPath::new("second"),
                 ManifestData::Opaque {
                     blob: shared_blob.clone(),
+                    size: 3,
                     mode: None,
                     unmanaged: false,
                 },
@@ -569,6 +574,7 @@ pub(crate) mod tests {
                     members: vec![ManifestMember {
                         relative: "a.ttf".into(),
                         blob: shared_blob.clone(),
+                        size: 3,
                         mode: 0o644,
                     }],
                 },
@@ -597,16 +603,17 @@ pub(crate) mod tests {
     #[test]
     fn prune_blobs_drops_only_unreferenced() {
         use crate::document::{ManifestData, ManifestDocument};
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use crate::ids::DocPath;
 
         fn opaque_plan(path: &str, byte: u8) -> Bundle {
-            let blob = crate::plan::sha256_hex(&[byte]);
+            let blob = crate::ids::sha256_hex(&[byte]);
             let mut built = match Bundle::build(
                 vec![ManifestDocument::new(
                     DocPath::new(path),
                     ManifestData::Opaque {
                         blob: blob.clone(),
+                        size: 1,
                         mode: None,
                         unmanaged: false,
                     },
@@ -663,7 +670,7 @@ pub(crate) mod tests {
         }
         assert!(!fs.exists(&orphan));
         for byte in [10, 20, 30] {
-            let kept = pool.join(crate::plan::sha256_hex(&[byte]));
+            let kept = pool.join(crate::ids::sha256_hex(&[byte]));
             assert!(fs.exists(&kept));
         }
         let loaded = match load_state(Some(&slot), &fs) {
@@ -675,7 +682,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lazy_hydration_skips_pool_on_identical_disk() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
@@ -712,7 +719,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lazy_hydration_loads_pool_on_mismatched_disk() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
@@ -738,7 +745,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lazy_hydration_rejects_corrupt_pool_blob() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
         use std::io::Write as _;
 
         let fs = MemoryFs::new();
@@ -748,7 +755,7 @@ pub(crate) mod tests {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
-        let sha = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
+        let sha = crate::ids::sha256_hex(&[0xFF, 0x00, 0x41]);
         let pool = match resolve_blobs_dir() {
             Ok(pool) => pool,
             Err(error) => panic!("blobs resolve: {error}"),
@@ -777,7 +784,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lazy_hydration_missing_blob_fails_naming_hash() {
-        use crate::fs::{Filesystem, MemoryFs};
+        use crate::fs::{Filesystem, memory::MemoryFs};
 
         let fs = MemoryFs::new();
         let built = mixed_plan();
@@ -786,7 +793,7 @@ pub(crate) mod tests {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
-        let sha = crate::plan::sha256_hex(&[0xFF, 0x00, 0x41]);
+        let sha = crate::ids::sha256_hex(&[0xFF, 0x00, 0x41]);
         let pool = match resolve_blobs_dir() {
             Ok(pool) => pool,
             Err(error) => panic!("blobs resolve: {error}"),
@@ -807,7 +814,7 @@ pub(crate) mod tests {
 
     #[test]
     fn compress_events_cover_every_blob_once() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
         use crate::progress::Event;
 
         let fs = MemoryFs::new();
@@ -860,7 +867,7 @@ pub(crate) mod tests {
 
     #[test]
     fn skipped_pool_blobs_emit_nothing() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
         use crate::progress::Event;
 
         let fs = MemoryFs::new();

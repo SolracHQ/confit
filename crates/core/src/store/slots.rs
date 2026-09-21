@@ -31,7 +31,7 @@ use super::manifest::{HistoryEntry, Manifest, manifest_json};
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::BUNDLE_VERSION;
 /// use confit_core::store::slots::load_state;
 ///
@@ -101,7 +101,7 @@ pub fn load_state(path: Option<&Path>, fs: &dyn Filesystem) -> Result<Bundle> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::slots::write_manifest;
 ///
@@ -410,7 +410,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::fs::MemoryFs;
+/// use confit_core::fs::memory::MemoryFs;
 /// use confit_core::plan::Bundle;
 /// use confit_core::store::slots::archive_previous;
 ///
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn named_plan_roundtrips_through_memory_fs() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         let built = match Bundle::build(
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn hooks_roundtrip_through_memory_fs() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         let hooks = vec![crate::hook::Hook {
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn version_two_state_fails_as_unsupported() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         match fs.write(
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn resolve_slot_absent_applied_refuses() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         match resolve_slot(None, &fs) {
@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn resolve_slot_named_roundtrips_with_kind() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         let built = match Bundle::build(Vec::new(), Vec::new()) {
@@ -666,7 +666,7 @@ mod tests {
 
     #[test]
     fn resolve_slot_empty_history_refuses_pick() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         match resolve_slot(Some("%1"), &fs) {
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn resolve_slot_bare_value_refuses() {
-        use crate::fs::MemoryFs;
+        use crate::fs::memory::MemoryFs;
 
         let fs = MemoryFs::new();
         match resolve_slot(Some("backup.cb"), &fs) {
