@@ -33,7 +33,7 @@ Hardness can emerge from use instead of declarations. Hook `__index` on the fact
 
 Idea: Stop holding the whole run in memory
 Importance: Critical
-Status: Partially planned in v0.8. The opaque file path first step moves there, the rest stays open.
+Status: Fully planned in v0.8. The memory section carries the whole pipeline.
 Pain: My dotfiles plan peaks at 1.7GB RSS in 6.6s and example 3 alone hits 1.3GB, and with the ram prices that is a big pain. We are using memory for use it not because we need it, I have almost everything in memory all the time.
 
 My suspects so far:
