@@ -210,7 +210,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "confit-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anstream",
  "clap",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "confit-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "crossbeam-channel",
  "diffy",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "confit-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "confit-core",
  "crossbeam-channel",

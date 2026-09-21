@@ -42,6 +42,15 @@ Design spec: `docs/design/v0.8.md`.
   names the first server. `servers[0]` fails the plan naming
   the path. Drift keys plus summary lines echo the same
   1-based shapes back.
+- Plan with no destination previews alone and writes nothing,
+  so the safe path runs cheaper than the apply it previews.
+  Explicit outputs mint artifacts on purpose, a file output
+  builds the portable bundle, a named output fills the slot.
+- Bytes live in files, memory holds hashes. `opaque` takes a
+  source path, archive callbacks receive member paths from an
+  extract-once temp root, and every consumer streams through
+  blob refs holding sha plus size plus path. Example 3 peaks
+  near 300 MB where it hit 1.5 GB, the plain preview lower.
 
 ## [0.7] - 2026-09-19
 
