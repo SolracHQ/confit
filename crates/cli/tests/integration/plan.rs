@@ -4,22 +4,25 @@ use crate::common::*;
 fn plan_file_feeds_state_roundtrip() {
     use confit_core::fs::{Filesystem, memory::MemoryFs};
 
-    let built = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "hi".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let fs = MemoryFs::new();
+    let built = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "hi".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
-    let text = match confit_core::store::manifest::manifest_json(&built) {
+    let text = match confit_core::store::manifest::manifest_json(&built.manifest) {
         Ok(text) => text,
         Err(error) => panic!("plan serializes: {error}"),
     };
-    let fs = MemoryFs::new();
     match fs.write(Path::new("slot.json"), text.as_bytes()) {
         Ok(()) => {}
         Err(error) => panic!("memory writes: {error}"),
@@ -277,7 +280,7 @@ fn plan_file_output_roundtrips_as_bundle() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -306,11 +309,12 @@ fn plan_file_output_roundtrips_as_bundle() {
 #[test]
 fn plan_manifest_json_roundtrips() {
     pin_home();
-    let built = match build(sample_documents()) {
+    let fs = MemoryFs::new();
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
-    let text = match confit_core::store::manifest::manifest_json(&built) {
+    let text = match confit_core::store::manifest::manifest_json(&built.manifest) {
         Ok(text) => text,
         Err(error) => panic!("manifest renders: {error}"),
     };
@@ -332,7 +336,7 @@ fn plan_named_output_lands_slot_manifest_plus_pool() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };

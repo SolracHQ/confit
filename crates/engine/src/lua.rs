@@ -59,23 +59,6 @@ pub(crate) trait TableExt {
     ///
     fn req_str(&self, ctx: &str, field: &str) -> mlua::Result<String>;
 
-    /// Reads one named byte field from a table.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - error prefix naming the constructor.
-    /// * `field` - field name under reading.
-    ///
-    /// # Returns
-    ///
-    /// Raw byte contents without text conversion.
-    ///
-    /// # Errors
-    ///
-    /// Missing plus non-string fields fail as plan errors.
-    ///
-    fn req_bytes(&self, ctx: &str, field: &str) -> mlua::Result<Vec<u8>>;
-
     /// Reads one named table field from a table.
     ///
     /// # Arguments
@@ -234,23 +217,6 @@ pub(crate) trait ValueExt {
     ///
     fn req_string_array(self, ctx: &str, field: &str) -> mlua::Result<Vec<String>>;
 
-    /// Reads one raw byte value with a uniform shape error.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - error prefix naming the constructor.
-    /// * `field` - field name under reading.
-    ///
-    /// # Returns
-    ///
-    /// Raw byte contents without text conversion.
-    ///
-    /// # Errors
-    ///
-    /// Non-string values fail as plan errors.
-    ///
-    fn req_bytes(self, ctx: &str, field: &str) -> mlua::Result<Vec<u8>>;
-
     /// Tests one value for string contents.
     ///
     /// # Arguments
@@ -338,11 +304,6 @@ impl TableExt for Table {
         value.req_table(ctx, field)
     }
 
-    fn req_bytes(&self, ctx: &str, field: &str) -> mlua::Result<Vec<u8>> {
-        let value: Value = self.get(field)?;
-        value.req_bytes(ctx, field)
-    }
-
     fn req_object(&self, ctx: &str, field: &str) -> mlua::Result<BTreeMap<String, Json>> {
         let json = self
             .to_json(&format!("{ctx} field '{field}'"))
@@ -427,15 +388,6 @@ impl ValueExt for Value {
 
     fn req_string_array(self, ctx: &str, field: &str) -> mlua::Result<Vec<String>> {
         self.req_table(ctx, field)?.req_string_array(ctx, field)
-    }
-
-    fn req_bytes(self, ctx: &str, field: &str) -> mlua::Result<Vec<u8>> {
-        match self {
-            Value::String(text) => Ok(text.as_bytes().to_vec()),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a string"
-            ))),
-        }
     }
 
     fn opt_str(self) -> Option<String> {

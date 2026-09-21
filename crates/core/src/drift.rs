@@ -5,9 +5,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::{ManifestDocument, ManifestMember, StructuredFormat, Table};
+use crate::fs::Filesystem;
 use crate::fs::snapshot::TreeMemberRead;
 use crate::ids::{DocPath, ReadOutcome};
 use crate::plan::{Bundle, opaque_label};
+use crate::store::blobs::{BlobRef, read_blob_bytes};
 
 /// Manual edit behind one recorded path.
 ///
@@ -216,6 +218,7 @@ impl Bundle {
     /// * `snapshot_tree` - the disk walker mapping destination
     ///   folders to relative member reads.
     /// * `order` - the side order under assigning old and new
+    /// * `fs` - the backend under reading recorded blob bytes.
     ///
     /// # Returns
     ///
@@ -226,6 +229,7 @@ impl Bundle {
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
     /// use confit_core::drift::{Drift, DriftOrder};
+    /// use confit_core::fs::memory::MemoryFs;
     /// use confit_core::ids::{DocPath, ReadOutcome};
     /// use confit_core::plan::Bundle;
     /// use std::collections::BTreeMap;
@@ -235,7 +239,7 @@ impl Bundle {
     ///     DocPath::new("note"),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// )];
-    /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst);
+    /// let drifts = previous.drift(&|_| ReadOutcome::Absent, &|_| BTreeMap::new(), DriftOrder::RecordedFirst, &MemoryFs::new());
     /// assert_eq!(
     ///     Drift::lines(&drifts),
     ///     vec![
@@ -249,6 +253,7 @@ impl Bundle {
         snapshot: &dyn Fn(&ManifestDocument) -> ReadOutcome,
         snapshot_tree: &dyn Fn(&DocPath) -> BTreeMap<String, TreeMemberRead>,
         order: DriftOrder,
+        fs: &dyn Filesystem,
     ) -> Vec<Drift> {
         let mut out = Vec::new();
         for document in &self.manifest.documents {
@@ -256,12 +261,13 @@ impl Bundle {
                 out.extend(document.tree_drift(
                     members,
                     &self.blobs,
+                    fs,
                     &snapshot_tree(&document.path),
                     order,
                 ));
                 continue;
             }
-            let recorded_bytes = match document.bytes(&self.blobs) {
+            let recorded_bytes = match document.bytes(&self.blobs, fs) {
                 Ok(bytes) => bytes,
                 Err(_) => continue,
             };
@@ -423,7 +429,8 @@ impl ManifestDocument {
     /// # Arguments
     ///
     /// * `members` - the recorded tree members under comparing.
-    /// * `blobs` - the raw blob bytes under content hashes.
+    /// * `blobs` - the blob refs under content hashes.
+    /// * `fs` - the backend under reading recorded member bytes.
     /// * `disk` - the relative disk reads under comparing.
     /// * `order` - the side order under assigning old and new
     ///
@@ -433,7 +440,8 @@ impl ManifestDocument {
     pub(crate) fn tree_drift(
         &self,
         members: &[ManifestMember],
-        blobs: &BTreeMap<String, Vec<u8>>,
+        blobs: &BTreeMap<String, BlobRef>,
+        fs: &dyn Filesystem,
         disk: &BTreeMap<String, TreeMemberRead>,
         order: DriftOrder,
     ) -> Vec<Drift> {
@@ -442,9 +450,9 @@ impl ManifestDocument {
         let mut out = Vec::new();
         for member in members {
             let member_path = DocPath::new(format!("{}/{}", self.path.as_str(), member.relative));
-            let recorded = match blobs.get(&member.blob) {
-                Some(bytes) => bytes,
-                None => continue,
+            let recorded = match read_blob_bytes(&member.blob, blobs, fs) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
             };
             match disk.get(&member.relative) {
                 None => out.push(Drift::Missing { path: member_path }),
@@ -453,15 +461,15 @@ impl ManifestDocument {
                     reason: reason.clone(),
                 }),
                 Some(TreeMemberRead::Present { bytes, mode }) => {
-                    if *bytes != *recorded {
+                    if *bytes != recorded {
                         let (old, new) = match order {
                             DriftOrder::RecordedFirst => (
-                                serde_json::Value::String(opaque_label(recorded)),
+                                serde_json::Value::String(opaque_label(&recorded)),
                                 serde_json::Value::String(opaque_label(bytes)),
                             ),
                             DriftOrder::DiskFirst => (
                                 serde_json::Value::String(opaque_label(bytes)),
-                                serde_json::Value::String(opaque_label(recorded)),
+                                serde_json::Value::String(opaque_label(&recorded)),
                             ),
                         };
                         out.push(Drift::Key {
@@ -624,6 +632,7 @@ fn flatten_value(
 mod tests {
     use super::*;
     use crate::document::{ManifestData, ManifestDocument};
+    use crate::fs::memory::MemoryFs;
 
     fn text_doc(path: &str, content: &str) -> ManifestDocument {
         ManifestDocument::new(
@@ -675,10 +684,10 @@ mod tests {
     }
 
     fn with_hashes(documents: Vec<ManifestDocument>) -> Bundle {
-        with_blobs(documents, BTreeMap::new())
+        with_refs(documents, BTreeMap::new())
     }
 
-    fn with_blobs(documents: Vec<ManifestDocument>, blobs: BTreeMap<String, Vec<u8>>) -> Bundle {
+    fn with_refs(documents: Vec<ManifestDocument>, blobs: BTreeMap<String, BlobRef>) -> Bundle {
         let mut docs = documents;
         for document in &mut docs {
             if let Err(error) = document.fill_hash() {
@@ -691,11 +700,30 @@ mod tests {
         previous
     }
 
-    fn opaque_blobs(pairs: &[&[u8]]) -> BTreeMap<String, Vec<u8>> {
-        pairs
-            .iter()
-            .map(|bytes| (crate::ids::sha256_hex(bytes), bytes.to_vec()))
-            .collect()
+    /// Builds spill refs for raw bytes, mirroring scratch into the memory backend.
+    ///
+    /// Spill files live outside the managed filesystem, so the
+    /// mirror lets ref paths resolve through the fake.
+    fn opaque_refs(fs: &MemoryFs, pairs: &[&[u8]]) -> BTreeMap<String, BlobRef> {
+        use crate::fs::Filesystem as _;
+
+        let mut out = BTreeMap::new();
+        for bytes in pairs {
+            let path = crate::store::blobs::spill_bytes(bytes);
+            if let Err(error) = fs.write(&path, bytes) {
+                panic!("spill mirrors: {error}");
+            }
+            let sha = crate::ids::sha256_hex(bytes);
+            out.insert(
+                sha.clone(),
+                BlobRef {
+                    sha,
+                    size: bytes.len() as u64,
+                    path,
+                },
+            );
+        }
+        out
     }
 
     #[test]
@@ -717,6 +745,7 @@ mod tests {
             &|document| snapshot_document(document, &fs),
             &|path| snapshot_tree(&path.expand(), &fs),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert!(quiet.is_empty());
         assert!(fs.write(std::path::Path::new("behind"), b"changed").is_ok());
@@ -724,6 +753,7 @@ mod tests {
             &|document| snapshot_document(document, &fs),
             &|path| snapshot_tree(&path.expand(), &fs),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert!(matches!(drifted.as_slice(), [Drift::Hunk { .. }]));
     }
@@ -746,6 +776,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         let mut keys: Vec<String> = drifts
             .iter()
@@ -793,6 +824,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         let mut keys: Vec<String> = drifts
             .iter()
@@ -842,6 +874,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -875,6 +908,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -889,9 +923,10 @@ mod tests {
 
     #[test]
     fn opaque_drift_reports_hash_plus_size() {
-        let recorded = with_blobs(
+        let fs = MemoryFs::new();
+        let recorded = with_refs(
             vec![opaque_doc("bin", &[0xFF, 0x00])],
-            opaque_blobs(&[&[0xFF, 0x00]]),
+            opaque_refs(&fs, &[&[0xFF, 0x00]]),
         );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Present {
@@ -900,6 +935,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -931,9 +967,10 @@ mod tests {
 
     #[test]
     fn opaque_drift_stays_quiet_on_equal_bytes() {
-        let recorded = with_blobs(
+        let fs = MemoryFs::new();
+        let recorded = with_refs(
             vec![opaque_doc("bin", &[0xFF, 0x00])],
-            opaque_blobs(&[&[0xFF, 0x00]]),
+            opaque_refs(&fs, &[&[0xFF, 0x00]]),
         );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Present {
@@ -942,15 +979,17 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert!(drifts.is_empty());
     }
 
     #[test]
     fn unmanaged_opaque_drift_stays_quiet_on_changed_bytes() {
-        let recorded = with_blobs(
+        let fs = MemoryFs::new();
+        let recorded = with_refs(
             vec![unmanaged_doc("bin", &[0xFF, 0x00])],
-            opaque_blobs(&[&[0xFF, 0x00]]),
+            opaque_refs(&fs, &[&[0xFF, 0x00]]),
         );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Present {
@@ -959,6 +998,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert!(drifts.is_empty());
         assert!(Drift::lines(&drifts).is_empty());
@@ -981,20 +1021,23 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert!(drifts.is_empty());
     }
 
     #[test]
     fn unmanaged_opaque_drift_reports_missing_when_absent() {
-        let recorded = with_blobs(
+        let fs = MemoryFs::new();
+        let recorded = with_refs(
             vec![unmanaged_doc("bin", &[0xFF, 0x00])],
-            opaque_blobs(&[&[0xFF, 0x00]]),
+            opaque_refs(&fs, &[&[0xFF, 0x00]]),
         );
         let drifts = recorded.drift(
             &|_| ReadOutcome::Absent,
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert!(matches!(drifts.as_slice(), [Drift::Missing { .. }]));
     }
@@ -1021,6 +1064,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -1095,12 +1139,8 @@ mod tests {
         )
     }
 
-    fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
-        BTreeMap::from([
-            (crate::ids::sha256_hex(&[1]), vec![1]),
-            (crate::ids::sha256_hex(&[2]), vec![2]),
-            (crate::ids::sha256_hex(&[3]), vec![3]),
-        ])
+    fn tree_refs(fs: &MemoryFs) -> BTreeMap<String, BlobRef> {
+        opaque_refs(fs, &[&[1], &[2], &[3]])
     }
 
     fn tree_disk() -> BTreeMap<String, crate::fs::snapshot::TreeMemberRead> {
@@ -1133,11 +1173,13 @@ mod tests {
 
     #[test]
     fn tree_drift_reports_missing_changed_mode() {
-        let recorded = with_blobs(vec![tree_doc()], tree_blobs());
+        let fs = MemoryFs::new();
+        let recorded = with_refs(vec![tree_doc()], tree_refs(&fs));
         let drifts = recorded.drift(
             &|_| ReadOutcome::Absent,
             &|_| tree_disk(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert_eq!(drifts.len(), 3);
         assert!(matches!(&drifts[0], Drift::Key { key, .. } if key == "changed.ttf"));
@@ -1153,7 +1195,8 @@ mod tests {
     fn tree_drift_stays_quiet_on_equal_manifest() {
         use crate::fs::snapshot::TreeMemberRead;
 
-        let recorded = with_blobs(vec![tree_doc()], tree_blobs());
+        let fs = MemoryFs::new();
+        let recorded = with_refs(vec![tree_doc()], tree_refs(&fs));
         let disk = BTreeMap::from([
             (
                 "changed.ttf".to_string(),
@@ -1181,6 +1224,7 @@ mod tests {
             &|_| ReadOutcome::Absent,
             &|_| disk.clone(),
             DriftOrder::RecordedFirst,
+            &fs,
         );
         assert!(drifts.is_empty());
     }
@@ -1199,6 +1243,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::DiskFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(disk_first.len(), 1);
         match &disk_first[0] {
@@ -1215,6 +1260,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(recorded_first.len(), 1);
         match &recorded_first[0] {
@@ -1236,6 +1282,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::DiskFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(disk_first.len(), 1);
         match &disk_first[0] {
@@ -1252,6 +1299,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(recorded_first.len(), 1);
         match &recorded_first[0] {
@@ -1273,6 +1321,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {
@@ -1305,6 +1354,7 @@ mod tests {
             },
             &|_| BTreeMap::new(),
             DriftOrder::DiskFirst,
+            &MemoryFs::new(),
         );
         assert_eq!(drifts.len(), 1);
         match &drifts[0] {

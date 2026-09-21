@@ -13,9 +13,10 @@ use crate::fs::Filesystem;
 use crate::plan::{BUNDLE_VERSION, Bundle};
 use crate::progress::{Event, ProgressSender};
 
-use super::blobs::{check_blob_id, collect_blobs, gunzip_bytes, gzip_bytes};
+use super::blobs::{check_blob_id, gunzip_bytes, gzip_bytes, read_blob_bytes, spill_bytes};
 use super::manifest::Manifest;
 use super::slots::load_state;
+use crate::store::blobs::BlobRef;
 
 /// Gzip level for the outer bundle tar.
 const BUNDLE_GZIP_LEVEL: u32 = 0;
@@ -64,17 +65,19 @@ pub fn write_bundle(
     fs: &dyn Filesystem,
     progress: Option<&ProgressSender>,
 ) -> Result<()> {
-    let stored = Manifest::of(bundle);
-    let manifest = serde_json::to_vec_pretty(&stored)
+    let manifest = serde_json::to_vec_pretty(&bundle.manifest)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
     let encoder =
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(BUNDLE_GZIP_LEVEL));
     let mut builder = tar::Builder::new(encoder);
     append_bundle_entry(&mut builder, BUNDLE_MANIFEST, &manifest, dest)?;
-    let blobs: Vec<(String, Vec<u8>)> = collect_blobs(bundle)
-        .into_iter()
-        .map(|(sha, bytes)| (sha, bytes.to_vec()))
-        .collect();
+    // Refs resolve to whole bytes through pool-first reads.
+    let mut blobs: Vec<(String, Vec<u8>)> = Vec::new();
+    for raw in bundle.blobs.values() {
+        let bytes = read_blob_bytes(&raw.sha, &bundle.blobs, fs)
+            .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
+        blobs.push((raw.sha.clone(), bytes));
+    }
     let total = blobs.len();
     if total > 0
         && let Some(sender) = progress
@@ -143,8 +146,8 @@ fn append_bundle_entry(
 
 /// Reads one portable bundle into a live bundle.
 ///
-/// Blob entries verify against their names before hydrating.
-/// Missing blobs fail naming the hash.
+/// Blob entries verify against their names before spilling to
+/// temp refs. Missing blobs fail naming the hash.
 ///
 /// # Arguments
 ///
@@ -153,7 +156,7 @@ fn append_bundle_entry(
 ///
 /// # Returns
 ///
-/// The live bundle holding binary bytes.
+/// The live bundle holding blob refs.
 ///
 /// # Errors
 ///
@@ -265,9 +268,21 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
             }
         }
     }
+    // Entries spill to temp refs holding whole bytes.
+    let mut refs: BTreeMap<String, BlobRef> = BTreeMap::new();
+    for (sha, raw) in &blobs {
+        refs.insert(
+            sha.clone(),
+            BlobRef {
+                sha: sha.clone(),
+                size: raw.len() as u64,
+                path: spill_bytes(raw),
+            },
+        );
+    }
     Ok(Bundle {
         manifest: stored,
-        blobs,
+        blobs: refs,
     })
 }
 
@@ -285,7 +300,7 @@ pub fn read_bundle(path: &Path, fs: &dyn Filesystem) -> Result<Bundle> {
 ///
 /// # Returns
 ///
-/// The live bundle holding binary bytes.
+/// The live bundle holding blob refs.
 ///
 /// # Errors
 ///
@@ -324,26 +339,18 @@ mod tests {
     use super::*;
     use crate::plan::Bundle;
     use crate::store::blobs::resolve_blobs_dir;
-    use crate::store::blobs::tests::{mixed_plan, pool_blobs};
+    use crate::store::blobs::tests::{assert_same_content, mixed_plan, pool_blobs};
     use crate::store::slots::{load_state, write_manifest};
 
-    #[test]
-    fn bundle_roundtrip_restores_plan_with_referenced_blobs_only() {
-        use crate::fs::memory::MemoryFs;
+    /// Lists tar entry names inside one stored bundle in archive order.
+    fn bundle_entry_names(
+        fs: &crate::fs::memory::MemoryFs,
+        bundle: &std::path::Path,
+    ) -> Vec<String> {
+        use crate::fs::Filesystem as _;
+        use std::io::Read as _;
 
-        let fs = MemoryFs::new();
-        let built = mixed_plan();
-        let dest = std::path::Path::new("bundle.tgz");
-        match write_bundle(&built, dest, &fs, None) {
-            Ok(()) => {}
-            Err(error) => panic!("bundle writes: {error}"),
-        }
-        let restored = match read_bundle(dest, &fs) {
-            Ok(restored) => restored,
-            Err(error) => panic!("bundle reads: {error}"),
-        };
-        assert_eq!(restored, built);
-        let bytes = match fs.read(dest) {
+        let bytes = match fs.read(bundle) {
             Ok(bytes) => bytes,
             Err(error) => panic!("bundle reads: {error}"),
         };
@@ -355,16 +362,41 @@ mod tests {
         };
         let mut names = Vec::new();
         for entry in entries {
-            let entry = match entry {
+            let mut entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => panic!("entry reads: {error}"),
             };
+            let mut raw = Vec::new();
+            match entry.read_to_end(&mut raw) {
+                Ok(_) => {}
+                Err(error) => panic!("entry drains: {error}"),
+            }
             let path = match entry.path() {
                 Ok(path) => path.into_owned(),
                 Err(error) => panic!("entry names: {error}"),
             };
             names.push(path.to_string_lossy().into_owned());
         }
+        names
+    }
+
+    #[test]
+    fn bundle_roundtrip_restores_plan_with_referenced_blobs_only() {
+        use crate::fs::memory::MemoryFs;
+
+        let fs = MemoryFs::new();
+        let built = mixed_plan(&fs);
+        let dest = std::path::Path::new("bundle.tgz");
+        match write_bundle(&built, dest, &fs, None) {
+            Ok(()) => {}
+            Err(error) => panic!("bundle writes: {error}"),
+        }
+        let restored = match read_bundle(dest, &fs) {
+            Ok(restored) => restored,
+            Err(error) => panic!("bundle reads: {error}"),
+        };
+        assert_eq!(restored, built);
+        let mut names = bundle_entry_names(&fs, dest);
         names.sort();
         let mut want = vec!["manifest.json".to_string()];
         for raw in [vec![0xFF, 0x00, 0x41], vec![1, 2, 3], vec![4, 5, 6]] {
@@ -436,11 +468,17 @@ mod tests {
             Ok(built) => built,
             Err(error) => panic!("bundle builds: {error}"),
         };
-        built
-            .blobs
-            .insert(compressible_blob.clone(), compressible.clone());
-        built.blobs.insert(noisy_blob.clone(), noisy.clone());
-        built.blobs.insert(empty_blob.clone(), empty.clone());
+        for raw in [&compressible, &noisy, &empty] {
+            let sha = crate::ids::sha256_hex(raw);
+            built.blobs.insert(
+                sha.clone(),
+                crate::store::blobs::BlobRef {
+                    sha,
+                    size: raw.len() as u64,
+                    path: crate::store::blobs::spill_bytes(raw),
+                },
+            );
+        }
         let fs = MemoryFs::new();
         let dest = std::path::Path::new("slot.json");
         match write_manifest(&built, Some(dest), &fs, None) {
@@ -458,7 +496,7 @@ mod tests {
             Ok(loaded) => loaded,
             Err(error) => panic!("manifest loads: {error}"),
         };
-        assert_eq!(loaded, built);
+        assert_same_content(&built, &loaded);
         let bundle = std::path::Path::new("bundle.tgz");
         match write_bundle(&built, bundle, &fs, None) {
             Ok(()) => {}
@@ -468,18 +506,15 @@ mod tests {
             Ok(restored) => restored,
             Err(error) => panic!("bundle reads: {error}"),
         };
-        assert_eq!(restored.manifest, built.manifest);
-        assert_eq!(restored.blobs, built.blobs);
         assert_eq!(restored, built);
     }
 
     #[test]
     fn bundle_skips_present_pool_blobs_and_stays_sorted() {
         use crate::fs::memory::MemoryFs;
-        use std::io::Read as _;
 
         let fs = MemoryFs::new();
-        let built = mixed_plan();
+        let built = mixed_plan(&fs);
         let dest = std::path::Path::new("slot.json");
         match write_manifest(&built, Some(dest), &fs, None) {
             Ok(()) => {}
@@ -498,33 +533,7 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("bundle writes: {error}"),
         }
-        let bytes = match fs.read(bundle) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("bundle reads: {error}"),
-        };
-        let decoder = flate2::read::GzDecoder::new(&bytes[..]);
-        let mut archive = tar::Archive::new(decoder);
-        let entries = match archive.entries() {
-            Ok(entries) => entries,
-            Err(error) => panic!("bundle lists: {error}"),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            let mut entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => panic!("entry reads: {error}"),
-            };
-            let path = match entry.path() {
-                Ok(path) => path.into_owned(),
-                Err(error) => panic!("entry names: {error}"),
-            };
-            let mut raw = Vec::new();
-            match entry.read_to_end(&mut raw) {
-                Ok(_) => {}
-                Err(error) => panic!("entry drains: {error}"),
-            }
-            names.push(path.to_string_lossy().into_owned());
-        }
+        let names = bundle_entry_names(&fs, bundle);
         let first_name = match names.first() {
             Some(first_name) => first_name.clone(),
             None => panic!("bundle holds entries"),

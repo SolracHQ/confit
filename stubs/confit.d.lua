@@ -20,7 +20,7 @@ local LinkDocument = {}
 
 ---@class OpaqueDocument
 ---@field path string # Destination path.
----@field content string # Raw file bytes as a Lua string.
+---@field source string # Absolute source file path resolved at declaration time.
 -- Plain opaque document table. Carries an opaque marker.
 local OpaqueDocument = {}
 

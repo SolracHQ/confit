@@ -14,6 +14,8 @@ use crate::document::{ManifestData, ManifestDocument, ManifestMember};
 use crate::error::{Error, Result};
 use crate::fs::Filesystem;
 use crate::ids::DocPath;
+use crate::store::blobs::blob_source;
+use crate::store::blobs::{BlobRef, BlobSource};
 
 /// Writes every document to its expanded path.
 ///
@@ -22,12 +24,13 @@ use crate::ids::DocPath;
 /// file lands in its place. Present unmanaged documents
 /// stay untouched while their declaration matches the
 /// recorded manifest, missing plus rewritten ones write
-/// normally.
+/// normally. Opaque plus tree bytes resolve pool-first, then
+/// stream to disk without holding whole files.
 ///
 /// # Arguments
 ///
 /// * `documents` - the desired documents under writing.
-/// * `blobs` - the raw blob bytes under content hashes.
+/// * `blobs` - the blob refs under content hashes.
 /// * `fs` - the backend under writing.
 /// * `on_written` - the per-document callback, holding `None` for silence.
 /// * `rewritten` - the declaration-changed paths under rewriting.
@@ -60,7 +63,7 @@ use crate::ids::DocPath;
 /// ```
 pub fn write_documents(
     documents: &[ManifestDocument],
-    blobs: &BTreeMap<String, Vec<u8>>,
+    blobs: &BTreeMap<String, BlobRef>,
     fs: &dyn Filesystem,
     on_written: Option<&dyn Fn(&DocPath)>,
     rewritten: &BTreeSet<DocPath>,
@@ -73,8 +76,21 @@ pub fn write_documents(
             continue;
         }
         let outcome = match &document.data {
-            ManifestData::Link { target } => fs.symlink(&expanded, Path::new(target)),
+            ManifestData::Link { target } => fs
+                .symlink(&expanded, Path::new(target))
+                .map_err(Error::from),
             ManifestData::Tree { members } => write_tree_members(&expanded, members, blobs, fs),
+            ManifestData::Opaque { blob, .. } => {
+                if fs.read_link(&expanded).is_some()
+                    && let Err(error) = fs.remove(&expanded)
+                {
+                    return Err(Error::Plan(format!(
+                        "cannot remove link '{}': {error}",
+                        expanded.display()
+                    )));
+                }
+                copy_blob(blob, blobs, fs, &expanded)
+            }
             _ => {
                 if fs.read_link(&expanded).is_some()
                     && let Err(error) = fs.remove(&expanded)
@@ -84,8 +100,8 @@ pub fn write_documents(
                         expanded.display()
                     )));
                 }
-                let bytes = document.bytes(blobs)?;
-                fs.write(&expanded, &bytes)
+                let bytes = document.render(blobs)?;
+                fs.write(&expanded, &bytes).map_err(Error::from)
             }
         };
         if let Err(error) = outcome {
@@ -110,18 +126,60 @@ pub fn write_documents(
     Ok(written)
 }
 
+/// Streams one blob to its destination through the read source.
+///
+/// Pool sources hold gzip bytes, so they decode through a
+/// stream into the destination. Ref files hold raw bytes, so
+/// they copy straight across.
+///
+/// # Arguments
+///
+/// * `sha` - the SHA-256 hex over raw content bytes.
+/// * `blobs` - the blob refs under content hashes.
+/// * `fs` - the backend under copying.
+/// * `dest` - the expanded destination file.
+///
+/// # Returns
+///
+/// Unit once the bytes land.
+///
+/// # Errors
+///
+/// Dangling hashes plus unreadable sources plus unwritable
+/// destinations fail as plan or io errors.
+fn copy_blob(
+    sha: &str,
+    blobs: &BTreeMap<String, BlobRef>,
+    fs: &dyn Filesystem,
+    dest: &std::path::Path,
+) -> Result<()> {
+    match blob_source(sha, blobs, fs)? {
+        BlobSource::Pool(path) => {
+            use std::io::Write as _;
+
+            let reader = fs.reader(&path)?;
+            let mut decoder = flate2::read::GzDecoder::new(reader);
+            let mut writer = fs.writer(dest)?;
+            std::io::copy(&mut decoder, &mut writer)?;
+            writer.flush()?;
+            Ok(())
+        }
+        BlobSource::File(path) => fs.copy(&path, dest).map(|_| ()).map_err(Error::from),
+    }
+}
+
 /// Writes one tree destination member by member.
 ///
 /// Only the members land, never the destination folder
 /// itself. Parent folders create as needed, modes land
-/// per member from the manifest. Member bytes read from
-/// the blob map under their references.
+/// per member from the manifest. Member bytes resolve
+/// pool-first through their refs, then stream to disk.
 ///
 /// # Arguments
 ///
 /// * `dest` - the expanded destination folder.
 /// * `members` - the desired members under writing.
-/// * `blobs` - the raw blob bytes under content hashes.
+/// * `blobs` - the blob refs under content hashes.
 /// * `fs` - the backend under writing.
 ///
 /// # Returns
@@ -130,33 +188,33 @@ pub fn write_documents(
 ///
 /// # Errors
 ///
-/// Missing blobs plus write plus mode failures surface as
-/// io errors carrying the member path.
+/// Missing refs plus unreadable sources plus unwritable
+/// destinations plus mode failures surface as plan or io
+/// errors carrying the member path.
 fn write_tree_members(
     dest: &std::path::Path,
     members: &[ManifestMember],
-    blobs: &BTreeMap<String, Vec<u8>>,
+    blobs: &BTreeMap<String, BlobRef>,
     fs: &dyn Filesystem,
-) -> std::io::Result<()> {
+) -> Result<()> {
     for member in members {
         let path = dest.join(&member.relative);
-        let content = blobs.get(&member.blob).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("missing blob '{}' for '{}'", member.blob, path.display()),
-            )
-        })?;
-        fs.write(&path, content).map_err(|error| {
-            std::io::Error::new(
+        copy_blob(&member.blob, blobs, fs, &path).map_err(|error| match error {
+            Error::Plan(_) => Error::Plan(format!(
+                "missing blob '{}' for '{}'",
+                member.blob,
+                path.display()
+            )),
+            Error::Io(error) => Error::Io(std::io::Error::new(
                 error.kind(),
                 format!("cannot write '{}': {error}", path.display()),
-            )
+            )),
         })?;
         fs.set_mode(&path, member.mode).map_err(|error| {
-            std::io::Error::new(
+            Error::Io(std::io::Error::new(
                 error.kind(),
                 format!("cannot set mode '{}': {error}", path.display()),
-            )
+            ))
         })?;
     }
     Ok(())
@@ -265,6 +323,32 @@ pub fn remove_tree_members(
 mod tests {
     use super::*;
 
+    /// Builds spill refs for raw bytes, mirroring scratch into the memory backend.
+    ///
+    /// Spill files live outside the managed filesystem, so the
+    /// mirror lets ref paths resolve through the fake.
+    fn ref_map(fs: &crate::fs::memory::MemoryFs, pairs: &[&[u8]]) -> BTreeMap<String, BlobRef> {
+        use crate::fs::Filesystem as _;
+
+        let mut out = BTreeMap::new();
+        for bytes in pairs {
+            let path = crate::store::blobs::spill_bytes(bytes);
+            if let Err(error) = fs.write(&path, bytes) {
+                panic!("spill mirrors: {error}");
+            }
+            let sha = crate::ids::sha256_hex(bytes);
+            out.insert(
+                sha.clone(),
+                BlobRef {
+                    sha,
+                    size: bytes.len() as u64,
+                    path,
+                },
+            );
+        }
+        out
+    }
+
     fn tree_recorded() -> Vec<ManifestDocument> {
         use crate::document::{ManifestData, ManifestDocument, ManifestMember};
         use crate::ids::DocPath;
@@ -290,11 +374,8 @@ mod tests {
         )]
     }
 
-    fn tree_blobs() -> BTreeMap<String, Vec<u8>> {
-        BTreeMap::from([
-            (crate::ids::sha256_hex(&[1]), vec![1]),
-            (crate::ids::sha256_hex(&[2]), vec![2]),
-        ])
+    fn tree_refs(fs: &crate::fs::memory::MemoryFs) -> BTreeMap<String, BlobRef> {
+        ref_map(fs, &[&[1], &[2]])
     }
 
     #[test]
@@ -303,7 +384,14 @@ mod tests {
 
         let fs = MemoryFs::new();
         assert!(
-            write_documents(&tree_recorded(), &tree_blobs(), &fs, None, &BTreeSet::new()).is_ok()
+            write_documents(
+                &tree_recorded(),
+                &tree_refs(&fs),
+                &fs,
+                None,
+                &BTreeSet::new()
+            )
+            .is_ok()
         );
         let dest = std::path::Path::new("fonts");
         match fs.read(&dest.join("kept.ttf")) {
@@ -371,7 +459,8 @@ mod tests {
                 unmanaged: true,
             },
         )];
-        let blobs = BTreeMap::from([(blob, b"new".to_vec())]);
+        let blobs = ref_map(&fs, &[b"new"]);
+        assert!(blobs.contains_key(&blob));
         match write_documents(&documents, &blobs, &fs, None, &BTreeSet::new()) {
             Ok(written) => assert_eq!(written, 0),
             Err(error) => panic!("unmanaged skips: {error}"),
@@ -397,7 +486,8 @@ mod tests {
                 unmanaged: true,
             },
         )];
-        let blobs = BTreeMap::from([(blob, b"fresh".to_vec())]);
+        let blobs = ref_map(&fs, &[b"fresh"]);
+        assert!(blobs.contains_key(&blob));
         match write_documents(&documents, &blobs, &fs, None, &BTreeSet::new()) {
             Ok(written) => assert_eq!(written, 1),
             Err(error) => panic!("unmanaged creates: {error}"),
@@ -405,6 +495,78 @@ mod tests {
         match fs.read(std::path::Path::new("bin")) {
             Ok(bytes) => assert_eq!(bytes, b"fresh"),
             Err(error) => panic!("fresh reads: {error}"),
+        }
+
+        // Pool refs decode pooled gzip bytes while their
+        // materialized path stays missing.
+        let pooled = b"pooled";
+        let pooled_sha = crate::ids::sha256_hex(pooled);
+        let pool = match crate::store::blobs::resolve_blobs_dir() {
+            Ok(pool) => pool,
+            Err(error) => panic!("blobs resolve: {error}"),
+        };
+        let gzipped = match crate::store::blobs::gzip_bytes(pooled) {
+            Ok(gzipped) => gzipped,
+            Err(error) => panic!("blob compresses: {error}"),
+        };
+        if let Err(error) = fs.write(&pool.join(&pooled_sha), &gzipped) {
+            panic!("pool seeds: {error}");
+        }
+        let pooled_documents = vec![ManifestDocument::new(
+            DocPath::new("pooled-bin"),
+            ManifestData::Opaque {
+                blob: pooled_sha.clone(),
+                size: pooled.len() as u64,
+                mode: None,
+                unmanaged: true,
+            },
+        )];
+        let pooled_blobs = BTreeMap::from([(
+            pooled_sha,
+            BlobRef {
+                sha: crate::ids::sha256_hex(pooled),
+                size: pooled.len() as u64,
+                path: std::path::PathBuf::from("nowhere/missing.bin"),
+            },
+        )]);
+        match write_documents(
+            &pooled_documents,
+            &pooled_blobs,
+            &fs,
+            None,
+            &BTreeSet::new(),
+        ) {
+            Ok(written) => assert_eq!(written, 1),
+            Err(error) => panic!("pooled writes: {error}"),
+        }
+        match fs.read(std::path::Path::new("pooled-bin")) {
+            Ok(bytes) => assert_eq!(bytes, pooled),
+            Err(error) => panic!("pooled reads: {error}"),
+        }
+
+        // Dangling refs fail naming the hash.
+        let dangling = "0".repeat(64);
+        let dangling_documents = vec![ManifestDocument::new(
+            DocPath::new("dangling-bin"),
+            ManifestData::Opaque {
+                blob: dangling.clone(),
+                size: 1,
+                mode: None,
+                unmanaged: true,
+            },
+        )];
+        match write_documents(
+            &dangling_documents,
+            &BTreeMap::new(),
+            &fs,
+            None,
+            &BTreeSet::new(),
+        ) {
+            Ok(_) => panic!("dangling ref passes"),
+            Err(error) => assert!(
+                error.to_string().contains(&dangling),
+                "error names the hash: {error}"
+            ),
         }
     }
 
@@ -446,10 +608,9 @@ mod tests {
                 },
             ),
         ];
-        let blobs = BTreeMap::from([
-            (kept_blob, b"new".to_vec()),
-            (fresh_blob, b"fresh".to_vec()),
-        ]);
+        let blobs = ref_map(&fs, &[b"new", b"fresh"]);
+        assert!(blobs.contains_key(&kept_blob));
+        assert!(blobs.contains_key(&fresh_blob));
         match write_documents(&documents, &blobs, &fs, None, &BTreeSet::new()) {
             Ok(written) => assert_eq!(written, 2),
             Err(error) => panic!("mixed writes: {error}"),
@@ -479,7 +640,8 @@ mod tests {
                 unmanaged: true,
             },
         )];
-        let blobs = BTreeMap::from([(blob, b"new".to_vec())]);
+        let blobs = ref_map(&fs, &[b"new"]);
+        assert!(blobs.contains_key(&blob));
         let rewritten = BTreeSet::from([DocPath::new("bin")]);
         match write_documents(&documents, &blobs, &fs, None, &rewritten) {
             Ok(written) => assert_eq!(written, 1),
@@ -528,7 +690,14 @@ mod tests {
 
         let fs = MemoryFs::new();
         assert!(
-            write_documents(&tree_recorded(), &tree_blobs(), &fs, None, &BTreeSet::new()).is_ok()
+            write_documents(
+                &tree_recorded(),
+                &tree_refs(&fs),
+                &fs,
+                None,
+                &BTreeSet::new()
+            )
+            .is_ok()
         );
         let dest = std::path::Path::new("fonts");
         match fs.write(&dest.join("hand.ttf"), b"mine") {
@@ -561,7 +730,14 @@ mod tests {
 
         let fs = MemoryFs::new();
         assert!(
-            write_documents(&tree_recorded(), &tree_blobs(), &fs, None, &BTreeSet::new()).is_ok()
+            write_documents(
+                &tree_recorded(),
+                &tree_refs(&fs),
+                &fs,
+                None,
+                &BTreeSet::new()
+            )
+            .is_ok()
         );
         match remove_orphans(&tree_recorded(), &[], &fs) {
             Ok(removed) => assert_eq!(removed, 0),

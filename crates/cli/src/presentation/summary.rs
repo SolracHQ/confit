@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use confit_core::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
 use confit_core::drift::{Drift, recorded_hunk};
 use confit_core::ids::DocPath;
-use confit_core::plan::opaque_label;
 use confit_core::plan::{Bundle, DocumentStatus};
+use confit_core::store::blobs::BlobRef;
 
 /// Yellow style for changed lines.
 const UPDATE_STYLE: &str = "\x1b[33m";
@@ -338,13 +338,7 @@ impl Summary<'_> {
                 .map(|body| painter.paint(Sigil::Add, &format!("  + {body}")))
                 .collect(),
             DocumentStatus::Update => match self.find_recorded(document) {
-                Some(old) => update_lines(
-                    painter,
-                    document,
-                    old,
-                    &self.built.blobs,
-                    &self.previous.blobs,
-                ),
+                Some(old) => update_lines(painter, document, old),
                 None => update_fallback(painter, document),
             },
             DocumentStatus::Unchanged => Vec::new(),
@@ -749,6 +743,14 @@ fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
 
+/// Reads the hash plus size label for one opaque ref.
+///
+/// Refs carry the content hash plus byte count, so the label
+/// matches `opaque_label` without reading blob bytes.
+fn opaque_ref_label(sha: &str, size: u64) -> String {
+    format!("sha256:{sha} ({size} bytes)")
+}
+
 /// Flattens one JSON value into dotted leaf entries.
 fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
@@ -773,14 +775,13 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
 /// Collects update lines with old to new values.
 ///
 /// Structured plus link plus opaque plus tree lines read yellow
-/// under the update sigil. Rc updates read as a recorded to
+/// under the update sigil. Opaque labels read the recorded hash
+/// plus size, never blob bytes. Rc updates read as a recorded to
 /// desired text hunk with per-symbol paint.
 fn update_lines(
     painter: &Painter,
     document: &ManifestDocument,
     recorded: &ManifestDocument,
-    new_blobs: &BTreeMap<String, Vec<u8>>,
-    old_blobs: &BTreeMap<String, Vec<u8>>,
 ) -> Vec<String> {
     match (&document.data, &recorded.data) {
         (
@@ -836,29 +837,28 @@ fn update_lines(
             }
         }
         (
-            ManifestData::Opaque { blob: new_blob, .. },
-            ManifestData::Opaque { blob: old_blob, .. },
+            ManifestData::Opaque {
+                blob: new_blob,
+                size: new_size,
+                ..
+            },
+            ManifestData::Opaque {
+                blob: old_blob,
+                size: old_size,
+                ..
+            },
         ) => {
             if old_blob == new_blob {
                 Vec::new()
             } else {
-                match (old_blobs.get(old_blob), new_blobs.get(new_blob)) {
-                    (Some(old_bytes), Some(new_bytes)) => {
-                        if old_bytes == new_bytes {
-                            Vec::new()
-                        } else {
-                            vec![painter.paint(
-                                Sigil::Update,
-                                &format!(
-                                    "  ~ content = {} -> {}",
-                                    opaque_label(old_bytes),
-                                    opaque_label(new_bytes)
-                                ),
-                            )]
-                        }
-                    }
-                    _ => update_fallback(painter, document),
-                }
+                vec![painter.paint(
+                    Sigil::Update,
+                    &format!(
+                        "  ~ content = {} -> {}",
+                        opaque_ref_label(old_blob, *old_size),
+                        opaque_ref_label(new_blob, *new_size)
+                    ),
+                )]
             }
         }
         (ManifestData::Tree { members: new }, ManifestData::Tree { members: old }) => {
@@ -868,9 +868,7 @@ fn update_lines(
                 &format!("  ~ tree ({changed} of {} files changed)", new.len()),
             )]
         }
-        (ManifestData::Rc(_), ManifestData::Rc(_)) => {
-            rc_update_lines(painter, document, recorded, new_blobs, old_blobs)
-        }
+        (ManifestData::Rc(_), ManifestData::Rc(_)) => rc_update_lines(painter, document, recorded),
         _ if touches_opaque(document, recorded) => {
             let mut out = vec![painter.paint(
                 Sigil::Update,
@@ -897,21 +895,21 @@ fn update_fallback(painter: &Painter, document: &ManifestDocument) -> Vec<String
 
 /// Renders one rc update as a recorded to desired text hunk.
 ///
-/// Hunk lines carry per-symbol paint through the shared hunk
-/// path. Render failures fall back to desired entry bodies under
-/// the update sigil.
+/// Rc payloads render inline, so no blob map reads. Hunk lines
+/// carry per-symbol paint through the shared hunk path. Render
+/// failures fall back to desired entry bodies under the update
+/// sigil.
 fn rc_update_lines(
     painter: &Painter,
     document: &ManifestDocument,
     recorded: &ManifestDocument,
-    new_blobs: &BTreeMap<String, Vec<u8>>,
-    old_blobs: &BTreeMap<String, Vec<u8>>,
 ) -> Vec<String> {
-    let old_bytes = match recorded.bytes(old_blobs) {
+    let empty: BTreeMap<String, BlobRef> = BTreeMap::new();
+    let old_bytes = match recorded.render(&empty) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
-    let new_bytes = match document.bytes(new_blobs) {
+    let new_bytes = match document.render(&empty) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
@@ -959,7 +957,6 @@ mod tests {
         }
         let mut previous = Bundle::empty();
         previous.manifest.documents = previous_docs;
-        previous.blobs.insert(old_blob, vec![0xFF, 0x00]);
         let desired = ManifestDocument::new(
             DocPath::new("bin"),
             ManifestData::Opaque {
@@ -969,11 +966,10 @@ mod tests {
                 unmanaged: false,
             },
         );
-        let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("bundle builds: {error}"),
         };
-        built.blobs.insert(new_blob, vec![0xFF, 0x01]);
         let report = Summary {
             built: &built,
             previous: &previous,
@@ -1018,11 +1014,10 @@ mod tests {
                 unmanaged: false,
             },
         );
-        let mut built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
+        let built = match confit_core::plan::Bundle::build(vec![desired], Vec::new()) {
             Ok(built) => built,
             Err(error) => panic!("bundle builds: {error}"),
         };
-        built.blobs.insert(blob, vec![0xFF, 0x00]);
         let report = Summary {
             built: &built,
             previous: &previous,
@@ -1617,6 +1612,7 @@ mod tests {
             },
             &|_| std::collections::BTreeMap::new(),
             DriftOrder::RecordedFirst,
+            &confit_core::fs::memory::MemoryFs::new(),
         );
         assert_eq!(drift.len(), 1);
         let hunks = match &drift[0] {

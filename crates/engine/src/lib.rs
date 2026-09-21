@@ -11,6 +11,7 @@ use std::sync::Arc;
 use confit_core::document::ManifestDocument;
 use confit_core::hook::Hook;
 use confit_core::progress::ProgressSender;
+use confit_core::store::blobs::BlobRef;
 
 use crate::fetch::Fetch;
 
@@ -66,7 +67,7 @@ impl std::fmt::Debug for EvalOpts {
 /// Finished evaluation holding documents plus blobs plus hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Blobs hold raw opaque plus tree member bytes under
+/// order. Blobs hold opaque plus tree member refs under
 /// SHA-256 hex, one entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
@@ -74,8 +75,8 @@ impl std::fmt::Debug for EvalOpts {
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
     pub documents: Vec<ManifestDocument>,
-    /// Holds raw blob bytes under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, Vec<u8>>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }

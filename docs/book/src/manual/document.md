@@ -26,15 +26,15 @@ Drift compares full bytes and reports a text hunk around the changed lines.
 
 ## Opaque
 
-The demo kitty install uses this shape for unpacked archive members. Binary bytes. Text kinds keep clear of them. Plans carry the bytes along, apply writes raw bytes:
+The demo kitty install uses this shape for fonts plus binaries. Source files on disk, named by path. Text kinds keep clear of them. Plans carry hashes plus sizes, apply writes raw bytes:
 
 ```lua
-confit.document.opaque(path, content)
-confit.document.opaque(path, content, { mode = "755" })
-confit.document.opaque(path, content, { unmanaged = true })
+confit.document.opaque(path, source)
+confit.document.opaque(path, source, { mode = "755" })
+confit.document.opaque(path, source, { unmanaged = true })
 ```
 
-Text documents take the same opts. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes. `unmanaged` marks existence-only files like self-updating tools: present bytes read as already in place, missing ones land from declared content, rewritten declarations land once.
+Text documents take the same opts. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes. `unmanaged` marks existence-only files like self-updating tools: present bytes read as already in place, missing ones land from the source file, rewritten declarations land once.
 
 Drift compares bytes and reports sha plus size. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
 
@@ -72,9 +72,9 @@ Drift compares the target string. A moved link reports old target plus new targe
 The demo kitty install uses this shape to unpack its tarball. A document source, not a file. It unpacks an archive and the callback returns one document per member. Returning nil skips the member:
 
 ```lua
-local fonts = confit.document.compressed(archive, function(path, _, content)
+local fonts = confit.document.compressed(archive, function(path, _, member)
   if path:match("%.ttf$") then
-    return confit.document.opaque(dest, content)
+    return confit.document.opaque(dest, member)
   end
 end)
 ```
@@ -84,7 +84,7 @@ end)
 The demo font setup in a later chapter uses this shape to unpack many files under one folder. A document source holding many files, not a file. It unpacks an archive into one document under one destination folder. The callback keeps the compressed shape and returns a relative path per kept member instead of a document. Returning nil skips the member:
 
 ```lua
-local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(path, _, content)
+local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(path, _, member)
   if not path:match("%.ttf$") then
     return nil
   end

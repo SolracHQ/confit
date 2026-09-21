@@ -37,7 +37,7 @@ validation before documents assemble.
 
 Configs contribute documents in declaration order. Structured
 documents assemble first. Text plus link documents follow. Rc
-documents close the assembly. Raw bytes collect beside the
+documents close the assembly. Blob refs collect beside the
 manifest under content hashes through the run.
 
 ### Patch handles
@@ -77,7 +77,7 @@ Single hooks pass through with bare shape kept.
 The build fills one data hash per document from rendered bytes.
 Opaque hashes copy the blob reference. Tree hashes cover
 canonical manifest bytes over blob references. Documents sort
-by path after hashing. Blob bytes attach beside the manifest
+by path after hashing. Blob refs attach beside the manifest
 after the build.
 
 ## Load Previous

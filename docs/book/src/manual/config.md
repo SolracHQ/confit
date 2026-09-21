@@ -59,9 +59,9 @@ local tarball = confit.resources.fetch_file(
   "https://github.com/kovidgoyal/kitty/releases/download/v" .. version
     .. "/kitty-" .. version .. "-x86_64.txz"
 )
-local app = confit.document.compressed(tarball, function(path, _, content)
+local app = confit.document.compressed(tarball, function(path, _, member)
   return confit.document.opaque(
-    confit.path.home(".local/kitty.app/" .. path), content)
+    confit.path.home(".local/kitty.app/" .. path), member)
 end)
 kitty:add_document(app)
 ```
@@ -69,10 +69,10 @@ kitty:add_document(app)
 `fetch_file` caches the tarball beside its sha sidecar, so re-plans cost zero network. `compressed` returns one document per member. The callback forwards the archive exec bit, so the kitty binary lands with `+x`:
 
 ```lua
-local app = confit.document.compressed(tarball, function(path, info, content)
+local app = confit.document.compressed(tarball, function(path, info, member)
   return confit.document.opaque(
     confit.path.home(".local/kitty.app/" .. path),
-    content,
+    member,
     { mode = info.executable and "755" or "644" }
   )
 end)

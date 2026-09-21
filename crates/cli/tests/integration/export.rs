@@ -6,7 +6,7 @@ fn export_applied_slot_writes_auto_bundle() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -40,7 +40,7 @@ fn export_named_slot_writes_auto_bundle() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -72,25 +72,31 @@ fn export_named_slot_writes_auto_bundle() {
 fn export_history_slots_write_auto_bundles() {
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![ManifestDocument::new(
-        DocPath::new("history-old"),
-        ManifestData::Text {
-            content: "old\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let old = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("history-old"),
+            ManifestData::Text {
+                content: "old\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("old bundle builds: {error}"),
     };
-    let new = match build(vec![ManifestDocument::new(
-        DocPath::new("history-new"),
-        ManifestData::Text {
-            content: "new\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let new = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("history-new"),
+            ManifestData::Text {
+                content: "new\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("new bundle builds: {error}"),
     };
@@ -172,7 +178,7 @@ fn export_output_imposes_cb_suffix() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -239,15 +245,18 @@ fn export_manifest_prints_pretty_json_without_base64() {
     pin_home();
     let fs = MemoryFs::new();
     let raw = vec![0xFF, 0x00, 0x80, 0x41];
-    let built = match build(vec![ManifestDocument::new(
-        DocPath::new("bin"),
-        ManifestData::Opaque {
-            blob: confit_core::ids::sha256_hex(&raw),
-            size: raw.len() as u64,
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let built = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("bin"),
+            ManifestData::Opaque {
+                blob: confit_core::ids::sha256_hex(&raw),
+                size: raw.len() as u64,
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };

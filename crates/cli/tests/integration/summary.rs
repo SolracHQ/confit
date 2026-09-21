@@ -81,6 +81,7 @@ fn drift_reports_manual_edits_on_memory_fs() {
         &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
+        &fs,
     );
     let built = Bundle::empty();
     let report = confit_cli::presentation::summary::Summary {
@@ -202,6 +203,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
         &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::DiskFirst,
+        &fs,
     );
     let empty = Bundle::empty();
     let steady = confit_cli::presentation::summary::Summary {
@@ -283,6 +285,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
+        &fs,
     );
     assert_eq!(drifts.len(), 1);
     match &drifts[0] {
@@ -410,6 +413,7 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::DiskFirst,
+        &fs,
     );
     assert_eq!(drifts.len(), 1);
     match &drifts[0] {

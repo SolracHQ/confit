@@ -21,6 +21,8 @@ struct FetchState {
     root: PathBuf,
     /// Cache folder for remote bytes.
     cache: PathBuf,
+    /// Extract folder for archive member reads.
+    extract: PathBuf,
     /// Forces downloads past the sidecar cache.
     re_fetch: bool,
     /// Network source behind the trait.
@@ -35,6 +37,7 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
     let state = FetchState {
         root: session.root.clone(),
         cache: session.cache.clone(),
+        extract: session.extract.clone(),
         re_fetch: session.re_fetch,
         fetcher: session.fetcher.clone(),
         progress: session.progress.clone(),
@@ -103,7 +106,7 @@ impl FetchState {
         caller: &str,
         rel: String,
     ) -> mlua::Result<Value> {
-        let full = resolve_under_root(&self.root, &self.cache, &rel, caller)?;
+        let full = resolve_under_root(&self.root, &self.cache, &self.extract, &rel, caller)?;
         let text = std::fs::read_to_string(&full)
             .map_err(|error| plan_error(format!("{caller}: cannot read '{rel}': {error}")))?;
         if name == "load_text" {
@@ -126,14 +129,14 @@ impl FetchState {
         json.to_lua(lua, caller)
     }
 
-    /// Loads one root-relative file as raw bytes for opaque use.
+    /// Loads one root-relative file as raw bytes.
     fn load_bytes_impl(&self, lua: &Lua, path: Value) -> mlua::Result<Value> {
         const CALLER: &str = "confit.resources.load_bytes";
         let rel = path.req_str(CALLER, "path")?;
         self.load_bytes_path(lua, CALLER, rel)
     }
 
-    /// Loads one root-relative file as raw bytes for opaque use.
+    /// Loads one root-relative file as raw bytes.
     ///
     /// # Arguments
     ///
@@ -150,7 +153,7 @@ impl FetchState {
     /// Jail escapes fail as plan errors. Unreadable files fail as plan errors.
     ///
     fn load_bytes_path(&self, lua: &Lua, caller: &str, rel: String) -> mlua::Result<Value> {
-        let full = resolve_under_root(&self.root, &self.cache, &rel, caller)?;
+        let full = resolve_under_root(&self.root, &self.cache, &self.extract, &rel, caller)?;
         let bytes = std::fs::read(&full)
             .map_err(|error| plan_error(format!("{caller}: cannot read '{rel}': {error}")))?;
         Ok(Value::String(lua.create_string(&bytes)?))
@@ -447,10 +450,11 @@ fn check_user_sha(caller: &str, url: &str, bytes: &[u8], wanted: Option<&str>) -
     Ok(())
 }
 
-/// Resolves project-relative plus cache-absolute reads.
+/// Resolves project-relative plus cache-absolute plus extract-absolute reads.
 pub(crate) fn resolve_under_root(
     root: &Path,
     cache: &Path,
+    extract: &Path,
     rel: &str,
     caller: &str,
 ) -> mlua::Result<PathBuf> {
@@ -460,7 +464,7 @@ pub(crate) fn resolve_under_root(
     let rel_path = Path::new(rel);
     if rel_path.is_absolute() {
         let candidate = PathBuf::from(rel);
-        if under_cache(cache, &candidate) {
+        if under_dir(cache, &candidate) || under_dir(extract, &candidate) {
             return Ok(candidate);
         }
         return Err(plan_error(format!(
@@ -500,20 +504,20 @@ pub(crate) fn resolve_under_root(
     Ok(full)
 }
 
-/// Reports true while a path sits under the cache folder.
-fn under_cache(cache: &Path, candidate: &Path) -> bool {
-    if candidate.starts_with(cache) {
-        if let (Ok(canonical_cache), Ok(canonical_candidate)) =
-            (cache.canonicalize(), candidate.canonicalize())
-            && !canonical_candidate.starts_with(&canonical_cache)
+/// Reports true while a path sits under one admitted folder.
+fn under_dir(base: &Path, candidate: &Path) -> bool {
+    if candidate.starts_with(base) {
+        if let (Ok(canonical_base), Ok(canonical_candidate)) =
+            (base.canonicalize(), candidate.canonicalize())
+            && !canonical_candidate.starts_with(&canonical_base)
         {
             return false;
         }
         return true;
     }
-    if let (Ok(canonical_cache), Ok(canonical_candidate)) =
-        (cache.canonicalize(), candidate.canonicalize())
-        && canonical_candidate.starts_with(&canonical_cache)
+    if let (Ok(canonical_base), Ok(canonical_candidate)) =
+        (base.canonicalize(), candidate.canonicalize())
+        && canonical_candidate.starts_with(&canonical_base)
     {
         return true;
     }

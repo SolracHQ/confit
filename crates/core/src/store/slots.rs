@@ -115,7 +115,7 @@ pub fn write_manifest(
     progress: Option<&ProgressSender>,
 ) -> Result<()> {
     store_blobs(bundle, fs, progress)?;
-    let text = manifest_json(bundle)?;
+    let text = manifest_json(&bundle.manifest)?;
     match out {
         Some(dest) => fs
             .write(dest, text.as_bytes())
@@ -430,7 +430,7 @@ pub fn archive_previous(
         stamp += 1;
         dest = dir.join(format!("{stamp}.json"));
     }
-    let text = manifest_json(bundle)?;
+    let text = manifest_json(&bundle.manifest)?;
     fs.write(&dest, text.as_bytes()).map_err(Error::from)?;
     rotate_previous(&dir, fs)?;
     Ok(dest)

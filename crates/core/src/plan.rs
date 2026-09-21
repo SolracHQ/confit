@@ -10,6 +10,7 @@ use crate::fs::Filesystem;
 use crate::hook::{Hook, preview_hook};
 use crate::ids::{DocPath, sha256_hex};
 use crate::runtime::Runtime;
+use crate::store::blobs::BlobRef;
 use crate::store::manifest::Manifest;
 
 /// Bundle format version written by every bundle build.
@@ -20,15 +21,15 @@ pub const BUNDLE_VERSION: u32 = 7;
 ///
 /// The manifest holds version, documents, plus
 /// hooks as the only document language. The blob map holds
-/// raw bytes under content hashes beside it. The bundle
+/// blob refs under content hashes beside it. The bundle
 /// holds no duplicate fields.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     /// Holds the portable manifest as the only document language.
     pub manifest: Manifest,
-    /// Holds raw blob bytes under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, Vec<u8>>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
 }
 
 impl Bundle {
@@ -231,7 +232,7 @@ impl Bundle {
     /// Builds the desired state bundle from documents.
     ///
     /// Fills data hashes, then sorts documents by path. The
-    /// caller holds one document per path. Blob bytes ride
+    /// caller holds one document per path. Blob refs ride
     /// beside the manifest and fill during hydration. Counts
     /// generate through `summary` against a previous manifest.
     ///

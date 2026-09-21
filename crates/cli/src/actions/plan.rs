@@ -114,9 +114,9 @@ impl PlanRunner<'_> {
         };
         let drifts = timed("drift", || {
             if first_run {
-                built.drift(&snapshot, &snapshot_tree, order)
+                built.drift(&snapshot, &snapshot_tree, order, fs)
             } else {
-                previous.drift(&snapshot, &snapshot_tree, order)
+                previous.drift(&snapshot, &snapshot_tree, order, fs)
             }
         });
         let hook_lines = lifecycle_lines(&built.manifest.hooks, &previous.manifest.hooks);

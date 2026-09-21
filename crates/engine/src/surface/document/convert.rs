@@ -60,12 +60,12 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
         }
         "opaque" => {
             let path = table.req_str(ctx, "path")?;
-            let content = table.req_bytes(ctx, "content")?;
+            let source = table.req_str(ctx, "source")?;
             let mode = read_mode(table, ctx)?;
             let unmanaged = read_unmanaged(table, ctx)?;
             Ok(Declared::Opaque(OpaqueDecl {
                 path,
-                content,
+                source: std::path::PathBuf::from(source),
                 mode,
                 unmanaged,
             }))
@@ -81,7 +81,7 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                     plan_error(format!("{ctx}: field 'members' must hold member tables"))
                 })?;
                 let rel = member.req_str(ctx, "rel")?;
-                let content = member.req_bytes(ctx, "content")?;
+                let source = member.req_str(ctx, "source")?;
                 let mode_value: Value = member.get("mode")?;
                 let mode = mode_value.req_int(ctx, "mode")?;
                 if !(0..=0o777).contains(&mode) {
@@ -91,7 +91,7 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                 }
                 members.push(TreeMemberDecl {
                     rel,
-                    content,
+                    source: std::path::PathBuf::from(source),
                     mode: mode as u32,
                 });
             }

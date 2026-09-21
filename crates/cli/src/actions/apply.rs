@@ -284,7 +284,7 @@ impl<'a> ApplyRunner<'a> {
         } else {
             DriftOrder::RecordedFirst
         };
-        let baseline = reference.drift(&snapshot, &snapshot_tree, order);
+        let baseline = reference.drift(&snapshot, &snapshot_tree, order, fs);
         let rt = Runtime::current();
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
         if self.preview {
@@ -306,7 +306,7 @@ impl<'a> ApplyRunner<'a> {
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = reference.drift(&snapshot, &snapshot_tree, order);
+        let fresh = reference.drift(&snapshot, &snapshot_tree, order, fs);
         if fresh != baseline {
             for line in Drift::lines(&fresh) {
                 self.seams.print_line(line);

@@ -11,17 +11,18 @@ fn fixture_plans_stay_deterministic() {
             Ok(dir) => dir,
             Err(error) => panic!("cache builds: {error}"),
         };
+        let fs = MemoryFs::new();
         let root = examples_root().join(fixture);
         let profile = root.join("profile.lua");
         let first = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
-            Ok(documents) => match build(documents) {
+            Ok(documents) => match build(&fs, documents) {
                 Ok(built) => built,
                 Err(error) => panic!("{fixture} first bundle builds: {error}"),
             },
             Err(error) => panic!("{fixture} first evaluation runs: {error}"),
         };
         let second = match evaluate_fetch(&profile, &root, cache.path(), fixture_fetch()) {
-            Ok(documents) => match build(documents) {
+            Ok(documents) => match build(&fs, documents) {
                 Ok(built) => built,
                 Err(error) => panic!("{fixture} second bundle builds: {error}"),
             },
@@ -73,7 +74,8 @@ return { shells = { "bash" }, configs = { %s } }
             Ok(documents) => documents,
             Err(error) => panic!("profile evaluates: {error}"),
         };
-        match build(documents) {
+        let fs = MemoryFs::new();
+        match build(&fs, documents) {
             Ok(built) => built,
             Err(error) => panic!("bundle builds: {error}"),
         }

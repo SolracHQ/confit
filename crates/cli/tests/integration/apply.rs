@@ -211,25 +211,31 @@ fn apply_history_first_restores_just_previous() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "first\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let old = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "first\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("old bundle builds: {error}"),
     };
-    let new = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "second\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let new = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "second\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("new bundle builds: {error}"),
     };
@@ -278,25 +284,31 @@ fn apply_history_first_restores_just_previous() {
 fn apply_history_second_restores_older() {
     pin_home();
     let fs = MemoryFs::new();
-    let old = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "first\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let old = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "first\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("old bundle builds: {error}"),
     };
-    let new = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "second\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let new = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "second\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("new bundle builds: {error}"),
     };
@@ -336,14 +348,17 @@ fn apply_history_second_restores_older() {
 fn apply_history_out_of_range_names_count() {
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "only\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let built = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "only\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -393,14 +408,17 @@ fn apply_named_slot_restores() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(vec![ManifestDocument::new(
-        DocPath::new("note"),
-        ManifestData::Text {
-            content: "named\n".to_string(),
-            mode: None,
-            unmanaged: false,
-        },
-    )]) {
+    let built = match build(
+        &fs,
+        vec![ManifestDocument::new(
+            DocPath::new("note"),
+            ManifestData::Text {
+                content: "named\n".to_string(),
+                mode: None,
+                unmanaged: false,
+            },
+        )],
+    ) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -494,7 +512,7 @@ return { shells = { "bash" }, configs = { tool } }
 fn apply_cb_positional_loads_bundle() {
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -554,6 +572,7 @@ fn apply_then_drift_stays_quiet() {
         &|document| snapshot_document(document, &fs),
         &|path| snapshot_tree(&path.expand(), &fs),
         DriftOrder::RecordedFirst,
+        &fs,
     );
     assert!(drifts.is_empty(), "fresh apply shows no drift: {drifts:?}");
 }
@@ -674,7 +693,7 @@ fn apply_plan_file_without_profile_runs_on_file_alone() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -789,7 +808,7 @@ fn named_plan_output_roundtrips_through_apply() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -837,7 +856,7 @@ fn apply_bundle_populates_pool() {
 
     pin_home();
     let fs = MemoryFs::new();
-    let built = match build(sample_documents()) {
+    let built = match build(&fs, sample_documents()) {
         Ok(built) => built,
         Err(error) => panic!("bundle builds: {error}"),
     };
@@ -920,14 +939,16 @@ fn apply_rotation_prunes_exclusive_blobs() {
                 },
             ),
         ];
-        let mut manifest = match build(desired) {
+        let mut manifest = match build(&fs, desired) {
             Ok(manifest) => manifest,
             Err(error) => panic!("bundle builds: {error}"),
         };
         manifest
             .blobs
-            .insert(shared_sha.clone(), shared_bytes.clone());
-        manifest.blobs.insert(unique_sha, unique_bytes);
+            .insert(shared_sha.clone(), spill_ref(&fs, &shared_bytes));
+        manifest
+            .blobs
+            .insert(unique_sha, spill_ref(&fs, &unique_bytes));
         let mut input = Cursor::new(String::new());
         let runner = confit_cli::actions::apply::ApplyRunner {
             manifest,

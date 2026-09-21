@@ -217,16 +217,18 @@ mode never attaches to links.
 #### Declaration shape
 
 ```lua
-confit.document.opaque(path, content, { mode = "755" })
+confit.document.opaque(path, source, { mode = "755" })
 ```
 
-The call takes a path plus raw bytes plus optional opts.
-Opts holds `mode` plus `unmanaged`. `unmanaged` marks
-existence-only documents, present bytes read as already
-in place whatever their content. The flag rides outside
-the data hash, so toggling it with identical bytes shows
-no plan line. Byte sources carry `load_bytes`
-plus archive callbacks plus fetch bodies.
+The call takes a path plus a source path plus optional
+opts. Sources name project files root-relative, fetch
+cache files absolute, or extract member files absolute.
+Opts holds `mode` plus `unmanaged`.
+`unmanaged` marks existence-only documents, present bytes
+read as already in place whatever their content. The flag
+rides outside the data hash, so toggling it with identical
+bytes shows no plan line. Assembly streams the source file
+into the plan and records its hash plus size.
 
 #### Merge rule
 
@@ -263,7 +265,7 @@ changes read as one create plus one delete.
 #### Declaration shape
 
 ```lua
-confit.document.tree(archive, dest, function(name, info, content)
+confit.document.tree(archive, dest, function(name, info, member)
   if not name:match("%.ttf$") then
     return nil
   end
@@ -273,7 +275,7 @@ end)
 
 The call takes an archive path plus a destination folder
 plus a picker. The picker takes member path plus info
-plus raw bytes. Info holds `size` plus `executable`. The
+plus member file path. Info holds `size` plus `executable`. The
 picker returns a destination-relative path per kept
 member. It returns nil per skip. A non-string return
 fails. An empty return fails. An absolute return fails.
@@ -409,17 +411,20 @@ eval "$(starship init bash)"
 ### Archives
 
 `compressed` unpacks one archive into kept documents. The
-callback takes member path plus info plus raw bytes. Info
-holds `size` plus `executable`. The callback returns one
-document per kept member. It returns nil per skip. Other
-returns fail naming the constructor. Kept documents ride
-the profile `documents` array or `config:add_document`.
-Results follow callback order.
+callback takes member path plus info plus member file
+path. Info holds `size` plus `executable`. The callback
+returns one document per kept member. It returns nil per
+skip. Other returns fail naming the constructor. Kept
+documents ride the profile `documents` array or
+`config:add_document`. Results follow callback order.
+Transforms read the member file through `load_bytes` or
+`load_text`, and `opaque` takes the member path as its
+source.
 
 ```lua
-local kept = confit.document.compressed(archive, function(name, info, content)
+local kept = confit.document.compressed(archive, function(name, info, member)
   if name == "mise/bin/mise" then
-    return confit.document.opaque(bin .. "/mise", content, { mode = "755" })
+    return confit.document.opaque(bin .. "/mise", member, { mode = "755" })
   end
 end)
 ```
@@ -439,10 +444,13 @@ Empty member names skip.
 
 Path reads stay jailed. Root-relative paths resolve under
 the project root. Cache-absolute paths resolve under the
-fetch cache. Absolute paths outside the cache fail. Empty
+fetch cache. Extract-absolute paths resolve under the
+extract root. Absolute paths outside both fail. Empty
 paths fail. Escapes above the root fail. Remote bytes
 ride `fetch_file` first. The cache path feeds
 `compressed` plus `tree` plus `load_bytes` directly.
+Member paths feed `opaque` plus `load_bytes` plus
+`load_text` directly.
 
 ### Hashing
 

@@ -89,7 +89,7 @@ impl<'a> ExportRunner<'a> {
             resolve_slot_bundle(args.picker.as_deref(), fs)
         })?;
         if args.manifest {
-            let text = timed("export manifest", || manifest_json(&bundle))?;
+            let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -121,7 +121,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Returns
 ///
-/// The live bundle holding binary bytes, plus the slot-derived
+/// The live bundle holding blob refs, plus the slot-derived
 /// bundle destination carrying `.cb`.
 ///
 /// # Errors

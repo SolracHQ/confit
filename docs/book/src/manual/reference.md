@@ -35,7 +35,7 @@ prints the manifest, not the file contents. `-o` plus
 confit.document.structured("toml"|"json"|"yaml", { path, data })
 confit.document.text(path, content)
 confit.document.link(path, target)
-confit.document.opaque(path, content)
+confit.document.opaque(path, source)
 confit.document.compressed(path, fn)          -- path reads root or cache relative alone, URLs travel through fetch_file; fn returns Document or nil
 confit.document.tree(archive, dest, fn)       -- fn returns relative path or nil
 confit.document.rc.new({ profile = {}, config = {}, final = {} })

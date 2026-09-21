@@ -7,22 +7,39 @@ use confit_core::error::{Error, Result};
 use confit_engine::{EvalOpts, evaluate};
 use serde_json::Value as Json;
 
+/// Writes one named file with parent dirs into a temp root.
+fn write_named(dir: &tempfile::TempDir, name: &str, contents: &[u8]) {
+    let path = dir.path().join(name);
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        panic!("mkdirs build: {error}");
+    }
+    if let Err(error) = std::fs::write(&path, contents) {
+        panic!("file writes: {error}");
+    }
+}
+
 /// Writes files plus profile into a temp root.
 fn project(files: &[(&str, &str)], profile: &str) -> (tempfile::TempDir, PathBuf) {
+    project_mixed(files, &[], profile)
+}
+
+/// Writes text plus binary files plus profile into a temp root.
+fn project_mixed(
+    files: &[(&str, &str)],
+    raw: &[(&str, &[u8])],
+    profile: &str,
+) -> (tempfile::TempDir, PathBuf) {
     let dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(error) => panic!("tempdir builds: {error}"),
     };
     for (name, contents) in files {
-        let path = dir.path().join(name);
-        if let Some(parent) = path.parent()
-            && let Err(error) = std::fs::create_dir_all(parent)
-        {
-            panic!("mkdirs build: {error}");
-        }
-        if let Err(error) = std::fs::write(&path, contents) {
-            panic!("file writes: {error}");
-        }
+        write_named(&dir, name, contents.as_bytes());
+    }
+    for (name, contents) in raw {
+        write_named(&dir, name, contents);
     }
     let profile_path = dir.path().join("profile.lua");
     if let Err(error) = std::fs::write(&profile_path, profile) {
@@ -59,7 +76,16 @@ fn run_ok(files: &[(&str, &str)], profile: &str) -> Vec<ManifestDocument> {
 
 /// Evaluates one passing profile string into its full evaluation.
 fn run_eval_ok(files: &[(&str, &str)], profile: &str) -> confit_engine::Evaluation {
-    let (dir, profile_path) = project(files, profile);
+    run_eval_ok_mixed(files, &[], profile)
+}
+
+/// Evaluates one passing profile string with binary fixtures into its full evaluation.
+fn run_eval_ok_mixed(
+    files: &[(&str, &str)],
+    raw: &[(&str, &[u8])],
+    profile: &str,
+) -> confit_engine::Evaluation {
+    let (dir, profile_path) = project_mixed(files, raw, profile);
     let outcome = evaluate(
         &profile_path,
         EvalOpts {
@@ -75,6 +101,17 @@ fn run_eval_ok(files: &[(&str, &str)], profile: &str) -> confit_engine::Evaluati
     match outcome {
         Ok(evaluation) => evaluation,
         Err(error) => panic!("profile evaluates: {error}"),
+    }
+}
+
+/// Reads one blob ref by hash from an evaluation.
+fn blob_ref(
+    evaluation: &confit_engine::Evaluation,
+    blob: &str,
+) -> confit_core::store::blobs::BlobRef {
+    match evaluation.blobs.get(blob) {
+        Some(found) => found.clone(),
+        None => panic!("blob '{blob}' missing"),
     }
 }
 
@@ -274,8 +311,8 @@ return { shells = { "bash" }, configs = { c } }
 #[test]
 fn unsafe_libraries_stay_unloaded() {
     let profile = r#"
-assert(io == nil, "io loads")
 assert(os == nil, "os loads")
+assert(io == nil, "io loads")
 assert(package == nil, "package loads")
 assert(debug == nil, "debug loads")
 return { shells = { "bash" }, configs = { confit.config("tool") } }
@@ -750,70 +787,47 @@ return { shells = { "bash" }, configs = { c } }
 }
 
 #[test]
-fn opaque_constructor_keeps_raw_bytes_without_utf8() {
+fn opaque_source_reads_raw_bytes_without_utf8() {
+    let bytes: &[u8] = &[0xFF, 0x00, 0x41];
     let profile = r#"
 return {
   shells = { "bash" },
   documents = {
-confit.document.opaque("bin/logo", string.char(0xFF, 0x00, 0x41)),
+confit.document.opaque("bin/logo", "logo.bin"),
   },
   configs = { confit.config("tool") },
 }
 "#;
-    let evaluation = run_eval_ok(&[], profile);
+    let evaluation = run_eval_ok_mixed(&[], &[("logo.bin", bytes)], profile);
     let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, 3);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(bytes));
+            assert_eq!(seen.size, 3);
+            assert!(seen.path.ends_with("logo.bin"));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
 }
 
 #[test]
-fn load_bytes_feeds_opaque_without_utf8() {
-    let dir = match tempfile::tempdir() {
-        Ok(dir) => dir,
-        Err(error) => panic!("tempdir builds: {error}"),
-    };
-    let asset = dir.path().join("logo.bin");
-    if let Err(error) = std::fs::write(&asset, [0xFF, 0x00, 0x41]) {
-        panic!("binary writes: {error}");
-    }
-    let profile_path = dir.path().join("profile.lua");
+fn load_bytes_feeds_text_without_decode() {
     let profile = r#"
-local raw = confit.resources.load_bytes("logo.bin")
+local raw = confit.resources.load_bytes("note.txt")
 return {
   shells = { "bash" },
-  documents = { confit.document.opaque("bin/logo", raw) },
+  documents = { confit.document.text("note", raw) },
   configs = { confit.config("tool") },
 }
 "#;
-    if let Err(error) = std::fs::write(&profile_path, profile) {
-        panic!("profile writes: {error}");
-    }
-    let outcome = evaluate(
-        &profile_path,
-        EvalOpts {
-            root: dir.path().to_path_buf(),
-            plugins: dir.path().join("plugins"),
-            re_fetch: false,
-            cache_dir: None,
-            fetcher: None,
-            progress: None,
-        },
-    );
-    let documents = match outcome {
-        Ok(evaluation) => evaluation,
-        Err(error) => panic!("profile evaluates: {error}"),
-    };
-    let found = by_path(&documents.documents, "bin/logo");
-    match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(documents.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
-        }
-        other => panic!("opaque expected, got {other:?}"),
-    }
+    let documents = run_ok(&[("note.txt", "hi")], profile);
+    let found = by_path(&documents, "note");
+    assert!(matches!(
+        found.data,
+        ManifestData::Text { ref content, .. } if content == "hi"
+    ));
 }
 
 #[test]
@@ -823,12 +837,12 @@ return {
   shells = { "bash" },
   documents = {
 confit.document.text("shared", "hi"),
-confit.document.opaque("shared", string.char(0xFF, 0x00)),
+confit.document.opaque("shared", "logo.bin"),
   },
   configs = { confit.config("tool") },
 }
 "#;
-    let error = run_err(&[], profile);
+    let error = run_err(&[("logo.bin", "x")], profile);
     assert!(matches!(error, Error::Plan(_)));
     assert!(error.to_string().contains("more than once"));
 }
@@ -892,12 +906,12 @@ fn unmanaged_opaque_flag_rides_manifest() {
 return {
   shells = { "bash" },
   documents = {
-confit.document.opaque("bin/tool", string.char(0x41), { unmanaged = true }),
+confit.document.opaque("bin/tool", "tool.bin", { unmanaged = true }),
   },
   configs = { confit.config("tool") },
 }
 "#;
-    let documents = run_ok(&[], profile);
+    let documents = run_ok(&[("tool.bin", "A")], profile);
     let found = by_path(&documents, "bin/tool");
     match &found.data {
         ManifestData::Opaque { unmanaged, .. } => assert!(*unmanaged),
@@ -1083,22 +1097,24 @@ fn fetch_file_cache_reads_pass_the_jail() {
     let url = "https://example.com/tool.bin";
     let profile = r#"
 local p = confit.resources.fetch_file("https://example.com/tool.bin")
-local raw = confit.resources.load_bytes(p)
 return {
   shells = { "bash" },
-  documents = { confit.document.opaque("bin/tool", raw) },
+  documents = { confit.document.opaque("bin/tool", p) },
   configs = { confit.config("tool") },
 }
 "#;
-    let fake = stubbed(url, &[0xFF, 0x00, 0x41]);
+    let bytes: &[u8] = &[0xFF, 0x00, 0x41];
+    let fake = stubbed(url, bytes);
     let evaluation = match run_fetch_eval(profile, cache.path(), fake, false) {
         Ok(evaluation) => evaluation,
         Err(error) => panic!("cached read runs: {error}"),
     };
     let found = by_path(&evaluation.documents, "bin/tool");
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, 3);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(bytes));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1170,13 +1186,27 @@ fn run_with_archive(
     archive: &[u8],
     profile: &str,
 ) -> Result<confit_engine::Evaluation> {
+    run_with_archive_mixed(archive_name, archive, &[], &[], profile)
+}
+
+/// Writes archive bytes plus fixtures plus profile into a temp root and evaluates.
+fn run_with_archive_mixed(
+    archive_name: &str,
+    archive: &[u8],
+    files: &[(&str, &str)],
+    raw: &[(&str, &[u8])],
+    profile: &str,
+) -> Result<confit_engine::Evaluation> {
     let dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(error) => panic!("tempdir builds: {error}"),
     };
-    let archive_path = dir.path().join(archive_name);
-    if let Err(error) = std::fs::write(&archive_path, archive) {
-        panic!("archive writes: {error}");
+    write_named(&dir, archive_name, archive);
+    for (name, contents) in files {
+        write_named(&dir, name, contents.as_bytes());
+    }
+    for (name, contents) in raw {
+        write_named(&dir, name, contents);
     }
     let profile_path = dir.path().join("profile.lua");
     if let Err(error) = std::fs::write(&profile_path, profile) {
@@ -1208,7 +1238,18 @@ fn run_archive_eval(
     archive: &[u8],
     profile: &str,
 ) -> confit_engine::Evaluation {
-    match run_with_archive(archive_name, archive, profile) {
+    run_archive_eval_mixed(archive_name, archive, &[], &[], profile)
+}
+
+/// Evaluates one passing archive profile with fixtures returning its full evaluation.
+fn run_archive_eval_mixed(
+    archive_name: &str,
+    archive: &[u8],
+    files: &[(&str, &str)],
+    raw: &[(&str, &[u8])],
+    profile: &str,
+) -> confit_engine::Evaluation {
+    match run_with_archive_mixed(archive_name, archive, files, raw, profile) {
         Ok(evaluation) => evaluation,
         Err(error) => panic!("profile evaluates: {error}"),
     }
@@ -1229,9 +1270,10 @@ fn compressed_extension_pick_keeps_matching_members() {
         ("fonts/readme.txt", b"readme".as_slice(), 0o644),
     ]);
     let profile = r#"
-local kept = confit.document.compressed("fonts.tar.gz", function(path, info, content)
+local kept = confit.document.compressed("fonts.tar.gz", function(path, info, member)
   if path:find("%.ttf$") then
-    return confit.document.text("/fonts/" .. path, content)
+    local raw = confit.resources.load_bytes(member)
+    return confit.document.text("/fonts/" .. path, raw)
   end
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
@@ -1252,7 +1294,7 @@ fn compressed_executable_pick_reads_the_mode() {
         ("bin/readme", b"read".as_slice(), 0o644),
     ]);
     let profile = r#"
-local kept = confit.document.compressed("tools.tar", function(path, info, content)
+local kept = confit.document.compressed("tools.tar", function(path, info, member)
   if info.executable then
     return confit.document.text("/out/" .. path, tostring(info.size))
   end
@@ -1275,7 +1317,7 @@ fn compressed_nil_callback_skips_members() {
         ("b.txt", b"b".as_slice(), 0o644),
     ]);
     let profile = r#"
-local kept = confit.document.compressed("empty.tar.gz", function(path, info, content)
+local kept = confit.document.compressed("empty.tar.gz", function(path, info, member)
 end)
 assert(#kept == 0, "kept stays empty")
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
@@ -1285,23 +1327,22 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
 }
 
 #[test]
-fn compressed_binary_member_wraps_opaque_without_utf8() {
+fn compressed_callback_opaque_takes_source_path() {
     let raw: &[u8] = &[0xFF, 0x00, 0x41, 0xFE];
     let archive = tar_gz_bytes(&[("bin/logo", raw, 0o644)]);
     let profile = r#"
-local kept = confit.document.compressed("bin.tar.gz", function(path, info, content)
-  return confit.document.opaque("bin/logo", content)
+local kept = confit.document.compressed("bin.tar.gz", function(path, info, member)
+  return confit.document.opaque("bin/logo", member)
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
     let evaluation = run_archive_eval("bin.tar.gz", &archive, profile);
     let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(
-                evaluation.blobs.get(blob),
-                Some(&vec![0xFF, 0x00, 0x41, 0xFE])
-            );
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, 4);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(raw));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1311,8 +1352,8 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
 fn compressed_corrupt_archive_fails_as_plan_error() {
     let bad = vec![0xFFu8; 1024];
     let profile = r#"
-local kept = confit.document.compressed("bad.tar.gz", function(path, info, content)
-  return confit.document.text("out", content)
+local kept = confit.document.compressed("bad.tar.gz", function(path, info, member)
+  return confit.document.text("out", confit.resources.load_text(member))
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
@@ -1325,8 +1366,8 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
 fn compressed_repeat_path_fails_as_plan_error() {
     let archive = tar_gz_bytes(&[("shared.txt", b"data".as_slice(), 0o644)]);
     let profile = r#"
-local kept = confit.document.compressed("a.tar.gz", function(path, info, content)
-  return confit.document.text("shared", content)
+local kept = confit.document.compressed("a.tar.gz", function(path, info, member)
+  return confit.document.text("shared", confit.resources.load_text(member))
 end)
 return {
   shells = { "bash" },
@@ -1349,8 +1390,8 @@ fn compressed_pairs_with_fetch_file_cache_path() {
     let url = "https://example.com/fonts.tar.gz";
     let profile = r#"
 local p = confit.resources.fetch_file("https://example.com/fonts.tar.gz")
-local kept = confit.document.compressed(p, function(path, info, content)
-  return confit.document.opaque("bin/logo", content)
+local kept = confit.document.compressed(p, function(path, info, member)
+  return confit.document.opaque("bin/logo", p)
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
@@ -1361,8 +1402,10 @@ return { shells = { "bash" }, documents = kept, configs = { confit.config("tool"
     };
     let found = by_path(&evaluation.documents, "bin/logo");
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]))
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, archive.len() as u64);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(&archive));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1376,7 +1419,7 @@ fn tree_pick_returns_one_sorted_document() {
         ("pkg/readme.txt", b"readme".as_slice(), 0o644),
     ]);
     let profile = r#"
-local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, content)
+local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, member)
   if not path:match("%.ttf$") then
     return nil
   end
@@ -1391,10 +1434,14 @@ return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("
         ManifestData::Tree { members } => {
             assert_eq!(members.len(), 2);
             assert_eq!(members[0].relative, "alpha.ttf");
-            assert_eq!(
-                evaluation.blobs.get(&members[0].blob),
-                Some(&b"alpha".to_vec())
-            );
+            let seen = blob_ref(&evaluation, &members[0].blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(b"alpha"));
+            assert_eq!(seen.size, 5);
+            let stored = match std::fs::read(&seen.path) {
+                Ok(stored) => stored,
+                Err(error) => panic!("extract reads: {error}"),
+            };
+            assert_eq!(stored, b"alpha");
             assert_eq!(members[0].mode, 0o644);
             assert_eq!(members[1].relative, "zulu.ttf");
         }
@@ -1409,7 +1456,7 @@ fn tree_executable_member_reads_the_mode() {
         ("bin/data", b"data".as_slice(), 0o644),
     ]);
     let profile = r#"
-local tools = confit.document.tree("tools.tar", "/out", function(path, info, content)
+local tools = confit.document.tree("tools.tar", "/out", function(path, info, member)
   return path:match("([^/]+)$")
 end)
 assert(tools.members[1].rel == "data", "members expose rels in order")
@@ -1421,10 +1468,13 @@ return { shells = { "bash" }, documents = { tools }, configs = { confit.config("
         ManifestData::Tree { members } => {
             assert_eq!(members[0].mode, 0o644);
             assert_eq!(members[1].mode, 0o755);
-            assert_eq!(
-                evaluation.blobs.get(&members[1].blob),
-                Some(&b"run".to_vec())
-            );
+            let seen = blob_ref(&evaluation, &members[1].blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(b"run"));
+            let stored = match std::fs::read(&seen.path) {
+                Ok(stored) => stored,
+                Err(error) => panic!("extract reads: {error}"),
+            };
+            assert_eq!(stored, b"run");
         }
         other => panic!("tree expected, got {other:?}"),
     }
@@ -1434,8 +1484,8 @@ return { shells = { "bash" }, documents = { tools }, configs = { confit.config("
 fn tree_document_return_fails_as_plan_error() {
     let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
     let profile = r#"
-local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
-  return confit.document.opaque("/fonts/a.ttf", content)
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, member)
+  return confit.document.opaque("/fonts/a.ttf", member)
 end)
 return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
 "#;
@@ -1448,7 +1498,7 @@ return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("
 fn tree_dotdot_rel_fails_as_plan_error() {
     let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
     let profile = r#"
-local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, member)
   return "../escape.ttf"
 end)
 return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
@@ -1465,7 +1515,7 @@ fn tree_duplicate_rel_fails_as_plan_error() {
         ("y/a.ttf", b"b".as_slice(), 0o644),
     ]);
     let profile = r#"
-local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, member)
   return "same.ttf"
 end)
 return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
@@ -1479,7 +1529,7 @@ return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("
 fn tree_empty_pick_fails_naming_the_filter() {
     let archive = tar_gz_bytes(&[("a.ttf", b"a".as_slice(), 0o644)]);
     let profile = r#"
-local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, content)
+local fonts = confit.document.tree("a.tar.gz", "/fonts", function(path, info, member)
   return nil
 end)
 return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
@@ -1487,6 +1537,50 @@ return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("
     let error = run_archive_err("a.tar.gz", &archive, profile);
     assert!(matches!(error, Error::Plan(_)));
     assert!(error.to_string().contains("check the pick filter"));
+}
+
+#[test]
+fn extract_reuse_keeps_scratch_across_runs() {
+    let archive = tar_gz_bytes(&[("pkg/alpha.ttf", b"alpha".as_slice(), 0o644)]);
+    let profile = r#"
+local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, member)
+  return path:match("([^/]+)$")
+end)
+return { shells = { "bash" }, documents = { fonts }, configs = { confit.config("tool") } }
+"#;
+    let first = run_archive_eval("fonts.tar.gz", &archive, profile);
+    let sha = confit_core::ids::sha256_hex(&archive);
+    let root = std::env::temp_dir().join("confit-extract");
+    let dir = root.join(&sha);
+    assert!(dir.is_dir(), "extract lands once");
+    assert!(
+        !root.join(format!("{sha}.part")).exists(),
+        "part renames away"
+    );
+    let member = dir.join("pkg/alpha.ttf");
+    let stored = match std::fs::read(&member) {
+        Ok(stored) => stored,
+        Err(error) => panic!("extract reads: {error}"),
+    };
+    assert_eq!(stored, b"alpha");
+    let sentinel = dir.join("sentinel");
+    if let Err(error) = std::fs::write(&sentinel, b"keep") {
+        panic!("sentinel writes: {error}");
+    }
+    let second = run_archive_eval("fonts.tar.gz", &archive, profile);
+    assert!(sentinel.exists(), "second run unpacks nothing");
+    if let Err(error) = std::fs::remove_file(&sentinel) {
+        panic!("sentinel clears: {error}");
+    }
+    let first_blob = match &by_path(&first.documents, "/fonts").data {
+        ManifestData::Tree { members } => members[0].blob.clone(),
+        other => panic!("tree expected, got {other:?}"),
+    };
+    let second_blob = match &by_path(&second.documents, "/fonts").data {
+        ManifestData::Tree { members } => members[0].blob.clone(),
+        other => panic!("tree expected, got {other:?}"),
+    };
+    assert_eq!(first_blob, second_blob);
 }
 
 #[test]
@@ -1548,22 +1642,22 @@ fn compressed_zip_pick_keeps_matching_members() {
         ("README.md", b"docs"),
     ]);
     let profile = r#"
-local kept = confit.document.compressed("fonts.zip", function(path, info, content)
+local kept = confit.document.compressed("fonts.zip", function(path, info, member)
   if path:match("%.ttf$") then
-    return confit.document.opaque("fonts/" .. path, content)
+    return confit.document.opaque("fonts/" .. path, member)
   end
 end)
 return { shells = { "bash" }, documents = kept, configs = { confit.config("tool") } }
 "#;
+    let bytes: &[u8] = &[0x00, 0x01, 0x00, 0x00];
     let evaluation = run_archive_eval("fonts.zip", &archive, profile);
     assert_eq!(evaluation.documents.len(), 1);
     let found = by_path(&evaluation.documents, "fonts/JetBrainsMono-Bold.ttf");
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(
-                evaluation.blobs.get(blob),
-                Some(&vec![0x00, 0x01, 0x00, 0x00])
-            );
+        ManifestData::Opaque { blob, size, .. } => {
+            assert_eq!(*size, 4);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(bytes));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1706,24 +1800,32 @@ return { shells = { "bash" }, configs = { bat } }
 fn eval_fills_honest_opaque_plus_tree_sizes() {
     let archive = tar_gz_bytes(&[("pkg/alpha.ttf", b"alpha".as_slice(), 0o644)]);
     let profile = r#"
-local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, content)
+local fonts = confit.document.tree("fonts.tar.gz", "/fonts", function(path, info, member)
   return path:match("([^/]+)$")
 end)
 return {
   shells = { "bash" },
   documents = {
     fonts,
-    confit.document.opaque("bin/logo", string.char(0xFF, 0x00, 0x41)),
+    confit.document.opaque("bin/logo", "logo.bin"),
   },
   configs = { confit.config("tool") },
 }
 "#;
-    let evaluation = run_archive_eval("fonts.tar.gz", &archive, profile);
+    let bytes: &[u8] = &[0xFF, 0x00, 0x41];
+    let evaluation = run_archive_eval_mixed(
+        "fonts.tar.gz",
+        &archive,
+        &[],
+        &[("logo.bin", bytes)],
+        profile,
+    );
     let opaque = by_path(&evaluation.documents, "bin/logo");
     match &opaque.data {
         ManifestData::Opaque { blob, size, .. } => {
             assert_eq!(*size, 3);
-            assert_eq!(evaluation.blobs.get(blob), Some(&vec![0xFF, 0x00, 0x41]));
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(bytes));
         }
         other => panic!("opaque expected, got {other:?}"),
     }
@@ -1733,10 +1835,8 @@ return {
             assert_eq!(members.len(), 1);
             assert_eq!(members[0].relative, "alpha.ttf");
             assert_eq!(members[0].size, 5);
-            assert_eq!(
-                evaluation.blobs.get(&members[0].blob),
-                Some(&b"alpha".to_vec())
-            );
+            let seen = blob_ref(&evaluation, &members[0].blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(b"alpha"));
         }
         other => panic!("tree expected, got {other:?}"),
     }
@@ -2154,8 +2254,12 @@ return { shells = { "bash" }, configs = { installer, bat } }
         .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
         .unwrap_or_else(|| panic!("installer binary missing"));
     match &found.data {
-        ManifestData::Opaque { blob, mode, .. } => {
-            assert_eq!(evaluation.blobs.get(blob), Some(&b"mise-binary".to_vec()));
+        ManifestData::Opaque {
+            blob, size, mode, ..
+        } => {
+            assert_eq!(*size, 11);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(b"mise-binary"));
             assert_eq!(mode, &Some(0o755));
         }
         other => panic!("opaque expected, got {other:?}"),
@@ -2207,7 +2311,8 @@ local installer = mise.init()
 local bat = mise.package({ name = "bat" })
 return { shells = { "bash" }, configs = { installer, bat } }
 "#;
-    let evaluation = match run_fetch_eval(profile, cache.path(), fake, false) {
+    let outcome = run_fetch_eval(profile, cache.path(), fake, false);
+    let evaluation = match outcome {
         Ok(evaluation) => evaluation,
         Err(error) => panic!("installer resolves: {error}"),
     };
@@ -2217,8 +2322,13 @@ return { shells = { "bash" }, configs = { installer, bat } }
         .find(|item| item.path.as_str().ends_with(".local/bin/mise"))
         .unwrap_or_else(|| panic!("installer binary missing"));
     match &found.data {
-        ManifestData::Opaque { blob, .. } => {
-            assert_eq!(evaluation.blobs.get(blob), Some(&b"mise-binary".to_vec()));
+        ManifestData::Opaque {
+            blob, size, mode, ..
+        } => {
+            assert_eq!(*size, 11);
+            let seen = blob_ref(&evaluation, blob);
+            assert_eq!(seen.sha, confit_core::ids::sha256_hex(b"mise-binary"));
+            assert_eq!(mode, &Some(0o755));
         }
         other => panic!("opaque expected, got {other:?}"),
     }

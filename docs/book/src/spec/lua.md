@@ -68,31 +68,36 @@ non-string fields.
 #### `confit.document.opaque`
 
 ```lua
-confit.document.opaque(path, content, opts?)
+confit.document.opaque(path, source, opts?)
 ```
 
-The call takes a path plus raw bytes plus optional opts.
-Lua strings carry the bytes without text conversion. Opts
-holds `mode` plus `unmanaged`. `unmanaged` marks
-existence-only documents.
+The call takes a path plus a source path plus optional
+opts. Root-relative sources resolve under the project
+root. Absolute sources resolve under the fetch cache or
+the extract root. Archive callbacks hand member paths
+straight to this call. Assembly opens the source and
+streams its bytes into the plan. Opts holds `mode` plus
+`unmanaged`. `unmanaged` marks existence-only documents.
 
-Preconditions hold path plus content strings. Plan errors
-name unknown opts fields plus bad modes.
+Preconditions hold path plus source strings. Plan errors
+name unknown opts fields plus bad modes plus jail escapes.
 
 #### `confit.document.compressed`
 
 ```lua
-confit.document.compressed(path, function(name, info, content)
+confit.document.compressed(path, function(name, info, member)
   if name == "mise/bin/mise" then
-    return confit.document.opaque(dest, content, { mode = "755" })
+    return confit.document.opaque(dest, member, { mode = "755" })
   end
 end)
 ```
 
 The call takes an archive path plus a callback. The
-callback takes member path plus info plus raw bytes. Info
-holds `size` plus `executable`. The callback returns one
-document per kept member. It returns nil per skip.
+callback takes member path plus info plus member file
+path. Info holds `size` plus `executable`. The callback
+returns one document per kept member. It returns nil per
+skip. Transforms read the member file through
+`load_bytes` or `load_text`.
 
 Preconditions hold a readable archive plus a function
 callback. Plan errors name empty paths plus jail escapes
@@ -101,7 +106,7 @@ plus unreadable archives plus non-document returns.
 #### `confit.document.tree`
 
 ```lua
-confit.document.tree(archive, dest, function(name, info, content)
+confit.document.tree(archive, dest, function(name, info, member)
   if not name:match("%.ttf$") then
     return nil
   end
@@ -406,7 +411,8 @@ Loaders read project files. Fetchers read remote URLs
 through a shared sidecar cache. Jail rules shape every
 path. Root-relative paths resolve under the project
 root. Cache-absolute paths resolve under the fetch
-cache.
+cache. Extract-absolute paths resolve under the extract
+root.
 
 #### `confit.resources.load_toml`
 
@@ -466,13 +472,14 @@ unreadable files.
 local raw = confit.resources.load_bytes("resources/logo.bin")
 ```
 
-The call takes one root-relative path or one
-cache-absolute path. It returns a Lua string holding raw
-bytes.
+The call takes one root-relative path or one absolute
+path under the cache or the extract root. It returns a
+Lua string holding raw bytes. Archive callbacks hand
+member paths straight to this call.
 
-Preconditions hold a readable path inside the jail or
-the cache. Plan errors name outside absolutes plus root
-escapes plus unreadable files.
+Preconditions hold a readable path inside the jail, the
+cache, or the extract root. Plan errors name outside
+absolutes plus root escapes plus unreadable files.
 
 #### `confit.resources.fetch_text`
 

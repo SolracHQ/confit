@@ -4,9 +4,11 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use confit_core::document::{ManifestData, ManifestDocument};
 pub(crate) use confit_core::drift::DriftOrder;
 pub(crate) use confit_core::error::Error;
+pub(crate) use confit_core::fs::Filesystem;
 pub(crate) use confit_core::fs::memory::MemoryFs;
 pub(crate) use confit_core::ids::{DocPath, ReadOutcome};
 pub(crate) use confit_core::plan::{BUNDLE_VERSION, Bundle};
+pub(crate) use confit_core::store::blobs::BlobRef;
 
 /// Points at the workspace examples folder from the cli crate dir.
 pub(crate) fn examples_root() -> PathBuf {
@@ -108,20 +110,44 @@ pub(crate) fn evaluate_fetch(
 }
 
 /// Builds a bundle off disk with an empty previous state.
-pub(crate) fn build(documents: Vec<ManifestDocument>) -> Result<confit_core::plan::Bundle, Error> {
+///
+/// Referenced sample blobs attach as spill refs mirrored into
+/// the backend, so storing streams from real spill files while
+/// pool-first reads resolve on memory fakes.
+pub(crate) fn build(
+    fs: &dyn Filesystem,
+    documents: Vec<ManifestDocument>,
+) -> Result<confit_core::plan::Bundle, Error> {
     let mut built = confit_core::plan::Bundle::build(documents, Vec::new())?;
-    let blobs = sample_blobs();
-    for (sha, bytes) in &blobs {
-        if built
-            .manifest
-            .documents
-            .iter()
-            .any(|document| document.data.blob_refs().contains(&sha.as_str()))
-        {
-            built.blobs.insert(sha.clone(), bytes.clone());
-        }
+    let raw = vec![0xFF, 0x00, 0x80, 0x41];
+    let sha = confit_core::ids::sha256_hex(&raw);
+    if built
+        .manifest
+        .documents
+        .iter()
+        .any(|document| document.data.blob_refs().contains(&sha.as_str()))
+    {
+        built.blobs.insert(sha.clone(), spill_ref(fs, &raw));
     }
     Ok(built)
+}
+
+/// Spills raw bytes to scratch plus mirrors them into the backend.
+///
+/// Storing streams from the real spill file while pool-first
+/// reads resolve through the mirror on memory fakes.
+pub(crate) fn spill_ref(fs: &dyn Filesystem, bytes: &[u8]) -> BlobRef {
+    let sha = confit_core::ids::sha256_hex(bytes);
+    let path = confit_core::store::blobs::spill_bytes(bytes);
+    match fs.write(&path, bytes) {
+        Ok(()) => {}
+        Err(error) => panic!("spill mirrors {}: {error}", path.display()),
+    }
+    BlobRef {
+        sha,
+        size: bytes.len() as u64,
+        path,
+    }
 }
 
 /// Fills data hashes or panics with context.
@@ -135,7 +161,7 @@ pub(crate) fn fill_hashes(documents: &mut [ManifestDocument]) {
 
 /// Serializes one built manifest for comparison.
 pub(crate) fn plan_value(built: &confit_core::plan::Bundle) -> serde_json::Value {
-    match serde_json::to_value(confit_core::store::manifest::Manifest::of(built)) {
+    match serde_json::to_value(&built.manifest) {
         Ok(value) => value,
         Err(error) => panic!("manifest serializes: {error}"),
     }
@@ -204,14 +230,6 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
     ]
 }
 
-/// Builds the blob map backing the sample opaque document.
-pub(crate) fn sample_blobs() -> std::collections::BTreeMap<String, Vec<u8>> {
-    std::collections::BTreeMap::from([(
-        confit_core::ids::sha256_hex(&[0xFF, 0x00, 0x80, 0x41]),
-        vec![0xFF, 0x00, 0x80, 0x41],
-    )])
-}
-
 /// Builds an apply runner over memory fakes.
 pub(crate) fn apply_runner<'a>(
     desired: Vec<ManifestDocument>,
@@ -221,7 +239,7 @@ pub(crate) fn apply_runner<'a>(
     preview: bool,
     seams: confit_cli::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let manifest = match build(desired) {
+    let manifest = match build(seams.fs, desired) {
         Ok(manifest) => manifest,
         Err(error) => panic!("bundle builds: {error}"),
     };
