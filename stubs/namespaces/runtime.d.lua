@@ -38,6 +38,11 @@ function RuntimeNs.in_path(name) end
 ---@return table
 function RuntimeNs.exists(path) end
 
+-- Builds a changed condition table from a document path.
+---@param path string # Built document path watched for changes. Unknown documents fail the plan.
+---@return table
+function RuntimeNs.changed(path) end
+
 -- Builds an all condition table.
 ---@param conds table[] # Condition tables, all holding.
 ---@return table

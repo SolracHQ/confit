@@ -19,7 +19,7 @@ fn init_scaffold_evaluates_to_one_rc() {
         Err(error) => panic!("init runs: {error}"),
     };
     assert_eq!(report.profile, PathBuf::from("project/profile.lua"));
-    assert_eq!(report.written, 14);
+    assert_eq!(report.written, 15);
     let stubs = [
         "project/stubs/confit.d.lua",
         "project/stubs/namespaces/config.d.lua",
@@ -32,6 +32,7 @@ fn init_scaffold_evaluates_to_one_rc() {
         "project/stubs/namespaces/runtime.d.lua",
         "project/stubs/namespaces/utils.d.lua",
         "project/plugins/solrachq/mise/plugin.d.lua",
+        "project/plugins/solrachq/nerd_fonts/plugin.d.lua",
         "project/plugins/solrachq/merge/plugin.d.lua",
         "project/plugins/solrachq/template/plugin.d.lua",
     ];

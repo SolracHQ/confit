@@ -62,6 +62,7 @@ The check covers these paths:
 {DIR}/stubs/namespaces/runtime.d.lua
 {DIR}/stubs/namespaces/utils.d.lua
 {DIR}/plugins/solrachq/mise/plugin.d.lua
+{DIR}/plugins/solrachq/nerd_fonts/plugin.d.lua
 {DIR}/plugins/solrachq/merge/plugin.d.lua
 {DIR}/plugins/solrachq/template/plugin.d.lua
 ```
@@ -82,6 +83,6 @@ file count:
 init: {profile} ({n} files)
 ```
 
-The current scaffold writes 14 files: the profile plus 13
+The current scaffold writes 15 files: the profile plus 14
 stubs. The run completes in one pass: parse, check, write,
 report. Stderr stays quiet.

@@ -12,8 +12,8 @@ local Config = {}
 ---@return Config
 function confit.config(name) end
 
--- Attaches a confit.document table or rc entry table to the config.
----@param document Document|RcEntry # Table from a confit.document constructor, tuned by when opts for rc entries.
+-- Attaches a confit.document table to the config.
+---@param document Document # Table from a confit.document constructor. Rc entry tables fail.
 function Config:add_document(document) end
 
 -- Attaches a confit.patch value to the config, stamping the config name as owner.

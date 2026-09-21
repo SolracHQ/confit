@@ -4,6 +4,7 @@
 
 ---@class HookOpts
 ---@field path? string[] # PATH extension dirs for the hook subprocess alone.
+---@field requires? table|fun(runtime: RuntimeNs): table # Capability gate, or a builder function receiving confit.runtime. Closed gates warn and excuse the hook.
 ---@field when? table|fun(runtime: RuntimeNs): table # Run gate, or a builder function receiving confit.runtime.
 ---@field checks? table[] # Proof conditions. Passing checks skip the hook.
 ---@field timeout? string # Run cap as a Lua-shaped duration, e.g. "10m". Defaults to "10m".
@@ -20,6 +21,6 @@ local HookNs = {}
 
 -- Builds a hook table running argv directly with no shell in between.
 ---@param argv string[] # Command plus arguments in order, e.g. { "mise", "install" }.
----@param opts HookOpts? # Path plus gate plus checks plus timeout shaping the run.
+---@param opts HookOpts? # Path plus requires plus when plus checks plus timeout shaping the run.
 ---@return Hook
 function HookNs.run(argv, opts) end

@@ -66,6 +66,10 @@ const STUB_FILES: &[(&str, &str)] = &[
         include_str!("../../../engine/plugins/solrachq/mise/plugin.d.lua"),
     ),
     (
+        "plugins/solrachq/nerd_fonts/plugin.d.lua",
+        include_str!("../../../engine/plugins/solrachq/nerd_fonts/plugin.d.lua"),
+    ),
+    (
         "plugins/solrachq/merge/plugin.d.lua",
         include_str!("../../../engine/plugins/solrachq/merge/plugin.d.lua"),
     ),

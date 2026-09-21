@@ -49,9 +49,10 @@ function MiseRc:source(path, opts) end
 ---@field version? string # Pinned tool version folded into the shared TOML. Defaults to "latest".
 ---@field bin? string # Binary proving the install through its shim. Defaults to name.
 ---@field aliases? table<string, string> # Alias map rendered with the binary guard. Sorted by name.
+---@field options? table<string, string|number|boolean|(string|number|boolean)[]> # Backend tool options folded into the shared TOML beside the version.
 ---@field rc_builder? fun(rc: MiseRc) # Optional builder receiving the collector.
 -- Table shape for one package. Every field stays optional except `name`.
--- The package folds the version, declares the install hook, requires
+-- The package folds the version plus options, declares the install hook, requires
 -- the installer config, then runs the builder.
 local MisePackageOpts = {}
 
@@ -62,7 +63,7 @@ local MisePackageOpts = {}
 local MiseNs = {}
 
 -- Declares one mise package plus its builder rc entries.
----@param opts MisePackageOpts # Package table holding name, version, rc_builder.
+---@param opts MisePackageOpts # Package table holding name, version, options, rc_builder.
 ---@return table # Config userdata for the profile configs array.
 function MiseNs.package(opts) end
 

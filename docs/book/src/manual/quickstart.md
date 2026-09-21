@@ -38,7 +38,7 @@ confit init ~/confit-demo
 `init` writes one profile plus editor stubs. It stops when the folder already holds a profile or stubs. Such folders stay untouched. It prints one line with the profile path plus the file count:
 
 ```text
-init: /home/you/confit-demo/profile.lua (14 files)
+init: /home/you/confit-demo/profile.lua (15 files)
 ```
 
 Open `profile.lua` and read it fully. It declares one shell config with one alias plus one shell eval. Small file, good starting point for edits.

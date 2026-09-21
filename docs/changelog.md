@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.1]
+
+### Fixed
+
+- `confit init` scaffolds the `nerd_fonts` plugin stub beside
+  the other three, so profiles following the lua page get
+  editor completion for it. The scaffold writes 15 files now,
+  the profile plus 14 stubs.
+- Editor stubs match the v0.8 surface again. `runtime` gains
+  the `changed` gate, `hook` gains the `requires` slot, `mise`
+  gains the package `options` field, `resources` teaches the
+  three-zone jail on every loader, `document` scopes
+  `unmanaged` to text plus opaque and names callback args for
+  the member identity, `config` notes that bare rc entry
+  tables fail `add_document`.
+
 ## [0.8]
 
 Design spec: `docs/design/v0.8.md`.
