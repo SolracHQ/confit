@@ -43,6 +43,16 @@ pub struct ApplyReport {
     pub stored: PathBuf,
 }
 
+/// Shared hook-run context for one apply run.
+struct HookCtx<'x> {
+    /// Holds the runtime facts under reading.
+    rt: &'x Runtime,
+    /// Holds the backend under stating.
+    fs: &'x dyn Filesystem,
+    /// Holds the changed document ids under reading.
+    changed: &'x BTreeSet<DocPath>,
+}
+
 /// One apply run from desired documents to disk writes.
 ///
 /// # Examples
@@ -74,7 +84,6 @@ pub struct ApplyReport {
 ///     previous: Bundle::empty(),
 ///     state: None,
 ///     force: false,
-///     preview: false,
 ///     seams: Seams::memory(&fs, &mut input),
 /// };
 /// assert!(matches!(runner.execute(), Ok(_)));
@@ -89,8 +98,6 @@ pub struct ApplyRunner<'a> {
     pub state: Option<PathBuf>,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
-    /// Renders the preview through presentation first.
-    pub preview: bool,
     /// Holds the injected filesystem, prompts, and sink.
     pub seams: Seams<'a>,
 }
@@ -166,7 +173,6 @@ impl<'a> ApplyRunner<'a> {
                 previous,
                 state: Some(state_file),
                 force: args.force,
-                preview: false,
                 seams,
             });
         }
@@ -187,7 +193,6 @@ impl<'a> ApplyRunner<'a> {
             previous,
             state: Some(state_file),
             force: args.force,
-            preview: true,
             seams,
         })
     }
@@ -202,7 +207,6 @@ impl<'a> ApplyRunner<'a> {
             previous,
             state: Some(state_file),
             force,
-            preview: true,
             seams,
         })
     }
@@ -287,20 +291,18 @@ impl<'a> ApplyRunner<'a> {
         let baseline = reference.drift(&snapshot, &snapshot_tree, order, fs);
         let rt = Runtime::current();
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        if self.preview {
-            let lifecycle = lifecycle_lines(&built.manifest.hooks, &self.previous.manifest.hooks);
-            let evaluated = built.hook_preview(&rt, fs, &changed)?;
-            let report = Summary {
-                built: &built,
-                previous: &self.previous,
-                drift: &baseline,
-                first_run,
-                hook_lines: lifecycle.as_slice(),
-                hook_evaluated: evaluated.as_slice(),
-            };
-            let text = report.render();
-            self.seams.print_line(text);
-        }
+        let lifecycle = lifecycle_lines(&built.manifest.hooks, &self.previous.manifest.hooks);
+        let evaluated = built.hook_preview(&rt, fs, &changed)?;
+        let report = Summary {
+            built: &built,
+            previous: &self.previous,
+            drift: &baseline,
+            first_run,
+            hook_lines: lifecycle.as_slice(),
+            hook_evaluated: evaluated.as_slice(),
+        };
+        let text = report.render();
+        self.seams.print_line(text);
         if !self.force && !self.seams.confirm()? {
             return Err(Error::Plan(
                 "apply aborted: answer reads no 'yes'".to_string(),
@@ -382,12 +384,7 @@ impl<'a> ApplyRunner<'a> {
             Some(runner) => runner,
             None => &real,
         };
-        let ctx = HookCtx {
-            runner,
-            rt,
-            fs,
-            changed,
-        };
+        let ctx = HookCtx { rt, fs, changed };
         for (index, hook) in built.manifest.hooks.iter().enumerate() {
             let position = index + 1;
             if let Some(line) = gate_line(hook, &ctx) {
@@ -404,7 +401,7 @@ impl<'a> ApplyRunner<'a> {
                 self.seams.print_line(line);
                 continue;
             }
-            self.spawn_hook(hook, position, total, &ctx)?;
+            self.spawn_hook(hook, position, total, &ctx, runner)?;
         }
         Ok(())
     }
@@ -421,6 +418,7 @@ impl<'a> ApplyRunner<'a> {
         position: usize,
         total: usize,
         ctx: &HookCtx<'_>,
+        runner: &dyn HookRunner,
     ) -> Result<()> {
         let argv_text = hook.argv.join(" ");
         let binary = resolve_hook(hook, ctx.rt, ctx.fs).ok_or_else(|| {
@@ -440,7 +438,7 @@ impl<'a> ApplyRunner<'a> {
         }
         let path_dirs: Vec<std::path::PathBuf> =
             hook.path.iter().map(std::path::PathBuf::from).collect();
-        let outcome = ctx.runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
+        let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
         if let Some(log) = self.seams.log_file.clone() {
             append_hook_log(ctx.fs, &log, &line, &outcome.output)?;
         }
@@ -454,18 +452,6 @@ impl<'a> ApplyRunner<'a> {
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
         Ok(())
     }
-}
-
-/// Shared hook-run context for one apply run.
-struct HookCtx<'x> {
-    /// Runs hook subprocesses.
-    runner: &'x dyn HookRunner,
-    /// Holds the runtime facts under reading.
-    rt: &'x Runtime,
-    /// Holds the backend under stating.
-    fs: &'x dyn Filesystem,
-    /// Holds the changed document ids under reading.
-    changed: &'x BTreeSet<DocPath>,
 }
 
 /// Renders the skip line for the first closed gate, else none.

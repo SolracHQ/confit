@@ -57,6 +57,15 @@ pub enum Condition {
     Not(Box<Condition>),
 }
 
+/// Names the n-ary operator under folding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NaryKind {
+    /// Folds an `All` member list.
+    All,
+    /// Folds an `Any` member list.
+    Any,
+}
+
 impl Condition {
     /// Reports whether one condition tree holds a changed leaf.
     ///
@@ -148,8 +157,8 @@ impl Condition {
                 Self::Not(grand) => *grand,
                 simple => Self::Not(Box::new(simple)),
             },
-            Self::All(items) => Self::nary(true, items),
-            Self::Any(items) => Self::nary(false, items),
+            Self::All(items) => Self::nary(NaryKind::All, items),
+            Self::Any(items) => Self::nary(NaryKind::Any, items),
             _ => self.clone(),
         }
     }
@@ -158,19 +167,19 @@ impl Condition {
     ///
     /// # Arguments
     ///
-    /// * `conjunction` - true for `All`, false for `Any`.
+    /// * `kind` - the operator under folding.
     /// * `items` - the member list under folding.
     ///
     /// # Returns
     ///
     /// The folded tree, collapsing singletons to their member.
-    fn nary(conjunction: bool, items: &[Self]) -> Self {
+    fn nary(kind: NaryKind, items: &[Self]) -> Self {
         let mut simple: Vec<Self> = items.iter().map(Self::simplified).collect();
         let mut flat = Vec::with_capacity(simple.len());
         for item in simple.drain(..) {
             match item {
-                Self::All(inner) if conjunction => flat.extend(inner),
-                Self::Any(inner) if !conjunction => flat.extend(inner),
+                Self::All(inner) if kind == NaryKind::All => flat.extend(inner),
+                Self::Any(inner) if kind == NaryKind::Any => flat.extend(inner),
                 _ => flat.push(item),
             }
         }
@@ -180,11 +189,11 @@ impl Condition {
             return flat.swap_remove(0);
         }
         if flat.iter().any(|member| Self::cancels(&flat, member)) {
-            return Self::nary_empty(conjunction);
+            return Self::nary_empty(kind);
         }
         let absorbed: Vec<bool> = flat
             .iter()
-            .map(|member| Self::absorbed(&flat, member, conjunction))
+            .map(|member| Self::absorbed(&flat, member, kind))
             .collect();
         let mut kept = Vec::with_capacity(flat.len());
         for (member, drop) in flat.drain(..).zip(absorbed) {
@@ -196,10 +205,9 @@ impl Condition {
         if flat.len() == 1 {
             return flat.swap_remove(0);
         }
-        if conjunction {
-            Self::All(flat)
-        } else {
-            Self::Any(flat)
+        match kind {
+            NaryKind::All => Self::All(flat),
+            NaryKind::Any => Self::Any(flat),
         }
     }
 
@@ -207,16 +215,15 @@ impl Condition {
     ///
     /// # Arguments
     ///
-    /// * `conjunction` - true for `All`, false for `Any`.
+    /// * `kind` - the operator holding the constant.
     ///
     /// # Returns
     ///
     /// The empty member list holding the constant value.
-    fn nary_empty(conjunction: bool) -> Self {
-        if conjunction {
-            Self::All(Vec::new())
-        } else {
-            Self::Any(Vec::new())
+    fn nary_empty(kind: NaryKind) -> Self {
+        match kind {
+            NaryKind::All => Self::All(Vec::new()),
+            NaryKind::Any => Self::Any(Vec::new()),
         }
     }
 
@@ -244,14 +251,14 @@ impl Condition {
     ///
     /// * `flat` - the flattened member list under checking.
     /// * `member` - the branch under testing.
-    /// * `conjunction` - true for `All`, false for `Any`.
+    /// * `kind` - the operator absorbing the branch.
     ///
     /// # Returns
     ///
     /// True while a sibling member reads inside the branch.
-    fn absorbed(flat: &[Self], member: &Self, conjunction: bool) -> bool {
-        let inner = match (conjunction, member) {
-            (true, Self::Any(inner)) | (false, Self::All(inner)) => inner,
+    fn absorbed(flat: &[Self], member: &Self, kind: NaryKind) -> bool {
+        let inner = match (kind, member) {
+            (NaryKind::All, Self::Any(inner)) | (NaryKind::Any, Self::All(inner)) => inner,
             _ => return false,
         };
         flat.iter().any(|sibling| inner.contains(sibling))

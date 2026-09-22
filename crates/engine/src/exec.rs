@@ -770,33 +770,24 @@ struct StructuredPatch {
 impl UserData for StructuredPatch {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("set", |lua, this, args: MultiValue| {
-            this.call_structured_op(lua, false, args)
+            let (path, value) = this.structured_args("set", args)?;
+            this.structured_set(lua, &path, value)
         });
         methods.add_method("append", |lua, this, args: MultiValue| {
-            this.call_structured_op(lua, true, args)
+            let (path, value) = this.structured_args("append", args)?;
+            this.structured_append(lua, &path, value)
         });
     }
 }
 
 impl StructuredPatch {
-    /// Runs one structured `set` or `append` call.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the live table.
-    /// * `append` - list extension holding true for `append`.
-    /// * `args` - path and value values.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the write lands or yields to the recorded winner.
+    /// Reads one `(path, value)` pair for a structured op.
     ///
     /// # Errors
     ///
-    /// Wrong arity fails as a plan error. Bad path or value fails as a plan error.
+    /// Wrong arity fails as a plan error. Bad path fails as a plan error.
     ///
-    fn call_structured_op(&self, lua: &Lua, append: bool, args: MultiValue) -> mlua::Result<()> {
-        let op = if append { "append" } else { "set" };
+    fn structured_args(&self, op: &str, args: MultiValue) -> mlua::Result<(String, Value)> {
         let collected: Vec<Value> = args.into_iter().collect();
         let (path_value, value_value) = match collected.as_slice() {
             [path, value] => (path.clone(), value.clone()),
@@ -808,11 +799,7 @@ impl StructuredPatch {
             }
         };
         let path = path_value.req_str(&self.ctx, "path")?;
-        if append {
-            self.structured_append(lua, &path, value_value)
-        } else {
-            self.structured_set(lua, &path, value_value)
-        }
+        Ok((path, value_value))
     }
 
     /// Writes one structured leaf with first-writer wins.

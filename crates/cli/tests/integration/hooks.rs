@@ -246,7 +246,6 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
         previous,
         state: None,
         force: true,
-        preview: false,
         seams,
     };
     match runner.execute() {
@@ -284,7 +283,6 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
         previous: Bundle::empty(),
         state: None,
         force: true,
-        preview: false,
         seams,
     };
     match runner.execute() {
@@ -317,7 +315,7 @@ fn requires_closed_apply_warns_without_spawning() {
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
-    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
         Ok(manifest) => manifest,
         Err(error) => panic!("bundle builds: {error}"),
@@ -357,7 +355,7 @@ fn when_closed_apply_skips_without_spawning() {
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
-    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
         Ok(manifest) => manifest,
         Err(error) => panic!("bundle builds: {error}"),
@@ -399,7 +397,7 @@ fn print_lines_keep_hook_order_as_data() {
     ]));
     let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
-    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(
         Vec::new(),
         vec![

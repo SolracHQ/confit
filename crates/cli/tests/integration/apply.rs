@@ -12,7 +12,6 @@ fn apply_yes_writes_all_files() {
         Bundle::empty(),
         Some(PathBuf::from("state.json")),
         false,
-        true,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     let report = match runner.execute() {
@@ -56,7 +55,6 @@ fn apply_non_yes_writes_nothing() {
             Bundle::empty(),
             Some(PathBuf::from("state.json")),
             false,
-            true,
             confit_cli::seams::Seams::memory(&fs, &mut input),
         );
         match runner.execute() {
@@ -89,7 +87,6 @@ fn apply_force_skips_prompt() {
         Bundle::empty(),
         None,
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     match runner.execute() {
@@ -113,7 +110,6 @@ fn apply_drift_reprompts() {
         Bundle::empty(),
         None,
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut seed_input),
     );
     match seed.execute() {
@@ -135,7 +131,6 @@ fn apply_drift_reprompts() {
         previous.clone(),
         None,
         false,
-        true,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     match denied.execute() {
@@ -160,7 +155,6 @@ fn apply_drift_reprompts() {
         previous,
         None,
         false,
-        true,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     match retry.execute() {
@@ -190,7 +184,6 @@ fn apply_rotation_drops_sixth() {
             Bundle::empty(),
             None,
             true,
-            false,
             confit_cli::seams::Seams::memory(&fs, &mut input),
         );
         match runner.execute() {
@@ -542,7 +535,7 @@ fn apply_cb_positional_loads_bundle() {
     while let Ok(line) = print_rx.try_recv() {
         lines.push(line);
     }
-    assert!(lines.is_empty(), "bundle skips preview");
+    assert!(!lines.is_empty(), "bundle renders preview");
 }
 
 #[test]
@@ -557,7 +550,6 @@ fn apply_then_drift_stays_quiet() {
         Bundle::empty(),
         None,
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     match runner.execute() {
@@ -593,7 +585,6 @@ fn apply_second_profile_removes_recorded_orphans() {
         Bundle::empty(),
         Some(PathBuf::from("state.json")),
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     match first.execute() {
@@ -633,7 +624,6 @@ fn apply_second_profile_removes_recorded_orphans() {
         previous,
         Some(PathBuf::from("state.json")),
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut input),
     );
     let report = match second.execute() {
@@ -660,7 +650,6 @@ fn apply_emits_writing_manifest_fact() {
         Bundle::empty(),
         None,
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut input).with_progress(sender),
     );
     match runner.execute() {
@@ -755,7 +744,6 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         Bundle::empty(),
         Some(slot.clone()),
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut first_input),
     );
     match first.execute() {
@@ -780,7 +768,6 @@ fn two_profiles_share_one_slot_last_applied_wins() {
         previous,
         Some(slot.clone()),
         true,
-        false,
         confit_cli::seams::Seams::memory(&fs, &mut second_input),
     );
     let report = match second.execute() {
@@ -955,7 +942,6 @@ fn apply_rotation_prunes_exclusive_blobs() {
             previous: Bundle::empty(),
             state: Some(slot.clone()),
             force: true,
-            preview: false,
             seams: confit_cli::seams::Seams::memory(&fs, &mut input),
         };
         match runner.execute() {

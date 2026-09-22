@@ -7,11 +7,8 @@ flowchart TD
     D --> F
     E --> F
     F --> G[Baseline drift against disk]
-    G --> H{Preview wanted}
-    H -- profile and slots --> I[Render the preview]
-    H -- bundle file --> J[Skip preview]
+    G --> I[Render the preview]
     I --> K{Force flag}
-    J --> K
     K -- set --> L[Take a fresh drift snapshot]
     K -- clear --> M[Prompt for yes]
     M -- other answer --> N[Abort, disk untouched]

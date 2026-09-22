@@ -235,13 +235,11 @@ pub(crate) fn sample_documents() -> Vec<ManifestDocument> {
 /// # Arguments
 ///
 /// * `force` - skips the literal-yes prompt while true.
-/// * `preview` - renders the plan preview while true.
 pub(crate) fn apply_runner<'a>(
     desired: Vec<ManifestDocument>,
     previous: Bundle,
     state: Option<PathBuf>,
     force: bool,
-    preview: bool,
     seams: confit_cli::seams::Seams<'a>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
     let manifest = match build(seams.fs, desired) {
@@ -253,7 +251,6 @@ pub(crate) fn apply_runner<'a>(
         previous,
         state,
         force,
-        preview,
         seams,
     }
 }
@@ -352,7 +349,7 @@ pub(crate) fn hook_runner<'a>(
     let mut seams = confit_cli::seams::Seams::memory(fs, input);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
-    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, false, seams);
+    let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(Vec::new(), hooks) {
         Ok(bundle) => bundle,
         Err(error) => panic!("bundle builds: {error}"),

@@ -26,8 +26,8 @@ and sorts documents by path. The preview renders.
 A source carrying the `.cb` suffix loads as a bundle file. The
 suffix match reads case-insensitive. The archive hydrates from
 its own bytes alone, so the run stands free of profiles. Stored
-hashes read trusted, so the run renders nothing. This branch
-moves from load straight to prompts. The fixed slot still loads as the
+hashes read trusted. The preview renders. This branch
+moves from load to preview, then prompts. The fixed slot still loads as the
 previous manifest, and prompts still guard the writes.
 
 ### Named slot source

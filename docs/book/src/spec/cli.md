@@ -33,7 +33,7 @@ confit apply SOURCE [--force] [--root DIR] [--plugins DIR] [--re-fetch]
 SOURCE is a required positional. Values starting with `@` or
 `%` load a slot manifest with preview and prompts. Values ending
 in `.cb` in any letter case load a bundle file and run from
-that file alone; the preview stays skipped. Remaining values
+that file alone. The preview renders. Remaining values
 evaluate as a profile path in any extension, extensionless
 included. A missing profile path fails as a plan error:
 
