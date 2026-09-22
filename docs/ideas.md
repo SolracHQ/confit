@@ -126,3 +126,17 @@ return {
   compression = { blob = 4 },
 }
 ```
+
+---
+
+Idea: Let trees group hand-built documents, not only archives
+Importance: Mid
+Pain: Related configs spray many small documents across the plan. One config needing 20 text documents in the same folder reads as noise next to the thing they serve. Separate documents diff better, grouped trees read better, both are valid, so the tool should offer the choice. Today tree only grows from compressed archives, so hand grouping has no home.
+
+What I have in my head
+
+Tree becomes a namespace with more than one source. The compressed road stays exactly as today, plus a from-data road that takes a list of documents and lands them under one destination. There are too many things open yet. I do not know if tree reuses documents and overwrites the paths or builds new constructors only for the tree. I am not even sure of the shape of the method. This is just a sketch, I will think on it when the moment of planning comes.
+
+```lua
+local bundle = confit.document.tree.from_data(dest, { doc1, doc2 })
+```
