@@ -61,39 +61,27 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
             opaque_impl(lua, &opaque_root, &opaque_cache, &opaque_extract, args)
         })?,
     )?;
-    let comp_root: PathBuf = session.root.clone();
-    let comp_cache: PathBuf = session.cache.clone();
-    let comp_extract: PathBuf = session.extract.clone();
-    let comp_progress = session.progress.clone();
+    let compressed = CompressedDocs {
+        root: session.root.clone(),
+        cache: session.cache.clone(),
+        extract: session.extract.clone(),
+        progress: session.progress.clone(),
+    };
     namespace.set(
         "compressed",
         lua.create_function(move |lua, args: (Value, Value)| {
-            compressed_impl(
-                lua,
-                &comp_root,
-                &comp_cache,
-                &comp_extract,
-                args,
-                comp_progress.clone(),
-            )
+            compressed_impl(lua, &compressed, args)
         })?,
     )?;
-    let tree_root: PathBuf = session.root.clone();
-    let tree_cache: PathBuf = session.cache.clone();
-    let tree_extract: PathBuf = session.extract.clone();
-    let tree_progress = session.progress.clone();
+    let tree = TreeDocs {
+        root: session.root.clone(),
+        cache: session.cache.clone(),
+        extract: session.extract.clone(),
+        progress: session.progress.clone(),
+    };
     namespace.set(
         "tree",
-        lua.create_function(move |lua, args: (Value, Value, Value)| {
-            tree_impl(
-                lua,
-                &tree_root,
-                &tree_cache,
-                &tree_extract,
-                args,
-                tree_progress.clone(),
-            )
-        })?,
+        lua.create_function(move |lua, args: (Value, Value, Value)| tree_impl(lua, &tree, args))?,
     )?;
     install_rc(lua, &namespace)?;
     confit.set("document", namespace)?;
@@ -390,23 +378,25 @@ impl DocOpts {
 }
 
 /// Parses `compressed` args and delegates to `CompressedDocs::build`.
-fn compressed_impl(
-    lua: &Lua,
-    root: &Path,
-    cache: &Path,
-    extract: &Path,
-    args: (Value, Value),
-    progress: Option<ProgressSender>,
-) -> mlua::Result<Table> {
+fn compressed_impl(lua: &Lua, docs: &CompressedDocs, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.compressed";
     let (path_value, callback_value) = args;
     let rel = path_value.req_str(CTOR, "path")?;
     let callback = callback_value.req_func(CTOR, "callback")?;
-    CompressedDocs::build(lua, root, cache, extract, CTOR, rel, callback, progress)
+    docs.build(lua, CTOR, rel, callback)
 }
 
 /// Archive unpacker holding domain validation.
-struct CompressedDocs;
+struct CompressedDocs {
+    /// Project root for archive reads.
+    root: PathBuf,
+    /// Cache folder for cache-absolute reads.
+    cache: PathBuf,
+    /// Extract folder for member file paths.
+    extract: PathBuf,
+    /// Progress sender holding `None` for silence.
+    progress: Option<ProgressSender>,
+}
 
 impl CompressedDocs {
     /// Unpacks one archive through a per-member callback.
@@ -414,13 +404,9 @@ impl CompressedDocs {
     /// # Arguments
     ///
     /// * `lua` - state owning the output table.
-    /// * `root` - project root for archive reads.
-    /// * `cache` - cache folder for cache-absolute reads.
-    /// * `extract` - extract folder for member file paths.
     /// * `ctor` - error prefix naming the constructor.
     /// * `rel` - archive path under reading.
     /// * `callback` - per-member document picker.
-    /// * `progress` - progress sender holding `None` for silence.
     ///
     /// # Returns
     ///
@@ -431,23 +417,19 @@ impl CompressedDocs {
     /// Empty paths fail as plan errors. Unreadable archives fail as plan errors.
     /// Non-document callback returns fail as plan errors.
     ///
-    #[allow(clippy::too_many_arguments)]
-    fn build(
-        lua: &Lua,
-        root: &Path,
-        cache: &Path,
-        extract: &Path,
-        ctor: &str,
-        rel: String,
-        callback: Function,
-        progress: Option<ProgressSender>,
-    ) -> mlua::Result<Table> {
+    fn build(&self, lua: &Lua, ctor: &str, rel: String, callback: Function) -> mlua::Result<Table> {
         if rel.is_empty() {
             return Err(plan_error(format!(
                 "{ctor}: field 'path' must not be empty"
             )));
         }
-        let full = super::resources::resolve_under_root(root, cache, extract, &rel, ctor)?;
+        let full = super::resources::resolve_under_root(
+            &self.root,
+            &self.cache,
+            &self.extract,
+            &rel,
+            ctor,
+        )?;
         let start = std::time::Instant::now();
         let sha = self::archive::archive_sha(&full, &rel, ctor)?;
         let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
@@ -485,7 +467,7 @@ impl CompressedDocs {
             members.len(),
             start.elapsed().as_millis()
         );
-        if let Some(sender) = progress.as_ref() {
+        if let Some(sender) = self.progress.as_ref() {
             let _ = sender.send(Event::Unpacked {
                 archive: rel.clone(),
                 kept: out.raw_len(),
@@ -497,26 +479,26 @@ impl CompressedDocs {
 }
 
 /// Builds one tree document from an archive through a path picker.
-fn tree_impl(
-    lua: &Lua,
-    root: &Path,
-    cache: &Path,
-    extract: &Path,
-    args: (Value, Value, Value),
-    progress: Option<ProgressSender>,
-) -> mlua::Result<Table> {
+fn tree_impl(lua: &Lua, docs: &TreeDocs, args: (Value, Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.tree";
     let (archive_value, dest_value, callback_value) = args;
     let rel = archive_value.req_str(CTOR, "archive")?;
     let dest = dest_value.req_str(CTOR, "dest")?;
     let callback = callback_value.req_func(CTOR, "callback")?;
-    TreeDocs::build(
-        lua, root, cache, extract, CTOR, rel, dest, callback, progress,
-    )
+    docs.build(lua, CTOR, rel, dest, callback)
 }
 
 /// Tree builder holding domain validation.
-struct TreeDocs;
+struct TreeDocs {
+    /// Project root for archive reads.
+    root: PathBuf,
+    /// Cache folder for cache-absolute reads.
+    cache: PathBuf,
+    /// Extract folder for member file paths.
+    extract: PathBuf,
+    /// Progress sender holding `None` for silence.
+    progress: Option<ProgressSender>,
+}
 
 impl TreeDocs {
     /// Builds one tree document from an archive through a path picker.
@@ -524,14 +506,10 @@ impl TreeDocs {
     /// # Arguments
     ///
     /// * `lua` - state owning the output table.
-    /// * `root` - project root for archive reads.
-    /// * `cache` - cache folder for cache-absolute reads.
-    /// * `extract` - extract folder for member file paths.
     /// * `ctor` - error prefix naming the constructor.
     /// * `rel` - archive path under reading.
     /// * `dest` - destination folder holding the members.
     /// * `callback` - per-member destination picker.
-    /// * `progress` - progress sender holding `None` for silence.
     ///
     /// # Returns
     ///
@@ -547,17 +525,13 @@ impl TreeDocs {
     /// errors. Repeated relative paths fail as plan errors.
     /// Empty picks fail as plan errors naming the filter.
     ///
-    #[allow(clippy::too_many_arguments)]
     fn build(
+        &self,
         lua: &Lua,
-        root: &Path,
-        cache: &Path,
-        extract: &Path,
         ctor: &str,
         rel: String,
         dest: String,
         callback: Function,
-        progress: Option<ProgressSender>,
     ) -> mlua::Result<Table> {
         if rel.is_empty() {
             return Err(plan_error(format!(
@@ -569,7 +543,13 @@ impl TreeDocs {
                 "{ctor}: field 'dest' must not be empty"
             )));
         }
-        let full = super::resources::resolve_under_root(root, cache, extract, &rel, ctor)?;
+        let full = super::resources::resolve_under_root(
+            &self.root,
+            &self.cache,
+            &self.extract,
+            &rel,
+            ctor,
+        )?;
         let start = std::time::Instant::now();
         let sha = self::archive::archive_sha(&full, &rel, ctor)?;
         let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
@@ -626,7 +606,7 @@ impl TreeDocs {
             members.len(),
             start.elapsed().as_millis()
         );
-        if let Some(sender) = progress.as_ref() {
+        if let Some(sender) = self.progress.as_ref() {
             let _ = sender.send(Event::Unpacked {
                 archive: rel.clone(),
                 kept: kept.len(),

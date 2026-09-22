@@ -426,13 +426,11 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Arguments
     ///
+    /// * `patch` - structured handle holding owner, format, plus shared winners.
     /// * `segments` - parsed path with the leaf last.
     /// * `full` - dotted path naming the write.
     /// * `lua_value` - converted value under writing.
     /// * `json` - data value seeding leaf owners.
-    /// * `owner` - contributing config name.
-    /// * `format` - format name for collision lines.
-    /// * `owners` - shared winners mutated in place.
     ///
     /// # Returns
     ///
@@ -443,16 +441,13 @@ impl<'a> LiveTable<'a> {
     /// Empty paths fail as plan errors. Blocked shapes fail as plan errors.
     /// Out of bounds indexes fail as plan errors.
     ///
-    #[allow(clippy::too_many_arguments)]
     fn set_live_value(
         &self,
+        patch: &StructuredPatch,
         segments: &[Segment],
         full: &str,
         lua_value: Value,
         json: &Json,
-        owner: &str,
-        format: &str,
-        owners: &Rc<RefCell<OwnerMap>>,
     ) -> mlua::Result<()> {
         let (last, prefix) = match segments.split_last() {
             Some(pair) => pair,
@@ -465,12 +460,14 @@ impl<'a> LiveTable<'a> {
         };
         let parent = self.live_parent(prefix, full)?;
         {
-            let owned = owners.borrow();
+            let owned = patch.live.owners.borrow();
             if let Some(winner) = owned.get(full)
-                && winner != owner
+                && winner != &patch.live.owner
             {
                 log::warn!(
-                    "collision on {format} \"{full}\": \"{owner}\" overwritten, \"{winner}\" wins"
+                    "collision on {} \"{full}\": \"{}\" overwritten, \"{winner}\" wins",
+                    patch.format,
+                    patch.live.owner
                 );
                 return Ok(());
             }
@@ -505,7 +502,7 @@ impl<'a> LiveTable<'a> {
             }
         }
         {
-            let mut owned = owners.borrow_mut();
+            let mut owned = patch.live.owners.borrow_mut();
             let dotted = format!("{full}.");
             let indexed = format!("{full}[");
             owned.retain(|key, _| {
@@ -514,7 +511,7 @@ impl<'a> LiveTable<'a> {
             let mut leaves = BTreeMap::new();
             flatten_json(json, full, &mut leaves);
             for leaf in leaves.keys() {
-                owned.insert(leaf.clone(), owner.to_string());
+                owned.insert(leaf.clone(), patch.live.owner.clone());
             }
         }
         Ok(())
@@ -524,12 +521,11 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Arguments
     ///
+    /// * `live` - document state holding owners plus the patch owner.
     /// * `segments` - parsed path with the list last.
     /// * `full` - dotted path naming the write.
     /// * `lua_value` - converted value under appending.
     /// * `json` - data value seeding leaf owners.
-    /// * `owner` - contributing config name.
-    /// * `owners` - shared winners mutated in place.
     ///
     /// # Returns
     ///
@@ -540,15 +536,13 @@ impl<'a> LiveTable<'a> {
     /// Empty paths fail as plan errors. Non-list leaves fail as plan errors.
     /// Out of bounds indexes fail as plan errors.
     ///
-    #[allow(clippy::too_many_arguments)]
     fn append_live_value(
         &self,
+        live: &LiveDoc,
         segments: &[Segment],
         full: &str,
         lua_value: Value,
         json: &Json,
-        owner: &str,
-        owners: &Rc<RefCell<OwnerMap>>,
     ) -> mlua::Result<()> {
         let (last, prefix) = match segments.split_last() {
             Some(pair) => pair,
@@ -578,11 +572,11 @@ impl<'a> LiveTable<'a> {
                 };
                 let next = (list.raw_len() + 1) as i64;
                 list.set(next, lua_value)?;
-                let mut owned = owners.borrow_mut();
+                let mut owned = live.owners.borrow_mut();
                 let mut leaves = BTreeMap::new();
                 flatten_json(json, &format!("{full}[{}]", next), &mut leaves);
                 for leaf in leaves.keys() {
-                    owned.insert(leaf.clone(), owner.to_string());
+                    owned.insert(leaf.clone(), live.owner.clone());
                 }
                 Ok(())
             }
@@ -704,14 +698,59 @@ impl RcPatch {
             }
         };
         let section = section_value.req_str(&self.ctx, "section")?;
-        rc_op(
+        self.rc_op(lua, &section, value_value)
+    }
+
+    /// Applies one rc insert from a patch callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - state owning the live table.
+    /// * `section` - section name holding the list.
+    /// * `value` - entry value under inserting.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the entry lands or yields to the recorded winner.
+    ///
+    /// # Errors
+    ///
+    /// Unknown sections fail as plan errors. Non-entry tables fail as plan errors.
+    ///
+    fn rc_op(&self, lua: &Lua, section: &str, value: Value) -> mlua::Result<()> {
+        let ctx = &self.ctx;
+        if !matches!(section, "profile" | "config" | "final") {
+            return Err(plan_error(format!(
+                "{ctx}: unknown section '{section}' (expected 'profile', 'config', or 'final')"
+            )));
+        }
+        let table = match value {
+            Value::Table(table) => table,
+            _ => {
+                return Err(plan_error(format!(
+                    "{ctx}: field 'value' must be an rc entry table"
+                )));
+            }
+        };
+        if read_marker(&table, "__kind").as_deref() != Some("rc-entry") {
+            return Err(plan_error(format!(
+                "{ctx}: field 'value' must be an rc entry table"
+            )));
+        }
+        let json = table.to_json(&format!("{ctx}: field 'value'"))?;
+        Executor {
             lua,
+            progress: None,
+            patch_total: 0,
+            patch_done: &Cell::new(0),
+        }
+        .rc_insert(
             &self.live.doc,
-            &section,
-            value_value,
+            &json,
+            section,
             &self.live.owner,
             &self.live.owners,
-            &self.ctx,
+            ctx,
         )
     }
 }
@@ -770,104 +809,61 @@ impl StructuredPatch {
         };
         let path = path_value.req_str(&self.ctx, "path")?;
         if append {
-            structured_append(
-                lua,
-                &self.live.doc,
-                &path,
-                value_value,
-                &self.live.owner,
-                &self.live.owners,
-                &self.ctx,
-            )
+            self.structured_append(lua, &path, value_value)
         } else {
-            structured_set(
-                lua,
-                &self.live.doc,
-                &path,
-                value_value,
-                &self.live.owner,
-                &self.format,
-                &self.live.owners,
-                &self.ctx,
-            )
+            self.structured_set(lua, &path, value_value)
         }
     }
-}
 
-/// Applies one rc insert from a patch callback.
-fn rc_op(
-    lua: &Lua,
-    doc: &Table,
-    section: &str,
-    value: Value,
-    owner: &str,
-    owners: &Rc<RefCell<OwnerMap>>,
-    ctx: &str,
-) -> mlua::Result<()> {
-    if !matches!(section, "profile" | "config" | "final") {
-        return Err(plan_error(format!(
-            "{ctx}: unknown section '{section}' (expected 'profile', 'config', or 'final')"
-        )));
+    /// Writes one structured leaf with first-writer wins.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - state owning the live table.
+    /// * `path` - dotted path naming the write.
+    /// * `value` - value under writing.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the leaf lands or yields to the recorded winner.
+    ///
+    /// # Errors
+    ///
+    /// Bad paths and values fail as plan errors. Blocked shapes fail as plan errors.
+    ///
+    fn structured_set(&self, lua: &Lua, path: &str, value: Value) -> mlua::Result<()> {
+        let ctx = format!("{}: field '{path}'", self.ctx);
+        let json = value.to_json(&ctx)?;
+        let segments = parse_path(path, &ctx)?;
+        let lua_value = json.to_lua(lua, &ctx)?;
+        LiveTable::new(lua, self.live.doc.clone(), &ctx)
+            .set_live_value(self, &segments, path, lua_value, &json)
     }
-    let table = match value {
-        Value::Table(table) => table,
-        _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'value' must be an rc entry table"
-            )));
-        }
-    };
-    if read_marker(&table, "__kind").as_deref() != Some("rc-entry") {
-        return Err(plan_error(format!(
-            "{ctx}: field 'value' must be an rc entry table"
-        )));
-    }
-    let json = table.to_json(&format!("{ctx}: field 'value'"))?;
-    Executor {
-        lua,
-        progress: None,
-        patch_total: 0,
-        patch_done: &Cell::new(0),
-    }
-    .rc_insert(doc, &json, section, owner, owners, ctx)
-}
 
-/// Writes one structured leaf with first-writer wins.
-#[allow(clippy::too_many_arguments)]
-fn structured_set(
-    lua: &Lua,
-    doc: &Table,
-    path: &str,
-    value: Value,
-    owner: &str,
-    format: &str,
-    owners: &Rc<RefCell<OwnerMap>>,
-    patch_ctx: &str,
-) -> mlua::Result<()> {
-    let ctx = format!("{patch_ctx}: field '{path}'");
-    let json = value.to_json(&ctx)?;
-    let segments = parse_path(path, &ctx)?;
-    let lua_value = json.to_lua(lua, &ctx)?;
-    LiveTable::new(lua, doc.clone(), &ctx)
-        .set_live_value(&segments, path, lua_value, &json, owner, format, owners)
-}
-
-/// Extends one structured list.
-fn structured_append(
-    lua: &Lua,
-    doc: &Table,
-    path: &str,
-    value: Value,
-    owner: &str,
-    owners: &Rc<RefCell<OwnerMap>>,
-    patch_ctx: &str,
-) -> mlua::Result<()> {
-    let ctx = format!("{patch_ctx}: field '{path}'");
-    let json = value.to_json(&ctx)?;
-    let segments = parse_path(path, &ctx)?;
-    let lua_value = json.to_lua(lua, &ctx)?;
-    LiveTable::new(lua, doc.clone(), &ctx)
-        .append_live_value(&segments, path, lua_value, &json, owner, owners)
+    /// Extends one structured list.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - state owning the live table.
+    /// * `path` - dotted path naming the list.
+    /// * `value` - value under appending.
+    ///
+    /// # Returns
+    ///
+    /// Unit after the value lands at the list tail.
+    ///
+    /// # Errors
+    ///
+    /// Bad paths and values fail as plan errors. Non-list leaves fail as plan errors.
+    ///
+    fn structured_append(&self, lua: &Lua, path: &str, value: Value) -> mlua::Result<()> {
+        let ctx = format!("{}: field '{path}'", self.ctx);
+        let json = value.to_json(&ctx)?;
+        let segments = parse_path(path, &ctx)?;
+        let lua_value = json.to_lua(lua, &ctx)?;
+        LiveTable::new(lua, self.live.doc.clone(), &ctx)
+            .append_live_value(&self.live, &segments, path, lua_value, &json)
+    }
 }
 
 #[cfg(test)]
