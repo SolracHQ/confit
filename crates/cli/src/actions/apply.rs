@@ -12,7 +12,7 @@ use confit_core::fs::{
     Filesystem,
     snapshot::{snapshot_document, snapshot_tree},
 };
-use confit_core::hook::{describe_condition, lifecycle_lines, resolve_hook};
+use confit_core::hook::resolve_hook;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
 use confit_core::runtime::Runtime;
@@ -25,7 +25,8 @@ use confit_core::store::{remove_orphans, remove_tree_members, write_documents};
 
 use crate::cli::ApplyArgs;
 use crate::hooks::{HookRunner, OsRunner, append_hook_log};
-use crate::presentation::summary::Summary;
+use crate::presentation::hooks::{describe_condition, evaluate_hooks};
+use crate::presentation::summary::{Hooks, Summary};
 
 use crate::seams::{Seams, evaluate_shared, log_processed, timed};
 
@@ -291,15 +292,18 @@ impl<'a> ApplyRunner<'a> {
         let baseline = reference.drift(&snapshot, &snapshot_tree, order, fs);
         let rt = Runtime::current();
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let lifecycle = lifecycle_lines(&built.manifest.hooks, &self.previous.manifest.hooks);
-        let evaluated = built.hook_preview(&rt, fs, &changed)?;
+        let evaluated = evaluate_hooks(&built, &rt, fs, &changed)?;
+        let lifecycle =
+            confit_core::hook::diff_lifecycle(&built.manifest.hooks, &self.previous.manifest.hooks);
         let report = Summary {
             built: &built,
             previous: &self.previous,
             drift: &baseline,
             first_run,
-            hook_lines: lifecycle.as_slice(),
-            hook_evaluated: evaluated.as_slice(),
+            hooks: Hooks {
+                lifecycle: &lifecycle,
+                evaluated: &evaluated,
+            },
         };
         let text = report.render();
         self.seams.print_line(text);

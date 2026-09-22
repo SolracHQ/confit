@@ -89,8 +89,10 @@ fn drift_reports_manual_edits_on_memory_fs() {
         previous: &previous,
         drift: &drifts,
         first_run: false,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     let text = report.render();
     assert!(
@@ -138,8 +140,10 @@ fn plan_shows_old_to_new_on_updates() {
         previous: &previous,
         drift: &[],
         first_run: false,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     let text = report.render();
     assert!(
@@ -211,16 +215,20 @@ fn first_run_preview_shows_impact_plus_in_place() {
         previous: &empty,
         drift: &[],
         first_run: false,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     let first = confit_cli::presentation::summary::Summary {
         built: &built,
         previous: &empty,
         drift: &drift,
         first_run: true,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     assert!(steady.render().contains("to change"));
     assert_eq!(
@@ -324,8 +332,10 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         previous: &previous,
         drift: &drifts,
         first_run: false,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     let text = report.render();
     assert!(
@@ -441,8 +451,10 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         previous: &empty,
         drift: &drifts,
         first_run: true,
-        hook_lines: &[],
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &[],
+            evaluated: &[],
+        },
     };
     let text = report.render();
     assert!(

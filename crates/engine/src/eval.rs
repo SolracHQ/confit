@@ -397,6 +397,16 @@ struct Profile {
     configs: Vec<ConfigData>,
 }
 
+/// Declared structured base holding format, data, and owner.
+struct StructuredBase {
+    /// Declared output format.
+    format: StructuredFormat,
+    /// Declared top-level fields.
+    data: BTreeMap<String, Json>,
+    /// Contributing owner name.
+    owner: String,
+}
+
 /// Walks one require closure over present configs.
 fn walk_requires(
     name: &str,
@@ -523,19 +533,26 @@ impl Session {
         patches: &[StoredPatch],
         ctx: &str,
     ) -> mlua::Result<Vec<ManifestDocument>> {
-        let mut bases: BTreeMap<String, (StructuredFormat, BTreeMap<String, Json>, String)> =
-            BTreeMap::new();
+        let mut bases: BTreeMap<String, StructuredBase> = BTreeMap::new();
         for item in &profile.declared.structured {
             bases.insert(
                 item.path.clone(),
-                (item.format, item.data.clone(), "profile".to_string()),
+                StructuredBase {
+                    format: item.format,
+                    data: item.data.clone(),
+                    owner: "profile".to_string(),
+                },
             );
         }
         for config in &profile.configs {
             for item in &config.structured {
                 bases.insert(
                     item.path.clone(),
-                    (item.format, item.data.clone(), config.name.clone()),
+                    StructuredBase {
+                        format: item.format,
+                        data: item.data.clone(),
+                        owner: config.name.clone(),
+                    },
                 );
             }
         }
@@ -552,12 +569,12 @@ impl Session {
             patch_done: &self.patch_done,
         };
         let mut out: BTreeMap<String, ManifestDocument> = BTreeMap::new();
-        for (path, (format, base, owner)) in &bases {
+        for (path, base) in &bases {
             let mut refs: Vec<&StoredPatch> = grouped.get(path).cloned().unwrap_or_default();
             Executor::sort_patches(&mut refs);
             for patch in &refs {
                 if let Some(other) = patch.format
-                    && other != *format
+                    && other != base.format
                 {
                     let patch_ctx = format!("confit.patch.structured('{path}')");
                     return Err(plan_error(format!(
@@ -565,23 +582,16 @@ impl Session {
                     )));
                 }
             }
-            let doc = self.lua.create_table()?;
-            for (key, value) in base {
-                let seed_ctx = if owner == "profile" {
-                    format!("{ctx}: field '{key}'")
-                } else {
-                    format!("config '{owner}': field '{key}'")
-                };
-                doc.set(key.as_str(), value.to_lua(&self.lua, &seed_ctx)?)?;
-            }
-            let mut seeds: OwnerMap = BTreeMap::new();
-            seed_owners(base, owner, &mut seeds);
-            let area = Area::Structured {
-                format: format.name().to_string(),
-            };
-            exec.execute(doc.clone(), area, seeds, exec_list(&refs))?;
-            let table = live_to_map(&doc, path)?;
-            out.insert(path.clone(), finish_structured(path, *format, table));
+            let document = run_structured_doc(
+                &self.lua,
+                &exec,
+                path,
+                base.format,
+                Some((&base.data, base.owner.as_str())),
+                &refs,
+                ctx,
+            )?;
+            out.insert(path.clone(), document);
         }
         for (path, items) in &grouped {
             if bases.contains_key(path) {
@@ -590,16 +600,52 @@ impl Session {
             let mut refs = items.clone();
             Executor::sort_patches(&mut refs);
             let format = created_format(path, &refs)?;
-            let doc = self.lua.create_table()?;
-            let area = Area::Structured {
-                format: format.name().to_string(),
-            };
-            exec.execute(doc.clone(), area, OwnerMap::new(), exec_list(&refs))?;
-            let table = live_to_map(&doc, path)?;
-            out.insert(path.clone(), finish_structured(path, format, table));
+            let document = run_structured_doc(&self.lua, &exec, path, format, None, &refs, ctx)?;
+            out.insert(path.clone(), document);
         }
         Ok(out.into_values().collect())
     }
+}
+
+/// Runs one structured document from its base through patches.
+///
+/// The live table seeds from the declared base, so patch callbacks merge over owned leaves.
+///
+/// # Arguments
+///
+/// * `base` - the declared data and owner under seeding, holding `None` for patch-created documents.
+///
+/// # Errors
+///
+/// Seeding, callback, and conversion failures fail as Lua errors.
+fn run_structured_doc(
+    lua: &Lua,
+    exec: &Executor<'_>,
+    path: &str,
+    format: StructuredFormat,
+    base: Option<(&BTreeMap<String, Json>, &str)>,
+    refs: &[&StoredPatch],
+    ctx: &str,
+) -> mlua::Result<ManifestDocument> {
+    let doc = lua.create_table()?;
+    let mut seeds: OwnerMap = BTreeMap::new();
+    if let Some((data, owner)) = base {
+        for (key, value) in data {
+            let seed_ctx = if owner == "profile" {
+                format!("{ctx}: field '{key}'")
+            } else {
+                format!("config '{owner}': field '{key}'")
+            };
+            doc.set(key.as_str(), value.to_lua(lua, &seed_ctx)?)?;
+        }
+        seed_owners(data, owner, &mut seeds);
+    }
+    let area = Area::Structured {
+        format: format.name().to_string(),
+    };
+    exec.execute(doc.clone(), area, seeds, exec_list(refs))?;
+    let table = live_to_map(&doc, path)?;
+    Ok(finish_structured(path, format, table))
 }
 
 /// Builds one finished structured document.

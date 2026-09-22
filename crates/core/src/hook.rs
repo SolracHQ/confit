@@ -2,14 +2,12 @@
 //!
 //! Post-config steps riding plans beside documents.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::condition::Condition;
 use crate::fs::Filesystem;
-use crate::ids::DocPath;
 use crate::runtime::{Runtime, find_binary};
 
 /// One post-config step with gates and checks.
@@ -37,6 +35,185 @@ pub struct Hook {
     pub checks: Vec<Condition>,
     /// Holds the run cap in seconds.
     pub timeout_secs: u64,
+}
+
+/// One gate slot holding the changed gate.
+///
+/// Requires gates capability, when gates need. The slot
+/// selects the rendered gate line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateSlot {
+    /// Holds the capability gate.
+    Requires,
+    /// Holds the need gate.
+    When,
+}
+
+/// One gate change holding before and after gates.
+///
+/// Either side reads `None` while absent. Equal simplified
+/// gates never build this shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateChange {
+    /// Holds the slot under diffing.
+    pub slot: GateSlot,
+    /// Holds the recorded gate. None reads absent.
+    pub before: Option<Condition>,
+    /// Holds the desired gate. None reads absent.
+    pub after: Option<Condition>,
+}
+
+/// One timeout change holding before and after caps.
+///
+/// Equal caps never build this shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutChange {
+    /// Holds the recorded cap in seconds.
+    pub before: u64,
+    /// Holds the desired cap in seconds.
+    pub after: u64,
+}
+
+/// One hook modification holding gate, check, and timeout edits.
+///
+/// Empty gates with empty check edits and no timeout reads
+/// silent and never renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookModification {
+    /// Holds the changed gates in slot order.
+    pub gates: Vec<GateChange>,
+    /// Holds the desired checks missing from recorded order.
+    pub added_checks: Vec<Condition>,
+    /// Holds the recorded checks missing from desired order.
+    pub removed_checks: Vec<Condition>,
+    /// Holds the timeout edit. None reads unchanged.
+    pub timeout: Option<TimeoutChange>,
+}
+
+/// One hook change selecting the lifecycle lines.
+///
+/// Added and removed hooks render one header line. Modified
+/// hooks render one header with detail lines. Unchanged hooks
+/// render nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookChange {
+    /// Renders one added header with full gates.
+    Added,
+    /// Renders one removed header alone.
+    Removed,
+    /// Renders one changed header with detail lines.
+    Modified(HookModification),
+    /// Renders nothing.
+    Unchanged,
+}
+
+/// One hook lifecycle pairing its hook with its change.
+///
+/// The hook borrows core data, the change carries the diff
+/// facts. Rendering reads the pair alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookLifecycle<'a> {
+    /// Holds the hook under display.
+    pub hook: &'a Hook,
+    /// Holds the lifecycle change behind its lines.
+    pub change: HookChange,
+}
+
+impl HookModification {
+    /// Reports whether one modification holds no edits.
+    ///
+    /// # Returns
+    ///
+    /// True while gates, check edits, and timeout all read empty.
+    pub fn is_empty(&self) -> bool {
+        self.gates.is_empty()
+            && self.added_checks.is_empty()
+            && self.removed_checks.is_empty()
+            && self.timeout.is_none()
+    }
+}
+
+impl HookChange {
+    /// Reports whether one change renders no lines.
+    ///
+    /// # Returns
+    ///
+    /// True for unchanged hooks and empty modifications.
+    pub fn is_silent(&self) -> bool {
+        match self {
+            Self::Unchanged => true,
+            Self::Modified(edits) => edits.is_empty(),
+            Self::Added | Self::Removed => false,
+        }
+    }
+
+    /// Reports whether one change renders an added header.
+    ///
+    /// # Returns
+    ///
+    /// True while the hook reads added.
+    pub fn is_added(&self) -> bool {
+        matches!(self, Self::Added)
+    }
+
+    /// Reports whether one change renders a removed header.
+    ///
+    /// # Returns
+    ///
+    /// True while the hook reads removed.
+    pub fn is_removed(&self) -> bool {
+        matches!(self, Self::Removed)
+    }
+
+    /// Reports whether one change renders a changed header.
+    ///
+    /// # Returns
+    ///
+    /// True while the hook reads modified with edits.
+    pub fn is_modified(&self) -> bool {
+        match self {
+            Self::Modified(edits) => !edits.is_empty(),
+            Self::Added | Self::Removed | Self::Unchanged => false,
+        }
+    }
+}
+
+impl HookLifecycle<'_> {
+    /// Reports whether one lifecycle renders an added header.
+    ///
+    /// # Returns
+    ///
+    /// True while the change reads added.
+    pub fn is_added(&self) -> bool {
+        self.change.is_added()
+    }
+
+    /// Reports whether one lifecycle renders a removed header.
+    ///
+    /// # Returns
+    ///
+    /// True while the change reads removed.
+    pub fn is_removed(&self) -> bool {
+        self.change.is_removed()
+    }
+
+    /// Reports whether one lifecycle renders a changed header.
+    ///
+    /// # Returns
+    ///
+    /// True while the change reads modified with edits.
+    pub fn is_modified(&self) -> bool {
+        self.change.is_modified()
+    }
+
+    /// Reports whether one lifecycle renders no lines.
+    ///
+    /// # Returns
+    ///
+    /// True while the change reads silent.
+    pub fn is_silent(&self) -> bool {
+        self.change.is_silent()
+    }
 }
 
 /// Merges hooks sharing argv and path into one run each.
@@ -73,6 +250,57 @@ pub fn merge_hooks(hooks: Vec<Hook>) -> Vec<Hook> {
         }
     }
     merged
+}
+
+/// Diffs desired hooks against previous hooks in render order.
+///
+/// Current hooks lead in plan order, removals trail in
+/// previous order. Identity joins on argv and path. Gates
+/// compare by simplified form, checks compare as a bag by
+/// simplified form with duplicate counts, timeout compares by
+/// value. Equal hooks read silent.
+///
+/// # Arguments
+///
+/// * `current` - the desired hooks in plan order.
+/// * `previous` - the previous hooks backing lifecycle marks.
+///
+/// # Returns
+///
+/// The lifecycle entries in plan order with removals trailing.
+pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<HookLifecycle<'a>> {
+    let mut out = Vec::new();
+    for hook in current {
+        match find_recorded(hook, previous) {
+            None => out.push(HookLifecycle {
+                hook,
+                change: HookChange::Added,
+            }),
+            Some(recorded) => {
+                let edits = modify_hook(recorded, hook);
+                if edits.is_empty() {
+                    out.push(HookLifecycle {
+                        hook,
+                        change: HookChange::Unchanged,
+                    });
+                } else {
+                    out.push(HookLifecycle {
+                        hook,
+                        change: HookChange::Modified(edits),
+                    });
+                }
+            }
+        }
+    }
+    for recorded in previous {
+        if find_live(recorded, current).is_none() {
+            out.push(HookLifecycle {
+                hook: recorded,
+                change: HookChange::Removed,
+            });
+        }
+    }
+    out
 }
 
 /// Joins two capability gates with AND semantics.
@@ -165,295 +393,131 @@ pub fn resolve_hook(hook: &Hook, rt: &Runtime, fs: &dyn Filesystem) -> Option<Pa
     find_binary(head, &dirs, fs)
 }
 
-/// Reports whether one hook reads satisfied with passing checks.
-fn checks_pass(
-    hook: &Hook,
-    rt: &Runtime,
-    fs: &dyn Filesystem,
-    changed: &BTreeSet<DocPath>,
-) -> bool {
-    !hook.checks.is_empty()
-        && hook
-            .checks
-            .iter()
-            .all(|check| rt.evaluate(check, fs, changed))
+/// Reports whether two hooks share one lifecycle identity.
+///
+/// Identity joins on argv and path, so gates, checks, and
+/// timeout never split one run.
+fn same_identity(first: &Hook, second: &Hook) -> bool {
+    first.argv == second.argv && first.path == second.path
 }
 
-/// Reads one hook argv as display text.
-fn argv_text(hook: &Hook) -> String {
-    hook.argv.join(" ")
-}
-
-/// Renders one preview line for a runnable hook.
-fn run_line(hook: &Hook, binary: &std::path::Path) -> String {
-    let rest = hook
-        .argv
-        .iter()
-        .skip(1)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if rest.is_empty() {
-        format!("! run: {}", binary.display())
-    } else {
-        format!("! run: {} {rest}", binary.display())
-    }
-}
-
-/// Renders one preview line for a single hook in plan order.
-///
-/// Closed requires warns with the gate named. Closed when
-/// skips with the un-need named. Satisfied checks skip with
-/// the work standing done. Everything else resolves the
-/// binary and runs. First closed mouth speaks.
-///
-/// # Arguments
-///
-/// * `hook` - the hook under preview.
-/// * `rt` - the runtime facts under reading.
-/// * `fs` - the backend under stating.
-/// * `changed` - the changed document ids under reading.
+/// Finds one recorded hook sharing identity with one desired hook.
 ///
 /// # Returns
 ///
-/// The preview line for the hook.
-///
-/// # Errors
-///
-/// Unresolvable binaries fail as plan errors naming the hook.
-pub fn preview_hook(
-    hook: &Hook,
-    rt: &Runtime,
-    fs: &dyn Filesystem,
-    changed: &BTreeSet<DocPath>,
-) -> crate::error::Result<String> {
-    if let Some(gate) = hook.requires.as_ref()
-        && !rt.evaluate(gate, fs, changed)
-    {
-        return Ok(format!(
-            "warn: {} cannot run ({})",
-            argv_text(hook),
-            describe_condition(gate)
-        ));
-    }
-    if let Some(gate) = hook.when.as_ref()
-        && !rt.evaluate(gate, fs, changed)
-    {
-        return Ok(format!(
-            "skipped: {} (no need: {})",
-            argv_text(hook),
-            describe_condition(gate)
-        ));
-    }
-    if checks_pass(hook, rt, fs, changed) {
-        return Ok(format!("skipped: {} (checks pass)", argv_text(hook)));
-    }
-    let Some(binary) = resolve_hook(hook, rt, fs) else {
-        let head = hook.argv.first().cloned().unwrap_or_default();
-        return Err(crate::error::Error::Plan(format!(
-            "hook '{}' cannot resolve '{head}'",
-            argv_text(hook)
-        )));
-    };
-    Ok(run_line(hook, &binary))
+/// The recorded hook holding the same argv and path, else `None`.
+fn find_recorded<'a>(hook: &Hook, previous: &'a [Hook]) -> Option<&'a Hook> {
+    previous.iter().find(|held| same_identity(held, hook))
 }
 
-/// Renders one condition in compact form for warn lines.
-///
-/// Simplifies before rendering, so merged duplicate gates collapse
-/// to one branch. Compounds read infix with full parens, leaves read
-/// bare.
-///
-/// # Arguments
-///
-/// * `cond` - the condition under rendering.
+/// Finds one desired hook sharing identity with one recorded hook.
 ///
 /// # Returns
 ///
-/// The compact gate text like `(in_path(mise) and changed(path))`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::condition::Condition;
-/// use confit_core::hook::describe_condition;
-///
-/// let cond = Condition::InPath { name: "mise".into() };
-/// assert!(matches!(describe_condition(&cond).as_str(), "in_path(mise)"));
-/// ```
-pub fn describe_condition(cond: &Condition) -> String {
-    fn render(cond: &Condition) -> String {
-        match cond {
-            Condition::EnvEq { key, value } => format!("env_eq({key}={value})"),
-            Condition::EnvSet { key } => format!("env_set({key})"),
-            Condition::InPath { name } => format!("in_path({name})"),
-            Condition::Exists { path } => format!("exists({path})"),
-            Condition::Changed { path } => format!("changed({path})"),
-            Condition::All(items) if items.is_empty() => "true".to_string(),
-            Condition::Any(items) if items.is_empty() => "false".to_string(),
-            Condition::All(items) => format!(
-                "({})",
-                items.iter().map(render).collect::<Vec<_>>().join(" and ")
-            ),
-            Condition::Any(items) => format!(
-                "({})",
-                items.iter().map(render).collect::<Vec<_>>().join(" or ")
-            ),
-            Condition::Not(inner) => format!("(not {})", render(inner)),
-        }
-    }
-    render(&cond.simplified())
+/// The desired hook holding the same argv and path, else `None`.
+fn find_live<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
+    current.iter().find(|hook| same_identity(hook, recorded))
 }
 
-/// Renders plan hook lines for desired hooks against previous hooks.
-///
-/// # Arguments
-///
-/// * `current` - the desired hooks in plan order.
-/// * `previous` - the previous hooks backing lifecycle marks.
+/// Reads one gate change while simplified gates differ.
 ///
 /// # Returns
 ///
-/// The lifecycle lines in plan order with removals trailing.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_core::hook::{Hook, lifecycle_lines};
-///
-/// let hook = Hook {
-///     argv: vec!["mise".to_string()],
-///     path: vec![],
-///     requires: None,
-///     when: None,
-///     checks: vec![],
-///     timeout_secs: 60,
-/// };
-/// assert_eq!(
-///     lifecycle_lines(&[hook], &[]),
-///     vec!["+ mise".to_string()]
-/// );
-/// ```
-pub fn lifecycle_lines(current: &[Hook], previous: &[Hook]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for hook in current {
-        let recorded = previous
-            .iter()
-            .find(|held| held.argv == hook.argv && held.path == hook.path);
-        match recorded {
-            None => {
-                lines.push(format!("+ {}", argv_text(hook)));
-                full_gates(hook, &mut lines);
-            }
-            Some(recorded) => {
-                let mut diff = Vec::new();
-                diff_gate(
-                    "requires",
-                    recorded.requires.as_ref(),
-                    hook.requires.as_ref(),
-                    &mut diff,
-                );
-                diff_gate(
-                    "when",
-                    recorded.when.as_ref(),
-                    hook.when.as_ref(),
-                    &mut diff,
-                );
-                diff_checks(&recorded.checks, &hook.checks, &mut diff);
-                if recorded.timeout_secs != hook.timeout_secs {
-                    diff.push(format!(
-                        "  ~ timeout ({} -> {})",
-                        timeout_text(recorded.timeout_secs),
-                        timeout_text(hook.timeout_secs)
-                    ));
-                }
-                if !diff.is_empty() {
-                    lines.push(format!("~ {}", argv_text(hook)));
-                    lines.extend(diff);
-                }
-            }
-        }
+/// The change holding original gates, else `None` while equal.
+fn gate_change(
+    slot: GateSlot,
+    before: Option<&Condition>,
+    after: Option<&Condition>,
+) -> Option<GateChange> {
+    let old = before.map(Condition::simplified);
+    let next = after.map(Condition::simplified);
+    if old == next {
+        return None;
     }
-    for recorded in previous {
-        let live = current
-            .iter()
-            .any(|hook| hook.argv == recorded.argv && hook.path == recorded.path);
-        if !live {
-            lines.push(format!("- {}", argv_text(recorded)));
-        }
-    }
-    lines
+    Some(GateChange {
+        slot,
+        before: before.cloned(),
+        after: after.cloned(),
+    })
 }
 
-/// Renders full gate lines for one added hook.
+/// Reads one timeout change while caps differ.
 ///
-/// Requires and when print once while present, checks print
-/// once per member, all marked new in slot order.
-fn full_gates(hook: &Hook, out: &mut Vec<String>) {
-    if let Some(gate) = hook.requires.as_ref() {
-        out.push(format!("  + requires ({})", describe_condition(gate)));
+/// # Returns
+///
+/// The change holding both caps, else `None` while equal.
+fn timeout_change(before: u64, after: u64) -> Option<TimeoutChange> {
+    if before == after {
+        return None;
     }
-    if let Some(gate) = hook.when.as_ref() {
-        out.push(format!("  + when ({})", describe_condition(gate)));
-    }
-    for check in &hook.checks {
-        out.push(format!("  + checks ({})", describe_condition(check)));
-    }
+    Some(TimeoutChange { before, after })
 }
 
-/// Renders one gate diff line for a single slot while text differs.
+/// Collects removed checks in previous order.
 ///
-/// Absent-to-present reads added, present-to-absent reads
-/// removed, changed reads old-to-new. Equal describe text
-/// reads silent.
-fn diff_gate(slot: &str, old: Option<&Condition>, new: Option<&Condition>, out: &mut Vec<String>) {
-    let prior = old.map(describe_condition);
-    let next = new.map(describe_condition);
-    match (prior, next) {
-        (Some(before), Some(after)) if before == after => {}
-        (Some(before), Some(after)) => {
-            out.push(format!("  ~ {slot} ({before}) -> ({after})"));
-        }
-        (None, Some(after)) => {
-            out.push(format!("  + {slot} ({after})"));
-        }
-        (Some(before), None) => {
-            out.push(format!("  - {slot} ({before})"));
-        }
-        (None, None) => {}
-    }
-}
-
-/// Renders added and removed check lines by describe text.
-///
-/// Members compare as a bag, so duplicate gates diff by
-/// count. Removals print in previous order, additions print
-/// in desired order.
-fn diff_checks(old: &[Condition], next: &[Condition], out: &mut Vec<String>) {
-    let mut rest: Vec<String> = next.iter().map(describe_condition).collect();
+/// Members match as a bag by simplified form, so duplicate
+/// gates diff by count. Matched desired members consume one
+/// previous member each.
+fn removed_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
+    let mut rest: Vec<Condition> = after.iter().map(Condition::simplified).collect();
     let mut missing = Vec::new();
-    for text in old.iter().map(describe_condition) {
-        match rest.iter().position(|item| *item == text) {
+    for text in before {
+        let key = text.simplified();
+        match rest.iter().position(|item| *item == key) {
             Some(index) => {
                 rest.remove(index);
             }
-            None => missing.push(text),
+            None => missing.push(text.clone()),
         }
     }
-    for text in missing {
-        out.push(format!("  - checks ({text})"));
-    }
-    for text in rest {
-        out.push(format!("  + checks ({text})"));
-    }
+    missing
 }
 
-/// Renders one timeout with the run cap suffix.
+/// Collects added checks in desired order.
 ///
-/// Matches the timed-out hook error shape, so `600` reads
-/// as `600s` here too.
-fn timeout_text(secs: u64) -> String {
-    format!("{secs}s")
+/// Members match as a bag by simplified form, so duplicate
+/// gates diff by count. Matched recorded members consume one
+/// desired member each.
+fn added_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
+    let mut rest: Vec<Condition> = after.to_vec();
+    let mut simple: Vec<Condition> = after.iter().map(Condition::simplified).collect();
+    for text in before {
+        let key = text.simplified();
+        if let Some(index) = simple.iter().position(|item| *item == key) {
+            simple.remove(index);
+            rest.remove(index);
+        }
+    }
+    rest
+}
+
+/// Reads one hook modification across gates, checks, and timeout.
+///
+/// Gates collect in slot order, checks split into removed
+/// then added bags, timeout holds the cap edit. Empty edits
+/// read silent.
+///
+/// # Returns
+///
+/// The modification holding every edit.
+fn modify_hook(recorded: &Hook, hook: &Hook) -> HookModification {
+    let mut gates = Vec::new();
+    if let Some(change) = gate_change(
+        GateSlot::Requires,
+        recorded.requires.as_ref(),
+        hook.requires.as_ref(),
+    ) {
+        gates.push(change);
+    }
+    if let Some(change) = gate_change(GateSlot::When, recorded.when.as_ref(), hook.when.as_ref()) {
+        gates.push(change);
+    }
+    HookModification {
+        gates,
+        removed_checks: removed_checks(&recorded.checks, &hook.checks),
+        added_checks: added_checks(&recorded.checks, &hook.checks),
+        timeout: timeout_change(recorded.timeout_secs, hook.timeout_secs),
+    }
 }
 
 #[cfg(test)]
@@ -596,292 +660,68 @@ mod tests {
             None => panic!("requires survives the merge"),
         };
         assert_eq!(gate.simplified(), in_path("mise"));
-        assert_eq!(describe_condition(&gate).as_str(), "in_path(mise)");
-    }
-
-    fn changed(path: &str) -> Condition {
-        Condition::Changed {
-            path: path.to_string(),
-        }
     }
 
     #[test]
-    fn describe_collapses_merged_duplicate_gates() {
-        let gate = || Condition::All(vec![in_path("mise"), changed("~/.config/mise/config.toml")]);
-        let merged = Condition::Any(vec![gate(), gate(), gate(), gate(), gate()]);
-        assert_eq!(
-            describe_condition(&merged).as_str(),
-            "(in_path(mise) and changed(~/.config/mise/config.toml))"
-        );
+    fn lifecycle_marks_added_removed_unchanged() {
+        let kept = hook(&["tool"], &[], None, vec![], 60);
+        let current = vec![kept.clone(), hook(&["fresh"], &[], None, vec![], 60)];
+        let previous = vec![kept.clone(), hook(&["stale"], &[], None, vec![], 60)];
+        let lifecycle = diff_lifecycle(&current, &previous);
+        assert_eq!(lifecycle.len(), 3);
+        assert!(lifecycle[0].is_silent());
+        assert!(lifecycle[1].is_added());
+        assert!(lifecycle[2].is_removed());
     }
 
     #[test]
-    fn describe_absorbs_redundant_branches() {
-        let gate = Condition::All(vec![
-            in_path("mise"),
-            Condition::Any(vec![in_path("mise"), changed("dest")]),
-        ]);
-        assert_eq!(describe_condition(&gate).as_str(), "in_path(mise)");
+    fn lifecycle_reads_simplified_gates_silent() {
+        let mut before = hook(&["mise"], &[], None, vec![], 60);
+        before.requires = Some(Condition::All(vec![in_path("mise"), in_path("mise")]));
+        let mut after = hook(&["mise"], &[], None, vec![], 60);
+        after.requires = Some(in_path("mise"));
+        let current = [after];
+        let previous = [before];
+        let lifecycle = diff_lifecycle(&current, &previous);
+        assert_eq!(lifecycle.len(), 1);
+        assert!(lifecycle[0].is_silent());
     }
 
     #[test]
-    fn describe_nests_compounds_with_full_parens() {
-        let gate = Condition::Any(vec![
-            Condition::All(vec![in_path("a"), in_path("b")]),
-            Condition::Not(Box::new(in_path("c"))),
-        ]);
-        assert_eq!(
-            describe_condition(&gate).as_str(),
-            "((in_path(a) and in_path(b)) or (not in_path(c)))"
-        );
-    }
-
-    #[test]
-    fn describe_folds_empty_lists_to_constants() {
-        assert_eq!(
-            describe_condition(&Condition::All(Vec::new())).as_str(),
-            "true"
-        );
-        assert_eq!(
-            describe_condition(&Condition::Any(Vec::new())).as_str(),
-            "false"
-        );
-    }
-
-    fn preview_state() -> (Runtime, crate::fs::memory::MemoryFs) {
-        let fs = crate::fs::memory::MemoryFs::new();
-        let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
-        let _ = fs.write(std::path::Path::new("/opt/probe"), b"done");
-        let rt = Runtime {
-            vars: Default::default(),
-            path_dirs: vec![std::path::PathBuf::from("/opt")],
-        };
-        (rt, fs)
-    }
-
-    fn changed_set(dests: &[&str]) -> BTreeSet<DocPath> {
-        dests.iter().copied().map(DocPath::new).collect()
-    }
-
-    fn preview_line(
-        hook: &Hook,
-        rt: &Runtime,
-        fs: &dyn Filesystem,
-        changed: &BTreeSet<DocPath>,
-    ) -> String {
-        match preview_hook(hook, rt, fs, changed) {
-            Ok(line) => line,
-            Err(error) => panic!("preview renders: {error}"),
-        }
-    }
-
-    #[test]
-    fn closed_requires_beats_open_when() {
-        let (rt, fs) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
-        hook.requires = Some(changed("missing"));
-        assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
-            "warn: tool cannot run (changed(missing))"
-        );
-    }
-
-    #[test]
-    fn closed_when_beats_passing_checks() {
-        let (rt, fs) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("missing")),
-            vec![Condition::Exists {
-                path: "/opt/probe".into(),
-            }],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
-            "skipped: tool (no need: changed(missing))"
-        );
-    }
-
-    #[test]
-    fn open_gates_with_passing_checks_skip_on_checks() {
-        let (rt, fs) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("touched")),
-            vec![Condition::Exists {
-                path: "/opt/probe".into(),
-            }],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
-            "skipped: tool (checks pass)"
-        );
-    }
-
-    #[test]
-    fn open_gates_with_failing_checks_run() {
-        let (rt, fs) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("touched")),
-            vec![Condition::Exists {
-                path: "/opt/absent".into(),
-            }],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
-            "! run: /opt/tool"
-        );
-    }
-
-    #[test]
-    fn added_hook_prints_plus_with_full_gates() {
-        let mut added = hook(
-            &["mise", "install"],
-            &[],
-            Some(changed("dest")),
-            vec![in_path("probe")],
-            60,
-        );
-        added.requires = Some(in_path("mise"));
-        assert_eq!(
-            lifecycle_lines(&[added], &[]),
-            vec![
-                "+ mise install".to_string(),
-                "  + requires (in_path(mise))".to_string(),
-                "  + when (changed(dest))".to_string(),
-                "  + checks (in_path(probe))".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn removed_hook_prints_bare_minus() {
-        let mut recorded = hook(
-            &["tool"],
-            &[],
-            Some(in_path("mise")),
-            vec![in_path("probe")],
-            60,
-        );
-        recorded.requires = Some(in_path("cap"));
-        assert_eq!(
-            lifecycle_lines(&[], &[recorded]),
-            vec!["- tool".to_string()]
-        );
-    }
-
-    #[test]
-    fn modified_gate_prints_tilde_with_slot_diff() {
-        let mut before = hook(&["mise", "install"], &[], None, vec![], 60);
-        before.requires = Some(in_path("a"));
-        let mut after = hook(&["mise", "install"], &[], None, vec![], 60);
-        after.requires = Some(in_path("b"));
-        assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec![
-                "~ mise install".to_string(),
-                "  ~ requires (in_path(a)) -> (in_path(b))".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn unchanged_hook_prints_nothing() {
-        let mut kept = hook(
-            &["tool"],
-            &[],
-            Some(in_path("mise")),
-            vec![in_path("probe")],
-            60,
-        );
-        kept.requires = Some(in_path("cap"));
-        assert!(lifecycle_lines(&[kept.clone()], &[kept]).is_empty());
-    }
-
-    #[test]
-    fn empty_previous_prints_all_plus() {
-        let current = vec![
-            hook(&["tool", "first"], &[], None, vec![], 60),
-            hook(&["tool", "second"], &[], None, vec![], 60),
-        ];
-        assert_eq!(
-            lifecycle_lines(&current, &[]),
-            vec!["+ tool first".to_string(), "+ tool second".to_string()]
-        );
-    }
-
-    #[test]
-    fn gate_absent_to_present_reads_added() {
-        let before = hook(&["mise"], &[], None, vec![], 60);
-        let after = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
-        assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec!["~ mise".to_string(), "  + when (in_path(a))".to_string(),]
-        );
-    }
-
-    #[test]
-    fn gate_present_to_absent_reads_removed() {
-        let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
-        let after = hook(&["mise"], &[], None, vec![], 60);
-        assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec!["~ mise".to_string(), "  - when (in_path(a))".to_string(),]
-        );
-    }
-
-    #[test]
-    fn gate_changed_single_reads_old_to_new() {
-        let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
-        let after = hook(&["mise"], &[], Some(in_path("b")), vec![], 60);
-        assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec![
-                "~ mise".to_string(),
-                "  ~ when (in_path(a)) -> (in_path(b))".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn checks_diff_reports_added_plus_removed() {
+    fn lifecycle_splits_check_bags_by_count() {
         let before = hook(&["mise"], &[], None, vec![in_path("a")], 60);
         let after = hook(&["mise"], &[], None, vec![in_path("b")], 60);
-        assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec![
-                "~ mise".to_string(),
-                "  - checks (in_path(a))".to_string(),
-                "  + checks (in_path(b))".to_string(),
-            ]
-        );
+        let current = [after];
+        let previous = [before];
+        let lifecycle = diff_lifecycle(&current, &previous);
+        assert_eq!(lifecycle.len(), 1);
+        let edits = match &lifecycle[0].change {
+            HookChange::Modified(edits) => edits,
+            _ => panic!("checks diff reads modified"),
+        };
+        assert_eq!(edits.removed_checks, vec![in_path("a")]);
+        assert_eq!(edits.added_checks, vec![in_path("b")]);
     }
 
     #[test]
-    fn timeout_change_reads_old_to_new() {
+    fn lifecycle_holds_timeout_edit() {
         let before = hook(&["mise"], &[], None, vec![], 60);
         let after = hook(&["mise"], &[], None, vec![], 600);
+        let current = [after];
+        let previous = [before];
+        let lifecycle = diff_lifecycle(&current, &previous);
+        assert_eq!(lifecycle.len(), 1);
+        assert!(lifecycle[0].is_modified());
+        let edits = match &lifecycle[0].change {
+            HookChange::Modified(edits) => edits,
+            _ => panic!("timeout diff reads modified"),
+        };
         assert_eq!(
-            lifecycle_lines(&[after], &[before]),
-            vec![
-                "~ mise".to_string(),
-                "  ~ timeout (60s -> 600s)".to_string(),
-            ]
+            edits.timeout,
+            Some(TimeoutChange {
+                before: 60,
+                after: 600
+            })
         );
     }
 }

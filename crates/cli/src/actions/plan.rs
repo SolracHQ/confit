@@ -12,7 +12,6 @@ use confit_core::fs::{
 };
 
 use confit_core::document::ManifestDocument;
-use confit_core::hook::lifecycle_lines;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
 use confit_core::store::bundle::write_bundle;
@@ -34,8 +33,6 @@ pub struct PlanOutcome {
     pub drift: Vec<Drift>,
     /// Holds true while the state slot file reads absent.
     pub first_run: bool,
-    /// Holds hook lifecycle lines beside the summary.
-    pub hook_lines: Vec<String>,
     /// Holds the tmp manifest path while no output destination passes.
     pub stored: Option<PathBuf>,
 }
@@ -119,7 +116,6 @@ impl PlanRunner<'_> {
                 previous.drift(&snapshot, &snapshot_tree, order, fs)
             }
         });
-        let hook_lines = lifecycle_lines(&built.manifest.hooks, &previous.manifest.hooks);
         if self.args.output.is_some() || self.store_tmp {
             self.seams
                 .emit_writing_manifest(built.manifest.documents.len());
@@ -148,7 +144,6 @@ impl PlanRunner<'_> {
             previous,
             drift: drifts,
             first_run,
-            hook_lines,
             stored,
         })
     }

@@ -508,7 +508,7 @@ fn live_headless_finish_joins_twice() {
 }
 
 #[test]
-fn plan_hook_lines_carry_lifecycle_without_evaluation() {
+fn plan_summary_carries_lifecycle_without_evaluation() {
     pin_home();
     let dir = match tempfile::tempdir() {
         Ok(dir) => dir,
@@ -540,19 +540,30 @@ return { shells = { "bash" }, configs = { tool } }
         Ok(outcome) => outcome,
         Err(error) => panic!("plan runs: {error}"),
     };
-    assert_eq!(
-        outcome.hook_lines,
-        vec![
-            "+ tool --flag".to_string(),
-            "  + when (in_path(mise))".to_string(),
-        ]
+    let lifecycle = confit_core::hook::diff_lifecycle(
+        &outcome.built.manifest.hooks,
+        &outcome.previous.manifest.hooks,
     );
-    for line in &outcome.hook_lines {
-        assert!(!line.contains("! run:"), "no evaluated run: {line}");
-        assert!(
-            !line.contains("warn: cannot run"),
-            "no evaluated warn: {line}"
-        );
-        assert!(!line.contains("skipped:"), "no evaluated skip: {line}");
-    }
+    let report = confit_cli::presentation::summary::Summary {
+        built: &outcome.built,
+        previous: &outcome.previous,
+        drift: &outcome.drift,
+        first_run: outcome.first_run,
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &lifecycle,
+            evaluated: &[],
+        },
+    };
+    let text = report.render();
+    assert!(text.contains("+ tool --flag"), "added hook shows: {text}");
+    assert!(
+        text.contains("  + when (in_path(mise))"),
+        "added gate shows: {text}"
+    );
+    assert!(!text.contains("! run:"), "no evaluated run: {text}");
+    assert!(
+        !text.contains("warn: cannot run"),
+        "no evaluated warn: {text}"
+    );
+    assert!(!text.contains("skipped:"), "no evaluated skip: {text}");
 }

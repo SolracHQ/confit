@@ -6,10 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
-use crate::fs::Filesystem;
-use crate::hook::{Hook, preview_hook};
-use crate::ids::{DocPath, sha256_hex};
-use crate::runtime::Runtime;
+use crate::hook::Hook;
+use crate::ids::sha256_hex;
 use crate::store::blobs::BlobRef;
 use crate::store::manifest::Manifest;
 
@@ -331,47 +329,6 @@ impl Bundle {
         }
         summary
     }
-
-    /// Renders one preview line per hook in plan order.
-    ///
-    /// # Arguments
-    ///
-    /// * `rt` - the runtime facts under reading.
-    /// * `fs` - the backend under stating.
-    /// * `changed` - the changed document ids under reading.
-    ///
-    /// # Returns
-    ///
-    /// The preview lines in plan order.
-    ///
-    /// # Errors
-    ///
-    /// Unresolvable binaries fail as plan errors naming the hook.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::plan::Bundle;
-    /// use confit_core::fs::memory::MemoryFs;
-    /// use confit_core::runtime::Runtime;
-    /// use std::collections::BTreeSet;
-    ///
-    /// let rt = Runtime { vars: Default::default(), path_dirs: Vec::new() };
-    /// let lines = Bundle::empty().hook_preview(&rt, &MemoryFs::new(), &BTreeSet::new());
-    /// assert!(matches!(lines, Ok(lines) if lines.is_empty()));
-    /// ```
-    pub fn hook_preview(
-        &self,
-        rt: &Runtime,
-        fs: &dyn Filesystem,
-        changed: &BTreeSet<DocPath>,
-    ) -> Result<Vec<String>> {
-        let mut lines = Vec::with_capacity(self.manifest.hooks.len());
-        for hook in &self.manifest.hooks {
-            lines.push(preview_hook(hook, rt, fs, changed)?);
-        }
-        Ok(lines)
-    }
 }
 
 #[cfg(test)]
@@ -539,98 +496,5 @@ mod tests {
         assert_eq!(built.manifest.version, BUNDLE_VERSION);
         assert_eq!(built.manifest.hooks.len(), 1);
         assert_eq!(built.manifest.hooks[0].argv, vec!["mise".to_string()]);
-    }
-
-    fn preview_runtime() -> (crate::runtime::Runtime, crate::fs::memory::MemoryFs) {
-        use crate::fs::Filesystem;
-
-        let fs = crate::fs::memory::MemoryFs::new();
-        let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
-        let _ = fs.write(std::path::Path::new("/opt/probe"), b"run");
-        let rt = crate::runtime::Runtime {
-            vars: std::collections::BTreeMap::new(),
-            path_dirs: vec![std::path::PathBuf::from("/opt")],
-        };
-        (rt, fs)
-    }
-
-    fn preview_hook(argv: &[&str]) -> crate::hook::Hook {
-        crate::hook::Hook {
-            argv: argv.iter().map(|item| item.to_string()).collect(),
-            path: Vec::new(),
-            requires: None,
-            when: None,
-            checks: Vec::new(),
-            timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
-        }
-    }
-
-    #[test]
-    fn hook_preview_renders_run_skip_warn_lines() {
-        use crate::condition::Condition;
-
-        let (rt, fs) = preview_runtime();
-        let mut bundle = Bundle::empty();
-        bundle.manifest.hooks = vec![
-            preview_hook(&["tool", "--flag"]),
-            crate::hook::Hook {
-                checks: vec![Condition::Exists {
-                    path: "/opt/probe".into(),
-                }],
-                ..preview_hook(&["tool"])
-            },
-            crate::hook::Hook {
-                when: Some(Condition::InPath {
-                    name: "absent".into(),
-                }),
-                ..preview_hook(&["tool"])
-            },
-        ];
-        let lines = match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
-            Ok(lines) => lines,
-            Err(error) => panic!("preview renders: {error}"),
-        };
-        assert_eq!(
-            lines,
-            vec![
-                "! run: /opt/tool --flag".to_string(),
-                "skipped: tool (checks pass)".to_string(),
-                "skipped: tool (no need: in_path(absent))".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn hook_preview_runs_on_failing_checks() {
-        use crate::condition::Condition;
-
-        let (rt, fs) = preview_runtime();
-        let mut bundle = Bundle::empty();
-        bundle.manifest.hooks = vec![crate::hook::Hook {
-            checks: vec![Condition::Exists {
-                path: "/opt/absent".into(),
-            }],
-            ..preview_hook(&["tool"])
-        }];
-        let lines = match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
-            Ok(lines) => lines,
-            Err(error) => panic!("preview renders: {error}"),
-        };
-        assert_eq!(lines, vec!["! run: /opt/tool".to_string()]);
-    }
-
-    #[test]
-    fn hook_preview_miss_fails_naming_hook() {
-        let (rt, fs) = preview_runtime();
-        let mut bundle = Bundle::empty();
-        bundle.manifest.hooks = vec![preview_hook(&["absent", "install"])];
-        match bundle.hook_preview(&rt, &fs, &BTreeSet::new()) {
-            Ok(_) => panic!("missing binary passes"),
-            Err(error) => assert_eq!(
-                error.to_string(),
-                "hook 'absent install' cannot resolve 'absent'"
-            ),
-        }
     }
 }

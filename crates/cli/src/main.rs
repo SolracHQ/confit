@@ -42,7 +42,7 @@ fn run() -> confit_core::error::Result<()> {
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
     match &cli.command {
-        Command::Plan(args) => run_plan_like(args, false, &log_path),
+        Command::Plan(args) => run_plan(args, &log_path),
         Command::Apply(args) => run_apply(args, &log_path),
         Command::Init(args) => run_init(args),
         Command::Export(args) => run_export(args),
@@ -53,9 +53,8 @@ fn run() -> confit_core::error::Result<()> {
 /// Runs plan with summary output.
 ///
 /// A plan run without a destination previews alone and writes nothing.
-fn run_plan_like(
+fn run_plan(
     args: &confit_cli::cli::PlanArgs,
-    store_tmp: bool,
     log_path: &std::path::Path,
 ) -> confit_core::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
@@ -66,18 +65,24 @@ fn run_plan_like(
     seams.suspend = live.suspend_handle();
     let outcome = confit_cli::actions::plan::PlanRunner {
         args,
-        store_tmp,
+        store_tmp: false,
         seams,
     }
     .execute()?;
     live.finish();
+    let lifecycle = confit_core::hook::diff_lifecycle(
+        &outcome.built.manifest.hooks,
+        &outcome.previous.manifest.hooks,
+    );
     let summary = confit_cli::presentation::summary::Summary {
         built: &outcome.built,
         previous: &outcome.previous,
         drift: &outcome.drift,
         first_run: outcome.first_run,
-        hook_lines: outcome.hook_lines.as_slice(),
-        hook_evaluated: &[],
+        hooks: confit_cli::presentation::summary::Hooks {
+            lifecycle: &lifecycle,
+            evaluated: &[],
+        },
     };
     anstream::println!("{}", summary.render());
     if let Some(stored) = outcome.stored {

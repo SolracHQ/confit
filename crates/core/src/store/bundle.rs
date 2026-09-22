@@ -27,6 +27,21 @@ const BUNDLE_MANIFEST: &str = "manifest.json";
 /// Bundle blob folder prefix inside the archive.
 const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
+/// Backpressure cap for compressed blobs awaiting ordered writes.
+const COMPRESS_CHANNEL_CAP: usize = 8;
+
+/// One gzip blob awaiting its ordered slot in the archive.
+struct CompressedBlob {
+    /// Original position feeding archive order.
+    index: usize,
+    /// Content hash naming the entry.
+    sha: String,
+    /// Gzip bytes landing in the archive.
+    gzipped: Vec<u8>,
+    /// Raw bytes compressed, feeding progress facts.
+    raw_len: u64,
+}
+
 /// Writes one portable bundle holding the manifest and referenced blobs.
 ///
 /// The tar.gz archive holds `manifest.json` first, then one
@@ -93,31 +108,56 @@ pub fn write_bundle(
         .enumerate()
         .map(|(index, (sha, raw))| (index, sha, raw))
         .collect();
-    let compressed: Vec<Result<(String, Vec<u8>)>> = indexed
-        .par_iter()
-        .map(|(index, sha, raw)| {
-            let raw_len = raw.len() as u64;
-            gzip_bytes(raw).map(|gzipped| {
-                if let Some(sender) = progress {
-                    let _ = sender.send(Event::BlobCompressed {
-                        done: index + 1,
-                        total,
-                        bytes: raw_len,
-                    });
+    // Payloads cross a bounded channel, so one writer owns archive order.
+    let (payload_tx, payload_rx) =
+        crossbeam_channel::bounded::<Result<CompressedBlob>>(COMPRESS_CHANNEL_CAP);
+    let builder = std::thread::scope(|scope| -> Result<_> {
+        let writer = scope.spawn(move || -> Result<_> {
+            let mut builder = builder;
+            let mut pending: BTreeMap<usize, CompressedBlob> = BTreeMap::new();
+            let mut next = 0;
+            for payload in payload_rx.iter() {
+                let blob = payload?;
+                pending.insert(blob.index, blob);
+                while let Some(blob) = pending.remove(&next) {
+                    append_bundle_entry(
+                        &mut builder,
+                        &format!("{BUNDLE_BLOBS_PREFIX}{}", blob.sha),
+                        &blob.gzipped,
+                        dest,
+                    )?;
+                    if let Some(sender) = progress {
+                        let _ = sender.send(Event::BlobCompressed {
+                            done: next + 1,
+                            total,
+                            bytes: blob.raw_len,
+                        });
+                    }
+                    next += 1;
                 }
-                (sha.clone(), gzipped)
-            })
-        })
-        .collect();
-    for entry in compressed {
-        let (sha, gzipped) = entry?;
-        append_bundle_entry(
-            &mut builder,
-            &format!("{BUNDLE_BLOBS_PREFIX}{sha}"),
-            &gzipped,
-            dest,
-        )?;
-    }
+            }
+            Ok(builder)
+        });
+        indexed.into_par_iter().for_each(|(index, sha, raw)| {
+            let raw_len = raw.len() as u64;
+            let payload = match gzip_bytes(&raw) {
+                Ok(gzipped) => Ok(CompressedBlob {
+                    index,
+                    sha,
+                    gzipped,
+                    raw_len,
+                }),
+                Err(error) => Err(error),
+            };
+            drop(raw);
+            let _ = payload_tx.send(payload);
+        });
+        drop(payload_tx);
+        match writer.join() {
+            Ok(inner) => inner,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })?;
     let encoder = builder
         .into_inner()
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
