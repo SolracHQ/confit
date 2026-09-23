@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+use crate::error::Result;
+
 /// Document path with home expansion.
 ///
 /// Paths carry a leading tilde for home relative targets.
@@ -128,6 +130,32 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Computes lowercase hex SHA-256 over a byte stream.
+///
+/// Reads in chunks, so large inputs hash without loading.
+///
+/// # Errors
+///
+/// Stream read failures surface as io errors.
+pub fn sha256_read(stream: &mut impl std::io::Read) -> Result<String> {
+    const CHUNK: usize = 8192;
+
+    let mut hasher = sha2::Sha256::new();
+    let mut chunk = [0u8; CHUNK];
+    loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&chunk[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +180,13 @@ mod tests {
         assert_eq!(expanded, PathBuf::from("/tmp/confit-home-fixture/.bashrc"));
         assert_eq!(bare, PathBuf::from("/tmp/confit-home-fixture"));
         assert_eq!(plain, PathBuf::from("/etc/hosts"));
+    }
+
+    #[test]
+    fn stream_hash_matches_bytes_hash() {
+        let bytes = b"abc".repeat(3000);
+        let mut stream = std::io::Cursor::new(&bytes);
+        let digest = sha256_read(&mut stream).unwrap();
+        assert_eq!(digest, sha256_hex(&bytes));
     }
 }

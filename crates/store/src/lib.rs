@@ -4,6 +4,13 @@
 
 #![deny(missing_docs)]
 
+pub mod archive;
+pub mod blob;
+pub mod bundle;
+pub mod fetch;
+pub mod slot;
+pub mod workspace;
+
 use std::path::PathBuf;
 
 /// Base folders for every write-backed capability.
