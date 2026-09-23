@@ -38,13 +38,15 @@ pub struct ExportReport {
 /// use confit_cli::actions::export::ExportRunner;
 /// use confit_cli::seams::Seams;
 /// use confit_cli::cli::ExportArgs;
-/// use confit_cli::fs::OsFs;
+/// use confit_core::fs::memory::MemoryFs;
+/// use confit_core::probe::MemoryProbe;
 /// use std::io::Cursor;
 ///
 /// let args = ExportArgs { picker: None, output: None, manifest: true };
-/// let fs = OsFs;
+/// let fs = MemoryFs::new();
+/// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new(String::new());
-/// let report = ExportRunner::run(&args, Seams::memory(&fs, &mut input));
+/// let report = ExportRunner::run(&args, Seams::memory(&fs, &probe, &mut input));
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
 pub struct ExportRunner<'a> {

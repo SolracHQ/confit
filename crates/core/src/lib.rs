@@ -12,6 +12,7 @@ pub mod fs;
 pub mod hook;
 pub mod ids;
 pub mod plan;
+pub mod probe;
 pub mod progress;
 pub mod render;
 pub mod runtime;

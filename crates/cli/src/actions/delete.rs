@@ -38,13 +38,15 @@ pub struct DeleteReport {
 /// ```rust,no_run
 /// use confit_cli::seams::Seams;
 /// use confit_cli::cli::DeleteArgs;
-/// use confit_cli::fs::OsFs;
+/// use confit_core::fs::memory::MemoryFs;
+/// use confit_core::probe::MemoryProbe;
 /// use std::io::Cursor;
 ///
 /// let args = DeleteArgs { name: "@personal".to_string() };
-/// let fs = OsFs;
+/// let fs = MemoryFs::new();
+/// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new(String::new());
-/// let report = confit_cli::actions::delete::run(&args, Seams::memory(&fs, &mut input));
+/// let report = confit_cli::actions::delete::run(&args, Seams::memory(&fs, &probe, &mut input));
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
 pub fn run(args: &DeleteArgs, seams: Seams<'_>) -> Result<DeleteReport> {

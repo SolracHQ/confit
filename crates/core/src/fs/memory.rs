@@ -239,7 +239,6 @@ impl Filesystem for MemoryFs {
     fn exists(&self, path: &Path) -> bool {
         self.files.borrow().contains_key(path) || self.links.borrow().contains_key(path)
     }
-
     /// Opens a cursor over the bytes `read` would return.
     ///
     /// Unreadable paths fail as denied, links read as target

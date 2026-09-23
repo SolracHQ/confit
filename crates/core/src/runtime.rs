@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::condition::Condition;
-use crate::fs::Filesystem;
 use crate::ids::DocPath;
+use crate::probe::PathProbe;
 
 /// Default hook timeout in seconds backing the `10m` opt default.
 ///
@@ -49,10 +49,10 @@ impl Runtime {
         Self { vars, path_dirs }
     }
 
-    /// Evaluates one condition against runtime facts and the backend.
+    /// Evaluates one condition against runtime facts and the probe.
     ///
     /// `in_path` joins each dir with the name, first existing
-    /// executable wins. While the backend reports a mode, the
+    /// executable wins. While the probe reports a mode, the
     /// `0o111` bit decides. Otherwise plain existence decides.
     /// `exists` expands a leading tilde through the OS home
     /// folder then stats. `env_eq` and `env_set` read `vars`.
@@ -62,7 +62,7 @@ impl Runtime {
     /// # Arguments
     ///
     /// * `cond` - the condition under testing.
-    /// * `fs` - the backend under stating.
+    /// * `probe` - the probe under stating.
     /// * `changed` - the changed document ids under reading.
     ///
     /// # Returns
@@ -73,7 +73,7 @@ impl Runtime {
     ///
     /// ```rust
     /// use confit_core::condition::Condition;
-    /// use confit_core::fs::memory::MemoryFs;
+    /// use confit_core::probe::MemoryProbe;
     /// use confit_core::runtime::Runtime;
     /// use std::collections::{BTreeMap, BTreeSet};
     ///
@@ -85,11 +85,11 @@ impl Runtime {
     ///     Condition::EnvSet { key: "SHELL".into() },
     ///     Condition::EnvEq { key: "SHELL".into(), value: "bash".into() },
     /// ]);
-    /// assert_eq!(rt.evaluate(&cond, &MemoryFs::new(), &BTreeSet::new()), true);
+    /// assert_eq!(rt.evaluate(&cond, &MemoryProbe::new(), &BTreeSet::new()), true);
     /// assert_eq!(
     ///     rt.evaluate(
     ///         &Condition::EnvSet { key: "MISSING".into() },
-    ///         &MemoryFs::new(),
+    ///         &MemoryProbe::new(),
     ///         &BTreeSet::new()
     ///     ),
     ///     false
@@ -98,90 +98,57 @@ impl Runtime {
     pub fn evaluate(
         &self,
         cond: &Condition,
-        fs: &dyn Filesystem,
+        probe: &dyn PathProbe,
         changed: &BTreeSet<DocPath>,
     ) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
-            Condition::InPath { name } => path_holds(name, self, fs),
-            Condition::Exists { path } => fs.exists(&DocPath::new(path).expand()),
+            Condition::InPath { name } => path_holds(name, self, probe),
+            Condition::Exists { path } => probe.exists(&DocPath::new(path).expand()),
             Condition::Changed { path } => changed.contains(&DocPath::new(path)),
-            Condition::All(items) => items.iter().all(|item| self.evaluate(item, fs, changed)),
-            Condition::Any(items) => items.iter().any(|item| self.evaluate(item, fs, changed)),
-            Condition::Not(inner) => !self.evaluate(inner, fs, changed),
+            Condition::All(items) => items.iter().all(|item| self.evaluate(item, probe, changed)),
+            Condition::Any(items) => items.iter().any(|item| self.evaluate(item, probe, changed)),
+            Condition::Not(inner) => !self.evaluate(inner, probe, changed),
         }
     }
 }
 
-/// Reports whether one binary resolves executable on the backend.
-fn path_holds(name: &str, rt: &Runtime, fs: &dyn Filesystem) -> bool {
-    find_binary(name, &rt.path_dirs, fs).is_some()
-}
-
-/// Finds one binary across dirs in order on the backend.
-///
-/// Each dir joins the name, first existing executable wins.
-/// While the backend reports a mode, the `0o111` bit decides.
-/// Otherwise plain existence decides.
-///
-/// # Arguments
-///
-/// * `name` - the binary name under resolving.
-/// * `dirs` - the directories under searching in order.
-/// * `fs` - the backend under stating.
-///
-/// # Returns
-///
-/// The joined candidate path for the first hit, else `None`.
-///
-pub fn find_binary(name: &str, dirs: &[PathBuf], fs: &dyn Filesystem) -> Option<PathBuf> {
-    const EXEC_BIT: u32 = 0o111;
-    for dir in dirs {
-        let candidate = dir.join(name);
-        match fs.file_mode(&candidate) {
-            Some(mode) => {
-                if mode & EXEC_BIT != 0 {
-                    return Some(candidate);
-                }
-            }
-            None => {
-                if fs.exists(&candidate) {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-    None
+/// Reports whether one binary resolves executable on the probe.
+fn path_holds(name: &str, rt: &Runtime, probe: &dyn PathProbe) -> bool {
+    probe.find_executable(name, &rt.path_dirs).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::memory::MemoryFs;
+    use crate::probe::MemoryProbe;
 
-    fn test_runtime(fs: &MemoryFs) -> Runtime {
+    fn test_runtime() -> (MemoryProbe, Runtime) {
         use std::path::Path;
 
-        let _ = fs.write(Path::new("/bin/tool"), b"run");
-        let _ = fs.set_mode(Path::new("/bin/tool"), 0o755);
-        let _ = fs.write(Path::new("/bin/plain"), b"run");
-        let _ = fs.set_mode(Path::new("/bin/plain"), 0o644);
-        let _ = fs.write(Path::new("/opt/tool"), b"run");
-        let _ = fs.write(Path::new("/home/tester/.local/bin/hook"), b"run");
-        Runtime {
-            vars: BTreeMap::from([
-                ("SHELL".to_string(), "bash".to_string()),
-                ("EMPTY".to_string(), String::new()),
-            ]),
-            path_dirs: vec![PathBuf::from("/bin"), PathBuf::from("/opt")],
-        }
+        let mut probe = MemoryProbe::new();
+        probe.exec(Path::new("/bin/tool"));
+        probe
+            .file(Path::new("/bin/plain"))
+            .mode(Path::new("/bin/plain"), 0o644);
+        probe.file(Path::new("/opt/tool"));
+        probe.file(Path::new("/home/tester/.local/bin/hook"));
+        (
+            probe,
+            Runtime {
+                vars: BTreeMap::from([
+                    ("SHELL".to_string(), "bash".to_string()),
+                    ("EMPTY".to_string(), String::new()),
+                ]),
+                path_dirs: vec![PathBuf::from("/bin"), PathBuf::from("/opt")],
+            },
+        )
     }
 
     #[test]
     fn evaluator_truth_table() {
-        let fs = MemoryFs::new();
-        let rt = test_runtime(&fs);
+        let (probe, rt) = test_runtime();
         let cases: Vec<(Condition, bool)> = vec![
             (
                 Condition::EnvEq {
@@ -341,7 +308,7 @@ mod tests {
         ];
         for (cond, want) in cases {
             assert_eq!(
-                rt.evaluate(&cond, &fs, &BTreeSet::new()),
+                rt.evaluate(&cond, &probe, &BTreeSet::new()),
                 want,
                 "condition {cond:?}"
             );
@@ -352,8 +319,7 @@ mod tests {
     fn changed_reads_membership_through_nesting() {
         use crate::ids::DocPath;
 
-        let fs = MemoryFs::new();
-        let rt = test_runtime(&fs);
+        let (probe, rt) = test_runtime();
         let changed: BTreeSet<DocPath> = BTreeSet::from([DocPath::new("touched")]);
         let cases: Vec<(Condition, bool)> = vec![
             (
@@ -427,7 +393,7 @@ mod tests {
         ];
         for (cond, want) in cases {
             assert_eq!(
-                rt.evaluate(&cond, &fs, &changed),
+                rt.evaluate(&cond, &probe, &changed),
                 want,
                 "condition {cond:?}"
             );
@@ -436,31 +402,30 @@ mod tests {
 
     #[test]
     fn in_path_skips_plain_files_for_later_executables() {
-        let fs = MemoryFs::new();
-        let _ = fs.write(std::path::Path::new("/first/dup"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/first/dup"), 0o644);
-        let _ = fs.write(std::path::Path::new("/second/dup"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/second/dup"), 0o755);
+        let mut probe = MemoryProbe::new();
+        probe
+            .file(std::path::Path::new("/first/dup"))
+            .mode(std::path::Path::new("/first/dup"), 0o644);
+        probe.exec(std::path::Path::new("/second/dup"));
         let rt = Runtime {
             vars: BTreeMap::new(),
             path_dirs: vec![PathBuf::from("/first"), PathBuf::from("/second")],
         };
         assert!(rt.evaluate(
             &Condition::InPath { name: "dup".into() },
-            &fs,
+            &probe,
             &BTreeSet::new()
         ));
     }
 
     #[test]
     fn in_path_without_mode_reports_presence() {
-        let fs = MemoryFs::new();
-        let rt = test_runtime(&fs);
+        let (probe, rt) = test_runtime();
         assert!(rt.evaluate(
             &Condition::InPath {
                 name: "tool".into()
             },
-            &fs,
+            &probe,
             &BTreeSet::new()
         ));
         let bare = Runtime {
@@ -471,7 +436,7 @@ mod tests {
             &Condition::InPath {
                 name: "tool".into()
             },
-            &fs,
+            &probe,
             &BTreeSet::new()
         ));
     }
@@ -482,11 +447,10 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", "/tmp/confit-runtime-fixture");
         }
-        let fs = MemoryFs::new();
-        let _ = fs.write(
-            std::path::Path::new("/tmp/confit-runtime-fixture/.local/bin/hook"),
-            b"run",
-        );
+        let mut probe = MemoryProbe::new();
+        probe.file(std::path::Path::new(
+            "/tmp/confit-runtime-fixture/.local/bin/hook",
+        ));
         let rt = Runtime {
             vars: BTreeMap::new(),
             path_dirs: Vec::new(),
@@ -495,14 +459,14 @@ mod tests {
             &Condition::Exists {
                 path: "~/.local/bin/hook".into(),
             },
-            &fs,
+            &probe,
             &BTreeSet::new(),
         );
         let missing = rt.evaluate(
             &Condition::Exists {
                 path: "~/.local/bin/absent".into(),
             },
-            &fs,
+            &probe,
             &BTreeSet::new(),
         );
         match previous {

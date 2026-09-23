@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use confit_core::error::{Error, Result};
 use confit_core::fs::Filesystem;
+use confit_core::probe::{OsProbe, PathProbe};
 
 use crate::fs::OsFs;
 use confit_core::plan::{Bundle, DocumentStatus};
@@ -20,13 +21,17 @@ use crate::presentation::spinner::{PrintSender, SuspendControl};
 /// Host filesystem under sharing by host seams.
 static HOST_FS: OsFs = OsFs;
 
+/// Host path probe under sharing by host seams.
+static HOST_PROBE: OsProbe = OsProbe;
+
 /// Injected effects under one command run.
 ///
 /// Host runs pass stdin and print senders. Tests pass memory fakes.
-///
 pub struct Seams<'a> {
     /// Reads and writes backend, memory under tests.
     pub fs: &'a dyn Filesystem,
+    /// Reads path facts, memory under tests.
+    pub probe: &'a dyn PathProbe,
     /// Gains the confirmation answer, stdin on the host.
     pub input: &'a mut dyn BufRead,
     /// Gains stderr lines through the renderer, holding `None` for silence.
@@ -55,6 +60,7 @@ impl<'a> Seams<'a> {
     pub fn host(input: &'a mut dyn BufRead) -> Self {
         Self {
             fs: &HOST_FS,
+            probe: &HOST_PROBE,
             input,
             print: None,
             progress: None,
@@ -69,15 +75,21 @@ impl<'a> Seams<'a> {
     /// # Arguments
     ///
     /// * `fs` - the memory backend under reading and writing.
+    /// * `probe` - the memory probe under stating.
     /// * `input` - the answer source under prompting.
     ///
     /// # Returns
     ///
     /// Silent memory seams gaining a sender through chaining.
     ///
-    pub fn memory(fs: &'a dyn Filesystem, input: &'a mut dyn BufRead) -> Self {
+    pub fn memory(
+        fs: &'a dyn Filesystem,
+        probe: &'a dyn PathProbe,
+        input: &'a mut dyn BufRead,
+    ) -> Self {
         Self {
             fs,
+            probe,
             input,
             print: None,
             progress: None,
@@ -134,11 +146,13 @@ impl<'a> Seams<'a> {
     /// ```rust
     /// use confit_cli::seams::Seams;
     /// use confit_core::fs::memory::MemoryFs;
+    /// use confit_core::probe::MemoryProbe;
     /// use std::io::Cursor;
     ///
     /// let fs = MemoryFs::new();
+    /// let probe = MemoryProbe::new();
     /// let mut input = Cursor::new("yes\n");
-    /// let mut seams = Seams::memory(&fs, &mut input);
+    /// let mut seams = Seams::memory(&fs, &probe, &mut input);
     /// assert!(matches!(seams.confirm(), Ok(true)));
     /// ```
     pub fn confirm(&mut self) -> Result<bool> {

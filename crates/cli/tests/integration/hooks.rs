@@ -12,8 +12,10 @@ fn hooks_run_spawn_resolve_and_log() {
             code: 0,
             output: b"did\n".to_vec(),
         })]));
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         Some(PathBuf::from("run.log")),
@@ -51,8 +53,10 @@ fn hooks_skip_on_passing_checks_without_spawning() {
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         None,
@@ -80,8 +84,10 @@ fn hooks_warn_on_closed_gates_without_spawning() {
     let fs = hook_fs();
     let mut input = Cursor::new(Vec::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         None,
@@ -118,8 +124,10 @@ fn hooks_abort_on_first_failure() {
             output: Vec::new(),
         }),
     ]));
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         Some(PathBuf::from("run.log")),
@@ -148,8 +156,10 @@ fn hooks_timeout_aborts_as_own_error() {
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::from([Err(
         confit_core::error::Error::Plan("hook 'tool' timed out after 600s".to_string()),
     )]));
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         None,
@@ -176,8 +186,10 @@ fn hooks_post_checks_fail_after_run() {
             code: 0,
             output: Vec::new(),
         })]));
+    let probe = hook_probe();
     let runner = hook_runner(
         &fs,
+        &probe,
         &mut input,
         &fake,
         None,
@@ -239,7 +251,8 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
     let mut input = Cursor::new(String::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
-    let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    let probe = hook_probe();
+    let mut seams = confit_cli::seams::Seams::memory(&fs, &probe, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let runner = confit_cli::actions::apply::ApplyRunner {
         manifest,
@@ -276,7 +289,8 @@ fn changed_gate_skips_quiet_apply_runs_touching_apply() {
             output: Vec::new(),
         })]));
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
-    let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    let probe = hook_probe();
+    let mut seams = confit_cli::seams::Seams::memory(&fs, &probe, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let runner = confit_cli::actions::apply::ApplyRunner {
         manifest,
@@ -313,7 +327,8 @@ fn requires_closed_apply_warns_without_spawning() {
     let mut input = Cursor::new(Vec::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
-    let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    let probe = hook_probe();
+    let mut seams = confit_cli::seams::Seams::memory(&fs, &probe, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
@@ -353,7 +368,8 @@ fn when_closed_apply_skips_without_spawning() {
     let mut input = Cursor::new(Vec::new());
     let fake = confit_cli::hooks::FakeRunner::new(VecDeque::new());
     let (print_tx, print_rx) = crossbeam_channel::unbounded();
-    let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    let probe = hook_probe();
+    let mut seams = confit_cli::seams::Seams::memory(&fs, &probe, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(Vec::new(), vec![hook]) {
@@ -395,7 +411,8 @@ fn print_lines_keep_hook_order_as_data() {
             output: Vec::new(),
         }),
     ]));
-    let mut seams = confit_cli::seams::Seams::memory(&fs, &mut input).with_print(print_tx);
+    let probe = hook_probe();
+    let mut seams = confit_cli::seams::Seams::memory(&fs, &probe, &mut input).with_print(print_tx);
     seams.hook_runner = Some(&fake);
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
     runner.manifest = match Bundle::build(

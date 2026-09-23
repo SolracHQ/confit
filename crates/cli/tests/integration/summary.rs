@@ -254,7 +254,7 @@ fn first_run_preview_shows_impact_plus_in_place() {
         Bundle::empty(),
         Some(slot),
         false,
-        confit_cli::seams::Seams::memory(&fs, &mut input),
+        confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     );
     match runner.execute() {
         Ok(_) => {}
@@ -383,7 +383,7 @@ fn steady_plan_flow_pins_recorded_headers_through_drift_and_preview() {
         previous,
         Some(PathBuf::from("steady-state.json")),
         true,
-        confit_cli::seams::Seams::memory(&fs, &mut input),
+        confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     );
     match runner.execute() {
         Ok(_) => {}
@@ -483,7 +483,7 @@ fn first_run_flow_pins_desired_headers_through_drift_and_preview() {
         Bundle::empty(),
         Some(PathBuf::from("first-run-state.json")),
         true,
-        confit_cli::seams::Seams::memory(&fs, &mut input),
+        confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     );
     match runner.execute() {
         Ok(_) => {}

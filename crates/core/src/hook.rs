@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::condition::Condition;
-use crate::fs::Filesystem;
-use crate::runtime::{Runtime, find_binary};
+use crate::probe::PathProbe;
+use crate::runtime::Runtime;
 
 /// One post-config step with gates and checks.
 ///
@@ -352,7 +352,7 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
 ///
 /// * `hook` - the hook holding argv and path dirs.
 /// * `rt` - the runtime facts under reading.
-/// * `fs` - the backend under stating.
+/// * `probe` - the probe under stating.
 ///
 /// # Returns
 ///
@@ -361,14 +361,12 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use confit_core::hook::{Hook, resolve_hook};
+/// use confit_core::probe::MemoryProbe;
 /// use confit_core::runtime::Runtime;
 ///
-/// let fs = MemoryFs::new();
-/// let binary = std::path::Path::new("/opt/tool");
-/// assert!(matches!(fs.write(binary, b"run"), Ok(())));
-/// assert!(matches!(fs.set_mode(binary, 0o755), Ok(())));
+/// let mut probe = MemoryProbe::new();
+/// probe.exec(std::path::Path::new("/opt/tool"));
 /// let hook = Hook {
 ///     argv: vec!["tool".into()],
 ///     path: Vec::new(),
@@ -382,15 +380,15 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
 ///     path_dirs: vec![std::path::PathBuf::from("/opt")],
 /// };
 /// assert_eq!(
-///     resolve_hook(&hook, &rt, &fs),
+///     resolve_hook(&hook, &rt, &probe),
 ///     Some(std::path::PathBuf::from("/opt/tool"))
 /// );
 /// ```
-pub fn resolve_hook(hook: &Hook, rt: &Runtime, fs: &dyn Filesystem) -> Option<PathBuf> {
+pub fn resolve_hook(hook: &Hook, rt: &Runtime, probe: &dyn PathProbe) -> Option<PathBuf> {
     let head = hook.argv.first()?;
     let mut dirs: Vec<PathBuf> = hook.path.iter().map(PathBuf::from).collect();
     dirs.extend(rt.path_dirs.iter().cloned());
-    find_binary(head, &dirs, fs)
+    probe.find_executable(head, &dirs)
 }
 
 /// Reports whether two hooks share one lifecycle identity.

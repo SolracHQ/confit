@@ -15,6 +15,7 @@ use confit_core::fs::{
 use confit_core::hook::resolve_hook;
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
+use confit_core::probe::PathProbe;
 use confit_core::runtime::Runtime;
 use confit_core::store::blobs::prune_blobs;
 use confit_core::store::bundle::load_bundle_input;
@@ -48,8 +49,10 @@ pub struct ApplyReport {
 struct HookCtx<'x> {
     /// Holds the runtime facts under reading.
     rt: &'x Runtime,
-    /// Holds the backend under stating.
+    /// Holds the backend under writing logs.
     fs: &'x dyn Filesystem,
+    /// Holds the probe under stating.
+    probe: &'x dyn PathProbe,
     /// Holds the changed document ids under reading.
     changed: &'x BTreeSet<DocPath>,
 }
@@ -65,10 +68,12 @@ struct HookCtx<'x> {
 /// use confit_core::fs::{Filesystem, memory::MemoryFs};
 /// use confit_core::ids::DocPath;
 /// use confit_core::plan::Bundle;
+/// use confit_core::probe::MemoryProbe;
 /// use std::io::Cursor;
 /// use std::path::Path;
 ///
 /// let fs = MemoryFs::new();
+/// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new("yes\n");
 /// let manifest = match Bundle::build(
 ///     vec![ManifestDocument::new(
@@ -85,7 +90,7 @@ struct HookCtx<'x> {
 ///     previous: Bundle::empty(),
 ///     state: None,
 ///     force: false,
-///     seams: Seams::memory(&fs, &mut input),
+///     seams: Seams::memory(&fs, &probe, &mut input),
 /// };
 /// assert!(matches!(runner.execute(), Ok(_)));
 /// assert!(fs.exists(Path::new("note")));
@@ -131,7 +136,8 @@ impl<'a> ApplyRunner<'a> {
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_cli::fs::OsFs;
+    /// use confit_core::fs::memory::MemoryFs;
+    /// use confit_core::probe::MemoryProbe;
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -144,9 +150,10 @@ impl<'a> ApplyRunner<'a> {
     ///     },
     ///     force: true,
     /// };
-    /// let fs = OsFs;
+    /// let fs = MemoryFs::new();
+    /// let probe = MemoryProbe::new();
     /// let mut input = Cursor::new(String::new());
-    /// let seams = Seams::memory(&fs, &mut input);
+    /// let seams = Seams::memory(&fs, &probe, &mut input);
     /// let runner = ApplyRunner::from_args(&args, seams);
     /// assert!(matches!(runner, Ok(_) | Err(_)));
     /// ```
@@ -234,7 +241,8 @@ impl<'a> ApplyRunner<'a> {
     /// use confit_cli::actions::apply::ApplyRunner;
     /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_cli::fs::OsFs;
+    /// use confit_core::fs::memory::MemoryFs;
+    /// use confit_core::probe::MemoryProbe;
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -247,9 +255,10 @@ impl<'a> ApplyRunner<'a> {
     ///     },
     ///     force: true,
     /// };
-    /// let fs = OsFs;
+    /// let fs = MemoryFs::new();
+    /// let probe = MemoryProbe::new();
     /// let mut input = Cursor::new(String::new());
-    /// let seams = Seams::memory(&fs, &mut input);
+    /// let seams = Seams::memory(&fs, &probe, &mut input);
     /// let report = ApplyRunner::run(&args, seams);
     /// assert!(matches!(report, Ok(_) | Err(_)));
     /// ```
@@ -291,8 +300,9 @@ impl<'a> ApplyRunner<'a> {
         };
         let baseline = reference.drift(&snapshot, &snapshot_tree, order, fs);
         let rt = Runtime::current();
+        let probe: &dyn PathProbe = self.seams.probe;
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let evaluated = evaluate_hooks(&built, &rt, fs, &changed)?;
+        let evaluated = evaluate_hooks(&built, &rt, probe, &changed)?;
         let lifecycle =
             confit_core::hook::diff_lifecycle(&built.manifest.hooks, &self.previous.manifest.hooks);
         let report = Summary {
@@ -363,7 +373,7 @@ impl<'a> ApplyRunner<'a> {
             .emit_writing_manifest(built.manifest.documents.len());
         let stored = archive_previous(&built, fs, self.seams.progress.as_ref())?;
         prune_blobs(fs)?;
-        self.run_hooks(&built, &rt, fs, &changed)?;
+        self.run_hooks(&built, &rt, fs, probe, &changed)?;
         Ok(ApplyReport {
             written,
             removed,
@@ -380,6 +390,7 @@ impl<'a> ApplyRunner<'a> {
         built: &Bundle,
         rt: &Runtime,
         fs: &dyn Filesystem,
+        probe: &dyn PathProbe,
         changed: &BTreeSet<DocPath>,
     ) -> Result<()> {
         let total = built.manifest.hooks.len();
@@ -388,7 +399,12 @@ impl<'a> ApplyRunner<'a> {
             Some(runner) => runner,
             None => &real,
         };
-        let ctx = HookCtx { rt, fs, changed };
+        let ctx = HookCtx {
+            rt,
+            fs,
+            probe,
+            changed,
+        };
         for (index, hook) in built.manifest.hooks.iter().enumerate() {
             let position = index + 1;
             if let Some(line) = gate_line(hook, &ctx) {
@@ -399,7 +415,7 @@ impl<'a> ApplyRunner<'a> {
                 && hook
                     .checks
                     .iter()
-                    .all(|check| ctx.rt.evaluate(check, ctx.fs, ctx.changed))
+                    .all(|check| ctx.rt.evaluate(check, ctx.probe, ctx.changed))
             {
                 let line = format!("skipped: {} (checks pass)", hook.argv.join(" "));
                 self.seams.print_line(line);
@@ -425,7 +441,7 @@ impl<'a> ApplyRunner<'a> {
         runner: &dyn HookRunner,
     ) -> Result<()> {
         let argv_text = hook.argv.join(" ");
-        let binary = resolve_hook(hook, ctx.rt, ctx.fs).ok_or_else(|| {
+        let binary = resolve_hook(hook, ctx.rt, ctx.probe).ok_or_else(|| {
             let head = hook.argv.first().cloned().unwrap_or_default();
             Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
         })?;
@@ -464,7 +480,7 @@ impl<'a> ApplyRunner<'a> {
 fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String> {
     let argv_text = hook.argv.join(" ");
     if let Some(gate) = hook.requires.as_ref()
-        && !ctx.rt.evaluate(gate, ctx.fs, ctx.changed)
+        && !ctx.rt.evaluate(gate, ctx.probe, ctx.changed)
     {
         return Some(format!(
             "warn: {argv_text} cannot run ({})",
@@ -472,7 +488,7 @@ fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String
         ));
     }
     if let Some(gate) = hook.when.as_ref()
-        && !ctx.rt.evaluate(gate, ctx.fs, ctx.changed)
+        && !ctx.rt.evaluate(gate, ctx.probe, ctx.changed)
     {
         return Some(format!(
             "skipped: {argv_text} (no need: {})",
@@ -495,7 +511,7 @@ fn verify_post_checks(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Resu
     let failed: Vec<String> = hook
         .checks
         .iter()
-        .filter(|check| !ctx.rt.evaluate(check, ctx.fs, ctx.changed))
+        .filter(|check| !ctx.rt.evaluate(check, ctx.probe, ctx.changed))
         .map(describe_condition)
         .collect();
     if failed.is_empty() {

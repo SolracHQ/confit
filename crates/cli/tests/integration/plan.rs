@@ -116,12 +116,11 @@ return { shells = { "bash" }, configs = { tool } }
         },
         output: None,
     };
-    let fs = confit_cli::fs::OsFs;
     let mut input = Cursor::new(String::new());
     let plan_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: true,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::host(&mut input),
     };
     let outcome = match plan_runner.execute() {
         Ok(outcome) => outcome,
@@ -185,7 +184,7 @@ return { shells = { "bash" }, configs = { tool } }
     let plan_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     };
     let outcome = match plan_runner.execute() {
         Ok(outcome) => outcome,
@@ -244,12 +243,11 @@ return { shells = { "bash" }, configs = { tool } }
         },
         output: None,
     };
-    let fs = confit_cli::fs::OsFs;
     let mut input = Cursor::new(String::new());
     let slot_runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::host(&mut input),
     };
     let outcome = match slot_runner.execute() {
         Ok(outcome) => outcome,
@@ -391,7 +389,8 @@ return { shells = { "bash" }, configs = { tool } }
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input).with_progress(sender),
+        seams: confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input)
+            .with_progress(sender),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -469,7 +468,7 @@ return { shells = { "bash" }, configs = { tool } }
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,
@@ -534,7 +533,7 @@ return { shells = { "bash" }, configs = { tool } }
     let runner = confit_cli::actions::plan::PlanRunner {
         args: &args,
         store_tmp: false,
-        seams: confit_cli::seams::Seams::memory(&fs, &mut input),
+        seams: confit_cli::seams::Seams::memory(&fs, &*EMPTY_PROBE, &mut input),
     };
     let outcome = match runner.execute() {
         Ok(outcome) => outcome,

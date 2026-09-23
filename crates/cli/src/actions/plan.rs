@@ -45,7 +45,8 @@ pub struct PlanOutcome {
 /// use confit_cli::actions::plan::PlanRunner;
 /// use confit_cli::seams::Seams;
 /// use confit_cli::cli::{PlanArgs, SharedArgs};
-/// use confit_cli::fs::OsFs;
+/// use confit_core::fs::memory::MemoryFs;
+/// use confit_core::probe::MemoryProbe;
 /// use std::io::Cursor;
 /// use std::path::PathBuf;
 ///
@@ -58,9 +59,10 @@ pub struct PlanOutcome {
 ///     },
 ///     output: None,
 /// };
-/// let fs = OsFs;
+/// let fs = MemoryFs::new();
+/// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new(String::new());
-/// let runner = PlanRunner { args: &args, store_tmp: false, seams: Seams::memory(&fs, &mut input) };
+/// let runner = PlanRunner { args: &args, store_tmp: false, seams: Seams::memory(&fs, &probe, &mut input) };
 /// let outcome = runner.execute();
 /// assert!(matches!(outcome, Ok(_) | Err(_)));
 /// ```

@@ -4,10 +4,10 @@
 
 use confit_core::condition::Condition;
 use confit_core::error::Result;
-use confit_core::fs::Filesystem;
 use confit_core::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle, resolve_hook};
 use confit_core::ids::DocPath;
 use confit_core::plan::Bundle;
+use confit_core::probe::PathProbe;
 use confit_core::runtime::Runtime;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -169,11 +169,11 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 fn decide<'a>(
     hook: &'a Hook,
     rt: &Runtime,
-    fs: &dyn Filesystem,
+    probe: &dyn PathProbe,
     changed: &BTreeSet<DocPath>,
 ) -> Result<EvaluatedHook<'a>> {
     if let Some(gate) = hook.requires.as_ref()
-        && !rt.evaluate(gate, fs, changed)
+        && !rt.evaluate(gate, probe, changed)
     {
         return Ok(EvaluatedHook {
             hook,
@@ -181,20 +181,20 @@ fn decide<'a>(
         });
     }
     if let Some(gate) = hook.when.as_ref()
-        && !rt.evaluate(gate, fs, changed)
+        && !rt.evaluate(gate, probe, changed)
     {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::WhenClosed(describe_condition(gate)),
         });
     }
-    if checks_pass(hook, rt, fs, changed) {
+    if checks_pass(hook, rt, probe, changed) {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::ChecksPass,
         });
     }
-    let Some(binary) = resolve_hook(hook, rt, fs) else {
+    let Some(binary) = resolve_hook(hook, rt, probe) else {
         let head = hook.argv.first().cloned().unwrap_or_default();
         return Err(confit_core::error::Error::Plan(format!(
             "hook '{}' cannot resolve '{head}'",
@@ -213,7 +213,7 @@ fn decide<'a>(
 ///
 /// * `bundle` - the bundle holding hooks under preview.
 /// * `rt` - the runtime facts under reading.
-/// * `fs` - the backend under stating.
+/// * `probe` - the probe under stating.
 /// * `changed` - the changed document ids under reading.
 ///
 /// # Returns
@@ -226,14 +226,14 @@ fn decide<'a>(
 pub fn evaluate_hooks<'a>(
     bundle: &'a Bundle,
     rt: &Runtime,
-    fs: &dyn Filesystem,
+    probe: &dyn PathProbe,
     changed: &BTreeSet<DocPath>,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
     bundle
         .manifest
         .hooks
         .iter()
-        .map(|hook| decide(hook, rt, fs, changed))
+        .map(|hook| decide(hook, rt, probe, changed))
         .collect()
 }
 
@@ -269,14 +269,14 @@ pub fn render_evaluated(evaluated: &[EvaluatedHook]) -> Vec<String> {
 fn checks_pass(
     hook: &Hook,
     rt: &Runtime,
-    fs: &dyn Filesystem,
+    probe: &dyn PathProbe,
     changed: &BTreeSet<DocPath>,
 ) -> bool {
     !hook.checks.is_empty()
         && hook
             .checks
             .iter()
-            .all(|check| rt.evaluate(check, fs, changed))
+            .all(|check| rt.evaluate(check, probe, changed))
 }
 
 /// Reads one hook argv as display text.
@@ -402,19 +402,21 @@ mod tests {
     fn preview_hook(
         hook: &Hook,
         rt: &Runtime,
-        fs: &dyn Filesystem,
+        probe: &dyn PathProbe,
         changed: &BTreeSet<DocPath>,
     ) -> Result<String> {
-        Ok(render_preview(&decide(hook, rt, fs, changed)?))
+        Ok(render_preview(&decide(hook, rt, probe, changed)?))
     }
 
     fn hook_preview(
         bundle: &Bundle,
         rt: &Runtime,
-        fs: &dyn Filesystem,
+        probe: &dyn PathProbe,
         changed: &BTreeSet<DocPath>,
     ) -> Result<Vec<String>> {
-        Ok(render_evaluated(&evaluate_hooks(bundle, rt, fs, changed)?))
+        Ok(render_evaluated(&evaluate_hooks(
+            bundle, rt, probe, changed,
+        )?))
     }
 
     fn hook(
@@ -509,16 +511,15 @@ mod tests {
         );
     }
 
-    fn preview_state() -> (Runtime, confit_core::fs::memory::MemoryFs) {
-        let fs = confit_core::fs::memory::MemoryFs::new();
-        let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
-        let _ = fs.write(std::path::Path::new("/opt/probe"), b"done");
+    fn preview_state() -> (Runtime, confit_core::probe::MemoryProbe) {
+        let mut probe = confit_core::probe::MemoryProbe::new();
+        probe.exec(std::path::Path::new("/opt/tool"));
+        probe.file(std::path::Path::new("/opt/probe"));
         let rt = Runtime {
             vars: Default::default(),
             path_dirs: vec![std::path::PathBuf::from("/opt")],
         };
-        (rt, fs)
+        (rt, probe)
     }
 
     fn changed_set(dests: &[&str]) -> BTreeSet<DocPath> {
@@ -528,10 +529,10 @@ mod tests {
     fn preview_line(
         hook: &Hook,
         rt: &Runtime,
-        fs: &dyn Filesystem,
+        probe: &dyn PathProbe,
         changed: &BTreeSet<DocPath>,
     ) -> String {
-        match preview_hook(hook, rt, fs, changed) {
+        match preview_hook(hook, rt, probe, changed) {
             Ok(line) => line,
             Err(error) => panic!("preview renders: {error}"),
         }
@@ -539,19 +540,19 @@ mod tests {
 
     #[test]
     fn closed_requires_beats_open_when() {
-        let (rt, fs) = preview_state();
+        let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
         let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
         hook.requires = Some(changed("missing"));
         assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched).as_str(),
             "warn: tool cannot run (changed(missing))"
         );
     }
 
     #[test]
     fn closed_when_beats_passing_checks() {
-        let (rt, fs) = preview_state();
+        let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
         let mut hook = hook(
             &["tool"],
@@ -564,14 +565,14 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched).as_str(),
             "skipped: tool (no need: changed(missing))"
         );
     }
 
     #[test]
     fn open_gates_with_passing_checks_skip_on_checks() {
-        let (rt, fs) = preview_state();
+        let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
         let mut hook = hook(
             &["tool"],
@@ -584,14 +585,14 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched).as_str(),
             "skipped: tool (checks pass)"
         );
     }
 
     #[test]
     fn open_gates_with_failing_checks_run() {
-        let (rt, fs) = preview_state();
+        let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
         let mut hook = hook(
             &["tool"],
@@ -604,7 +605,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &fs, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched).as_str(),
             "! run: /opt/tool"
         );
     }
@@ -748,19 +749,16 @@ mod tests {
 
     fn preview_runtime() -> (
         confit_core::runtime::Runtime,
-        confit_core::fs::memory::MemoryFs,
+        confit_core::probe::MemoryProbe,
     ) {
-        use confit_core::fs::Filesystem;
-
-        let fs = confit_core::fs::memory::MemoryFs::new();
-        let _ = fs.write(std::path::Path::new("/opt/tool"), b"run");
-        let _ = fs.set_mode(std::path::Path::new("/opt/tool"), 0o755);
-        let _ = fs.write(std::path::Path::new("/opt/probe"), b"run");
+        let mut probe = confit_core::probe::MemoryProbe::new();
+        probe.exec(std::path::Path::new("/opt/tool"));
+        probe.file(std::path::Path::new("/opt/probe"));
         let rt = confit_core::runtime::Runtime {
             vars: std::collections::BTreeMap::new(),
             path_dirs: vec![std::path::PathBuf::from("/opt")],
         };
-        (rt, fs)
+        (rt, probe)
     }
 
     fn hook_fixture(argv: &[&str]) -> confit_core::hook::Hook {
@@ -778,7 +776,7 @@ mod tests {
     fn hook_preview_renders_run_skip_warn_lines() {
         use confit_core::condition::Condition;
 
-        let (rt, fs) = preview_runtime();
+        let (rt, probe) = preview_runtime();
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -801,7 +799,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &fs, &BTreeSet::new()) {
+        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -819,7 +817,7 @@ mod tests {
     fn hook_preview_runs_on_failing_checks() {
         use confit_core::condition::Condition;
 
-        let (rt, fs) = preview_runtime();
+        let (rt, probe) = preview_runtime();
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -833,7 +831,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &fs, &BTreeSet::new()) {
+        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -842,7 +840,7 @@ mod tests {
 
     #[test]
     fn hook_preview_miss_fails_naming_hook() {
-        let (rt, fs) = preview_runtime();
+        let (rt, probe) = preview_runtime();
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -851,7 +849,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        match hook_preview(&bundle, &rt, &fs, &BTreeSet::new()) {
+        match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

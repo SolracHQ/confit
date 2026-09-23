@@ -8,6 +8,7 @@ pub(crate) use confit_core::fs::Filesystem;
 pub(crate) use confit_core::fs::memory::MemoryFs;
 pub(crate) use confit_core::ids::{DocPath, ReadOutcome};
 pub(crate) use confit_core::plan::{BUNDLE_VERSION, Bundle};
+pub(crate) use confit_core::probe::MemoryProbe;
 pub(crate) use confit_core::store::blobs::BlobRef;
 
 /// Points at the workspace examples folder from the cli crate dir.
@@ -34,6 +35,10 @@ pub(crate) fn pin_home() -> PathBuf {
     }
     home
 }
+
+/// Shares one empty probe across tests reading no path facts.
+pub(crate) static EMPTY_PROBE: std::sync::LazyLock<MemoryProbe> =
+    std::sync::LazyLock::new(MemoryProbe::new);
 
 /// Evaluates one profile file with no external plugins.
 pub(crate) fn evaluate(profile: &Path, root: &Path) -> Result<Vec<ManifestDocument>, Error> {
@@ -318,7 +323,9 @@ pub(crate) fn hook_for(
     }
 }
 
-/// Seeds one executable binary plus probe on a memory backend.
+/// Seeds one executable binary on a memory backend.
+///
+/// The hook probe below carries the matching path facts.
 pub(crate) fn hook_fs() -> MemoryFs {
     use confit_core::fs::Filesystem;
 
@@ -338,15 +345,24 @@ pub(crate) fn hook_fs() -> MemoryFs {
     fs
 }
 
+/// Builds one probe resolving the hook fixture binaries.
+pub(crate) fn hook_probe() -> MemoryProbe {
+    let mut probe = MemoryProbe::new();
+    probe.exec(Path::new("/fakebin/tool"));
+    probe.file(Path::new("/fakebin/probe"));
+    probe
+}
+
 /// Builds an apply runner carrying hooks plus a fake hook runner.
 pub(crate) fn hook_runner<'a>(
     fs: &'a MemoryFs,
+    probe: &'a MemoryProbe,
     input: &'a mut Cursor<Vec<u8>>,
     fake: &'a confit_cli::hooks::FakeRunner,
     log: Option<PathBuf>,
     hooks: Vec<confit_core::hook::Hook>,
 ) -> confit_cli::actions::apply::ApplyRunner<'a> {
-    let mut seams = confit_cli::seams::Seams::memory(fs, input);
+    let mut seams = confit_cli::seams::Seams::memory(fs, probe, input);
     seams.hook_runner = Some(fake);
     seams.log_file = log;
     let mut runner = apply_runner(Vec::new(), Bundle::empty(), None, true, seams);
@@ -391,7 +407,7 @@ pub(crate) fn run_export(
     let mut input = Cursor::new(String::new());
     confit_cli::actions::export::ExportRunner::run(
         args,
-        confit_cli::seams::Seams::memory(fs, &mut input),
+        confit_cli::seams::Seams::memory(fs, &*EMPTY_PROBE, &mut input),
     )
 }
 
@@ -401,5 +417,8 @@ pub(crate) fn run_delete(
     args: &confit_cli::cli::DeleteArgs,
 ) -> Result<confit_cli::actions::delete::DeleteReport, Error> {
     let mut input = Cursor::new(String::new());
-    confit_cli::actions::delete::run(args, confit_cli::seams::Seams::memory(fs, &mut input))
+    confit_cli::actions::delete::run(
+        args,
+        confit_cli::seams::Seams::memory(fs, &*EMPTY_PROBE, &mut input),
+    )
 }
