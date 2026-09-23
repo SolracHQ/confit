@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/engine", "crates/cli"]
+members = ["crates/core", "crates/engine", "crates/cli", "crates/store"]
 
 [workspace.dependencies]
 anstream = "1.0.0"

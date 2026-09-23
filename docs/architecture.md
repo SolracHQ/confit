@@ -1,10 +1,11 @@
 # ConfIt architecture
 
-Three crates form the app, each holding one main
+Four crates form the app, each holding one main
 responsibility.
 
 The engine converts a Lua profile into manifest documents
-and blob bytes. The core manages state and diffs across bundles, manifests, 
+and blob bytes. The store holds write-backed capability
+roots for one run. The core manages state and diffs across bundles, manifests, 
 the pool, and rotation.
 The cli orchestrates both, calling engine and core where
 needed, and provides user experience across prompts, progress,
@@ -19,11 +20,12 @@ memory filesystem, memory fetcher, silent progress.
 ## Dependencies
 
 ```text
-confit-cli --> confit-engine --> confit-core
+confit-cli --> confit-engine --> confit-store --> confit-core
+confit-cli --> confit-store
 confit-cli --> confit-core
 ```
 
-These three edges are the whole graph.
+These five edges are the whole graph.
 
 ## confit-core
 
@@ -68,6 +70,16 @@ tests off the network and the OS cache.
   `solrachq` (mise, merge, template). External plugin
   folders attach beside them. Plugin Lua composes surface
   primitives only.
+
+## confit-store
+
+Write-backed capability roots for one run.
+
+- `StoreRoots` owns the config base, the cache base, and
+  the temp base. Roots arrive explicit at construction.
+- `Stores` owns the roots for every capability. `Stores::host`
+  serves CLI wiring, `Stores::memory` serves tests. Later
+  sections add the capabilities behind these roots.
 
 ## confit-cli
 

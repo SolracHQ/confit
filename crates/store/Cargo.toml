@@ -1,0 +1,10 @@
+[package]
+name = "confit-store"
+version = "0.8.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-core = { version = "0.8.0", path = "../core" }

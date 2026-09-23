@@ -255,6 +255,7 @@ name = "confit-engine"
 version = "0.8.0"
 dependencies = [
  "confit-core",
+ "confit-store",
  "crossbeam-channel",
  "directories",
  "dirs",
@@ -271,6 +272,13 @@ dependencies = [
  "toml",
  "ureq",
  "zip",
+]
+
+[[package]]
+name = "confit-store"
+version = "0.8.0"
+dependencies = [
+ "confit-core",
 ]
 
 [[package]]
