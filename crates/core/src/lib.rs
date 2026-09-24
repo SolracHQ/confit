@@ -12,7 +12,6 @@ pub mod error;
 pub mod fs;
 pub mod handles;
 pub mod hook;
-pub mod ids;
 pub mod plan;
 pub mod probe;
 pub mod progress;

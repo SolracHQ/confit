@@ -10,7 +10,7 @@ local starship = mise.package({
 
 return function(user_config)
 	local path = confit.path.config("starship.toml")
-	local base = confit.resources.load_toml("resources/starship.toml")
+	local base = confit.fetch("resources/starship.toml"):toml()
 	starship:add_document(confit.document.structured("toml", {
 		path = path,
 		data = base,

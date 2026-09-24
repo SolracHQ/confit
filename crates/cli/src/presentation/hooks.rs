@@ -2,6 +2,7 @@
 //!
 //! Hook preview lines for plans beside documents.
 
+use confit_apply::Applier;
 use confit_core::arg::Arg;
 use confit_core::condition::Condition;
 use confit_core::error::Result;
@@ -9,7 +10,6 @@ use confit_core::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
 use confit_core::plan::Bundle;
 use confit_core::probe::PathProbe;
 use confit_core::runtime::Runtime;
-use confit_store::workspace::Workspace;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -175,7 +175,7 @@ fn decide<'a>(
     rt: &Runtime,
     probe: &dyn PathProbe,
     changed: &BTreeSet<String>,
-    workspace: &dyn Workspace,
+    applier: &Applier,
 ) -> Result<EvaluatedHook<'a>> {
     if let Some(gate) = hook.requires.as_ref()
         && !rt.evaluate(gate, probe, changed)
@@ -199,7 +199,7 @@ fn decide<'a>(
             outcome: PreviewOutcome::ChecksPass,
         });
     }
-    let Some(binary) = resolve_hook(hook, rt, probe, workspace) else {
+    let Some(binary) = resolve_hook(hook, rt, probe, applier) else {
         let head = hook.argv.first().map(Arg::display).unwrap_or_default();
         return Err(confit_core::error::Error::Plan(format!(
             "hook '{}' cannot resolve '{head}'",
@@ -215,24 +215,24 @@ fn decide<'a>(
 /// Resolves one hook binary with routes expanded inline.
 ///
 /// Hook path entries search first, runtime dirs follow. Route
-/// slots expand through the workspace; text runs verbatim.
+/// slots expand through the resolver; text runs verbatim.
 /// First existing executable wins. No hook copy.
 pub fn resolve_hook(
     hook: &Hook,
     rt: &Runtime,
     probe: &dyn PathProbe,
-    workspace: &dyn Workspace,
+    applier: &Applier,
 ) -> Option<PathBuf> {
     let head = match hook.argv.first()? {
         Arg::Text(head) => head.clone(),
-        Arg::Route(route) => workspace.resolve(route).to_string_lossy().into_owned(),
+        Arg::Route(route) => applier.resolve(route).to_string_lossy().into_owned(),
     };
     let mut dirs: Vec<PathBuf> = hook
         .path
         .iter()
         .map(|slot| match slot {
             Arg::Text(dir) => PathBuf::from(dir),
-            Arg::Route(route) => workspace.resolve(route),
+            Arg::Route(route) => applier.resolve(route),
         })
         .collect();
     dirs.extend(rt.path_dirs.iter().cloned());
@@ -249,13 +249,13 @@ pub fn evaluate_hooks<'a>(
     rt: &Runtime,
     probe: &dyn PathProbe,
     changed: &BTreeSet<String>,
-    workspace: &dyn Workspace,
+    applier: &Applier,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
     bundle
         .manifest
         .hooks
         .iter()
-        .map(|hook| decide(hook, rt, probe, changed, workspace))
+        .map(|hook| decide(hook, rt, probe, changed, applier))
         .collect()
 }
 
@@ -421,16 +421,9 @@ mod tests {
         rt: &Runtime,
         probe: &dyn PathProbe,
         changed: &BTreeSet<String>,
+        applier: &Applier,
     ) -> Result<String> {
-        let workspace =
-            confit_store::Stores::memory(confit_store::StoreRoots::default()).workspace();
-        Ok(render_preview(&decide(
-            hook,
-            rt,
-            probe,
-            changed,
-            &*workspace,
-        )?))
+        Ok(render_preview(&decide(hook, rt, probe, changed, applier)?))
     }
 
     fn hook_preview(
@@ -438,15 +431,10 @@ mod tests {
         rt: &Runtime,
         probe: &dyn PathProbe,
         changed: &BTreeSet<String>,
+        applier: &Applier,
     ) -> Result<Vec<String>> {
-        let workspace =
-            confit_store::Stores::memory(confit_store::StoreRoots::default()).workspace();
         Ok(render_evaluated(&evaluate_hooks(
-            bundle,
-            rt,
-            probe,
-            changed,
-            &*workspace,
+            bundle, rt, probe, changed, applier,
         )?))
     }
 
@@ -568,8 +556,9 @@ mod tests {
         rt: &Runtime,
         probe: &dyn PathProbe,
         changed: &BTreeSet<String>,
+        applier: &Applier,
     ) -> String {
-        match preview_hook(hook, rt, probe, changed) {
+        match preview_hook(hook, rt, probe, changed, applier) {
             Ok(line) => line,
             Err(error) => panic!("preview renders: {error}"),
         }
@@ -579,10 +568,11 @@ mod tests {
     fn closed_requires_beats_open_when() {
         let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
         hook.requires = Some(changed("missing"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
             "warn: tool cannot run (changed(missing))"
         );
     }
@@ -591,6 +581,7 @@ mod tests {
     fn closed_when_beats_passing_checks() {
         let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let mut hook = hook(
             &["tool"],
             &[],
@@ -602,7 +593,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
             "skipped: tool (no need: changed(missing))"
         );
     }
@@ -611,6 +602,7 @@ mod tests {
     fn open_gates_with_passing_checks_skip_on_checks() {
         let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let mut hook = hook(
             &["tool"],
             &[],
@@ -622,7 +614,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
             "skipped: tool (checks pass)"
         );
     }
@@ -631,6 +623,7 @@ mod tests {
     fn open_gates_with_failing_checks_run() {
         let (rt, probe) = preview_state();
         let touched = changed_set(&["touched"]);
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let mut hook = hook(
             &["tool"],
             &[],
@@ -642,7 +635,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched).as_str(),
+            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
             "! run: /opt/tool"
         );
     }
@@ -817,6 +810,7 @@ mod tests {
         use confit_core::condition::Condition;
 
         let (rt, probe) = preview_runtime();
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -839,7 +833,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
+        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -858,6 +852,7 @@ mod tests {
         use confit_core::condition::Condition;
 
         let (rt, probe) = preview_runtime();
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -871,7 +866,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
+        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -881,6 +876,7 @@ mod tests {
     #[test]
     fn hook_preview_miss_fails_naming_hook() {
         let (rt, probe) = preview_runtime();
+        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
         let bundle = Bundle {
             manifest: confit_core::store::manifest::Manifest {
                 version: confit_core::plan::BUNDLE_VERSION,
@@ -889,7 +885,7 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        match hook_preview(&bundle, &rt, &probe, &BTreeSet::new()) {
+        match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

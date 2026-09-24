@@ -6,7 +6,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
+use confit_core::handles::{ArchiveHandle, ResourceHandle, Sha, TrustedHandle};
 use sha2::Digest as _;
 
 use super::ArchiveStore;
@@ -24,10 +24,16 @@ const ENTRY_CHUNK: usize = 8192;
 /// Fallback mode for members without distinct bits.
 const DEFAULT_MEMBER_MODE: u32 = 0o644;
 
+/// Zip local file header magic.
+const ZIP_LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
+
+/// Zip empty archive magic.
+const ZIP_EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+
 /// Archive member with a streamed content hash.
 struct BornMember {
     name: String,
-    sha: String,
+    sha: Sha,
 }
 
 /// File-backed archive member listing and extraction.
@@ -53,11 +59,14 @@ impl ArchiveStore for FileArchiveStore {
     fn archive(&self, source: &dyn TrustedHandle) -> Result<ArchiveHandle> {
         let path = source.canonical();
         check_compressed_source(path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha())
+        ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
     }
 
     fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         let source = archive.canonical();
+        if peek_is_zip(source)? {
+            return stream_zip_names(source);
+        }
         if !peek_is_gzip(source)? {
             let file = std::fs::File::open(source).map_err(|error| {
                 Error::Plan(format!("cannot read '{}': {error}", source.display()))
@@ -78,9 +87,25 @@ impl ArchiveStore for FileArchiveStore {
 
     fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
-        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha());
+        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
         if dest.is_dir() {
             return spilled_handles(&dest, source);
+        }
+        if peek_is_zip(source)? {
+            check_zip_names(source)?;
+            let staging = staging_path(&dest);
+            if staging.exists() {
+                std::fs::remove_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
+            }
+            std::fs::create_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
+            let born = match unpack_zip_entries(source, &staging) {
+                Ok(born) => born,
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(error);
+                }
+            };
+            return finish_unpack(source, &dest, &staging, &born);
         }
         let gzipped = peek_is_gzip(source)?;
         check_unpack_names(source, gzipped)?;
@@ -126,7 +151,7 @@ impl ArchiveStore for FileArchiveStore {
 
     fn extract_member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
         let members = self.extract(archive)?;
-        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha());
+        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
         let wanted = dest.join(name);
         members
             .into_iter()
@@ -154,13 +179,17 @@ impl ArchiveStore for FileArchiveStore {
 
 /// Proves one source holds a compressed archive.
 ///
-/// Gzip magic plus tar readability under current fallback rules.
+/// Gzip magic plus tar readability and zip magic plus zip
+/// readability under current fallback rules.
 ///
 /// # Errors
 ///
 /// Plain and undecodable sources fail as plan errors naming
 /// the source.
 fn check_compressed_source(source: &Path) -> Result<()> {
+    if peek_is_zip(source)? {
+        return verify_zip_body(source);
+    }
     if !peek_is_gzip(source)? {
         return Err(not_archive(source));
     }
@@ -186,6 +215,18 @@ fn verify_gzip_body(source: &Path) -> Result<()> {
         &mut std::io::sink(),
     )
     .map_err(|_| not_archive(source))?;
+    Ok(())
+}
+
+/// Proves one zip body decodes.
+///
+/// # Errors
+///
+/// Undecodable sources fail as plan errors naming the source.
+fn verify_zip_body(source: &Path) -> Result<()> {
+    let file = std::fs::File::open(source)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    zip::ZipArchive::new(file).map_err(|_| not_archive(source))?;
     Ok(())
 }
 
@@ -255,6 +296,26 @@ fn peek_is_gzip(source: &Path) -> Result<bool> {
     let mut magic = [0u8; 2];
     match file.read_exact(&mut magic) {
         Ok(()) => Ok(magic == [0x1f, 0x8b]),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(Error::Plan(format!(
+            "cannot read '{}': {error}",
+            source.display()
+        ))),
+    }
+}
+
+/// Reports zip magic for one source path.
+///
+/// # Errors
+///
+/// Missing and unreadable files fail as plan errors naming
+/// the archive.
+fn peek_is_zip(source: &Path) -> Result<bool> {
+    let mut file = std::fs::File::open(source)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    let mut magic = [0u8; 4];
+    match file.read_exact(&mut magic) {
+        Ok(()) => Ok(magic == ZIP_LOCAL_MAGIC || magic == ZIP_EMPTY_MAGIC),
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
         Err(error) => Err(Error::Plan(format!(
             "cannot read '{}': {error}",
@@ -353,12 +414,79 @@ fn unpack_tar_entries<R: std::io::Read>(
                 return Err(unpack_failure(source, error));
             }
         }
-        let sha: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        born.push(BornMember { name, sha });
+        born.push(BornMember {
+            name,
+            sha: Sha::finish(hasher),
+        });
+    }
+    Ok(born)
+}
+
+/// Unpacks zip members from disk with streaming hashes.
+///
+/// Folders plus links skip as absent. Escape checks run before
+/// each spill. Chunk copies feed the member hash.
+///
+/// # Errors
+///
+/// Decoder and spill failures surface as plan errors naming
+/// the source.
+fn unpack_zip_entries(source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
+    use std::io::Write as _;
+
+    let file = std::fs::File::open(source)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| unpack_failure(source, error))?;
+    let mut born = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| unpack_failure(source, error))?;
+        if !entry.is_file() {
+            continue;
+        }
+        let name = entry.name().to_owned();
+        if name.is_empty() {
+            continue;
+        }
+        check_member_path(&name, source)?;
+        let path = staging.join(&name);
+        if let Some(parent) = path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            let _ = std::fs::remove_dir_all(staging);
+            return Err(unpack_failure(source, error));
+        }
+        let mut out = match std::fs::File::create(&path) {
+            Ok(out) => out,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(staging);
+                return Err(unpack_failure(source, error));
+            }
+        };
+        let mut hasher = sha2::Sha256::new();
+        let mut chunk = [0u8; ENTRY_CHUNK];
+        loop {
+            let read = match entry.read(&mut chunk) {
+                Ok(read) => read,
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(staging);
+                    return Err(unpack_failure(source, error));
+                }
+            };
+            if read == 0 {
+                break;
+            }
+            hasher.update(&chunk[..read]);
+            if let Err(error) = out.write_all(&chunk[..read]) {
+                let _ = std::fs::remove_dir_all(staging);
+                return Err(unpack_failure(source, error));
+            }
+        }
+        born.push(BornMember {
+            name,
+            sha: Sha::finish(hasher),
+        });
     }
     Ok(born)
 }
@@ -410,12 +538,10 @@ fn unpack_single_entry(source: &Path, staging: &Path) -> Result<Vec<BornMember>>
             return Err(unpack_failure(source, error));
         }
     }
-    let sha: String = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(vec![BornMember { name, sha }])
+    Ok(vec![BornMember {
+        name,
+        sha: Sha::finish(hasher),
+    }])
 }
 
 /// Reads born handles back for one present spill.
@@ -444,7 +570,7 @@ fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
 ///
 /// Unreadable members fail as plan errors naming archive
 /// and member.
-fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<String> {
+fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
     let mut file = std::fs::File::open(path).map_err(|_| missing_spilled_member(source, name))?;
     let mut hasher = sha2::Sha256::new();
     let mut chunk = [0u8; ENTRY_CHUNK];
@@ -457,11 +583,7 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<String> {
         }
         hasher.update(&chunk[..read]);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(Sha::finish(hasher))
 }
 
 /// Collects archive-relative member names under one spill folder.
@@ -564,6 +686,18 @@ fn check_unpack_names(source: &Path, gzipped: bool) -> Result<()> {
     Ok(())
 }
 
+/// Rejects escaping zip member names before one unpack.
+///
+/// # Errors
+///
+/// Escaping members fail as plan errors naming the member.
+fn check_zip_names(source: &Path) -> Result<()> {
+    for name in &stream_zip_names(source)? {
+        check_member_path(name, source)?;
+    }
+    Ok(())
+}
+
 /// Derives the staging folder beside one unpack destination.
 ///
 /// Staging rides beside the destination with the staging suffix.
@@ -593,6 +727,34 @@ fn stream_names<R: std::io::Read>(reader: R, archive: &Path) -> Result<Vec<Strin
         }
         std::io::copy(&mut entry, &mut std::io::sink())
             .map_err(|error| unpack_failure(archive, error))?;
+    }
+    Ok(names)
+}
+
+/// Lists file member names from a zip archive without keeping content.
+///
+/// Entry bytes stay unread, so listings hold names only.
+///
+/// # Errors
+///
+/// Malformed archives fail as plan errors naming the archive.
+fn stream_zip_names(source: &Path) -> Result<Vec<String>> {
+    let file = std::fs::File::open(source)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| unpack_failure(source, error))?;
+    let mut names = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| unpack_failure(source, error))?;
+        if !entry.is_file() {
+            continue;
+        }
+        let name = entry.name().to_owned();
+        if name.is_empty() {
+            continue;
+        }
+        names.push(name);
     }
     Ok(names)
 }
@@ -678,7 +840,6 @@ fn single_name(archive: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_core::ids::sha256_hex;
     use std::io::Write as _;
 
     fn test_roots(dir: &Path) -> StoreRoots {
@@ -737,14 +898,14 @@ mod tests {
         path
     }
 
-    struct TestSource(PathBuf, String);
+    struct TestSource(PathBuf, Sha);
 
     impl TrustedHandle for TestSource {
         fn canonical(&self) -> &Path {
             &self.0
         }
 
-        fn sha(&self) -> &str {
+        fn sha(&self) -> &Sha {
             &self.1
         }
     }
@@ -756,19 +917,19 @@ mod tests {
         bytes: &[u8],
     ) -> ArchiveHandle {
         let path = write_archive(dir, name, bytes);
-        match store.archive(&TestSource(path, sha256_hex(bytes))) {
+        match store.archive(&TestSource(path, Sha::hash(bytes))) {
             Ok(handle) => handle,
             Err(error) => panic!("source seals: {error}"),
         }
     }
 
-    fn handle_sha(handles: &[ResourceHandle], name: &str) -> String {
+    fn handle_sha(handles: &[ResourceHandle], name: &str) -> Sha {
         handles
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with(name))
             .unwrap()
             .sha()
-            .to_string()
+            .clone()
     }
 
     #[test]
@@ -779,10 +940,10 @@ mod tests {
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
-        match store.archive(&TestSource(path.clone(), sha256_hex(&raw))) {
+        match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
-                assert_eq!(handle.sha(), sha256_hex(&raw));
+                assert_eq!(handle.sha(), &Sha::hash(&raw));
                 assert_eq!(handle.proof(), ArchiveProof::Compressed);
             }
             Err(error) => panic!("source seals: {error}"),
@@ -794,7 +955,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let path = write_archive(dir.path(), "note.txt", b"plain text");
-        match store.archive(&TestSource(path.clone(), sha256_hex(b"plain text"))) {
+        match store.archive(&TestSource(path.clone(), Sha::hash(b"plain text"))) {
             Ok(_) => panic!("plain source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&path.display().to_string()),
@@ -802,7 +963,7 @@ mod tests {
             ),
         }
         let missing = dir.path().join("absent.tar.gz");
-        match store.archive(&TestSource(missing.clone(), sha256_hex(b"absent"))) {
+        match store.archive(&TestSource(missing.clone(), Sha::hash(b"absent"))) {
             Ok(_) => panic!("absent source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&missing.display().to_string()),
@@ -842,7 +1003,7 @@ mod tests {
             ]),
         );
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
-        let expected_spill = spill_base.join(archive.sha());
+        let expected_spill = spill_base.join(archive.sha().hex());
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
             Err(error) => panic!("archive extracts: {error}"),
@@ -855,7 +1016,7 @@ mod tests {
                 handle.canonical().display()
             );
         }
-        assert_eq!(handle_sha(&handles, "a.txt"), sha256_hex(b"same"));
+        assert_eq!(handle_sha(&handles, "a.txt"), Sha::hash(b"same"));
         assert_eq!(handle_sha(&handles, "a.txt"), handle_sha(&handles, "b.txt"));
         assert_ne!(
             handle_sha(&handles, "a.txt"),
@@ -903,7 +1064,7 @@ mod tests {
         }
         let root = handles[0].canonical().parent().unwrap().to_path_buf();
         let missing =
-            ResourceHandle::new(&root, root.join("absent.txt"), sha256_hex(b"absent")).unwrap();
+            ResourceHandle::new(&root, root.join("absent.txt"), Sha::hash(b"absent")).unwrap();
         match store.open_decompressed(&missing) {
             Ok(_) => panic!("absent member passes"),
             Err(error) => {
@@ -931,7 +1092,7 @@ mod tests {
             Err(error) => panic!("archive extracts: {error}"),
         };
         let root = handles[0].canonical().parent().unwrap().to_path_buf();
-        let evil = ResourceHandle::new(&root, root.join("../evil.txt"), sha256_hex(b"x")).unwrap();
+        let evil = ResourceHandle::new(&root, root.join("../evil.txt"), Sha::hash(b"x")).unwrap();
         match store.open_decompressed(&evil) {
             Ok(_) => panic!("escaping member passes"),
             Err(error) => {
@@ -1016,7 +1177,7 @@ mod tests {
             Err(error) => panic!("single gzip extracts: {error}"),
         };
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].sha(), sha256_hex(b"plain"));
+        assert_eq!(handles[0].sha(), &Sha::hash(b"plain"));
         match store.open_decompressed(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
@@ -1032,7 +1193,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let missing = dir.path().join("absent.tar.gz");
-        let handle = ArchiveHandle::new(&missing, sha256_hex(b"absent")).unwrap();
+        let handle = ArchiveHandle::new(&missing, Sha::hash(b"absent")).unwrap();
         match store.members(&handle) {
             Ok(_) => panic!("absent archive passes"),
             Err(error) => assert!(
@@ -1047,8 +1208,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
-        let sha_a = sha256_hex(b"archive-a");
-        let sha_b = sha256_hex(b"archive-b");
+        let sha_a = Sha::hash(b"archive-a");
+        let sha_b = Sha::hash(b"archive-b");
         assert_ne!(sha_a, sha_b);
         let path_a = write_archive(dir.path(), "a.tar.gz", &raw);
         let path_b = write_archive(dir.path(), "b.tar.gz", &raw);
@@ -1060,8 +1221,8 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("second source seals: {error}"),
         };
-        assert_eq!(first.sha(), sha_a);
-        assert_eq!(second.sha(), sha_b);
+        assert_eq!(first.sha(), &sha_a);
+        assert_eq!(second.sha(), &sha_b);
         let first_handles = match store.extract(&first) {
             Ok(handles) => handles,
             Err(error) => panic!("first archive extracts: {error}"),
@@ -1074,14 +1235,14 @@ mod tests {
         assert!(
             first_handles[0]
                 .canonical()
-                .starts_with(spill_base.join(first.sha())),
+                .starts_with(spill_base.join(first.sha().hex())),
             "first spill follows its handle: {}",
             first_handles[0].canonical().display()
         );
         assert!(
             second_handles[0]
                 .canonical()
-                .starts_with(spill_base.join(second.sha())),
+                .starts_with(spill_base.join(second.sha().hex())),
             "second spill follows its handle: {}",
             second_handles[0].canonical().display()
         );
@@ -1117,5 +1278,189 @@ mod tests {
             }
             Err(error) => panic!("large member opens: {error}"),
         }
+    }
+
+    fn zip_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        for (name, bytes) in members {
+            writer
+                .start_file(
+                    *name,
+                    SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn zip_bytes_with_dir() -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        writer
+            .add_directory("sub/", SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .start_file(
+                "a.txt",
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"alpha").unwrap();
+        writer
+            .start_file(
+                "sub/b.txt",
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"beta").unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn evil_zip_bytes() -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        writer
+            .start_file(
+                "../evil.txt",
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"x").unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn symlink_zip_bytes() -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        writer
+            .add_symlink("link.txt", "a.txt", SimpleFileOptions::default())
+            .unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn zip_birth_seals_and_rejects_plain() {
+        use confit_core::handles::ArchiveProof;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let raw = zip_bytes(&[("a.txt", b"alpha")]);
+        let path = write_archive(dir.path(), "fonts.zip", &raw);
+        match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
+            Ok(handle) => {
+                assert_eq!(handle.canonical(), path.as_path());
+                assert_eq!(handle.sha(), &Sha::hash(&raw));
+                assert_eq!(handle.proof(), ArchiveProof::Compressed);
+            }
+            Err(error) => panic!("zip source seals: {error}"),
+        }
+        let plain = write_archive(dir.path(), "note.txt", b"plain text");
+        match store.archive(&TestSource(plain.clone(), Sha::hash(b"plain text"))) {
+            Ok(_) => panic!("plain source passes"),
+            Err(error) => assert!(
+                error.to_string().contains(&plain.display().to_string()),
+                "error names the source: {error}"
+            ),
+        }
+    }
+
+    #[test]
+    fn zip_members_lists_files_skipping_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let archive = born_archive(&store, dir.path(), "fonts.zip", &zip_bytes_with_dir());
+        match store.members(&archive) {
+            Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
+            Err(error) => panic!("zip members list: {error}"),
+        }
+    }
+
+    #[test]
+    fn zip_extract_unpacks_reuses_and_rejects_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let archive = born_archive(
+            &store,
+            dir.path(),
+            "fonts.zip",
+            &zip_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+        );
+        let handles = match store.extract(&archive) {
+            Ok(handles) => handles,
+            Err(error) => panic!("zip archive extracts: {error}"),
+        };
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handle_sha(&handles, "a.txt"), Sha::hash(b"alpha"));
+        assert_eq!(handle_sha(&handles, "sub/b.txt"), Sha::hash(b"beta"));
+        let picked = handles
+            .iter()
+            .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
+            .unwrap();
+        assert_eq!(std::fs::read(picked.canonical()).unwrap(), b"beta");
+        let spill = handles[0].canonical().parent().unwrap().to_path_buf();
+        let mut staging = spill.as_os_str().to_owned();
+        staging.push(STAGING_SUFFIX);
+        assert!(!PathBuf::from(staging).exists());
+        match store.extract(&archive) {
+            Ok(reused) => assert_eq!(reused, handles),
+            Err(error) => panic!("repeat unpack skips: {error}"),
+        }
+        let evil = born_archive(&store, dir.path(), "evil.zip", &evil_zip_bytes());
+        let expected = format!(
+            "cannot unpack '{}': member '../evil.txt' escapes",
+            evil.canonical().display()
+        );
+        match store.extract(&evil) {
+            Ok(_) => panic!("escaping member passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(
+                    text.contains(&expected),
+                    "error names source plus member: {text}"
+                );
+                assert!(text.contains("escapes"), "error reports escape: {text}");
+            }
+        }
+        let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
+        let evil_spill = spill_base.join(evil.sha().hex());
+        assert!(!evil_spill.exists());
+        let mut evil_staging = evil_spill.as_os_str().to_owned();
+        evil_staging.push(STAGING_SUFFIX);
+        assert!(!PathBuf::from(evil_staging).exists());
+    }
+
+    #[test]
+    fn zip_symlink_skips_without_spill() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let archive = born_archive(&store, dir.path(), "link.zip", &symlink_zip_bytes());
+        match store.members(&archive) {
+            Ok(names) => assert!(names.is_empty(), "symlink skips: {names:?}"),
+            Err(error) => panic!("symlink members list: {error}"),
+        }
+        let handles = match store.extract(&archive) {
+            Ok(handles) => handles,
+            Err(error) => panic!("symlink archive extracts: {error}"),
+        };
+        assert!(handles.is_empty());
+        let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
+        let spill = spill_base.join(archive.sha().hex());
+        if spill.exists() {
+            let left = std::fs::read_dir(&spill).unwrap().count();
+            assert_eq!(left, 0);
+        }
+        let mut staging = spill.as_os_str().to_owned();
+        staging.push(STAGING_SUFFIX);
+        assert!(!PathBuf::from(staging).exists());
     }
 }

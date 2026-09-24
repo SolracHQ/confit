@@ -87,10 +87,10 @@ impl Session {
             .set("require", requirer)
             .map_err(|error| plan(format!("require: {error}")))?;
         crate::surface::install(&session)?;
-        let workspace = session.stores.workspace();
+        let resources = session.stores.resources();
         let absolute = absolutize(profile)?;
-        let handle = workspace.resource(&session.root, &absolute)?;
-        let source = workspace.read_profile(&handle)?;
+        let handle = resources.resource(&session.root, &absolute)?;
+        let source = resources.read_text(&handle)?;
         let profile_ctx = format!("profile '{}'", profile.display());
         let returned: Value = session
             .lua
@@ -879,7 +879,7 @@ fn assemble_text_link(
 /// Collects one blob handle under its content hash.
 fn collect_blob(handle: &BlobHandle, blobs: &mut BTreeMap<String, BlobHandle>) {
     blobs
-        .entry(handle.sha().to_string())
+        .entry(handle.sha().hex())
         .or_insert_with(|| handle.clone());
 }
 

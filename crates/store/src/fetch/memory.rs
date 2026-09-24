@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{FetchHandle, TrustedHandle};
-use confit_core::ids::sha256_hex;
+use confit_core::handles::{FetchHandle, Sha, TrustedHandle};
 use confit_core::progress::{Event, ProgressSender};
 
 use super::FetchCache;
@@ -54,7 +53,7 @@ impl MemoryFetchCache {
 
     /// Derives the cache file path for one URL.
     fn cache_path(&self, url: &str) -> PathBuf {
-        self.base.join(sha256_hex(url.as_bytes()))
+        self.base.join(Sha::hash(url.as_bytes()).hex())
     }
 
     /// Persists stub bytes under the cache path.
@@ -83,7 +82,7 @@ impl FetchCache for MemoryFetchCache {
     fn fetch(
         &self,
         url: &str,
-        expected_sha: Option<&str>,
+        expected_sha: Option<Sha>,
         re_fetch: bool,
         progress: Option<&ProgressSender>,
     ) -> Result<FetchHandle> {
@@ -108,9 +107,9 @@ impl FetchCache for MemoryFetchCache {
                     bytes: stored.len(),
                 });
             }
-            check_sha(url, &stored, expected_sha)?;
+            check_sha(url, &stored, expected_sha.as_ref())?;
             self.persist(url, &stored)?;
-            return FetchHandle::new(self.cache_path(url), sha256_hex(&stored), url);
+            return FetchHandle::new(self.cache_path(url), Sha::hash(&stored), url);
         }
         let mut calls = match self.calls.lock() {
             Ok(guard) => guard,
@@ -125,9 +124,9 @@ impl FetchCache for MemoryFetchCache {
                 bytes: stored.len(),
             });
         }
-        check_sha(url, &stored, expected_sha)?;
+        check_sha(url, &stored, expected_sha.as_ref())?;
         self.persist(url, &stored)?;
-        FetchHandle::new(self.cache_path(url), sha256_hex(&stored), url)
+        FetchHandle::new(self.cache_path(url), Sha::hash(&stored), url)
     }
 
     fn read(&self, handle: &FetchHandle) -> Result<Vec<u8>> {
@@ -136,7 +135,7 @@ impl FetchCache for MemoryFetchCache {
             Err(poisoned) => poisoned.into_inner(),
         };
         for body in guard.values() {
-            if sha256_hex(body) == handle.sha() {
+            if Sha::hash(body) == *handle.sha() {
                 return Ok(body.clone());
             }
         }
@@ -151,12 +150,12 @@ impl FetchCache for MemoryFetchCache {
 }
 
 /// Checks fetched bytes against the user sha.
-fn check_sha(url: &str, bytes: &[u8], expected: Option<&str>) -> Result<()> {
+fn check_sha(url: &str, bytes: &[u8], expected: Option<&Sha>) -> Result<()> {
     let Some(wanted) = expected else {
         return Ok(());
     };
-    let actual = sha256_hex(bytes);
-    if actual != wanted.to_lowercase() {
+    let actual = Sha::hash(bytes);
+    if actual != *wanted {
         return Err(Error::Plan(format!(
             "sha256 mismatch for '{url}': want {wanted}, got {actual}"
         )));
@@ -177,23 +176,23 @@ mod tests {
         cache.insert(URL, b"1.2.3");
         match cache.fetch(URL, None, false, None) {
             Ok(hit) => {
-                assert_eq!(hit.sha(), sha256_hex(b"1.2.3"));
+                assert_eq!(hit.sha(), &Sha::hash(b"1.2.3"));
                 assert_eq!(cache.calls(URL), 0, "hit makes no download");
             }
             Err(error) => panic!("hit serves: {error}"),
         }
-        let wanted = sha256_hex(b"1.2.3");
-        match cache.fetch(URL, Some(&wanted), false, None) {
-            Ok(hit) => assert_eq!(hit.sha(), wanted),
+        let wanted = Sha::hash(b"1.2.3");
+        match cache.fetch(URL, Some(wanted.clone()), false, None) {
+            Ok(hit) => assert_eq!(hit.sha(), &wanted),
             Err(error) => panic!("good user sha serves: {error}"),
         }
-        match cache.fetch(URL, Some(&"0".repeat(64)), false, None) {
+        match cache.fetch(URL, Some(Sha::new("0".repeat(64)).unwrap()), false, None) {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => assert!(error.to_string().contains(URL)),
         }
         match cache.fetch(URL, None, true, None) {
             Ok(refetched) => {
-                assert_eq!(refetched.sha(), wanted);
+                assert_eq!(refetched.sha(), &wanted);
                 assert_eq!(cache.calls(URL), 1, "re-fetch downloads once");
             }
             Err(error) => panic!("re-fetch serves: {error}"),

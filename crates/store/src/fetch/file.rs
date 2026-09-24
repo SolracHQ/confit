@@ -6,8 +6,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{FetchHandle, TrustedHandle};
-use confit_core::ids::{sha256_hex, sha256_read};
+use confit_core::handles::{FetchHandle, Sha, TrustedHandle};
 use confit_core::progress::{Event, ProgressSender};
 use sha2::Digest as _;
 
@@ -46,7 +45,7 @@ impl FileFetchCache {
 
     /// Derives the cache file path for one URL.
     fn cache_path(&self, url: &str) -> PathBuf {
-        self.cache.join(sha256_hex(url.as_bytes()))
+        self.cache.join(Sha::hash(url.as_bytes()).hex())
     }
 
     /// Reads a cached handle passing the sidecar digest check.
@@ -60,8 +59,8 @@ impl FileFetchCache {
             return None;
         }
         let mut file = std::fs::File::open(&cached).ok()?;
-        let actual = sha256_read(&mut file).ok()?;
-        if actual != wanted {
+        let actual = Sha::read(&mut file).ok()?;
+        if actual != Sha::new(wanted).ok()? {
             return None;
         }
         FetchHandle::new(cached, actual, url).ok()
@@ -72,7 +71,7 @@ impl FileFetchCache {
     /// # Errors
     ///
     /// Transport failures fail as plan errors naming the URL.
-    fn download(&self, url: &str) -> Result<(PathBuf, String, usize)> {
+    fn download(&self, url: &str) -> Result<(PathBuf, Sha, usize)> {
         let response = ureq::get(url)
             .call()
             .map_err(|error| Error::Plan(format!("cannot fetch '{url}': {error}")))?;
@@ -91,11 +90,7 @@ impl FileFetchCache {
     /// Unwritable folders and files fail as plan errors naming
     /// the URL. Read failures on the body reader fail as plan
     /// errors naming the URL.
-    fn store_stream(
-        &self,
-        url: &str,
-        reader: impl std::io::Read,
-    ) -> Result<(PathBuf, String, usize)> {
+    fn store_stream(&self, url: &str, reader: impl std::io::Read) -> Result<(PathBuf, Sha, usize)> {
         let cached = self.cache_path(url);
         let staging = staging_path(&cached);
         let sidecar = sidecar_path(&cached);
@@ -117,7 +112,7 @@ impl FileFetchCache {
                 "cannot write cache for '{url}': {error}"
             )));
         }
-        std::fs::write(&sidecar, digest.as_bytes())
+        std::fs::write(&sidecar, digest.hex().as_bytes())
             .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
         Ok((cached, digest, bytes))
     }
@@ -134,7 +129,7 @@ impl FileFetchCache {
         url: &str,
         reader: impl std::io::Read,
         staging: &Path,
-    ) -> Result<(String, usize)> {
+    ) -> Result<(Sha, usize)> {
         let file = std::fs::File::create(staging)
             .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
         let mut writer = std::io::BufWriter::new(file);
@@ -158,11 +153,7 @@ impl FileFetchCache {
         writer
             .flush()
             .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
-        let digest: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let digest = Sha::finish(hasher);
         Ok((digest, usize::try_from(bytes).unwrap_or(0)))
     }
 }
@@ -171,7 +162,7 @@ impl FetchCache for FileFetchCache {
     fn fetch(
         &self,
         url: &str,
-        expected_sha: Option<&str>,
+        expected_sha: Option<Sha>,
         re_fetch: bool,
         progress: Option<&ProgressSender>,
     ) -> Result<FetchHandle> {
@@ -187,7 +178,7 @@ impl FetchCache for FileFetchCache {
                     bytes: file_len(hit.canonical()),
                 });
             }
-            check_sha(url, hit.sha(), expected_sha)?;
+            check_sha(url, hit.sha(), expected_sha.as_ref())?;
             return Ok(hit);
         }
         let (path, sha, bytes) = self.download(url)?;
@@ -197,7 +188,7 @@ impl FetchCache for FileFetchCache {
                 bytes,
             });
         }
-        check_sha(url, &sha, expected_sha)?;
+        check_sha(url, &sha, expected_sha.as_ref())?;
         FetchHandle::new(path, sha, url)
     }
 
@@ -249,11 +240,11 @@ fn is_hex64(sha: &str) -> bool {
 /// # Errors
 ///
 /// Mismatches fail as plan errors naming the URL.
-fn check_sha(url: &str, actual: &str, expected: Option<&str>) -> Result<()> {
+fn check_sha(url: &str, actual: &Sha, expected: Option<&Sha>) -> Result<()> {
     let Some(wanted) = expected else {
         return Ok(());
     };
-    if actual != wanted.to_lowercase() {
+    if actual != wanted {
         return Err(Error::Plan(format!(
             "sha256 mismatch for '{url}': want {wanted}, got {actual}"
         )));
@@ -281,7 +272,7 @@ mod tests {
     }
 
     fn cache_file(dir: &Path, url: &str) -> PathBuf {
-        dir.join("cache").join(sha256_hex(url.as_bytes()))
+        dir.join("cache").join(Sha::hash(url.as_bytes()).hex())
     }
 
     fn seed(dir: &Path, url: &str, body: &[u8]) -> PathBuf {
@@ -292,7 +283,7 @@ mod tests {
         std::fs::write(&cached, body).unwrap();
         let mut sidecar = cached.as_os_str().to_owned();
         sidecar.push(SIDECAR_SUFFIX);
-        std::fs::write(PathBuf::from(sidecar), sha256_hex(body)).unwrap();
+        std::fs::write(PathBuf::from(sidecar), Sha::hash(body).hex()).unwrap();
         cached
     }
 
@@ -392,7 +383,12 @@ mod tests {
         seed(dir.path(), DARK_URL, b"1.2.3");
         seed(dir.path(), DARK_FILE_URL, b"binary");
         let wrong = "0".repeat(64);
-        match cache.fetch(DARK_URL, Some(&wrong), false, None) {
+        match cache.fetch(
+            DARK_URL,
+            Some(Sha::new(wrong.clone()).unwrap()),
+            false,
+            None,
+        ) {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => {
                 let text = error.to_string();
@@ -403,7 +399,12 @@ mod tests {
                 );
             }
         }
-        match cache.fetch(DARK_FILE_URL, Some(&wrong), false, None) {
+        match cache.fetch(
+            DARK_FILE_URL,
+            Some(Sha::new(wrong.clone()).unwrap()),
+            false,
+            None,
+        ) {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => {
                 let text = error.to_string();
@@ -421,8 +422,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = file_cache(dir.path());
         seed(dir.path(), DARK_URL, b"1.2.3");
-        let wanted = sha256_hex(b"1.2.3");
-        match cache.fetch(DARK_URL, Some(&wanted), false, None) {
+        let wanted = Sha::hash(b"1.2.3");
+        match cache.fetch(DARK_URL, Some(wanted.clone()), false, None) {
             Ok(handle) => {
                 let found = std::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
@@ -462,7 +463,7 @@ mod tests {
         assert!(cache.lookup(DARK_URL).is_some());
         match cache.fetch(DARK_URL, None, false, None) {
             Ok(handle) => {
-                assert_eq!(handle.sha(), sha256_hex(&raw));
+                assert_eq!(handle.sha(), &Sha::hash(&raw));
                 let found = std::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, raw);
             }

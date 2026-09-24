@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{BlobHandle, TrustedHandle};
-use confit_core::ids::sha256_hex;
+use confit_core::handles::{BlobHandle, Sha, TrustedHandle};
 use confit_core::plan::BUNDLE_VERSION;
 use confit_core::store::manifest::Manifest;
 use sha2::Digest;
@@ -22,9 +21,6 @@ const BLOBS_DIR: &str = "blobs";
 
 /// Pool gzip level.
 const BLOB_GZIP_LEVEL: u32 = 6;
-
-/// Blob hash length in lowercase hex chars.
-const BLOB_ID_LEN: usize = 64;
 
 /// Staging suffix for atomic pool writes.
 const STAGING_SUFFIX: &str = ".part";
@@ -50,7 +46,7 @@ pub struct FileBlobStore {
 /// Verifying blob byte stream.
 struct VerifiedBlobReader {
     decoder: flate2::read::GzDecoder<std::fs::File>,
-    sha: String,
+    sha: Sha,
     hasher: sha2::Sha256,
     done: bool,
 }
@@ -75,11 +71,8 @@ impl FileBlobStore {
 
 impl BlobStore for FileBlobStore {
     fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
-        let sha = handle.sha();
-        if !is_pool_id(handle.stored()) {
-            return Err(Error::Plan(format!("missing blob '{sha}'")));
-        }
-        let path = self.pool.join(handle.stored());
+        let sha = handle.sha().clone();
+        let path = self.pool.join(handle.stored().hex());
         let file = std::fs::File::open(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 Error::Plan(format!("missing blob '{sha}'"))
@@ -89,7 +82,7 @@ impl BlobStore for FileBlobStore {
         })?;
         Ok(Box::new(VerifiedBlobReader {
             decoder: flate2::read::GzDecoder::new(file),
-            sha: sha.to_string(),
+            sha,
             hasher: sha2::Sha256::new(),
             done: false,
         }) as Box<dyn std::io::Read>)
@@ -97,8 +90,8 @@ impl BlobStore for FileBlobStore {
 
     fn put(&self, bytes: &[u8]) -> Result<BlobHandle> {
         let gzipped = gzip_bytes(bytes)?;
-        let handle = BlobHandle::new(sha256_hex(bytes), sha256_hex(&gzipped))?;
-        let dest = self.pool.join(handle.stored());
+        let handle = BlobHandle::new(Sha::hash(bytes), Sha::hash(&gzipped))?;
+        let dest = self.pool.join(handle.stored().hex());
         if dest.exists() {
             return Ok(handle);
         }
@@ -109,7 +102,7 @@ impl BlobStore for FileBlobStore {
         }
         let staging = self
             .pool
-            .join(format!("{}{STAGING_SUFFIX}", handle.stored()));
+            .join(format!("{}{STAGING_SUFFIX}", handle.stored().hex()));
         std::fs::write(&staging, &gzipped)
             .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
         std::fs::rename(&staging, &dest)
@@ -147,8 +140,8 @@ impl BlobStore for FileBlobStore {
         let writer = encoder
             .finish()
             .map_err(|error| Error::Plan(format!("compress blob: {error}")))?;
-        let handle = BlobHandle::new(source.sha(), writer.digest())?;
-        let dest = self.pool.join(handle.stored());
+        let handle = BlobHandle::new(source.sha().clone(), writer.digest())?;
+        let dest = self.pool.join(handle.stored().hex());
         if dest.exists() {
             std::fs::remove_file(&staging).map_err(|error| {
                 Error::Plan(format!("cannot write '{}': {error}", dest.display()))
@@ -162,18 +155,11 @@ impl BlobStore for FileBlobStore {
     }
 
     fn has(&self, handle: &BlobHandle) -> bool {
-        if !is_pool_id(handle.stored()) {
-            return false;
-        }
-        self.pool.join(handle.stored()).exists()
+        self.pool.join(handle.stored().hex()).exists()
     }
 
     fn len(&self, handle: &BlobHandle) -> Result<u64> {
-        let sha = handle.sha();
-        if !is_pool_id(handle.stored()) {
-            return Err(Error::Plan(format!("missing blob '{sha}'")));
-        }
-        pooled_len(&self.pool.join(handle.stored()), sha)
+        pooled_len(&self.pool.join(handle.stored().hex()), handle.sha())
     }
 
     fn prune(&self) -> Result<usize> {
@@ -228,8 +214,8 @@ impl StoredWriter {
     }
 
     /// Reads the encoded-bytes hash.
-    fn digest(self) -> String {
-        hex_digest(self.hasher)
+    fn digest(self) -> Sha {
+        Sha::finish(self.hasher)
     }
 }
 
@@ -254,14 +240,6 @@ fn staging_path(pool: &Path) -> PathBuf {
     pool.join(format!(".put-{}-{seq}{STAGING_SUFFIX}", std::process::id()))
 }
 
-/// Renders one SHA-256 hash as lowercase hex.
-fn hex_digest(hash: sha2::Sha256) -> String {
-    hash.finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 impl std::io::Read for VerifiedBlobReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
@@ -273,7 +251,7 @@ impl std::io::Read for VerifiedBlobReader {
                     return Ok(0);
                 }
                 self.done = true;
-                let actual = hex_digest(std::mem::replace(&mut self.hasher, sha2::Sha256::new()));
+                let actual = Sha::finish(std::mem::replace(&mut self.hasher, sha2::Sha256::new()));
                 if actual != self.sha {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -300,7 +278,7 @@ impl std::io::Read for VerifiedBlobReader {
 ///
 /// Missing and unreadable pool files fail as plan errors
 /// naming the hash.
-fn pooled_len(path: &Path, sha: &str) -> Result<u64> {
+fn pooled_len(path: &Path, sha: &Sha) -> Result<u64> {
     let mut file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             Error::Plan(format!("missing blob '{sha}'"))
@@ -321,18 +299,6 @@ fn pooled_len(path: &Path, sha: &str) -> Result<u64> {
     file.read_exact(&mut footer)
         .map_err(|error| Error::Plan(format!("read blob '{sha}': {error}")))?;
     Ok(u32::from_le_bytes(footer) as u64)
-}
-
-/// Content hash for one source path.
-///
-/// # Errors
-///
-/// Unreadable sources fail as plan errors naming the path.
-/// Pool id shape at path join.
-///
-/// Defense only; handles carry validity.
-fn is_pool_id(sha: &str) -> bool {
-    sha.len() == BLOB_ID_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Collects blob refs from every manifest file in one folder.
@@ -378,7 +344,7 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
                 .data
                 .blob_handles()
                 .into_iter()
-                .map(|handle| handle.stored().to_string()),
+                .map(|handle| handle.stored().hex()),
         );
     }
 }

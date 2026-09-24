@@ -7,7 +7,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::BlobHandle;
+use confit_core::handles::{BlobHandle, Sha};
 use confit_core::plan::{BUNDLE_VERSION, Bundle};
 use confit_core::progress::ProgressSender;
 use confit_core::store::manifest::Manifest;
@@ -180,10 +180,10 @@ impl BundleStore for FileBundleStore {
         let mut want_stored: BTreeMap<String, String> = BTreeMap::new();
         let mut handles: BTreeMap<String, BlobHandle> = BTreeMap::new();
         for handle in &manifest_handles {
-            want_content.insert(handle.stored().to_string(), handle.sha().to_string());
-            want_stored.insert(handle.sha().to_string(), handle.stored().to_string());
+            want_content.insert(handle.stored().hex(), handle.sha().hex());
+            want_stored.insert(handle.sha().hex(), handle.stored().hex());
             handles
-                .entry(handle.sha().to_string())
+                .entry(handle.sha().hex())
                 .or_insert_with(|| handle.clone());
         }
         let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
@@ -200,7 +200,19 @@ impl BundleStore for FileBundleStore {
                 )));
             }
             if !handles.contains_key(&content) {
-                let handle = BlobHandle::new(&content, entry_stored).map_err(|_| {
+                let content_sha = Sha::new(content.clone()).map_err(|_| {
+                    Error::Plan(format!(
+                        "read bundle '{}': bad blob entry '{entry_stored}'",
+                        path.display()
+                    ))
+                })?;
+                let stored_sha = Sha::new(entry_stored.as_str()).map_err(|_| {
+                    Error::Plan(format!(
+                        "read bundle '{}': bad blob entry '{entry_stored}'",
+                        path.display()
+                    ))
+                })?;
+                let handle = BlobHandle::new(content_sha, stored_sha).map_err(|_| {
                     Error::Plan(format!(
                         "read bundle '{}': bad blob entry '{entry_stored}'",
                         path.display()
@@ -213,7 +225,7 @@ impl BundleStore for FileBundleStore {
         }
         for document in &stored.documents {
             for handle in document.data.blob_handles() {
-                if !sizes.contains_key(handle.sha()) {
+                if !sizes.contains_key(handle.sha().hex().as_str()) {
                     return Err(Error::Plan(format!(
                         "read bundle '{}': missing blob '{}'",
                         path.display(),
@@ -257,11 +269,11 @@ fn append_bundle_entry(
 /// errors naming the bundle.
 fn append_pool_entry(
     builder: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>,
-    stored: &str,
+    stored: &Sha,
     pool: &Path,
     dest: &Path,
 ) -> Result<()> {
-    let pooled = pool.join(stored);
+    let pooled = pool.join(stored.hex());
     let source = match std::fs::File::open(&pooled) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -345,7 +357,7 @@ fn stage_entry_to_pool(
     staged
         .flush()
         .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", staging.display())))?;
-    if hex_digest(hasher) != stored {
+    if Sha::finish(hasher).hex().as_str() != stored {
         let _ = std::fs::remove_file(&staging);
         return Err(Error::Plan(format!(
             "read bundle '{}': blob '{stored}' fails verification",
@@ -386,7 +398,7 @@ fn verify_staged_content(
         hasher.update(&chunk[..read]);
         len += read as u64;
     }
-    let content = hex_digest(hasher);
+    let content = Sha::finish(hasher).hex();
     if let Some(want) = expected
         && want != content
     {
@@ -416,14 +428,6 @@ fn land_staged_blob(staging: &Path, stored: &str, pool: &Path) -> Result<()> {
         std::fs::rename(staging, &dest)
             .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))
     }
-}
-
-/// Renders one SHA-256 hash as lowercase hex.
-fn hex_digest(hash: sha2::Sha256) -> String {
-    hash.finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 /// Checks one blob reference holds 64 hex chars.

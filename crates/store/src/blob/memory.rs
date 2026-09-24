@@ -8,8 +8,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{BlobHandle, TrustedHandle};
-use confit_core::ids::sha256_hex;
+use confit_core::handles::{BlobHandle, Sha, TrustedHandle};
 
 use super::BlobStore;
 
@@ -41,9 +40,9 @@ impl BlobStore for MemoryBlobStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        match guard.get(handle.stored()) {
+        match guard.get(handle.stored().hex().as_str()) {
             Some(bytes) => {
-                if sha256_hex(bytes) != handle.sha() {
+                if Sha::hash(bytes) != *handle.sha() {
                     return Err(Error::Plan(format!(
                         "blob '{}' fails verification",
                         handle.sha()
@@ -56,23 +55,23 @@ impl BlobStore for MemoryBlobStore {
     }
 
     fn put(&self, bytes: &[u8]) -> Result<BlobHandle> {
-        let handle = BlobHandle::new(sha256_hex(bytes), sha256_hex(bytes))?;
+        let handle = BlobHandle::new(Sha::hash(bytes), Sha::hash(bytes))?;
         let mut guard = match self.blobs.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.insert(handle.stored().to_string(), bytes.to_vec());
+        guard.insert(handle.stored().hex(), bytes.to_vec());
         Ok(handle)
     }
 
     fn put_source(&self, source: &dyn TrustedHandle) -> Result<BlobHandle> {
         let bytes = read_source(source.canonical())?;
-        let handle = BlobHandle::new(source.sha(), source.sha())?;
+        let handle = BlobHandle::new(source.sha().clone(), source.sha().clone())?;
         let mut guard = match self.blobs.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.entry(handle.stored().to_string()).or_insert(bytes);
+        guard.entry(handle.stored().hex()).or_insert(bytes);
         Ok(handle)
     }
 
@@ -81,7 +80,7 @@ impl BlobStore for MemoryBlobStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.contains_key(handle.stored())
+        guard.contains_key(handle.stored().hex().as_str())
     }
 
     fn len(&self, handle: &BlobHandle) -> Result<u64> {
@@ -89,7 +88,7 @@ impl BlobStore for MemoryBlobStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        match guard.get(handle.stored()) {
+        match guard.get(handle.stored().hex().as_str()) {
             Some(bytes) => Ok(bytes.len() as u64),
             None => Err(Error::Plan(format!("missing blob '{}'", handle.sha()))),
         }
@@ -128,14 +127,14 @@ mod tests {
 
     use super::*;
 
-    struct TestSource(PathBuf, String);
+    struct TestSource(PathBuf, Sha);
 
     impl TrustedHandle for TestSource {
         fn canonical(&self) -> &Path {
             &self.0
         }
 
-        fn sha(&self) -> &str {
+        fn sha(&self) -> &Sha {
             &self.1
         }
     }
@@ -158,9 +157,9 @@ mod tests {
         assert!(raw.len() > SOURCE_CHUNK);
         let path = write_source(dir.path(), "input.bin", &raw);
         let handle = store
-            .put_source(&TestSource(path, sha256_hex(&raw)))
+            .put_source(&TestSource(path, Sha::hash(&raw)))
             .unwrap();
-        assert_eq!(handle.sha(), sha256_hex(&raw));
+        assert_eq!(handle.sha(), &Sha::hash(&raw));
         assert!(store.has(&handle));
         match store.open(&handle) {
             Ok(mut reader) => {
@@ -180,12 +179,12 @@ mod tests {
         let via_put = store.put(&raw).unwrap();
         let path = write_source(dir.path(), "input.bin", &raw);
         let first = store
-            .put_source(&TestSource(path, via_put.sha().to_string()))
+            .put_source(&TestSource(path, via_put.sha().clone()))
             .unwrap();
         assert_eq!(first, via_put);
         let path = write_source(dir.path(), "input.bin", &raw);
         let second = store
-            .put_source(&TestSource(path, via_put.sha().to_string()))
+            .put_source(&TestSource(path, via_put.sha().clone()))
             .unwrap();
         assert_eq!(second, via_put);
         match store.open(&via_put) {
@@ -203,7 +202,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryBlobStore::new();
         let path = dir.path().join("absent.bin");
-        match store.put_source(&TestSource(path.clone(), sha256_hex(b"absent"))) {
+        match store.put_source(&TestSource(path.clone(), Sha::hash(b"absent"))) {
             Ok(_) => panic!("missing source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&path.display().to_string()),
@@ -220,7 +219,7 @@ mod tests {
         let sealed = store.put(&raw).unwrap();
         let path = write_source(dir.path(), "a.bin", &raw);
         let again = store
-            .put_source(&TestSource(path, sealed.sha().to_string()))
+            .put_source(&TestSource(path, sealed.sha().clone()))
             .unwrap();
         assert_eq!(again, sealed);
         assert!(store.has(&sealed));
@@ -241,7 +240,7 @@ mod tests {
         let forged = store
             .put_source(&TestSource(
                 write_source(dir.path(), "a.bin", &raw),
-                sha256_hex(b"forged-identity"),
+                Sha::hash(b"forged-identity"),
             ))
             .unwrap();
         assert!(store.has(&forged));

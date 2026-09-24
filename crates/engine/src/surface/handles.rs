@@ -6,15 +6,16 @@ use std::io::Read as _;
 
 use mlua::Value;
 use mlua_extras::{TypedUserData, typeduserdata_impl};
+use serde_json::Value as Json;
 
 use super::confit_table;
 use super::document::{check_rel, tree_table};
 use crate::error::plan_error;
-use crate::lua::ValueExt;
+use crate::lua::{JsonExt, ValueExt};
 use crate::model::TreeMemberDecl;
 use confit_core::error::Error;
 use confit_core::handles::{
-    ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, Route, TrustedHandle,
+    ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, Route, Sha, TrustedHandle,
 };
 use confit_core::progress::ProgressSender;
 use confit_store::Stores;
@@ -175,6 +176,84 @@ fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua:
         ))
     })?;
     Ok(bytes)
+}
+
+/// Structured document format for handle decode views.
+enum DecodeFormat {
+    Toml,
+    Json,
+    Yaml,
+}
+
+/// Reads fetch bytes from the fetch cache.
+///
+/// # Errors
+///
+/// Unreadable cache files fail as plan errors.
+fn fetch_bytes(handle: &LuaFetchHandle, caller: &str) -> mlua::Result<Vec<u8>> {
+    match handle.stores.fetch().read(&handle.handle) {
+        Ok(bytes) => Ok(bytes),
+        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+    }
+}
+
+/// Reads resource bytes from the workspace or the archive spill.
+///
+/// # Errors
+///
+/// Unreadable files fail as plan errors.
+fn resource_bytes(handle: &LuaResourceHandle, caller: &str) -> mlua::Result<Vec<u8>> {
+    if handle.archive.is_some() {
+        return member_bytes(&handle.handle, &handle.stores, caller);
+    }
+    match handle.stores.resources().read_text(&handle.handle) {
+        Ok(text) => Ok(text.into_bytes()),
+        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+    }
+}
+
+/// Decodes handle bytes into a Lua table.
+///
+/// # Errors
+///
+/// Malformed documents fail as plan errors. Non-table
+/// documents fail as plan errors.
+fn decode_bytes(
+    lua: &mlua::Lua,
+    bytes: &[u8],
+    format: DecodeFormat,
+    caller: &str,
+) -> mlua::Result<mlua::Table> {
+    let parsed: Json = match format {
+        DecodeFormat::Toml => {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?;
+            let value: toml::Value =
+                toml::from_str(text).map_err(|error| plan_error(format!("{caller}: {error}")))?;
+            serde_json::to_value(&value)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?
+        }
+        DecodeFormat::Json => {
+            let value: Json = serde_json::from_slice(bytes)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?;
+            serde_json::to_value(&value)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?
+        }
+        DecodeFormat::Yaml => {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?;
+            let value: noyalib::Value = noyalib::from_str(text)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?;
+            serde_json::to_value(&value)
+                .map_err(|error| plan_error(format!("{caller}: {error}")))?
+        }
+    };
+    match parsed.to_lua(lua, caller)? {
+        Value::Table(table) => Ok(table),
+        _ => Err(plan_error(format!("{caller}: document must hold a table"))),
+    }
 }
 
 /// Resolves one opaque source value into a blob handle and size.
@@ -423,6 +502,42 @@ impl LuaFetchHandle {
         })
     }
 
+    /// Decoded TOML table for the fetched artifact.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable cache files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn toml(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "FetchHandle:toml";
+        let bytes = fetch_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Toml, CALLER)
+    }
+
+    /// Decoded JSON table for the fetched artifact.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable cache files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn json(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "FetchHandle:json";
+        let bytes = fetch_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Json, CALLER)
+    }
+
+    /// Decoded YAML table for the fetched artifact.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable cache files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn yaml(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "FetchHandle:yaml";
+        let bytes = fetch_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Yaml, CALLER)
+    }
+
     /// Cache file path for the fetched artifact.
     #[lua(infallible)]
     fn canonical(&self) -> String {
@@ -432,7 +547,7 @@ impl LuaFetchHandle {
     /// Content hash for the fetched artifact.
     #[lua(infallible)]
     fn sha(&self) -> String {
-        self.handle.sha().to_owned()
+        self.handle.sha().hex()
     }
 
     /// Seals the fetched artifact as a verified archive.
@@ -506,7 +621,7 @@ impl LuaResourceHandle {
     fn text(&self) -> mlua::Result<String> {
         const CALLER: &str = "ResourceHandle:text";
         if self.archive.is_none() {
-            return match self.stores.workspace().read_module(&self.handle) {
+            return match self.stores.resources().read_text(&self.handle) {
                 Ok(text) => Ok(text),
                 Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
                 Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
@@ -519,6 +634,42 @@ impl LuaResourceHandle {
                 self.handle.canonical().display()
             ))
         })
+    }
+
+    /// Decoded TOML table for the project file or member.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn toml(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "ResourceHandle:toml";
+        let bytes = resource_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Toml, CALLER)
+    }
+
+    /// Decoded JSON table for the project file or member.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn json(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "ResourceHandle:json";
+        let bytes = resource_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Json, CALLER)
+    }
+
+    /// Decoded YAML table for the project file or member.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable files fail as plan errors. Malformed
+    /// documents fail as plan errors.
+    fn yaml(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+        const CALLER: &str = "ResourceHandle:yaml";
+        let bytes = resource_bytes(self, CALLER)?;
+        decode_bytes(lua, &bytes, DecodeFormat::Yaml, CALLER)
     }
 
     /// File name for the resource path.
@@ -559,7 +710,7 @@ impl LuaResourceHandle {
     /// Content hash for the resource.
     #[lua(infallible)]
     fn sha(&self) -> String {
-        self.handle.sha().to_owned()
+        self.handle.sha().hex()
     }
 
     /// Seals the resource as a verified archive.
@@ -815,10 +966,7 @@ fn fetch_impl(
     }
     if raw.contains("://") {
         let (url, wanted) = parse_fetch_args(raw, opts, CALLER)?;
-        return match stores
-            .fetch()
-            .fetch(&url, wanted.as_deref(), re_fetch, progress)
-        {
+        return match stores.fetch().fetch(&url, wanted, re_fetch, progress) {
             Ok(handle) => lua
                 .create_userdata(LuaFetchHandle::new(handle, stores.clone()))
                 .map(Value::UserData),
@@ -839,7 +987,7 @@ fn fetch_impl(
     } else {
         root.join(rel)
     };
-    match stores.workspace().resource(root, &full) {
+    match stores.resources().resource(root, &full) {
         Ok(handle) => lua
             .create_userdata(LuaResourceHandle::new(handle, stores.clone(), None))
             .map(Value::UserData),
@@ -868,7 +1016,7 @@ fn parse_fetch_args(
     url: String,
     opts: Option<Value>,
     caller: &str,
-) -> mlua::Result<(String, Option<String>)> {
+) -> mlua::Result<(String, Option<Sha>)> {
     let Some(opts_value) = opts else {
         return Ok((url, None));
     };
@@ -876,7 +1024,7 @@ fn parse_fetch_args(
         return Ok((url, None));
     }
     let table = opts_value.req_table(caller, "opts")?;
-    let mut wanted: Option<String> = None;
+    let mut wanted: Option<Sha> = None;
     for pair in table.pairs::<Value, Value>() {
         let (key, value) = pair?;
         let Some(name) = key.opt_str() else {
@@ -890,12 +1038,9 @@ fn parse_fetch_args(
             )));
         }
         let digest = value.req_str(caller, "sha256")?;
-        if digest.len() != 64 || !digest.chars().all(|item| item.is_ascii_hexdigit()) {
-            return Err(plan_error(format!(
-                "{caller}: field 'sha256' must be 64 hex chars"
-            )));
-        }
-        wanted = Some(digest.to_lowercase());
+        let sha = Sha::new(digest)
+            .map_err(|_| plan_error(format!("{caller}: field 'sha256' must be 64 hex chars")))?;
+        wanted = Some(sha);
     }
     Ok((url, wanted))
 }

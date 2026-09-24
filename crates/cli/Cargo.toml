@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
+confit-apply = { path = "../apply" }
 confit-core = { path = "../core" }
 confit-engine = { path = "../engine" }
 confit-store = { path = "../store" }

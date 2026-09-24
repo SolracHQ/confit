@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/engine", "crates/cli", "crates/store"]
+members = [
+  "crates/core",
+  "crates/engine",
+  "crates/cli",
+  "crates/store",
+  "crates/apply",
+]
 
 [workspace.dependencies]
 anstream = "1.0.0"
@@ -8,7 +14,7 @@ clap = { version = "4.6.6", features = ["derive"] }
 log = "0.4.34"
 minijinja = "2.24.0"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
-noyalib = "0.0.43"
+noyalib = "0.0.51"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

@@ -328,7 +328,6 @@ impl Drop for MemoryWriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::sha256_hex;
 
     #[test]
     fn copy_roundtrips_bytes() {
@@ -359,7 +358,7 @@ mod tests {
         }
         match fs.hash_file(path) {
             Ok((digest, len)) => {
-                assert_eq!(digest, sha256_hex(b"abc"));
+                assert_eq!(digest, crate::handles::Sha::hash(b"abc"));
                 assert_eq!(len, 3);
             }
             Err(error) => panic!("hash runs: {error}"),

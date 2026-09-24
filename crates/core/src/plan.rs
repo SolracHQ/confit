@@ -8,9 +8,8 @@ use std::path::PathBuf;
 use crate::arg::Arg;
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
-use crate::handles::BlobHandle;
+use crate::handles::{BlobHandle, Sha};
 use crate::hook::Hook;
-use crate::ids::sha256_hex;
 use crate::store::manifest::Manifest;
 
 /// Bundle format version written by every bundle build.
@@ -166,23 +165,23 @@ impl ManifestDocument {
     pub fn fill_hash(&mut self) -> Result<()> {
         match &self.data {
             ManifestData::Opaque { blob, .. } => {
-                self.data_hash = blob.sha().to_string();
+                self.data_hash = blob.sha().hex();
                 Ok(())
             }
             ManifestData::Tree { members } => {
-                self.data_hash = sha256_hex(&crate::document::tree_manifest_bytes(members));
+                self.data_hash = Sha::hash(&crate::document::tree_manifest_bytes(members)).hex();
                 Ok(())
             }
             ManifestData::Secret { argv, .. } => {
                 let joined = argv.iter().map(Arg::display).collect::<Vec<_>>().join("\0");
-                self.data_hash = sha256_hex(joined.as_bytes());
+                self.data_hash = Sha::hash(joined.as_bytes()).hex();
                 Ok(())
             }
             inline => {
                 let bytes = crate::render::render_inline_bytes(inline, &|route| {
                     PathBuf::from(route.display())
                 })?;
-                self.data_hash = sha256_hex(&bytes);
+                self.data_hash = Sha::hash(&bytes).hex();
                 Ok(())
             }
         }
@@ -230,7 +229,7 @@ impl ManifestDocument {
 /// assert!(matches!(label.contains("(2 bytes)"), true));
 /// ```
 pub fn opaque_label(bytes: &[u8]) -> String {
-    format!("sha256:{} ({} bytes)", sha256_hex(bytes), bytes.len())
+    format!("sha256:{} ({} bytes)", Sha::hash(bytes), bytes.len())
 }
 
 impl Bundle {

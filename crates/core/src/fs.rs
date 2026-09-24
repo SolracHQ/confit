@@ -4,8 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::handles::Sha;
+
 pub mod memory;
-pub mod snapshot;
 
 /// Read chunk size for streaming hashes.
 const STREAM_BUF_BYTES: usize = 8 * 1024;
@@ -114,12 +115,12 @@ pub trait Filesystem {
 
     /// Hashes one path with sha256 through a stream.
     ///
-    /// Reports the lowercase hex digest and the hashed byte count.
+    /// Reports the sealed digest and the hashed byte count.
     ///
     /// # Errors
     ///
     /// Missing paths and permission failures surface as io errors.
-    fn hash_file(&self, path: &Path) -> std::io::Result<(String, u64)> {
+    fn hash_file(&self, path: &Path) -> std::io::Result<(Sha, u64)> {
         use sha2::Digest as _;
 
         let mut reader = self.reader(path)?;
@@ -134,11 +135,7 @@ pub trait Filesystem {
             hasher.update(&buf[..read]);
             len += read as u64;
         }
-        let hex: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        Ok((hex, len))
+        let sha = Sha::finish(hasher);
+        Ok((sha, len))
     }
 }

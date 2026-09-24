@@ -84,8 +84,6 @@ impl PlanRunner<'_> {
         )?;
         let documents = evaluation.documents;
         let slots = self.seams.stores.slots();
-        let workspace = self.seams.stores.workspace();
-        let blobs = self.seams.stores.blobs();
         let first_run = slots.is_first_run();
         let previous = slots.load()?;
 
@@ -96,14 +94,11 @@ impl PlanRunner<'_> {
 
         let drifts = timed("drift", || {
             if first_run {
-                confit_store::drift::drift(&built, &*workspace, &*blobs, DriftOrder::DiskFirst)
+                self.seams.applier.drift(&built, DriftOrder::DiskFirst)
             } else {
-                confit_store::drift::drift(
-                    &previous,
-                    &*workspace,
-                    &*blobs,
-                    DriftOrder::RecordedFirst,
-                )
+                self.seams
+                    .applier
+                    .drift(&previous, DriftOrder::RecordedFirst)
             }
         });
         if self.args.output.is_some() {

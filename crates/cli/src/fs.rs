@@ -313,7 +313,7 @@ mod tests {
         }
         match OsFs.hash_file(&path) {
             Ok((digest, len)) => {
-                assert_eq!(digest, confit_core::ids::sha256_hex(b"abc"));
+                assert_eq!(digest, confit_core::handles::Sha::hash(b"abc"));
                 assert_eq!(len, 3);
             }
             Err(error) => panic!("hash runs: {error}"),

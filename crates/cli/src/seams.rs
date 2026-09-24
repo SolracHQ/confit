@@ -10,6 +10,7 @@ use confit_core::fs::Filesystem;
 use confit_core::probe::{OsProbe, PathProbe};
 
 use crate::fs::OsFs;
+use confit_apply::{Applier, DiskKind};
 use confit_core::plan::{Bundle, DocumentStatus};
 
 use confit_core::progress::{Event, ProgressSender};
@@ -47,6 +48,8 @@ pub struct Seams<'a> {
     pub log_file: Option<PathBuf>,
     /// Holds the write capabilities for the run.
     pub stores: Stores,
+    /// Holds the destination reads and writes for the run.
+    pub applier: Applier,
 }
 
 impl<'a> Seams<'a> {
@@ -61,6 +64,8 @@ impl<'a> Seams<'a> {
     /// Silent host seams gaining senders through the fields.
     ///
     pub fn host(input: &'a mut dyn BufRead) -> Self {
+        let stores = Stores::host(StoreRoots::standard());
+        let applier = Applier::with_stores(stores.clone(), DiskKind::Host);
         Self {
             fs: &HOST_FS,
             probe: &HOST_PROBE,
@@ -70,7 +75,8 @@ impl<'a> Seams<'a> {
             suspend: None,
             hook_runner: None,
             log_file: None,
-            stores: Stores::host(StoreRoots::standard()),
+            stores,
+            applier,
         }
     }
 
@@ -91,6 +97,8 @@ impl<'a> Seams<'a> {
         probe: &'a dyn PathProbe,
         input: &'a mut dyn BufRead,
     ) -> Self {
+        let stores = Stores::memory(StoreRoots::default());
+        let applier = Applier::with_stores(stores.clone(), DiskKind::Memory);
         Self {
             fs,
             probe,
@@ -100,7 +108,8 @@ impl<'a> Seams<'a> {
             suspend: None,
             hook_runner: None,
             log_file: None,
-            stores: Stores::memory(StoreRoots::default()),
+            stores,
+            applier,
         }
     }
 

@@ -200,7 +200,7 @@ fn hydrate_bundle(stored: &Manifest) -> Bundle {
     for document in &stored.documents {
         for handle in document.data.blob_handles() {
             blobs
-                .entry(handle.sha().to_string())
+                .entry(handle.sha().hex())
                 .or_insert_with(|| handle.clone());
         }
     }

@@ -10,17 +10,16 @@ use std::sync::Arc;
 pub mod archive;
 pub mod blob;
 pub mod bundle;
-pub mod drift;
 pub mod fetch;
+pub mod resources;
 pub mod slot;
-pub mod workspace;
 
 use archive::{ArchiveStore, file::FileArchiveStore, memory::MemoryArchiveStore};
 use blob::{BlobStore, file::FileBlobStore, memory::MemoryBlobStore};
 use bundle::{BundleStore, file::FileBundleStore, memory::MemoryBundleStore};
 use fetch::{FetchCache, file::FileFetchCache, memory::MemoryFetchCache};
+use resources::{Resources, file::FileResources, memory::MemoryResources};
 use slot::{SlotStore, file::FileSlotStore, memory::MemorySlotStore};
-use workspace::{Workspace, file::FileWorkspace, memory::MemoryWorkspace};
 
 /// Base folders for every write-backed capability.
 ///
@@ -45,8 +44,8 @@ pub struct StoreRoots {
 pub struct Stores {
     /// Base folders for every write-backed capability.
     pub roots: StoreRoots,
-    /// Managed disk behind snapshots, writes, and text reads.
-    workspace: Arc<dyn Workspace>,
+    /// Trusted project files behind exec-rooted handles.
+    resources: Arc<dyn Resources>,
     /// Content-addressed blob pool.
     blobs: Arc<dyn BlobStore>,
     /// Content-addressed fetch cache.
@@ -99,7 +98,7 @@ impl Stores {
     /// serve every capability.
     pub fn host(roots: StoreRoots) -> Self {
         Self {
-            workspace: Arc::new(FileWorkspace::new(&roots)),
+            resources: Arc::new(FileResources::new(&roots)),
             blobs: Arc::new(FileBlobStore::new(&roots)),
             fetch: Arc::new(FileFetchCache::new(&roots)),
             archives: Arc::new(FileArchiveStore::new(&roots)),
@@ -115,7 +114,7 @@ impl Stores {
     /// serve every capability.
     pub fn memory(roots: StoreRoots) -> Self {
         Self {
-            workspace: Arc::new(MemoryWorkspace::new()),
+            resources: Arc::new(MemoryResources::new()),
             blobs: Arc::new(MemoryBlobStore::new()),
             fetch: Arc::new(MemoryFetchCache::new(roots.cache_base.clone())),
             archives: Arc::new(MemoryArchiveStore::new()),
@@ -131,7 +130,7 @@ impl Stores {
     /// capability. Tests seed fakes before assembling.
     pub fn assemble(
         roots: StoreRoots,
-        workspace: Arc<dyn Workspace>,
+        resources: Arc<dyn Resources>,
         blobs: Arc<dyn BlobStore>,
         fetch: Arc<dyn FetchCache>,
         archives: Arc<dyn ArchiveStore>,
@@ -140,7 +139,7 @@ impl Stores {
     ) -> Self {
         Self {
             roots,
-            workspace,
+            resources,
             blobs,
             fetch,
             archives,
@@ -149,9 +148,9 @@ impl Stores {
         }
     }
 
-    /// Reads the managed disk behind snapshots and writes.
-    pub fn workspace(&self) -> Arc<dyn Workspace> {
-        self.workspace.clone()
+    /// Reads trusted project files behind exec-rooted handles.
+    pub fn resources(&self) -> Arc<dyn Resources> {
+        self.resources.clone()
     }
 
     /// Reads the content-addressed blob pool.

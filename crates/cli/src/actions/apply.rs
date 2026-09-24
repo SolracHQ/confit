@@ -268,8 +268,6 @@ impl<'a> ApplyRunner<'a> {
     /// io errors. A non-`yes` answer aborts as a plan error.
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
-        let workspace = self.seams.stores.workspace();
-        let blobs = self.seams.stores.blobs();
         let built = std::mem::replace(&mut self.manifest, Bundle::empty());
         log_processed(&built, &self.previous);
         let first_run = self.seams.stores.slots().is_first_run();
@@ -279,12 +277,12 @@ impl<'a> ApplyRunner<'a> {
         } else {
             DriftOrder::RecordedFirst
         };
-        let baseline = confit_store::drift::drift(reference, &*workspace, &*blobs, order);
+        let baseline = self.seams.applier.drift(reference, order);
         let rt = Runtime::current();
         let probe: &dyn PathProbe = self.seams.probe;
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
         let changed_ids: BTreeSet<String> = changed.iter().map(|route| route.display()).collect();
-        let evaluated = evaluate_hooks(&built, &rt, probe, &changed_ids, &*workspace)?;
+        let evaluated = evaluate_hooks(&built, &rt, probe, &changed_ids, &self.seams.applier)?;
         let lifecycle =
             confit_core::hook::diff_lifecycle(&built.manifest.hooks, &self.previous.manifest.hooks);
         let report = Summary {
@@ -304,7 +302,7 @@ impl<'a> ApplyRunner<'a> {
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = confit_store::drift::drift(reference, &*workspace, &*blobs, order);
+        let fresh = self.seams.applier.drift(reference, order);
         if fresh != baseline {
             for line in drift_lines(&fresh) {
                 self.seams.print_line(line);
@@ -327,11 +325,15 @@ impl<'a> ApplyRunner<'a> {
             None
         };
         let written =
-            workspace.write_documents(&built.manifest.documents, &*blobs, &changed, notify)?;
-        let removed = workspace
+            self.seams
+                .applier
+                .write_documents(&built.manifest.documents, &changed, notify)?;
+        let removed = self
+            .seams
+            .applier
             .remove_orphans(&self.previous.manifest.documents, &built.manifest.documents)?;
         let removed = removed
-            + workspace.remove_tree_members(
+            + self.seams.applier.remove_tree_members(
                 &self.previous.manifest.documents,
                 &built.manifest.documents,
             )?;
@@ -412,17 +414,24 @@ impl<'a> ApplyRunner<'a> {
         runner: &dyn HookRunner,
     ) -> Result<()> {
         let argv_text = Arg::join(&hook.argv);
-        let workspace = self.seams.stores.workspace();
-        let expand = |slot: &Arg| match slot {
-            Arg::Text(text) => text.clone(),
-            Arg::Route(route) => workspace.resolve(route).to_string_lossy().into_owned(),
-        };
-        let binary = resolve_hook(hook, ctx.rt, ctx.probe, &*workspace).ok_or_else(|| {
-            let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-            Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
-        })?;
+        let binary =
+            resolve_hook(hook, ctx.rt, ctx.probe, &self.seams.applier).ok_or_else(|| {
+                let head = hook.argv.first().map(Arg::display).unwrap_or_default();
+                Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
+            })?;
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
-        spawn.extend(hook.argv.iter().skip(1).map(&expand));
+        for slot in hook.argv.iter().skip(1) {
+            match slot {
+                Arg::Text(text) => spawn.push(text.clone()),
+                Arg::Route(route) => spawn.push(
+                    self.seams
+                        .applier
+                        .resolve(route)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            }
+        }
         let line = format!("hook {position} of {total}: {argv_text}");
         self.seams.print_line(line.clone());
         if let Some(sender) = self.seams.progress.as_ref() {
@@ -432,11 +441,13 @@ impl<'a> ApplyRunner<'a> {
                 argv: argv_text.clone(),
             });
         }
-        let path_dirs: Vec<std::path::PathBuf> = hook
-            .path
-            .iter()
-            .map(|slot| std::path::PathBuf::from(expand(slot)))
-            .collect();
+        let mut path_dirs: Vec<std::path::PathBuf> = Vec::with_capacity(hook.path.len());
+        for slot in &hook.path {
+            match slot {
+                Arg::Text(text) => path_dirs.push(std::path::PathBuf::from(text)),
+                Arg::Route(route) => path_dirs.push(self.seams.applier.resolve(route)),
+            }
+        }
         let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
         if let Some(log) = self.seams.log_file.clone() {
             append_hook_log(ctx.fs, &log, &line, &outcome.output)?;

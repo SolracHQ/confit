@@ -3,7 +3,7 @@
 //! Content-addressed fetch cache unifying downloads and blobs.
 
 use confit_core::error::Result;
-use confit_core::handles::FetchHandle;
+use confit_core::handles::{FetchHandle, Sha};
 use confit_core::progress::ProgressSender;
 
 pub mod file;
@@ -25,7 +25,7 @@ pub trait FetchCache {
     fn fetch(
         &self,
         url: &str,
-        expected_sha: Option<&str>,
+        expected_sha: Option<Sha>,
         re_fetch: bool,
         progress: Option<&ProgressSender>,
     ) -> Result<FetchHandle>;

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use confit_core::arg::Arg;
 use confit_core::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
 use confit_core::drift::Drift;
-use confit_core::handles::Route;
+use confit_core::handles::{Route, Sha};
 use confit_core::hook::HookLifecycle;
 use confit_core::plan::{Bundle, DocumentStatus};
 
@@ -859,7 +859,7 @@ fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
 ///
 /// Refs carry the content hash and byte count, so the label
 /// matches `opaque_label` without reading blob bytes.
-fn opaque_ref_label(sha: &str, size: u64) -> String {
+fn opaque_ref_label(sha: &Sha, size: u64) -> String {
     format!("sha256:{sha} ({size} bytes)")
 }
 

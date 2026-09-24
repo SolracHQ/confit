@@ -7,6 +7,6 @@ local starship = mise.package({
 	end,
 })
 local starship_path = confit.path.config("starship.toml")
-local starship_body = confit.resources.load_text("resources/starship.toml")
+local starship_body = confit.fetch("resources/starship.toml"):text()
 starship:add_document(confit.document.text(starship_path, starship_body))
 return starship

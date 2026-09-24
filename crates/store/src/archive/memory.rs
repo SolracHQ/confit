@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use confit_core::error::{Error, Result};
-use confit_core::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
-use confit_core::ids::sha256_hex;
+use confit_core::handles::{ArchiveHandle, ResourceHandle, Sha, TrustedHandle};
 
 use super::ArchiveStore;
 
@@ -47,7 +46,7 @@ impl ArchiveStore for MemoryArchiveStore {
         let path = source.canonical();
         let bytes = read_source_bytes(path)?;
         check_compressed(&bytes, path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha())
+        ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
     }
 
     fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
@@ -135,7 +134,7 @@ fn born_handles(spill: &Path, members: &HashMap<String, Vec<u8>>) -> Result<Vec<
         handles.push(ResourceHandle::new(
             spill,
             spill.join(name),
-            sha256_hex(bytes),
+            Sha::hash(bytes),
         )?);
     }
     handles.sort_by(|left, right| left.canonical().cmp(right.canonical()));
@@ -144,7 +143,7 @@ fn born_handles(spill: &Path, members: &HashMap<String, Vec<u8>>) -> Result<Vec<
 
 /// Fake spill folder for one archive.
 fn spill_path(archive: &ArchiveHandle) -> PathBuf {
-    PathBuf::from(SPILL_DIR).join(archive.sha())
+    PathBuf::from(SPILL_DIR).join(archive.sha().hex())
 }
 
 /// Reads raw source bytes from disk.
@@ -368,14 +367,14 @@ fn gunzip(bytes: &[u8], source: &Path) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    struct TestSource(PathBuf, String);
+    struct TestSource(PathBuf, Sha);
 
     impl TrustedHandle for TestSource {
         fn canonical(&self) -> &Path {
             &self.0
         }
 
-        fn sha(&self) -> &str {
+        fn sha(&self) -> &Sha {
             &self.1
         }
     }
@@ -434,19 +433,19 @@ mod tests {
         bytes: &[u8],
     ) -> ArchiveHandle {
         let path = write_source(dir, name, bytes);
-        match store.archive(&TestSource(path, sha256_hex(bytes))) {
+        match store.archive(&TestSource(path, Sha::hash(bytes))) {
             Ok(handle) => handle,
             Err(error) => panic!("source seals: {error}"),
         }
     }
 
-    fn handle_sha(handles: &[ResourceHandle], name: &str) -> String {
+    fn handle_sha(handles: &[ResourceHandle], name: &str) -> Sha {
         handles
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with(name))
             .unwrap()
             .sha()
-            .to_string()
+            .clone()
     }
 
     #[test]
@@ -457,10 +456,10 @@ mod tests {
         let store = MemoryArchiveStore::new();
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
         let path = write_source(dir.path(), "fonts.tar.gz", &raw);
-        match store.archive(&TestSource(path.clone(), sha256_hex(&raw))) {
+        match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
-                assert_eq!(handle.sha(), sha256_hex(&raw));
+                assert_eq!(handle.sha(), &Sha::hash(&raw));
                 assert_eq!(handle.proof(), ArchiveProof::Compressed);
             }
             Err(error) => panic!("source seals: {error}"),
@@ -472,7 +471,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryArchiveStore::new();
         let path = write_source(dir.path(), "note.txt", b"plain text");
-        match store.archive(&TestSource(path.clone(), sha256_hex(b"plain text"))) {
+        match store.archive(&TestSource(path.clone(), Sha::hash(b"plain text"))) {
             Ok(_) => panic!("plain source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&path.display().to_string()),
@@ -516,7 +515,7 @@ mod tests {
             Err(error) => panic!("archive extracts: {error}"),
         };
         assert_eq!(handles.len(), 3);
-        let expected_spill = PathBuf::from(SPILL_DIR).join(archive.sha());
+        let expected_spill = PathBuf::from(SPILL_DIR).join(archive.sha().hex());
         for handle in &handles {
             assert!(
                 handle.canonical().starts_with(&expected_spill),
@@ -524,7 +523,7 @@ mod tests {
                 handle.canonical().display()
             );
         }
-        assert_eq!(handle_sha(&handles, "a.txt"), sha256_hex(b"same"));
+        assert_eq!(handle_sha(&handles, "a.txt"), Sha::hash(b"same"));
         assert_eq!(handle_sha(&handles, "a.txt"), handle_sha(&handles, "b.txt"));
         assert_ne!(
             handle_sha(&handles, "a.txt"),
@@ -580,7 +579,7 @@ mod tests {
         };
         let root = handles[0].canonical().parent().unwrap().to_path_buf();
         let missing =
-            ResourceHandle::new(&root, root.join("absent.txt"), sha256_hex(b"absent")).unwrap();
+            ResourceHandle::new(&root, root.join("absent.txt"), Sha::hash(b"absent")).unwrap();
         match store.open_decompressed(&missing) {
             Ok(_) => panic!("absent member passes"),
             Err(error) => {
@@ -608,7 +607,7 @@ mod tests {
             Err(error) => panic!("archive extracts: {error}"),
         };
         let root = handles[0].canonical().parent().unwrap().to_path_buf();
-        let evil = ResourceHandle::new(&root, root.join("../evil.txt"), sha256_hex(b"x")).unwrap();
+        let evil = ResourceHandle::new(&root, root.join("../evil.txt"), Sha::hash(b"x")).unwrap();
         match store.open_decompressed(&evil) {
             Ok(_) => panic!("escaping member passes"),
             Err(error) => {
@@ -655,7 +654,7 @@ mod tests {
             Err(error) => panic!("single gzip extracts: {error}"),
         };
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].sha(), sha256_hex(b"plain"));
+        assert_eq!(handles[0].sha(), &Sha::hash(b"plain"));
         match store.open_decompressed(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
@@ -671,8 +670,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryArchiveStore::new();
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
-        let sha_a = sha256_hex(b"archive-a");
-        let sha_b = sha256_hex(b"archive-b");
+        let sha_a = Sha::hash(b"archive-a");
+        let sha_b = Sha::hash(b"archive-b");
         assert_ne!(sha_a, sha_b);
         let path_a = write_source(dir.path(), "a.tar.gz", &raw);
         let path_b = write_source(dir.path(), "b.tar.gz", &raw);
@@ -684,8 +683,8 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("second source seals: {error}"),
         };
-        assert_eq!(first.sha(), sha_a);
-        assert_eq!(second.sha(), sha_b);
+        assert_eq!(first.sha(), &sha_a);
+        assert_eq!(second.sha(), &sha_b);
         let first_handles = match store.extract(&first) {
             Ok(handles) => handles,
             Err(error) => panic!("first archive extracts: {error}"),
@@ -694,8 +693,8 @@ mod tests {
             Ok(handles) => handles,
             Err(error) => panic!("second archive extracts: {error}"),
         };
-        let expected_a = PathBuf::from(SPILL_DIR).join(first.sha());
-        let expected_b = PathBuf::from(SPILL_DIR).join(second.sha());
+        let expected_a = PathBuf::from(SPILL_DIR).join(first.sha().hex());
+        let expected_b = PathBuf::from(SPILL_DIR).join(second.sha().hex());
         assert!(
             first_handles[0].canonical().starts_with(&expected_a),
             "first spill follows its handle: {}",

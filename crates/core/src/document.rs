@@ -652,12 +652,16 @@ impl ManifestDocument {
 ///
 /// ```rust
 /// use confit_core::document::{ManifestMember, tree_changed};
-/// use confit_core::handles::BlobHandle;
+/// use confit_core::handles::{BlobHandle, Sha};
 ///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: BlobHandle::new("aa".repeat(32), "aa".repeat(32)).unwrap(), mode: 0o644 }];
+/// fn sealed(content: String, stored: String) -> BlobHandle {
+///     BlobHandle::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap()).unwrap()
+/// }
+///
+/// let old = vec![ManifestMember { relative: "a".into(), blob: sealed("aa".repeat(32), "aa".repeat(32)), mode: 0o644 }];
 /// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: BlobHandle::new("bb".repeat(32), "bb".repeat(32)).unwrap(), mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: BlobHandle::new("cc".repeat(32), "cc".repeat(32)).unwrap(), mode: 0o644 },
+///     ManifestMember { relative: "a".into(), blob: sealed("bb".repeat(32), "bb".repeat(32)), mode: 0o644 },
+///     ManifestMember { relative: "b".into(), blob: sealed("cc".repeat(32), "cc".repeat(32)), mode: 0o644 },
 /// ];
 /// assert_eq!(tree_changed(&old, &new), 2);
 /// ```
