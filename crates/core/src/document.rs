@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::arg::Arg;
 use crate::condition::Condition;
 use crate::error::{Error, Result};
-use crate::ids::DocPath;
+use crate::handles::{BlobHandle, Route};
 
 /// JSON shaped data table for structured documents.
 ///
@@ -119,8 +120,8 @@ pub enum RcOp {
     Path {
         /// Holds the variable name, like `PATH`.
         name: String,
-        /// Holds the directory under placement.
-        dir: String,
+        /// Holds the directory route under placement.
+        dir: Route,
         /// Holds the path placement.
         op: PathOp,
     },
@@ -134,17 +135,17 @@ pub enum RcOp {
     /// Evaluates command output through eval.
     Eval {
         /// Holds the command and arguments in order.
-        argv: Vec<String>,
+        argv: Vec<Arg>,
     },
     /// Runs a plain command line.
     Cmd {
         /// Holds the command and arguments in order.
-        argv: Vec<String>,
+        argv: Vec<Arg>,
     },
     /// Sources a file into the shell.
     Source {
-        /// Holds the file path under sourcing.
-        path: String,
+        /// Holds the file route under sourcing.
+        path: Route,
     },
 }
 
@@ -337,6 +338,8 @@ pub enum DocumentKind {
     Opaque,
     /// Managed file set from one archive under one folder.
     Tree,
+    /// Apply-time secret from command stdout.
+    Secret,
 }
 
 impl DocumentKind {
@@ -354,6 +357,7 @@ impl DocumentKind {
             Self::Rc => "rc",
             Self::Opaque => "opaque",
             Self::Tree => "tree",
+            Self::Secret => "secret",
         }
     }
 }
@@ -364,30 +368,24 @@ impl std::fmt::Display for DocumentKind {
     }
 }
 
-/// One persisted tree member holding a blob reference.
-///
-/// The blob names gzipped member bytes under their SHA-256
-/// hex in the shared pool. The mode stays inline beside the
-/// reference, so manifests read without pool access.
-///
+/// One persisted tree member holding a blob handle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMember {
     /// Holds the destination-relative member path.
     pub relative: String,
-    /// Holds the SHA-256 hex over raw member bytes.
-    pub blob: String,
-    /// Holds the raw byte count of the member content.
-    pub size: u64,
+    /// Holds the content-addressed member bytes identity.
+    pub blob: BlobHandle,
     /// Holds unix permission bits for the member file.
     pub mode: u32,
 }
 
-/// Persisted document payload with binary bytes as references.
+/// Persisted document payload with binary bytes as handles.
 ///
 /// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
 /// Text, structured, rc, and link payloads stay inline.
-/// Opaque and tree payloads hold pool blob references alone.
+/// Opaque and tree payloads hold blob handles alone.
+/// Secret payloads hold the apply-time command alone, never bytes.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -417,14 +415,14 @@ pub enum ManifestData {
     },
     /// Holds the rc data object.
     Rc(RcData),
-    /// Holds one pool blob reference and its mode.
+    /// Holds one blob handle and its mode.
     ///
     /// The unmanaged flag marks presence-only documents.
     /// Present unmanaged documents stay quiet whatever the
     /// bytes. Missing unmanaged documents read as missing.
     Opaque {
-        /// Holds the SHA-256 hex over raw file bytes.
-        blob: String,
+        /// Holds the content-addressed file bytes identity.
+        blob: BlobHandle,
         /// Holds the raw byte count of the file content.
         size: u64,
         /// Holds unix permission bits. None applies the umask default.
@@ -438,6 +436,17 @@ pub enum ManifestData {
     Tree {
         /// Holds members in destination-relative order.
         members: Vec<ManifestMember>,
+    },
+    /// Holds one apply-time secret command.
+    ///
+    /// Bytes arrive at apply time from command stdout and
+    /// never land in a bundle or preview.
+    Secret {
+        /// Holds the command and arguments in order.
+        argv: Vec<Arg>,
+        /// Holds unix permission bits. None applies the umask default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<u32>,
     },
 }
 
@@ -456,17 +465,19 @@ impl ManifestData {
             Self::Rc(_) => DocumentKind::Rc,
             Self::Opaque { .. } => DocumentKind::Opaque,
             Self::Tree { .. } => DocumentKind::Tree,
+            Self::Secret { .. } => DocumentKind::Secret,
         }
     }
 
     /// Reads the unix permission bits for this payload.
     ///
-    /// Text and opaque payloads carry an optional mode.
-    /// Every other payload reads as None.
+    /// Text, opaque, and secret payloads carry an optional
+    /// mode. Every other payload reads as None.
     ///
     /// # Returns
     ///
-    /// The mode bits for text and opaque payloads, else None.
+    /// The mode bits for text, opaque, and secret payloads,
+    /// else None.
     ///
     /// # Examples
     ///
@@ -478,7 +489,9 @@ impl ManifestData {
     /// ```
     pub fn mode(&self) -> Option<u32> {
         match self {
-            Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
+            Self::Text { mode, .. } | Self::Opaque { mode, .. } | Self::Secret { mode, .. } => {
+                *mode
+            }
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
         }
     }
@@ -495,7 +508,11 @@ impl ManifestData {
     pub fn unmanaged(&self) -> bool {
         match self {
             Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
-            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => false,
+            Self::Structured { .. }
+            | Self::Link { .. }
+            | Self::Rc(_)
+            | Self::Tree { .. }
+            | Self::Secret { .. } => false,
         }
     }
 
@@ -512,33 +529,32 @@ impl ManifestData {
         }
     }
 
-    /// Reads every referenced blob hash in document order.
-    ///
-    /// # Returns
-    ///
-    /// The blob hashes for opaque and tree payloads, else empty.
-    ///
-    pub fn blob_refs(&self) -> Vec<&str> {
+    /// Reads every blob handle in document order.
+    pub fn blob_handles(&self) -> Vec<&BlobHandle> {
         match self {
-            Self::Opaque { blob, .. } => vec![blob.as_str()],
-            Self::Tree { members } => members.iter().map(|member| member.blob.as_str()).collect(),
-            Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
-                Vec::new()
-            }
+            Self::Opaque { blob, .. } => vec![blob],
+            Self::Tree { members } => members.iter().map(|member| &member.blob).collect(),
+            Self::Structured { .. }
+            | Self::Text { .. }
+            | Self::Link { .. }
+            | Self::Rc(_)
+            | Self::Secret { .. } => Vec::new(),
         }
     }
 }
 
-/// One persisted document holding metadata and references.
+/// One persisted document holding metadata and handles.
 ///
 /// The data hash covers rendered bytes, so plan diffs read
-/// trusted hashes without pool access.
+/// trusted hashes without pool access. The destination
+/// holds a late-bound route, so bundles apply between
+/// users and platforms.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestDocument {
-    /// Holds the destination path.
-    pub path: DocPath,
+    /// Holds the late-bound destination route.
+    pub destination: Route,
     /// Holds the persisted payload.
     pub data: ManifestData,
     /// Holds the hex SHA-256 over rendered bytes.
@@ -550,16 +566,16 @@ impl ManifestDocument {
     ///
     /// # Arguments
     ///
-    /// * `path` - the destination path.
+    /// * `destination` - the late-bound destination route.
     /// * `data` - the document payload.
     ///
     /// # Returns
     ///
     /// The document with an empty data hash.
     ///
-    pub fn new(path: DocPath, data: ManifestData) -> Self {
+    pub fn new(destination: Route, data: ManifestData) -> Self {
         Self {
-            path,
+            destination,
             data,
             data_hash: String::new(),
         }
@@ -587,26 +603,26 @@ impl ManifestDocument {
         self.data.mode()
     }
 
-    /// Builds the kind and path key for state lookups.
+    /// Builds the kind and route key for state lookups.
     ///
     /// # Returns
     ///
-    /// The `kind:path` string identifying the state slot.
+    /// The `kind:base:relative` string identifying the state slot.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
+    /// use confit_core::handles::{Route, RouteBase};
     ///
     /// let stored = ManifestDocument::new(
-    ///     DocPath::new("x"),
+    ///     Route::new(RouteBase::Home, "x").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
-    /// assert_eq!(stored.key(), "text:x");
+    /// assert_eq!(stored.key(), "text:home:x");
     /// ```
     pub fn key(&self) -> String {
-        format!("{}:{}", self.data.kind().name(), self.path.as_str())
+        format!("{}:{}", self.data.kind().name(), self.destination.display())
     }
 
     /// Reports whether the document carries opaque bytes.
@@ -618,32 +634,30 @@ impl ManifestDocument {
     pub fn is_opaque(&self) -> bool {
         matches!(self.kind(), DocumentKind::Opaque)
     }
+
+    /// Reports whether the document carries an apply-time secret.
+    ///
+    /// # Returns
+    ///
+    /// True for the secret kind only.
+    ///
+    pub fn is_secret(&self) -> bool {
+        matches!(self.kind(), DocumentKind::Secret)
+    }
 }
 
 /// Counts changed members between two tree manifests.
-///
-/// Added, removed, and content-or-mode modified
-/// members count. Order never counts, manifests sort
-/// by relative path before comparing.
-///
-/// # Arguments
-///
-/// * `old` - the recorded members under comparing.
-/// * `new` - the desired members under comparing.
-///
-/// # Returns
-///
-/// The changed member count.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use confit_core::document::{ManifestMember, tree_changed};
+/// use confit_core::handles::BlobHandle;
 ///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: "aa".into(), size: 1, mode: 0o644 }];
+/// let old = vec![ManifestMember { relative: "a".into(), blob: BlobHandle::new("aa".repeat(32), "aa".repeat(32)).unwrap(), mode: 0o644 }];
 /// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: "bb".into(), size: 1, mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: "cc".into(), size: 1, mode: 0o644 },
+///     ManifestMember { relative: "a".into(), blob: BlobHandle::new("bb".repeat(32), "bb".repeat(32)).unwrap(), mode: 0o644 },
+///     ManifestMember { relative: "b".into(), blob: BlobHandle::new("cc".repeat(32), "cc".repeat(32)).unwrap(), mode: 0o644 },
 /// ];
 /// assert_eq!(tree_changed(&old, &new), 2);
 /// ```
@@ -675,25 +689,19 @@ pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
 }
 
 /// Renders the canonical manifest bytes for tree hashing.
-///
-/// Members sort by relative path, so declaration order
-/// never leaks into plan hashes. Each line holds the
-/// octal mode, the relative path, and the member blob hash.
-///
-/// # Arguments
-///
-/// * `members` - the tree members under encoding.
-///
-/// # Returns
-///
-/// The canonical manifest bytes.
 pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
     let mut sorted: Vec<&ManifestMember> = members.iter().collect();
     sorted.sort_by(|left, right| left.relative.cmp(&right.relative));
     let mut out = Vec::new();
     for member in sorted {
         out.extend_from_slice(
-            format!("{:o} {} {}\n", member.mode, member.relative, member.blob).as_bytes(),
+            format!(
+                "{:o} {} {}\n",
+                member.mode,
+                member.relative,
+                member.blob.sha()
+            )
+            .as_bytes(),
         );
     }
     out

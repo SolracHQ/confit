@@ -13,6 +13,7 @@ use crate::fs::OsFs;
 use confit_core::plan::{Bundle, DocumentStatus};
 
 use confit_core::progress::{Event, ProgressSender};
+use confit_store::{StoreRoots, Stores};
 
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
 use crate::hooks::HookRunner;
@@ -44,6 +45,8 @@ pub struct Seams<'a> {
     pub hook_runner: Option<&'a dyn HookRunner>,
     /// Gains hook output bytes, holding `None` for no log.
     pub log_file: Option<PathBuf>,
+    /// Holds the write capabilities for the run.
+    pub stores: Stores,
 }
 
 impl<'a> Seams<'a> {
@@ -67,6 +70,7 @@ impl<'a> Seams<'a> {
             suspend: None,
             hook_runner: None,
             log_file: None,
+            stores: Stores::host(StoreRoots::standard()),
         }
     }
 
@@ -96,6 +100,7 @@ impl<'a> Seams<'a> {
             suspend: None,
             hook_runner: None,
             log_file: None,
+            stores: Stores::memory(StoreRoots::default()),
         }
     }
 
@@ -218,6 +223,7 @@ pub fn evaluate_shared(
     shared: &SharedArgs,
     profile: &Path,
     progress: Option<ProgressSender>,
+    stores: &Stores,
 ) -> Result<confit_engine::Evaluation> {
     let root = resolve_root(&shared.root, Some(profile));
     let plugins = resolve_plugins(&root, &shared.plugins);
@@ -227,8 +233,7 @@ pub fn evaluate_shared(
             root,
             plugins,
             re_fetch: shared.re_fetch,
-            cache_dir: None,
-            fetcher: None,
+            stores: Some(stores.clone()),
             progress,
         },
     )
@@ -244,7 +249,7 @@ pub fn log_processed(built: &Bundle, previous: &Bundle) {
         };
         log::debug!(
             "document processed path={} kind={} status={status}",
-            document.path.as_str(),
+            document.destination.display(),
             document.data.kind().name()
         );
     }

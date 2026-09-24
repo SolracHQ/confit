@@ -30,11 +30,11 @@
 --
 -- Only existing primitives compose this module: confit.config,
 -- confit.document plus its rc namespace, confit.patch, confit.runtime,
--- confit.hook, plus confit.resources plus confit.path for the installer.
+-- confit.hook, plus confit.fetch plus confit.path for the installer.
 -- Failures raise through confit.plugin.helpers.error so they attribute
 -- this plugin file.
 
-local MISE_PATH = "~/.config/mise/config.toml"
+local MISE_PATH = confit.path.config("mise/config.toml")
 
 -- Installer config name holding the shared base plus the mise binary.
 -- Packages require this target, so a profile without `init()` fails
@@ -148,7 +148,7 @@ local function resolve_version(version)
 	if version ~= nil then
 		return version
 	end
-	local body = confit.resources.fetch_text(MISE_RELEASES_URL)
+	local body = confit.fetch(MISE_RELEASES_URL):text()
 	local tag = body:match('"tag_name"%s*:%s*"([^"]+)"')
 	if tag == nil then
 		confit.plugin.helpers.error("mise: cannot resolve the latest release from the releases feed")
@@ -163,25 +163,17 @@ end
 -- Builds the mise binary document from the release tarball.
 --
 -- The tarball holds `mise/bin/mise`. The pick places it under the home
--- binary dir with mode `755`. A tarball holding the member any other
--- number of times fails as a plan error.
+-- binary dir with mode `755`. A tarball missing the member fails as
+-- a plan error.
 local function installer_binary(version)
 	local url = "https://github.com/jdx/mise/releases/download/v"
 		.. version
 		.. "/mise-v"
 		.. version
 		.. "-linux-x64.tar.gz"
-	local archive = confit.resources.fetch_file(url)
-	local bin_dir = confit.path.home(".local/bin")
-	local picked = confit.document.compressed(archive, function(path, _, member_path)
-		if path == "mise/bin/mise" then
-			return confit.document.opaque(bin_dir .. "/mise", member_path, { mode = "755" })
-		end
-	end)
-	if #picked ~= 1 then
-		confit.plugin.helpers.error("mise: installer tarball holds mise/bin/mise exactly once")
-	end
-	return picked[1]
+	local archive = confit.fetch(url)
+	local member = archive:extract_member("mise/bin/mise")
+	return confit.document.opaque(confit.path.home(".local/bin", "mise"), member, { mode = "755" })
 end
 
 -- Shared installer config holding the base document plus the binary.
@@ -208,8 +200,9 @@ local function init(version)
 			data = { tools = {} },
 		}))
 		installer:add_document(installer_binary(resolved))
+		local bindir = confit.path.home(".local/bin")
 		installer:add_patch(confit.patch.rc(function(data)
-			data:add("profile", confit.document.rc.prepend(confit.path.home(".local/bin")))
+			data:add("profile", confit.document.rc.prepend(bindir))
 			data:add("profile", confit.document.rc.eval({ "mise", "activate", confit.runtime.SHELL }))
 		end))
 	end
@@ -309,8 +302,8 @@ local function package(opts)
 	config:add_hook(confit.hook.run({ "mise", "install" }, {
 		path = { confit.path.home(".local/bin") },
 		requires = confit.runtime.in_path("mise"),
-		when = confit.runtime.changed("~/.config/mise/config.toml"),
-		checks = { confit.runtime.exists(confit.path.data("mise/shims/" .. bin)) },
+		when = confit.runtime.changed(MISE_PATH),
+		checks = { confit.runtime.exists(confit.path.data("mise/shims", bin)) },
 	}))
 	if rc_builder ~= nil then
 		local rc, pending = collector(bin)

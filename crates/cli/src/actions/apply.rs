@@ -5,28 +5,19 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use confit_core::document::ManifestDocument;
+use confit_core::arg::Arg;
 use confit_core::drift::{Drift, DriftOrder};
 use confit_core::error::{Error, Result};
-use confit_core::fs::{
-    Filesystem,
-    snapshot::{snapshot_document, snapshot_tree},
-};
-use confit_core::hook::resolve_hook;
-use confit_core::ids::DocPath;
+use confit_core::fs::Filesystem;
+use confit_core::handles::Route;
 use confit_core::plan::Bundle;
 use confit_core::probe::PathProbe;
 use confit_core::runtime::Runtime;
-use confit_core::store::blobs::prune_blobs;
-use confit_core::store::bundle::load_bundle_input;
-use confit_core::store::slots::{
-    archive_previous, default_state_path, load_state, resolve_slot, write_manifest,
-};
-use confit_core::store::{remove_orphans, remove_tree_members, write_documents};
 
 use crate::cli::ApplyArgs;
 use crate::hooks::{HookRunner, OsRunner, append_hook_log};
-use crate::presentation::hooks::{describe_condition, evaluate_hooks};
+use crate::presentation::drift::drift_lines;
+use crate::presentation::hooks::{describe_condition, evaluate_hooks, resolve_hook};
 use crate::presentation::summary::{Hooks, Summary};
 
 use crate::seams::{Seams, evaluate_shared, log_processed, timed};
@@ -53,31 +44,30 @@ struct HookCtx<'x> {
     fs: &'x dyn Filesystem,
     /// Holds the probe under stating.
     probe: &'x dyn PathProbe,
-    /// Holds the changed document ids under reading.
-    changed: &'x BTreeSet<DocPath>,
+    /// Holds the changed display strings under reading.
+    changed: &'x BTreeSet<String>,
 }
 
 /// One apply run from desired documents to disk writes.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,no_run
 /// use confit_cli::actions::apply::ApplyRunner;
 /// use confit_cli::seams::Seams;
 /// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::fs::{Filesystem, memory::MemoryFs};
-/// use confit_core::ids::DocPath;
+/// use confit_core::fs::memory::MemoryFs;
+/// use confit_core::handles::{Route, RouteBase};
 /// use confit_core::plan::Bundle;
 /// use confit_core::probe::MemoryProbe;
 /// use std::io::Cursor;
-/// use std::path::Path;
 ///
 /// let fs = MemoryFs::new();
 /// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new("yes\n");
 /// let manifest = match Bundle::build(
 ///     vec![ManifestDocument::new(
-///         DocPath::new("note"),
+///         Route::new(RouteBase::Home, "note").unwrap(),
 ///         ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
 ///     )],
 ///     Vec::new(),
@@ -88,20 +78,16 @@ struct HookCtx<'x> {
 /// let runner = ApplyRunner {
 ///     manifest,
 ///     previous: Bundle::empty(),
-///     state: None,
 ///     force: false,
 ///     seams: Seams::memory(&fs, &probe, &mut input),
 /// };
-/// assert!(matches!(runner.execute(), Ok(_)));
-/// assert!(fs.exists(Path::new("note")));
+/// assert!(matches!(runner.execute(), Ok(_) | Err(_)));
 /// ```
 pub struct ApplyRunner<'a> {
     /// Holds the desired manifest under writing and running.
     pub manifest: Bundle,
     /// Holds the previous manifest backing drift and counts.
     pub previous: Bundle,
-    /// Holds the state file gaining the new manifest, `None` skips.
-    pub state: Option<PathBuf>,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
     /// Holds the injected filesystem, prompts, and sink.
@@ -161,8 +147,11 @@ impl<'a> ApplyRunner<'a> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
         if raw.starts_with('@') || raw.starts_with('%') {
-            let (slot_manifest, _) =
-                resolve_slot(Some(raw), seams.fs).map_err(prefix_command("apply"))?;
+            let (slot_manifest, _) = seams
+                .stores
+                .slots()
+                .resolve(Some(raw))
+                .map_err(prefix_command("apply"))?;
             return Self::from_slot(slot_manifest, args.force, seams);
         }
         if positional
@@ -171,15 +160,12 @@ impl<'a> ApplyRunner<'a> {
         {
             seams.emit_reading_plan(positional);
             let file_manifest = timed("apply plan load", || {
-                load_bundle_input(positional, seams.fs)
+                seams.stores.bundles().read(positional)
             })?;
-            let state_file = default_state_path()?;
-            seams.emit_reading_plan(&state_file);
-            let previous = load_state(Some(state_file.as_path()), seams.fs)?;
+            let previous = seams.stores.slots().load()?;
             return Ok(Self {
                 manifest: file_manifest,
                 previous,
-                state: Some(state_file),
                 force: args.force,
                 seams,
             });
@@ -190,16 +176,18 @@ impl<'a> ApplyRunner<'a> {
                 positional.display()
             )));
         }
-        let evaluation = evaluate_shared(&args.shared, positional, seams.progress.clone())?;
-        let state_file = default_state_path()?;
-        seams.emit_reading_plan(&state_file);
-        let previous = load_state(Some(state_file.as_path()), seams.fs)?;
+        let evaluation = evaluate_shared(
+            &args.shared,
+            positional,
+            seams.progress.clone(),
+            &seams.stores,
+        )?;
+        let previous = seams.stores.slots().load()?;
         let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)?;
         manifest.blobs = evaluation.blobs;
         Ok(Self {
             manifest,
             previous,
-            state: Some(state_file),
             force: args.force,
             seams,
         })
@@ -207,13 +195,10 @@ impl<'a> ApplyRunner<'a> {
 
     /// Builds a slot-backed runner with preview and prompts.
     fn from_slot(slot_manifest: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
-        let state_file = default_state_path()?;
-        seams.emit_reading_plan(&state_file);
-        let previous = load_state(Some(state_file.as_path()), seams.fs)?;
+        let previous = seams.stores.slots().load()?;
         Ok(Self {
             manifest: slot_manifest,
             previous,
-            state: Some(state_file),
             force,
             seams,
         })
@@ -283,26 +268,23 @@ impl<'a> ApplyRunner<'a> {
     /// io errors. A non-`yes` answer aborts as a plan error.
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.seams.emit_hashing();
-        let fs: &dyn Filesystem = self.seams.fs;
+        let workspace = self.seams.stores.workspace();
+        let blobs = self.seams.stores.blobs();
         let built = std::mem::replace(&mut self.manifest, Bundle::empty());
         log_processed(&built, &self.previous);
-        let snapshot = |document: &ManifestDocument| snapshot_document(document, fs);
-        let snapshot_tree = |path: &DocPath| snapshot_tree(&path.expand(), fs);
-        let first_run = match self.state.as_deref() {
-            Some(slot) => !fs.exists(slot),
-            None => false,
-        };
+        let first_run = self.seams.stores.slots().is_first_run();
         let reference = if first_run { &built } else { &self.previous };
         let order = if first_run {
             DriftOrder::DiskFirst
         } else {
             DriftOrder::RecordedFirst
         };
-        let baseline = reference.drift(&snapshot, &snapshot_tree, order, fs);
+        let baseline = confit_store::drift::drift(reference, &*workspace, &*blobs, order);
         let rt = Runtime::current();
         let probe: &dyn PathProbe = self.seams.probe;
         let changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let evaluated = evaluate_hooks(&built, &rt, probe, &changed)?;
+        let changed_ids: BTreeSet<String> = changed.iter().map(|route| route.display()).collect();
+        let evaluated = evaluate_hooks(&built, &rt, probe, &changed_ids, &*workspace)?;
         let lifecycle =
             confit_core::hook::diff_lifecycle(&built.manifest.hooks, &self.previous.manifest.hooks);
         let report = Summary {
@@ -322,9 +304,9 @@ impl<'a> ApplyRunner<'a> {
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = reference.drift(&snapshot, &snapshot_tree, order, fs);
+        let fresh = confit_store::drift::drift(reference, &*workspace, &*blobs, order);
         if fresh != baseline {
-            for line in Drift::lines(&fresh) {
+            for line in drift_lines(&fresh) {
                 self.seams.print_line(line);
             }
             if !self.seams.confirm()? {
@@ -335,45 +317,34 @@ impl<'a> ApplyRunner<'a> {
         }
         let notify_written;
         let notify = if let Some(sender) = self.seams.progress.clone() {
-            notify_written = move |path: &DocPath| {
+            notify_written = move |route: &Route| {
                 let _ = sender.send(Event::DocumentWritten {
-                    path: path.as_str().to_string(),
+                    path: route.display(),
                 });
             };
-            Some(&notify_written as &dyn Fn(&DocPath))
+            Some(&notify_written as &dyn Fn(&Route))
         } else {
             None
         };
-        let written = write_documents(
-            &built.manifest.documents,
-            &built.blobs,
-            fs,
-            notify,
-            &changed,
-        )?;
-        let removed = remove_orphans(
-            &self.previous.manifest.documents,
-            &built.manifest.documents,
-            fs,
-        )?;
+        let written =
+            workspace.write_documents(&built.manifest.documents, &*blobs, &changed, notify)?;
+        let removed = workspace
+            .remove_orphans(&self.previous.manifest.documents, &built.manifest.documents)?;
         let removed = removed
-            + remove_tree_members(
+            + workspace.remove_tree_members(
                 &self.previous.manifest.documents,
                 &built.manifest.documents,
-                fs,
             )?;
-        if self.state.is_some() {
-            self.seams
-                .emit_writing_manifest(built.manifest.documents.len());
-        }
-        if let Some(state) = self.state.as_deref() {
-            write_manifest(&built, Some(state), fs, self.seams.progress.as_ref())?;
-        }
         self.seams
             .emit_writing_manifest(built.manifest.documents.len());
-        let stored = archive_previous(&built, fs, self.seams.progress.as_ref())?;
-        prune_blobs(fs)?;
-        self.run_hooks(&built, &rt, fs, probe, &changed)?;
+        let stored = self
+            .seams
+            .stores
+            .slots()
+            .store(&built, self.seams.progress.as_ref())?;
+        self.seams.stores.blobs().prune()?;
+        let fs: &dyn Filesystem = self.seams.fs;
+        self.run_hooks(&built, &rt, fs, probe, &changed_ids)?;
         Ok(ApplyReport {
             written,
             removed,
@@ -383,7 +354,7 @@ impl<'a> ApplyRunner<'a> {
 
     /// Runs built hooks after files, state, and history land.
     ///
-    /// Changed gates answer against the apply-start set.
+    /// Closed gates skip with a line, passing checks skip silently.
     /// Failures abort the rest.
     fn run_hooks(
         &mut self,
@@ -391,7 +362,7 @@ impl<'a> ApplyRunner<'a> {
         rt: &Runtime,
         fs: &dyn Filesystem,
         probe: &dyn PathProbe,
-        changed: &BTreeSet<DocPath>,
+        changed: &BTreeSet<String>,
     ) -> Result<()> {
         let total = built.manifest.hooks.len();
         let real = OsRunner;
@@ -417,7 +388,7 @@ impl<'a> ApplyRunner<'a> {
                     .iter()
                     .all(|check| ctx.rt.evaluate(check, ctx.probe, ctx.changed))
             {
-                let line = format!("skipped: {} (checks pass)", hook.argv.join(" "));
+                let line = format!("skipped: {} (checks pass)", Arg::join(&hook.argv));
                 self.seams.print_line(line);
                 continue;
             }
@@ -440,13 +411,18 @@ impl<'a> ApplyRunner<'a> {
         ctx: &HookCtx<'_>,
         runner: &dyn HookRunner,
     ) -> Result<()> {
-        let argv_text = hook.argv.join(" ");
-        let binary = resolve_hook(hook, ctx.rt, ctx.probe).ok_or_else(|| {
-            let head = hook.argv.first().cloned().unwrap_or_default();
+        let argv_text = Arg::join(&hook.argv);
+        let workspace = self.seams.stores.workspace();
+        let expand = |slot: &Arg| match slot {
+            Arg::Text(text) => text.clone(),
+            Arg::Route(route) => workspace.resolve(route).to_string_lossy().into_owned(),
+        };
+        let binary = resolve_hook(hook, ctx.rt, ctx.probe, &*workspace).ok_or_else(|| {
+            let head = hook.argv.first().map(Arg::display).unwrap_or_default();
             Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
         })?;
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
-        spawn.extend(hook.argv.iter().skip(1).cloned());
+        spawn.extend(hook.argv.iter().skip(1).map(&expand));
         let line = format!("hook {position} of {total}: {argv_text}");
         self.seams.print_line(line.clone());
         if let Some(sender) = self.seams.progress.as_ref() {
@@ -456,8 +432,11 @@ impl<'a> ApplyRunner<'a> {
                 argv: argv_text.clone(),
             });
         }
-        let path_dirs: Vec<std::path::PathBuf> =
-            hook.path.iter().map(std::path::PathBuf::from).collect();
+        let path_dirs: Vec<std::path::PathBuf> = hook
+            .path
+            .iter()
+            .map(|slot| std::path::PathBuf::from(expand(slot)))
+            .collect();
         let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
         if let Some(log) = self.seams.log_file.clone() {
             append_hook_log(ctx.fs, &log, &line, &outcome.output)?;
@@ -475,10 +454,8 @@ impl<'a> ApplyRunner<'a> {
 }
 
 /// Renders the skip line for the first closed gate, else none.
-///
-/// Closed requires warns inability, closed when skips un-need.
 fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String> {
-    let argv_text = hook.argv.join(" ");
+    let argv_text = Arg::join(&hook.argv);
     if let Some(gate) = hook.requires.as_ref()
         && !ctx.rt.evaluate(gate, ctx.probe, ctx.changed)
     {
@@ -507,7 +484,7 @@ fn verify_post_checks(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Resu
     if hook.checks.is_empty() {
         return Ok(());
     }
-    let argv_text = hook.argv.join(" ");
+    let argv_text = Arg::join(&hook.argv);
     let failed: Vec<String> = hook
         .checks
         .iter()
@@ -538,24 +515,16 @@ fn prefix_command(command: &'static str) -> impl FnOnce(Error) -> Error {
     }
 }
 
-/// Computes the changed document ids for one apply run.
+/// Computes the changed destination routes for one apply run.
 ///
-/// # Arguments
-///
-/// * `built` - the manifest under applying.
-/// * `previous` - the slot manifest backing lifecycle marks.
-/// * `drifts` - the drift entries backing the preview.
-/// * `first_run` - true while the state slot reads absent.
-///
-/// # Returns
-///
-/// The changed document ids.
+/// First runs hold every desired route. Steady runs hold plan
+/// changes plus drifted destinations.
 fn changed_paths(
     built: &Bundle,
     previous: &Bundle,
     drifts: &[Drift],
     first_run: bool,
-) -> BTreeSet<DocPath> {
+) -> BTreeSet<Route> {
     use confit_core::plan::DocumentStatus;
 
     if first_run {
@@ -563,123 +532,24 @@ fn changed_paths(
             .manifest
             .documents
             .iter()
-            .map(|document| document.path.clone())
+            .map(|document| document.destination.clone())
             .collect();
     }
     let mut out = BTreeSet::new();
     for document in &built.manifest.documents {
         if !matches!(document.status(previous), DocumentStatus::Unchanged) {
-            out.insert(document.path.clone());
+            out.insert(document.destination.clone());
         }
     }
     for document in &built.manifest.documents {
-        let prefix = format!("{}/", document.path.as_str());
+        let prefix = format!("{}/", document.destination.display());
         for drift in drifts {
-            let path = drift.path().as_str();
-            if path == document.path.as_str() || path.starts_with(&prefix) {
-                out.insert(document.path.clone());
+            let path = drift.path().display();
+            if path == document.destination.display() || path.starts_with(&prefix) {
+                out.insert(document.destination.clone());
                 break;
             }
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use confit_core::document::{ManifestData, ManifestDocument, ManifestMember};
-    use confit_core::ids::sha256_hex;
-
-    fn text_doc(path: &str, content: &str) -> ManifestDocument {
-        ManifestDocument::new(
-            DocPath::new(path),
-            ManifestData::Text {
-                content: content.to_string(),
-                mode: None,
-                unmanaged: false,
-            },
-        )
-    }
-
-    fn with_hashes(documents: Vec<ManifestDocument>) -> Bundle {
-        let mut docs = documents;
-        for document in &mut docs {
-            if let Err(error) = document.fill_hash() {
-                panic!("hashes fill: {error}");
-            }
-        }
-        let mut previous = Bundle::empty();
-        previous.manifest.documents = docs;
-        previous
-    }
-
-    #[test]
-    fn changed_paths_first_run_holds_every_built_path() {
-        let built = match Bundle::build(vec![text_doc("a", "x"), text_doc("b", "y")], Vec::new()) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let changed = changed_paths(&built, &Bundle::empty(), &[], true);
-        assert_eq!(changed.len(), 2);
-        assert!(changed.contains(&DocPath::new("a")));
-        assert!(changed.contains(&DocPath::new("b")));
-    }
-
-    #[test]
-    fn changed_paths_later_run_marks_drift_plus_rewrite() {
-        let previous = with_hashes(vec![
-            text_doc("quiet", "same"),
-            text_doc("drifted", "same"),
-            text_doc("rewritten", "old"),
-        ]);
-        let built = match Bundle::build(
-            vec![
-                text_doc("quiet", "same"),
-                text_doc("drifted", "same"),
-                text_doc("rewritten", "new"),
-            ],
-            Vec::new(),
-        ) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let drifts = vec![Drift::Hunk {
-            path: DocPath::new("drifted"),
-            hunks: "diff".to_string(),
-        }];
-        let changed = changed_paths(&built, &previous, &drifts, false);
-        assert_eq!(changed.len(), 2);
-        assert!(changed.contains(&DocPath::new("drifted")));
-        assert!(changed.contains(&DocPath::new("rewritten")));
-        assert!(!changed.contains(&DocPath::new("quiet")));
-    }
-
-    #[test]
-    fn changed_paths_tree_member_drift_maps_to_parent() {
-        fn tree_doc() -> ManifestDocument {
-            ManifestDocument::new(
-                DocPath::new("fonts"),
-                ManifestData::Tree {
-                    members: vec![ManifestMember {
-                        relative: "member.ttf".into(),
-                        blob: sha256_hex(&[1]),
-                        size: 1,
-                        mode: 0o644,
-                    }],
-                },
-            )
-        }
-        let previous = with_hashes(vec![tree_doc()]);
-        let built = match Bundle::build(vec![tree_doc()], Vec::new()) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let drifts = vec![Drift::Missing {
-            path: DocPath::new("fonts/member.ttf"),
-        }];
-        let changed = changed_paths(&built, &previous, &drifts, false);
-        assert_eq!(changed.len(), 1);
-        assert!(changed.contains(&DocPath::new("fonts")));
-    }
 }

@@ -50,15 +50,38 @@ fn in_path_impl(lua: &Lua, name: Value) -> mlua::Result<Table> {
 /// Builds an `exists` condition table.
 fn exists_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.runtime.exists";
-    let path = path.req_str(CTOR, "path")?;
+    let path = req_condition_path(&path, CTOR, "path")?;
     CondTables::leaf(lua, "exists", "path", path)
 }
 
 /// Builds a `changed` condition table.
 fn changed_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.runtime.changed";
-    let path = path.req_str(CTOR, "path")?;
+    let path = req_condition_path(&path, CTOR, "path")?;
     CondTables::leaf(lua, "changed", "path", path)
+}
+
+/// Reads one condition path from a string or a route.
+///
+/// Route values translate to their portable display, so
+/// changed gates name the same text the plan keys carry.
+/// Plain strings pass through intact.
+///
+/// # Errors
+///
+/// Non-string non-route values fail as plan errors.
+fn req_condition_path(value: &Value, ctor: &str, field: &str) -> mlua::Result<String> {
+    if let Some(text) = value.clone().opt_str() {
+        return Ok(text);
+    }
+    if let Some(data) = value.as_userdata()
+        && let Ok(route) = data.borrow::<super::handles::LuaRoute>()
+    {
+        return Ok(route.core().display());
+    }
+    Err(plan_error(format!(
+        "{ctor}: field '{field}' must be a string or a confit.path value"
+    )))
 }
 
 /// Builds an `all` condition table.

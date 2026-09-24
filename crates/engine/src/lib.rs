@@ -6,19 +6,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use confit_core::document::ManifestDocument;
+use confit_core::handles::BlobHandle;
 use confit_core::hook::Hook;
 use confit_core::progress::ProgressSender;
-use confit_core::store::blobs::BlobRef;
-
-use crate::fetch::Fetch;
+use confit_store::Stores;
 
 mod error;
 mod eval;
 mod exec;
-pub mod fetch;
 mod level;
 mod lua;
 mod model;
@@ -30,8 +27,8 @@ mod surface;
 ///
 /// The root jails resource reads. The plugins folder adds external
 /// namespaces beside the embedded defaults. The re-fetch flag forces
-/// remote downloads. The cache override keeps tests off the OS cache.
-/// The fetcher override keeps tests off the network. The progress
+/// remote downloads. The stores override keeps tests on memory
+/// backends, holding `None` for host backends. The progress
 /// sender stays silent while holding `None`.
 ///
 #[derive(Clone, Default)]
@@ -43,10 +40,8 @@ pub struct EvalOpts {
     pub plugins: PathBuf,
     /// Forces remote downloads past the sidecar cache.
     pub re_fetch: bool,
-    /// Cache folder override for tests, holding `None` for OS cache.
-    pub cache_dir: Option<PathBuf>,
-    /// Network source override for tests, holding `None` for HTTP.
-    pub fetcher: Option<Arc<dyn Fetch>>,
+    /// Store override for tests, holding `None` for host stores.
+    pub stores: Option<Stores>,
     /// Progress sender for fetch, unpack, and patch facts.
     pub progress: Option<ProgressSender>,
 }
@@ -57,8 +52,7 @@ impl std::fmt::Debug for EvalOpts {
             .field("root", &self.root)
             .field("plugins", &self.plugins)
             .field("re_fetch", &self.re_fetch)
-            .field("cache_dir", &self.cache_dir)
-            .field("fetcher", &self.fetcher.is_some())
+            .field("stores", &self.stores.is_some())
             .field("progress", &self.progress.is_some())
             .finish()
     }
@@ -67,16 +61,16 @@ impl std::fmt::Debug for EvalOpts {
 /// Finished evaluation holding documents, blobs, and hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Blobs hold opaque and tree member refs under
-/// SHA-256 hex, one entry per referenced blob. Hooks hold merged
+/// order. Blobs hold blob handles under SHA-256 hex, one
+/// entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
 #[derive(Debug, Clone, Default)]
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
     pub documents: Vec<ManifestDocument>,
-    /// Holds blob refs under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, BlobRef>,
+    /// Holds blob handles under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobHandle>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }
@@ -90,7 +84,7 @@ pub struct Evaluation {
 ///
 /// # Returns
 ///
-/// Structured, text, link documents, one rc document per
+/// Structured, text, link, secret documents, one rc document per
 /// shell, in deterministic order, and merged hooks.
 ///
 /// # Errors

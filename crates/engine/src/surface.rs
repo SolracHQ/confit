@@ -6,11 +6,11 @@ use mlua::{Lua, Table};
 
 pub(crate) mod config;
 pub(crate) mod document;
+pub(crate) mod handles;
 pub(crate) mod hook;
 pub(crate) mod patch;
 pub(crate) mod paths;
 pub(crate) mod plugin;
-pub(crate) mod resources;
 pub(crate) mod runtime;
 pub(crate) mod utils;
 
@@ -34,11 +34,11 @@ pub(crate) fn install(session: &crate::eval::Session) -> confit_core::error::Res
     lua.globals().set("confit", fresh).map_err(plan)?;
     config::install(lua).map_err(plan)?;
     document::install(session).map_err(plan)?;
+    handles::install(session).map_err(plan)?;
     hook::install(lua).map_err(plan)?;
     patch::install(lua).map_err(plan)?;
     runtime::install(lua).map_err(plan)?;
-    paths::install(session).map_err(plan)?;
-    resources::install(session).map_err(plan)?;
+    paths::install(lua).map_err(plan)?;
     utils::install(lua).map_err(plan)?;
     plugin::install(session).map_err(plan)?;
     Ok(())

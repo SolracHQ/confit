@@ -5,13 +5,11 @@
 use std::path::PathBuf;
 
 use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
 use confit_core::plan::Bundle;
-use confit_core::store::bundle::write_bundle;
+use confit_core::store::SlotKind;
 use confit_core::store::manifest::manifest_json;
-use confit_core::store::slots::{SlotKind, resolve_slot};
+use confit_store::slot::SlotStore;
 
-use crate::actions::plan::ensure_bundle_extension;
 use crate::cli::ExportArgs;
 
 use crate::seams::{Seams, timed};
@@ -86,9 +84,9 @@ impl<'a> ExportRunner<'a> {
                 "export: '-o' plus '--manifest' refuse together, pick one".to_string(),
             ));
         }
-        let fs: &dyn Filesystem = seams.fs;
+        let slots = seams.stores.slots();
         let (bundle, auto) = timed("export load", || {
-            resolve_slot_bundle(args.picker.as_deref(), fs)
+            resolve_slot_bundle(args.picker.as_deref(), &*slots)
         })?;
         if args.manifest {
             let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
@@ -98,12 +96,15 @@ impl<'a> ExportRunner<'a> {
             });
         }
         let dest = match args.output.as_deref() {
-            Some(raw) => ensure_bundle_extension(raw),
+            Some(raw) => raw.to_path_buf(),
             None => auto,
         };
         seams.emit_writing_manifest(bundle.manifest.documents.len());
-        timed("export write", || {
-            write_bundle(&bundle, &dest, fs, seams.progress.as_ref())
+        let dest = timed("export write", || {
+            seams
+                .stores
+                .bundles()
+                .write(&bundle, &dest, seams.progress.as_ref())
         })?;
         Ok(ExportReport {
             dest: Some(dest),
@@ -119,11 +120,11 @@ impl<'a> ExportRunner<'a> {
 /// # Arguments
 ///
 /// * `picker` - the raw picker value under resolving.
-/// * `fs` - the backend under reading.
+/// * `slots` - the slot store under reading.
 ///
 /// # Returns
 ///
-/// The live bundle holding blob refs, plus the slot-derived
+/// The live bundle holding blob handles, plus the slot-derived
 /// bundle destination carrying `.cb`.
 ///
 /// # Errors
@@ -135,15 +136,19 @@ impl<'a> ExportRunner<'a> {
 ///
 /// ```rust
 /// use confit_cli::actions::export::resolve_slot_bundle;
-/// use confit_core::fs::memory::MemoryFs;
+/// use confit_store::slot::memory::MemorySlotStore;
+/// use confit_store::slot::SlotStore;
 ///
-/// let fs = MemoryFs::new();
-/// assert!(matches!(resolve_slot_bundle(None, &fs), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("backup.cb"), &fs), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("%1"), &fs), Err(_)));
+/// let slots = MemorySlotStore::new();
+/// assert!(matches!(resolve_slot_bundle(None, &slots), Err(_)));
+/// assert!(matches!(resolve_slot_bundle(Some("@missing"), &slots), Err(_)));
+/// assert!(matches!(resolve_slot_bundle(Some("%1"), &slots), Err(_)));
 /// ```
-pub fn resolve_slot_bundle(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, PathBuf)> {
-    let (bundle, kind) = resolve_slot(picker, fs).map_err(|error| match error {
+pub fn resolve_slot_bundle(
+    picker: Option<&str>,
+    slots: &dyn SlotStore,
+) -> Result<(Bundle, PathBuf)> {
+    let (bundle, kind) = slots.resolve(picker).map_err(|error| match error {
         Error::Plan(detail) => Error::Plan(format!("export: {detail}")),
         other => other,
     })?;
@@ -155,7 +160,7 @@ pub fn resolve_slot_bundle(picker: Option<&str>, fs: &dyn Filesystem) -> Result<
     Ok((bundle, auto_dest(&stem)))
 }
 
-/// Builds one slot-derived bundle destination carrying `.cb`.
+/// Builds one slot-derived bundle destination stem.
 fn auto_dest(stem: &str) -> PathBuf {
-    ensure_bundle_extension(std::path::Path::new(stem))
+    std::path::Path::new(stem).to_path_buf()
 }

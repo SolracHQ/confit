@@ -2,13 +2,14 @@
 //!
 //! Hook preview lines for plans beside documents.
 
+use confit_core::arg::Arg;
 use confit_core::condition::Condition;
 use confit_core::error::Result;
-use confit_core::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle, resolve_hook};
-use confit_core::ids::DocPath;
+use confit_core::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
 use confit_core::plan::Bundle;
 use confit_core::probe::PathProbe;
 use confit_core::runtime::Runtime;
+use confit_store::workspace::Workspace;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -106,7 +107,7 @@ pub fn describe_condition(cond: &Condition) -> String {
 /// use confit_cli::presentation::hooks::lifecycle_lines;
 ///
 /// let hook = Hook {
-///     argv: vec!["mise".to_string()],
+///     argv: vec![confit_core::arg::Arg::Text("mise".to_string())],
 ///     path: vec![],
 ///     requires: None,
 ///     when: None,
@@ -122,14 +123,18 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     for entry in lifecycle {
         match &entry.change {
             HookChange::Added => {
-                lines.push(format!("{} {}", Sigil::Add.mark(), argv_text(entry.hook)));
+                lines.push(format!(
+                    "{} {}",
+                    Sigil::Add.mark(),
+                    Arg::join(&entry.hook.argv)
+                ));
                 full_gates(entry.hook, &mut lines);
             }
             HookChange::Removed => {
                 lines.push(format!(
                     "{} {}",
                     Sigil::Remove.mark(),
-                    argv_text(entry.hook)
+                    Arg::join(&entry.hook.argv)
                 ));
             }
             HookChange::Modified(edits) => {
@@ -139,7 +144,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
                 lines.push(format!(
                     "{} {}",
                     Sigil::Update.mark(),
-                    argv_text(entry.hook)
+                    Arg::join(&entry.hook.argv)
                 ));
                 render_gate_changes(&edits.gates, &mut lines);
                 render_check_changes(&edits.removed_checks, &edits.added_checks, &mut lines);
@@ -160,8 +165,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 
 /// Reads one hook preview outcome.
 ///
-/// First closed mouth speaks: requires, when, checks, then
-/// resolve.
+/// Requires, when, and checks gates answer before resolving.
 ///
 /// # Errors
 ///
@@ -170,7 +174,8 @@ fn decide<'a>(
     hook: &'a Hook,
     rt: &Runtime,
     probe: &dyn PathProbe,
-    changed: &BTreeSet<DocPath>,
+    changed: &BTreeSet<String>,
+    workspace: &dyn Workspace,
 ) -> Result<EvaluatedHook<'a>> {
     if let Some(gate) = hook.requires.as_ref()
         && !rt.evaluate(gate, probe, changed)
@@ -194,11 +199,11 @@ fn decide<'a>(
             outcome: PreviewOutcome::ChecksPass,
         });
     }
-    let Some(binary) = resolve_hook(hook, rt, probe) else {
-        let head = hook.argv.first().cloned().unwrap_or_default();
+    let Some(binary) = resolve_hook(hook, rt, probe, workspace) else {
+        let head = hook.argv.first().map(Arg::display).unwrap_or_default();
         return Err(confit_core::error::Error::Plan(format!(
             "hook '{}' cannot resolve '{head}'",
-            argv_text(hook)
+            Arg::join(&hook.argv)
         )));
     };
     Ok(EvaluatedHook {
@@ -207,18 +212,34 @@ fn decide<'a>(
     })
 }
 
+/// Resolves one hook binary with routes expanded inline.
+///
+/// Hook path entries search first, runtime dirs follow. Route
+/// slots expand through the workspace; text runs verbatim.
+/// First existing executable wins. No hook copy.
+pub fn resolve_hook(
+    hook: &Hook,
+    rt: &Runtime,
+    probe: &dyn PathProbe,
+    workspace: &dyn Workspace,
+) -> Option<PathBuf> {
+    let head = match hook.argv.first()? {
+        Arg::Text(head) => head.clone(),
+        Arg::Route(route) => workspace.resolve(route).to_string_lossy().into_owned(),
+    };
+    let mut dirs: Vec<PathBuf> = hook
+        .path
+        .iter()
+        .map(|slot| match slot {
+            Arg::Text(dir) => PathBuf::from(dir),
+            Arg::Route(route) => workspace.resolve(route),
+        })
+        .collect();
+    dirs.extend(rt.path_dirs.iter().cloned());
+    probe.find_executable(&head, &dirs)
+}
+
 /// Evaluates one preview outcome per hook in plan order.
-///
-/// # Arguments
-///
-/// * `bundle` - the bundle holding hooks under preview.
-/// * `rt` - the runtime facts under reading.
-/// * `probe` - the probe under stating.
-/// * `changed` - the changed document ids under reading.
-///
-/// # Returns
-///
-/// The evaluated hooks in plan order.
 ///
 /// # Errors
 ///
@@ -227,19 +248,20 @@ pub fn evaluate_hooks<'a>(
     bundle: &'a Bundle,
     rt: &Runtime,
     probe: &dyn PathProbe,
-    changed: &BTreeSet<DocPath>,
+    changed: &BTreeSet<String>,
+    workspace: &dyn Workspace,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
     bundle
         .manifest
         .hooks
         .iter()
-        .map(|hook| decide(hook, rt, probe, changed))
+        .map(|hook| decide(hook, rt, probe, changed, workspace))
         .collect()
 }
 
 /// Renders one evaluated hook line.
 fn render_preview(evaluated: &EvaluatedHook) -> String {
-    let argv = argv_text(evaluated.hook);
+    let argv = Arg::join(&evaluated.hook.argv);
     match &evaluated.outcome {
         PreviewOutcome::RequiresClosed(gate) => {
             format!("warn: {argv} cannot run ({gate})")
@@ -270,7 +292,7 @@ fn checks_pass(
     hook: &Hook,
     rt: &Runtime,
     probe: &dyn PathProbe,
-    changed: &BTreeSet<DocPath>,
+    changed: &BTreeSet<String>,
 ) -> bool {
     !hook.checks.is_empty()
         && hook
@@ -279,18 +301,13 @@ fn checks_pass(
             .all(|check| rt.evaluate(check, probe, changed))
 }
 
-/// Reads one hook argv as display text.
-fn argv_text(hook: &Hook) -> String {
-    hook.argv.join(" ")
-}
-
 /// Renders one preview line for a runnable hook.
 fn run_line(hook: &Hook, binary: &std::path::Path) -> String {
     let rest = hook
         .argv
         .iter()
         .skip(1)
-        .cloned()
+        .map(Arg::display)
         .collect::<Vec<_>>()
         .join(" ");
     if rest.is_empty() {
@@ -403,19 +420,33 @@ mod tests {
         hook: &Hook,
         rt: &Runtime,
         probe: &dyn PathProbe,
-        changed: &BTreeSet<DocPath>,
+        changed: &BTreeSet<String>,
     ) -> Result<String> {
-        Ok(render_preview(&decide(hook, rt, probe, changed)?))
+        let workspace =
+            confit_store::Stores::memory(confit_store::StoreRoots::default()).workspace();
+        Ok(render_preview(&decide(
+            hook,
+            rt,
+            probe,
+            changed,
+            &*workspace,
+        )?))
     }
 
     fn hook_preview(
         bundle: &Bundle,
         rt: &Runtime,
         probe: &dyn PathProbe,
-        changed: &BTreeSet<DocPath>,
+        changed: &BTreeSet<String>,
     ) -> Result<Vec<String>> {
+        let workspace =
+            confit_store::Stores::memory(confit_store::StoreRoots::default()).workspace();
         Ok(render_evaluated(&evaluate_hooks(
-            bundle, rt, probe, changed,
+            bundle,
+            rt,
+            probe,
+            changed,
+            &*workspace,
         )?))
     }
 
@@ -427,8 +458,14 @@ mod tests {
         timeout_secs: u64,
     ) -> Hook {
         Hook {
-            argv: argv.iter().map(|item| item.to_string()).collect(),
-            path: path.iter().map(|item| item.to_string()).collect(),
+            argv: argv
+                .iter()
+                .map(|item| Arg::Text(item.to_string()))
+                .collect(),
+            path: path
+                .iter()
+                .map(|item| Arg::Text(item.to_string()))
+                .collect(),
             requires: None,
             when,
             checks,
@@ -522,15 +559,15 @@ mod tests {
         (rt, probe)
     }
 
-    fn changed_set(dests: &[&str]) -> BTreeSet<DocPath> {
-        dests.iter().copied().map(DocPath::new).collect()
+    fn changed_set(dests: &[&str]) -> BTreeSet<String> {
+        dests.iter().map(|dest| dest.to_string()).collect()
     }
 
     fn preview_line(
         hook: &Hook,
         rt: &Runtime,
         probe: &dyn PathProbe,
-        changed: &BTreeSet<DocPath>,
+        changed: &BTreeSet<String>,
     ) -> String {
         match preview_hook(hook, rt, probe, changed) {
             Ok(line) => line,
@@ -763,7 +800,10 @@ mod tests {
 
     fn hook_fixture(argv: &[&str]) -> confit_core::hook::Hook {
         confit_core::hook::Hook {
-            argv: argv.iter().map(|item| item.to_string()).collect(),
+            argv: argv
+                .iter()
+                .map(|item| Arg::Text(item.to_string()))
+                .collect(),
             path: Vec::new(),
             requires: None,
             when: None,

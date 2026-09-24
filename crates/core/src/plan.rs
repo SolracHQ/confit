@@ -3,12 +3,14 @@
 //! Desired state builds with two comparisons.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
+use crate::arg::Arg;
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
+use crate::handles::BlobHandle;
 use crate::hook::Hook;
 use crate::ids::sha256_hex;
-use crate::store::blobs::BlobRef;
 use crate::store::manifest::Manifest;
 
 /// Bundle format version written by every bundle build.
@@ -19,15 +21,16 @@ pub const BUNDLE_VERSION: u32 = 7;
 ///
 /// The manifest holds version, documents, and
 /// hooks as the only document language. The blob map holds
-/// blob refs under content hashes beside it. The bundle
-/// holds no duplicate fields.
+/// blob handles under content hashes beside it. Secret
+/// documents hold no hashes here; their bytes arrive at
+/// apply time. The bundle holds no duplicate fields.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     /// Holds the portable manifest as the only document language.
     pub manifest: Manifest,
-    /// Holds blob refs under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, BlobRef>,
+    /// Holds blob handles under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobHandle>,
 }
 
 impl Bundle {
@@ -56,10 +59,10 @@ impl Bundle {
             .find(|document| document.key() == key)
     }
 
-    /// Finds one recorded document sharing path with opaque kind.
+    /// Finds one recorded document sharing destination with opaque kind.
     fn find_same_path_opaque(&self, document: &ManifestDocument) -> Option<&ManifestDocument> {
         self.manifest.documents.iter().find(|recorded| {
-            recorded.path == document.path
+            recorded.destination == document.destination
                 && recorded.key() != document.key()
                 && (recorded.is_opaque() || document.is_opaque())
         })
@@ -104,11 +107,11 @@ impl ManifestDocument {
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
+    /// use confit_core::handles::{Route, RouteBase};
     /// use confit_core::plan::{DocumentStatus, Bundle};
     ///
     /// let mut document = ManifestDocument::new(
-    ///     DocPath::new("x"),
+    ///     Route::new(RouteBase::Home, "x").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
@@ -133,9 +136,11 @@ impl ManifestDocument {
     ///
     /// The hash covers rendered bytes only. Modes compare
     /// separately through status and drift. Opaque hashes
-    /// copy the blob reference, since the blob holds the
+    /// copy the blob handle, since the handle is the
     /// SHA-256 over raw bytes. Tree hashes cover canonical
-    /// manifest bytes over blob references.
+    /// manifest bytes over blob handles. Secret hashes
+    /// cover the command argv, since secret bytes arrive
+    /// at apply time alone.
     ///
     /// # Returns
     ///
@@ -149,10 +154,10 @@ impl ManifestDocument {
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
+    /// use confit_core::handles::{Route, RouteBase};
     ///
     /// let mut document = ManifestDocument::new(
-    ///     DocPath::new("x"),
+    ///     Route::new(RouteBase::Home, "x").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert!(matches!(document.fill_hash(), Ok(())));
@@ -161,15 +166,22 @@ impl ManifestDocument {
     pub fn fill_hash(&mut self) -> Result<()> {
         match &self.data {
             ManifestData::Opaque { blob, .. } => {
-                self.data_hash = blob.clone();
+                self.data_hash = blob.sha().to_string();
                 Ok(())
             }
             ManifestData::Tree { members } => {
                 self.data_hash = sha256_hex(&crate::document::tree_manifest_bytes(members));
                 Ok(())
             }
+            ManifestData::Secret { argv, .. } => {
+                let joined = argv.iter().map(Arg::display).collect::<Vec<_>>().join("\0");
+                self.data_hash = sha256_hex(joined.as_bytes());
+                Ok(())
+            }
             inline => {
-                let bytes = crate::render::render_inline_bytes(inline)?;
+                let bytes = crate::render::render_inline_bytes(inline, &|route| {
+                    PathBuf::from(route.display())
+                })?;
                 self.data_hash = sha256_hex(&bytes);
                 Ok(())
             }
@@ -179,7 +191,7 @@ impl ManifestDocument {
     /// Reports whether a recorded document yields to desired documents.
     ///
     /// A recorded key yields while some desired document shares
-    /// its path under another key with either side opaque.
+    /// its destination under another key with either side opaque.
     ///
     /// # Arguments
     ///
@@ -187,11 +199,11 @@ impl ManifestDocument {
     ///
     /// # Returns
     ///
-    /// True while an opaque same-path sibling exists in desired.
+    /// True while an opaque same-destination sibling exists in desired.
     ///
     pub fn superseded_by(&self, desired: &[ManifestDocument]) -> bool {
         desired.iter().any(|document| {
-            document.path == self.path
+            document.destination == self.destination
                 && document.key() != self.key()
                 && (document.is_opaque() || self.is_opaque())
         })
@@ -224,14 +236,14 @@ pub fn opaque_label(bytes: &[u8]) -> String {
 impl Bundle {
     /// Builds the desired state bundle from documents.
     ///
-    /// Fills data hashes, then sorts documents by path. The
-    /// caller holds one document per path. Blob refs ride
-    /// beside the manifest and fill during hydration. Counts
-    /// generate through `summary` against a previous manifest.
+    /// Fills data hashes, then sorts documents by destination.
+    /// The caller holds one document per destination. Secret
+    /// payloads hash their command alone and ride no blobs.
+    /// Counts generate through `summary` against a previous manifest.
     ///
     /// # Arguments
     ///
-    /// * `documents` - desired documents in pipeline order, unique per path.
+    /// * `documents` - desired documents in pipeline order, unique per destination.
     /// * `hooks` - desired hooks in declaration order, merged downstream.
     ///
     /// # Returns
@@ -246,11 +258,11 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
+    /// use confit_core::handles::{Route, RouteBase};
     /// use confit_core::plan::Bundle;
     ///
     /// let document = ManifestDocument::new(
-    ///     DocPath::new("note"),
+    ///     Route::new(RouteBase::Home, "note").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// let outcome = Bundle::build(vec![document], Vec::new());
@@ -261,7 +273,7 @@ impl Bundle {
         for document in &mut documents {
             document.fill_hash()?;
         }
-        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        documents.sort_by_key(|document| document.destination.display());
         Ok(Self {
             manifest: Manifest {
                 version: BUNDLE_VERSION,
@@ -289,17 +301,17 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
+    /// use confit_core::handles::{Route, RouteBase};
     /// use confit_core::plan::Bundle;
     ///
     /// let mut previous = Bundle::empty();
     /// previous.manifest.documents = vec![ManifestDocument::new(
-    ///     DocPath::new("note"),
+    ///     Route::new(RouteBase::Home, "note").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// )];
     /// let bundle = Bundle::build(
     ///     vec![ManifestDocument::new(
-    ///         DocPath::new("note"),
+    ///         Route::new(RouteBase::Home, "note").unwrap(),
     ///         ManifestData::Text { content: "changed".into(), mode: None, unmanaged: false},
     ///     )],
     ///     Vec::new(),
@@ -328,173 +340,5 @@ impl Bundle {
             }
         }
         summary
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::document::{ManifestData, ManifestDocument};
-    use crate::ids::DocPath;
-
-    fn text_doc(path: &str, content: &str) -> ManifestDocument {
-        ManifestDocument::new(
-            DocPath::new(path),
-            ManifestData::Text {
-                content: content.to_string(),
-                mode: None,
-                unmanaged: false,
-            },
-        )
-    }
-
-    fn with_hashes(documents: Vec<ManifestDocument>) -> Bundle {
-        let mut docs = documents;
-        for document in &mut docs {
-            if let Err(error) = document.fill_hash() {
-                panic!("hashes fill: {error}");
-            }
-        }
-        let mut previous = Bundle::empty();
-        previous.manifest.documents = docs;
-        previous
-    }
-
-    #[test]
-    fn plan_counts_create_update_delete() {
-        let previous = with_hashes(vec![text_doc("a", "same-a"), text_doc("gone", "gone")]);
-        let stale = previous.manifest.documents[0].clone();
-        let desired = vec![text_doc("a", "same-a"), text_doc("b", "fresh-b")];
-        let _ = stale;
-        let outcome = Bundle::build(desired, Vec::new());
-        let built = match outcome {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let summary = built.summary(&previous);
-        assert_eq!(summary.create, 1);
-        assert_eq!(summary.update, 0);
-        assert_eq!(summary.delete, 1);
-        assert!(matches!(
-            built.manifest.documents[0].status(&previous),
-            DocumentStatus::Unchanged
-        ));
-        assert!(matches!(
-            built.manifest.documents[1].status(&previous),
-            DocumentStatus::Create
-        ));
-    }
-
-    #[test]
-    fn plan_marks_update_on_hash_change() {
-        let previous = with_hashes(vec![text_doc("b", "old")]);
-        let outcome = Bundle::build(vec![text_doc("b", "new")], Vec::new());
-        let built = match outcome {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        assert_eq!(built.summary(&previous).update, 1);
-        assert!(matches!(
-            built.manifest.documents[0].status(&previous),
-            DocumentStatus::Update
-        ));
-    }
-
-    fn opaque_doc(path: &str, bytes: &[u8]) -> ManifestDocument {
-        ManifestDocument::new(
-            DocPath::new(path),
-            ManifestData::Opaque {
-                blob: sha256_hex(bytes),
-                size: bytes.len() as u64,
-                mode: None,
-                unmanaged: false,
-            },
-        )
-    }
-
-    #[test]
-    fn opaque_kind_change_reads_as_update_both_ways() {
-        let previous = with_hashes(vec![text_doc("bin", "hi")]);
-        let desired = opaque_doc("bin", &[0xFF, 0x00]);
-        let mut hashed = vec![desired.clone()];
-        for document in &mut hashed {
-            if let Err(error) = document.fill_hash() {
-                panic!("hashes fill: {error}");
-            }
-        }
-        assert!(matches!(
-            hashed[0].status(&previous),
-            DocumentStatus::Update
-        ));
-        let previous_opaque = with_hashes(vec![opaque_doc("bin", &[0xFF, 0x00])]);
-        let mut back = vec![text_doc("bin", "hi")];
-        for document in &mut back {
-            if let Err(error) = document.fill_hash() {
-                panic!("hashes fill: {error}");
-            }
-        }
-        assert!(matches!(
-            back[0].status(&previous_opaque),
-            DocumentStatus::Update
-        ));
-    }
-
-    #[test]
-    fn opaque_kind_change_skips_superseded_delete() {
-        let previous = with_hashes(vec![text_doc("bin", "hi")]);
-        let mut desired = vec![opaque_doc("bin", &[0xFF, 0x00])];
-        for document in &mut desired {
-            if let Err(error) = document.fill_hash() {
-                panic!("hashes fill: {error}");
-            }
-        }
-        let built = match Bundle::build(vec![opaque_doc("bin", &[0xFF, 0x00])], Vec::new()) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let summary = built.summary(&previous);
-        assert_eq!(summary.update, 1);
-        assert_eq!(summary.delete, 0);
-        assert_eq!(summary.create, 0);
-    }
-    #[test]
-    fn plain_kind_change_keeps_create_plus_delete() {
-        let previous = with_hashes(vec![text_doc("bin", "hi")]);
-        let built = match Bundle::build(
-            vec![ManifestDocument::new(
-                DocPath::new("bin"),
-                ManifestData::Link {
-                    target: "dest".to_string(),
-                },
-            )],
-            Vec::new(),
-        ) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        let summary = built.summary(&previous);
-        assert_eq!(summary.create, 1);
-        assert_eq!(summary.delete, 1);
-        assert_eq!(summary.update, 0);
-    }
-    #[test]
-    fn build_carries_hooks_through() {
-        use crate::hook::Hook;
-
-        let hooks = vec![Hook {
-            argv: vec!["mise".to_string()],
-            path: Vec::new(),
-            requires: None,
-            when: None,
-            checks: Vec::new(),
-            timeout_secs: crate::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
-        }];
-        let built = match Bundle::build(Vec::new(), hooks) {
-            Ok(out) => out,
-            Err(error) => panic!("bundle builds: {error}"),
-        };
-        assert_eq!(built.manifest.version, BUNDLE_VERSION);
-        assert_eq!(built.manifest.hooks.len(), 1);
-        assert_eq!(built.manifest.hooks[0].argv, vec!["mise".to_string()]);
     }
 }

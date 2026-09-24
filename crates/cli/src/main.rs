@@ -63,12 +63,7 @@ fn run_plan(
     seams.progress = live.sink();
     seams.print = live.print_handle();
     seams.suspend = live.suspend_handle();
-    let outcome = confit_cli::actions::plan::PlanRunner {
-        args,
-        store_tmp: false,
-        seams,
-    }
-    .execute()?;
+    let outcome = confit_cli::actions::plan::PlanRunner { args, seams }.execute()?;
     live.finish();
     let lifecycle = confit_core::hook::diff_lifecycle(
         &outcome.built.manifest.hooks,
@@ -85,9 +80,6 @@ fn run_plan(
         },
     };
     anstream::println!("{}", summary.render());
-    if let Some(stored) = outcome.stored {
-        anstream::println!("plan: {}", stored.display());
-    }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())

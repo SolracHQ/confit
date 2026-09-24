@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::condition::Condition;
-use crate::ids::DocPath;
 use crate::probe::PathProbe;
 
 /// Default hook timeout in seconds backing the `10m` opt default.
@@ -51,23 +50,8 @@ impl Runtime {
 
     /// Evaluates one condition against runtime facts and the probe.
     ///
-    /// `in_path` joins each dir with the name, first existing
-    /// executable wins. While the probe reports a mode, the
-    /// `0o111` bit decides. Otherwise plain existence decides.
-    /// `exists` expands a leading tilde through the OS home
-    /// folder then stats. `env_eq` and `env_set` read `vars`.
-    /// `changed` reads membership in the changed-path set.
+    /// `changed` reads membership in the changed display set.
     /// `all`, `any` and `Not` recurse.
-    ///
-    /// # Arguments
-    ///
-    /// * `cond` - the condition under testing.
-    /// * `probe` - the probe under stating.
-    /// * `changed` - the changed document ids under reading.
-    ///
-    /// # Returns
-    ///
-    /// True while the condition holds.
     ///
     /// # Examples
     ///
@@ -99,14 +83,14 @@ impl Runtime {
         &self,
         cond: &Condition,
         probe: &dyn PathProbe,
-        changed: &BTreeSet<DocPath>,
+        changed: &BTreeSet<String>,
     ) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => path_holds(name, self, probe),
-            Condition::Exists { path } => probe.exists(&DocPath::new(path).expand()),
-            Condition::Changed { path } => changed.contains(&DocPath::new(path)),
+            Condition::Exists { path } => probe.exists(std::path::Path::new(path)),
+            Condition::Changed { path } => changed.contains(path),
             Condition::All(items) => items.iter().all(|item| self.evaluate(item, probe, changed)),
             Condition::Any(items) => items.iter().any(|item| self.evaluate(item, probe, changed)),
             Condition::Not(inner) => !self.evaluate(inner, probe, changed),
@@ -317,10 +301,8 @@ mod tests {
 
     #[test]
     fn changed_reads_membership_through_nesting() {
-        use crate::ids::DocPath;
-
         let (probe, rt) = test_runtime();
-        let changed: BTreeSet<DocPath> = BTreeSet::from([DocPath::new("touched")]);
+        let changed: BTreeSet<String> = BTreeSet::from(["touched".to_string()]);
         let cases: Vec<(Condition, bool)> = vec![
             (
                 Condition::Changed {
@@ -442,41 +424,27 @@ mod tests {
     }
 
     #[test]
-    fn exists_expands_tilde_through_home() {
-        let previous = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", "/tmp/confit-runtime-fixture");
-        }
+    fn exists_reads_probe_presence() {
         let mut probe = MemoryProbe::new();
-        probe.file(std::path::Path::new(
-            "/tmp/confit-runtime-fixture/.local/bin/hook",
-        ));
+        probe.file(std::path::Path::new("/opt/tool"));
         let rt = Runtime {
             vars: BTreeMap::new(),
             path_dirs: Vec::new(),
         };
         let found = rt.evaluate(
             &Condition::Exists {
-                path: "~/.local/bin/hook".into(),
+                path: "/opt/tool".into(),
             },
             &probe,
             &BTreeSet::new(),
         );
         let missing = rt.evaluate(
             &Condition::Exists {
-                path: "~/.local/bin/absent".into(),
+                path: "/opt/absent".into(),
             },
             &probe,
             &BTreeSet::new(),
         );
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("HOME", value);
-            },
-            None => unsafe {
-                std::env::remove_var("HOME");
-            },
-        }
         assert!(found);
         assert!(!missing);
     }

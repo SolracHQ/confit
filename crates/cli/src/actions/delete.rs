@@ -3,8 +3,6 @@
 //! Named slot removal with orphan pruning.
 
 use confit_core::error::{Error, Result};
-use confit_core::store::blobs::prune_blobs;
-use confit_core::store::slots::resolve_named_slot;
 
 use crate::cli::DeleteArgs;
 
@@ -56,12 +54,15 @@ pub fn run(args: &DeleteArgs, seams: Seams<'_>) -> Result<DeleteReport> {
             args.name
         )));
     };
-    let path = resolve_named_slot(name)?;
-    if !seams.fs.exists(&path) {
-        return Err(Error::Plan(format!("delete: '@{name}' reads absent")));
-    }
-    seams.fs.remove(&path).map_err(Error::from)?;
-    let pruned = prune_blobs(seams.fs)?;
+    seams
+        .stores
+        .slots()
+        .delete_named(name)
+        .map_err(|error| match error {
+            Error::Plan(detail) => Error::Plan(format!("delete: {detail}")),
+            other => other,
+        })?;
+    let pruned = seams.stores.blobs().prune()?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,

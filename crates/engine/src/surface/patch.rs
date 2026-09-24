@@ -13,7 +13,7 @@ use confit_core::document::StructuredFormat;
 /// Patch handle built by the constructors.
 #[derive(Clone)]
 pub(crate) struct LuaPatch {
-    /// Target document key: `rc` or one document path.
+    /// Target document key: `rc` or one destination display.
     pub(crate) target: String,
     /// Structured format for patch-created documents.
     pub(crate) format: Option<StructuredFormat>,
@@ -48,24 +48,24 @@ impl LuaPatch {
     /// # Arguments
     ///
     /// * `format_name` - raw format name under parsing.
-    /// * `path` - target document path.
+    /// * `target` - target destination display.
     /// * `callback` - callback receiving the live wrapper.
     ///
     /// # Returns
     ///
-    /// Patch handle targeting the document path at normal priority.
+    /// Patch handle targeting the destination at normal priority.
     ///
     /// # Errors
     ///
     /// Unknown format names fail as plan errors.
     ///
-    fn structured(format_name: String, path: String, callback: Function) -> mlua::Result<Self> {
+    fn structured(format_name: String, target: String, callback: Function) -> mlua::Result<Self> {
         const CTOR: &str = "confit.patch.structured";
         const KNOWN: &str = "'json', 'toml', or 'yaml'";
         let format = StructuredFormat::parse(&format_name)
             .ok_or_else(|| plan_error(format!("{CTOR}: field 'format' must be one of {KNOWN}")))?;
         Ok(Self {
-            target: path,
+            target,
             format: Some(format),
             callback,
             priority: Level::Normal,
@@ -128,7 +128,7 @@ fn structured_impl(args: (Value, Value, Value)) -> mlua::Result<LuaPatch> {
     const CTOR: &str = "confit.patch.structured";
     let (format_value, path_value, callback_value) = args;
     let format_name = format_value.req_str(CTOR, "format")?;
-    let path = path_value.req_str(CTOR, "path")?;
+    let target = super::handles::req_target_path(&path_value, CTOR, "path")?;
     let callback = callback_value.req_func(CTOR, "callback")?;
-    LuaPatch::structured(format_name, path, callback)
+    LuaPatch::structured(format_name, target, callback)
 }

@@ -2,13 +2,10 @@
 //!
 //! Post-config steps riding plans beside documents.
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
+use crate::arg::Arg;
 use crate::condition::Condition;
-use crate::probe::PathProbe;
-use crate::runtime::Runtime;
 
 /// One post-config step with gates and checks.
 ///
@@ -23,9 +20,9 @@ use crate::runtime::Runtime;
 #[serde(deny_unknown_fields)]
 pub struct Hook {
     /// Holds the command and arguments in order.
-    pub argv: Vec<String>,
+    pub argv: Vec<Arg>,
     /// Holds the PATH extension dirs for the subprocess alone.
-    pub path: Vec<String>,
+    pub path: Vec<Arg>,
     /// Holds the capability gate. None runs where capable.
     #[serde(default)]
     pub requires: Option<Condition>,
@@ -231,7 +228,7 @@ impl HookLifecycle<'_> {
 /// The merged hooks in first-seen order.
 ///
 pub fn merge_hooks(hooks: Vec<Hook>) -> Vec<Hook> {
-    let mut order: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+    let mut order: Vec<(Vec<Arg>, Vec<Arg>)> = Vec::new();
     let mut merged: Vec<Hook> = Vec::new();
     for hook in hooks {
         let key = (hook.argv.clone(), hook.path.clone());
@@ -341,54 +338,6 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
         Condition::Any(items) => items,
         other => vec![other],
     }
-}
-
-/// Resolves one hook binary across hook path dirs and runtime dirs.
-///
-/// Hook path entries search first, runtime dirs follow. First
-/// existing executable wins with the `in_path` rule.
-///
-/// # Arguments
-///
-/// * `hook` - the hook holding argv and path dirs.
-/// * `rt` - the runtime facts under reading.
-/// * `probe` - the probe under stating.
-///
-/// # Returns
-///
-/// The joined candidate path for the first hit, else `None`.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_core::hook::{Hook, resolve_hook};
-/// use confit_core::probe::MemoryProbe;
-/// use confit_core::runtime::Runtime;
-///
-/// let mut probe = MemoryProbe::new();
-/// probe.exec(std::path::Path::new("/opt/tool"));
-/// let hook = Hook {
-///     argv: vec!["tool".into()],
-///     path: Vec::new(),
-///     requires: None,
-///     when: None,
-///     checks: Vec::new(),
-///     timeout_secs: 600,
-/// };
-/// let rt = Runtime {
-///     vars: Default::default(),
-///     path_dirs: vec![std::path::PathBuf::from("/opt")],
-/// };
-/// assert_eq!(
-///     resolve_hook(&hook, &rt, &probe),
-///     Some(std::path::PathBuf::from("/opt/tool"))
-/// );
-/// ```
-pub fn resolve_hook(hook: &Hook, rt: &Runtime, probe: &dyn PathProbe) -> Option<PathBuf> {
-    let head = hook.argv.first()?;
-    let mut dirs: Vec<PathBuf> = hook.path.iter().map(PathBuf::from).collect();
-    dirs.extend(rt.path_dirs.iter().cloned());
-    probe.find_executable(head, &dirs)
 }
 
 /// Reports whether two hooks share one lifecycle identity.
@@ -530,8 +479,14 @@ mod tests {
         timeout_secs: u64,
     ) -> Hook {
         Hook {
-            argv: argv.iter().map(|item| item.to_string()).collect(),
-            path: path.iter().map(|item| item.to_string()).collect(),
+            argv: argv
+                .iter()
+                .map(|item| Arg::Text(item.to_string()))
+                .collect(),
+            path: path
+                .iter()
+                .map(|item| Arg::Text(item.to_string()))
+                .collect(),
             requires: None,
             when,
             checks,

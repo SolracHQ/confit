@@ -4,34 +4,30 @@
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use serde_json::Value as Json;
-use sha2::{Digest as _, Sha256};
 
 use crate::EvalOpts;
 use crate::error::{find_plan, plan, plan_error};
 use crate::exec::{Area, ExecPatch, Executor, OwnerMap};
-use crate::fetch::Fetch;
 use crate::lua::{JsonExt, TableExt};
 use crate::model::{ConfigData, StoredPatch};
 use crate::path_expr::flatten_json;
 use crate::require::Requirer;
 use crate::surface::config::ConfigBuilder;
 use crate::surface::document::Declared;
+use crate::surface::document::convert::translate_entry;
 use crate::surface::utils;
+use confit_core::arg::Arg;
 use confit_core::document::ManifestDocument;
-use confit_core::document::{
-    ManifestData, ManifestMember, RcData, RcEntry, RcOp, StructuredFormat,
-};
+use confit_core::document::{ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
 use confit_core::error::{Error, Result};
+use confit_core::handles::{BlobHandle, Route, RouteBase};
 use confit_core::hook::{Hook, merge_hooks};
-use confit_core::ids::DocPath;
 use confit_core::progress::{Event, ProgressSender};
-use confit_core::store::blobs::BlobRef;
+use confit_store::Stores;
 
 /// One evaluation holding the Lua state and its context.
 ///
@@ -43,12 +39,6 @@ pub(crate) struct Session {
     pub(crate) lua: Lua,
     /// Require and resource base.
     pub(crate) root: PathBuf,
-    /// Fetch sidecar cache folder.
-    pub(crate) cache: PathBuf,
-    /// Archive extract folder.
-    pub(crate) extract: PathBuf,
-    /// Network source, HTTP by default.
-    pub(crate) fetcher: Arc<dyn Fetch>,
     /// External plugin folder.
     pub(crate) plugins: PathBuf,
     /// Forces remote downloads past the sidecar cache.
@@ -57,17 +47,18 @@ pub(crate) struct Session {
     pub(crate) progress: Option<ProgressSender>,
     /// Finished patch count shared across documents.
     pub(crate) patch_done: Cell<usize>,
+    /// Write capabilities behind the handle surface.
+    pub(crate) stores: Stores,
 }
 
 impl Session {
     /// Runs one profile file into finished documents and hooks.
     pub(crate) fn run(profile: &Path, opts: EvalOpts) -> Result<crate::Evaluation> {
         let start = std::time::Instant::now();
-        let root = resolve_root(profile, &opts.root);
-        let cache = crate::fetch::resolve_cache_dir(opts.cache_dir.as_deref())?;
-        let fetcher = match opts.fetcher {
-            Some(source) => source,
-            None => Arc::new(crate::fetch::HttpFetch),
+        let root = absolutize(&resolve_root(profile, &opts.root))?;
+        let stores = match opts.stores {
+            Some(stores) => stores,
+            None => Stores::host(confit_store::StoreRoots::standard()),
         };
         let lua = Lua::new_with(
             StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
@@ -77,13 +68,11 @@ impl Session {
         let session = Self {
             lua,
             root,
-            cache,
-            extract: crate::surface::document::archive::extract_root(),
-            fetcher,
             plugins: opts.plugins,
             re_fetch: opts.re_fetch,
             progress: opts.progress,
             patch_done: Cell::new(0),
+            stores,
         };
         let requirer = Requirer {
             current: session.root.clone(),
@@ -98,7 +87,10 @@ impl Session {
             .set("require", requirer)
             .map_err(|error| plan(format!("require: {error}")))?;
         crate::surface::install(&session)?;
-        let source = std::fs::read(profile)?;
+        let workspace = session.stores.workspace();
+        let absolute = absolutize(profile)?;
+        let handle = workspace.resource(&session.root, &absolute)?;
+        let source = workspace.read_profile(&handle)?;
         let profile_ctx = format!("profile '{}'", profile.display());
         let returned: Value = session
             .lua
@@ -116,11 +108,13 @@ impl Session {
         {
             let _ = sender.send(Event::PatchesStarted { patches: total });
         }
-        let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
+        let mut blobs: BTreeMap<String, BlobHandle> = BTreeMap::new();
         let mut out = session
             .assemble_structured(&profile, &patches, &profile_ctx)
             .map_err(wrap)?;
-        out.extend(profile.text_link(&profile_ctx, &mut blobs)?);
+        let (rest, handles) = profile.text_link(&profile_ctx)?;
+        blobs.extend(handles);
+        out.extend(rest);
         out.extend(
             session
                 .assemble_rc(&profile, &patches, &profile_ctx)
@@ -156,6 +150,15 @@ fn resolve_root(profile: &Path, root: &Path) -> PathBuf {
     }
 }
 
+/// Resolves one profile path against the working folder.
+fn absolutize(profile: &Path) -> Result<PathBuf> {
+    if profile.is_absolute() {
+        return Ok(profile.to_path_buf());
+    }
+    let cwd = std::env::current_dir()?;
+    Ok(cwd.join(profile))
+}
+
 /// Maps one Lua failure onto the core error.
 fn wrap(error: mlua::Error) -> Error {
     if let Some(message) = find_plan(&error) {
@@ -167,9 +170,9 @@ fn wrap(error: mlua::Error) -> Error {
 /// Rejects changed gates naming documents outside the built set.
 fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Result<()> {
     const CTOR: &str = "confit.runtime.changed";
-    let built: std::collections::BTreeSet<&str> = documents
+    let built: std::collections::BTreeSet<String> = documents
         .iter()
-        .map(|document| document.path.as_str())
+        .map(|document| document.destination.display())
         .collect();
     let mut paths = Vec::new();
     for hook in hooks {
@@ -184,7 +187,7 @@ fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Res
         }
     }
     for path in paths {
-        if !built.contains(path.as_str()) {
+        if !built.contains(&path) {
             return Err(crate::error::plan_error(format!(
                 "{CTOR}: unknown document '{path}'"
             )));
@@ -360,6 +363,8 @@ struct ProfileDeclared {
     opaques: Vec<crate::model::OpaqueDecl>,
     /// Tree declarations in profile order.
     trees: Vec<crate::model::TreeDecl>,
+    /// Secret declarations in profile order.
+    secrets: Vec<crate::model::SecretDecl>,
     /// Optional rc base from one rc.new table.
     rc_base: Option<Vec<crate::model::RcEntryDecl>>,
 }
@@ -374,6 +379,7 @@ impl ProfileDeclared {
             Declared::Link(decl) => self.links.push(decl),
             Declared::Opaque(decl) => self.opaques.push(decl),
             Declared::Tree(decl) => self.trees.push(decl),
+            Declared::Secret(decl) => self.secrets.push(decl),
             Declared::Rc(entries) => {
                 if self.rc_base.is_some() {
                     return Err(crate::error::plan_error(format!(
@@ -399,6 +405,8 @@ struct Profile {
 
 /// Declared structured base holding format, data, and owner.
 struct StructuredBase {
+    /// Late-bound destination route.
+    destination: Route,
     /// Declared output format.
     format: StructuredFormat,
     /// Declared top-level fields.
@@ -447,21 +455,22 @@ impl Profile {
 
     /// Rejects repeated declarations across profile and configs.
     fn check(&self, ctx: &str) -> Result<()> {
-        let mut owners: BTreeMap<&str, &str> = BTreeMap::new();
+        let mut owners: BTreeMap<String, &str> = BTreeMap::new();
         for item in &self.declared.structured {
-            if let Some(first) = owners.insert(item.path.as_str(), "profile") {
+            let display = item.destination.display();
+            if let Some(first) = owners.insert(display.clone(), "profile") {
                 return Err(plan(format!(
-                    "{ctx}: document '{}' is declared more than once ('{first}' plus 'profile')",
-                    item.path
+                    "{ctx}: document '{display}' is declared more than once ('{first}' plus 'profile')"
                 )));
             }
         }
         for config in &self.configs {
             for item in &config.structured {
-                if let Some(first) = owners.insert(item.path.as_str(), config.name.as_str()) {
+                let display = item.destination.display();
+                if let Some(first) = owners.insert(display.clone(), config.name.as_str()) {
                     return Err(plan(format!(
-                        "{ctx}: document '{}' is declared more than once ('{first}' plus '{}')",
-                        item.path, config.name
+                        "{ctx}: document '{display}' is declared more than once ('{first}' plus '{}')",
+                        config.name
                     )));
                 }
             }
@@ -515,18 +524,17 @@ impl Profile {
         out
     }
 
-    /// Assembles text, link, and opaque documents in path order.
+    /// Assembles text, link, opaque, tree, and secret documents in route order.
     fn text_link(
         &self,
         ctx: &str,
-        blobs: &mut BTreeMap<String, BlobRef>,
-    ) -> Result<Vec<ManifestDocument>> {
-        assemble_text_link(&self.declared, &self.configs, ctx, blobs)
+    ) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobHandle>)> {
+        assemble_text_link(&self.declared, &self.configs, ctx)
     }
 }
 
 impl Session {
-    /// Assembles structured documents in path order.
+    /// Assembles structured documents in destination order.
     fn assemble_structured(
         &self,
         profile: &Profile,
@@ -536,8 +544,9 @@ impl Session {
         let mut bases: BTreeMap<String, StructuredBase> = BTreeMap::new();
         for item in &profile.declared.structured {
             bases.insert(
-                item.path.clone(),
+                item.destination.display(),
                 StructuredBase {
+                    destination: item.destination.clone(),
                     format: item.format,
                     data: item.data.clone(),
                     owner: "profile".to_string(),
@@ -547,8 +556,9 @@ impl Session {
         for config in &profile.configs {
             for item in &config.structured {
                 bases.insert(
-                    item.path.clone(),
+                    item.destination.display(),
                     StructuredBase {
+                        destination: item.destination.clone(),
                         format: item.format,
                         data: item.data.clone(),
                         owner: config.name.clone(),
@@ -569,39 +579,42 @@ impl Session {
             patch_done: &self.patch_done,
         };
         let mut out: BTreeMap<String, ManifestDocument> = BTreeMap::new();
-        for (path, base) in &bases {
-            let mut refs: Vec<&StoredPatch> = grouped.get(path).cloned().unwrap_or_default();
+        for (display, base) in &bases {
+            let mut refs: Vec<&StoredPatch> = grouped.get(display).cloned().unwrap_or_default();
             Executor::sort_patches(&mut refs);
             for patch in &refs {
                 if let Some(other) = patch.format
                     && other != base.format
                 {
-                    let patch_ctx = format!("confit.patch.structured('{path}')");
+                    let patch_ctx = format!("confit.patch.structured('{display}')");
                     return Err(plan_error(format!(
-                        "{patch_ctx}: cannot merge document at '{path}': format mismatch"
+                        "{patch_ctx}: cannot merge document at '{display}': format mismatch"
                     )));
                 }
             }
             let document = run_structured_doc(
                 &self.lua,
                 &exec,
-                path,
+                &base.destination,
                 base.format,
                 Some((&base.data, base.owner.as_str())),
                 &refs,
                 ctx,
             )?;
-            out.insert(path.clone(), document);
+            out.insert(display.clone(), document);
         }
-        for (path, items) in &grouped {
-            if bases.contains_key(path) {
+        for (display, items) in &grouped {
+            if bases.contains_key(display) {
                 continue;
             }
             let mut refs = items.clone();
             Executor::sort_patches(&mut refs);
-            let format = created_format(path, &refs)?;
-            let document = run_structured_doc(&self.lua, &exec, path, format, None, &refs, ctx)?;
-            out.insert(path.clone(), document);
+            let format = created_format(display, &refs)?;
+            let destination =
+                Route::parse(display).map_err(|error| plan_error(error.to_string()))?;
+            let document =
+                run_structured_doc(&self.lua, &exec, &destination, format, None, &refs, ctx)?;
+            out.insert(display.clone(), document);
         }
         Ok(out.into_values().collect())
     }
@@ -621,7 +634,7 @@ impl Session {
 fn run_structured_doc(
     lua: &Lua,
     exec: &Executor<'_>,
-    path: &str,
+    destination: &Route,
     format: StructuredFormat,
     base: Option<(&BTreeMap<String, Json>, &str)>,
     refs: &[&StoredPatch],
@@ -644,18 +657,18 @@ fn run_structured_doc(
         format: format.name().to_string(),
     };
     exec.execute(doc.clone(), area, seeds, exec_list(refs))?;
-    let table = live_to_map(&doc, path)?;
-    Ok(finish_structured(path, format, table))
+    let table = live_to_map(&doc, &destination.display())?;
+    Ok(finish_structured(destination, format, table))
 }
 
 /// Builds one finished structured document.
 fn finish_structured(
-    path: &str,
+    destination: &Route,
     format: StructuredFormat,
     table: BTreeMap<String, Json>,
 ) -> ManifestDocument {
     ManifestDocument::new(
-        DocPath::new(path),
+        destination.clone(),
         ManifestData::Structured {
             format,
             data: table,
@@ -721,175 +734,170 @@ fn exec_list(refs: &[&StoredPatch]) -> Vec<ExecPatch> {
         .collect()
 }
 
-/// Assembles text, link, and opaque documents in path order.
+/// Assembles text, link, opaque, tree, and secret documents in route order.
 fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
     ctx: &str,
-    blobs: &mut BTreeMap<String, BlobRef>,
-) -> Result<Vec<ManifestDocument>> {
+) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobHandle>)> {
     let mut grouped: BTreeMap<String, Vec<(ManifestData, String)>> = BTreeMap::new();
+    let mut blobs: BTreeMap<String, BlobHandle> = BTreeMap::new();
     for item in &declared.texts {
-        grouped.entry(item.path.clone()).or_default().push((
-            ManifestData::Text {
-                content: item.content.clone(),
-                mode: item.mode,
-                unmanaged: item.unmanaged,
-            },
-            "profile".to_string(),
-        ));
-    }
-    for item in &declared.links {
-        grouped.entry(item.path.clone()).or_default().push((
-            ManifestData::Link {
-                target: item.target.clone(),
-            },
-            "profile".to_string(),
-        ));
-    }
-    for item in &declared.opaques {
-        grouped.entry(item.path.clone()).or_default().push((
-            resolve_opaque(&item.source, item.mode, item.unmanaged, blobs)?,
-            "profile".to_string(),
-        ));
-    }
-    for item in &declared.trees {
         grouped
-            .entry(item.path.clone())
+            .entry(item.destination.display())
             .or_default()
-            .push((resolve_tree(&item.members, blobs)?, "profile".to_string()));
-    }
-    for config in configs {
-        for item in &config.texts {
-            grouped.entry(item.path.clone()).or_default().push((
+            .push((
                 ManifestData::Text {
                     content: item.content.clone(),
                     mode: item.mode,
                     unmanaged: item.unmanaged,
                 },
-                config.name.clone(),
+                "profile".to_string(),
             ));
-        }
-        for item in &config.links {
-            grouped.entry(item.path.clone()).or_default().push((
+    }
+    for item in &declared.links {
+        grouped
+            .entry(item.destination.display())
+            .or_default()
+            .push((
                 ManifestData::Link {
                     target: item.target.clone(),
                 },
-                config.name.clone(),
+                "profile".to_string(),
             ));
+    }
+    for item in &declared.opaques {
+        collect_blob(&item.blob, &mut blobs);
+        grouped
+            .entry(item.destination.display())
+            .or_default()
+            .push((
+                ManifestData::Opaque {
+                    blob: item.blob.clone(),
+                    size: item.size,
+                    mode: item.mode,
+                    unmanaged: item.unmanaged,
+                },
+                "profile".to_string(),
+            ));
+    }
+    for item in &declared.trees {
+        let members = collect_tree(&item.members, &mut blobs);
+        grouped
+            .entry(item.destination.display())
+            .or_default()
+            .push((ManifestData::Tree { members }, "profile".to_string()));
+    }
+    for item in &declared.secrets {
+        grouped
+            .entry(item.destination.display())
+            .or_default()
+            .push((
+                ManifestData::Secret {
+                    argv: item.argv.clone(),
+                    mode: item.mode,
+                },
+                "profile".to_string(),
+            ));
+    }
+    for config in configs {
+        for item in &config.texts {
+            grouped
+                .entry(item.destination.display())
+                .or_default()
+                .push((
+                    ManifestData::Text {
+                        content: item.content.clone(),
+                        mode: item.mode,
+                        unmanaged: item.unmanaged,
+                    },
+                    config.name.clone(),
+                ));
+        }
+        for item in &config.links {
+            grouped
+                .entry(item.destination.display())
+                .or_default()
+                .push((
+                    ManifestData::Link {
+                        target: item.target.clone(),
+                    },
+                    config.name.clone(),
+                ));
         }
         for item in &config.opaques {
-            grouped.entry(item.path.clone()).or_default().push((
-                resolve_opaque(&item.source, item.mode, item.unmanaged, blobs)?,
-                config.name.clone(),
-            ));
+            collect_blob(&item.blob, &mut blobs);
+            grouped
+                .entry(item.destination.display())
+                .or_default()
+                .push((
+                    ManifestData::Opaque {
+                        blob: item.blob.clone(),
+                        size: item.size,
+                        mode: item.mode,
+                        unmanaged: item.unmanaged,
+                    },
+                    config.name.clone(),
+                ));
         }
         for item in &config.trees {
+            let members = collect_tree(&item.members, &mut blobs);
             grouped
-                .entry(item.path.clone())
+                .entry(item.destination.display())
                 .or_default()
-                .push((resolve_tree(&item.members, blobs)?, config.name.clone()));
+                .push((ManifestData::Tree { members }, config.name.clone()));
+        }
+        for item in &config.secrets {
+            grouped
+                .entry(item.destination.display())
+                .or_default()
+                .push((
+                    ManifestData::Secret {
+                        argv: item.argv.clone(),
+                        mode: item.mode,
+                    },
+                    config.name.clone(),
+                ));
         }
     }
     let mut out = Vec::with_capacity(grouped.len());
-    for (path, items) in &grouped {
+    for (display, items) in &grouped {
         let Some(((data, first), rest)) = items.split_first() else {
             continue;
         };
         if let Some((_, second)) = rest.first() {
             return Err(plan(format!(
-                "{ctx}: document '{path}' is declared more than once ('{first}' plus '{second}'): declare once, patch to modify"
+                "{ctx}: document '{display}' is declared more than once ('{first}' plus '{second}'): declare once, patch to modify"
             )));
         }
-        out.push(ManifestDocument::new(DocPath::new(path), data.clone()));
+        let destination = Route::parse(display).map_err(|error| plan(error.to_string()))?;
+        out.push(ManifestDocument::new(destination, data.clone()));
     }
-    Ok(out)
+    Ok((out, blobs))
 }
 
-/// Chunk size for streaming source files into the content hash.
-const HASH_CHUNK: usize = 8 * 1024;
-
-/// Builds one opaque payload streaming its source file.
-///
-/// The unmanaged flag rides beside the blob, outside the data
-/// hash, so toggling it with identical bytes shows no update line.
-///
-/// # Errors
-///
-/// Missing and unreadable sources fail as io errors.
-fn resolve_opaque(
-    source: &Path,
-    mode: Option<u32>,
-    unmanaged: bool,
-    blobs: &mut BTreeMap<String, BlobRef>,
-) -> Result<ManifestData> {
-    let (blob, size) = hash_source(source)?;
-    blobs.entry(blob.clone()).or_insert_with(|| BlobRef {
-        sha: blob.clone(),
-        size,
-        path: source.to_path_buf(),
-    });
-    Ok(ManifestData::Opaque {
-        blob,
-        size,
-        mode,
-        unmanaged,
-    })
+/// Collects one blob handle under its content hash.
+fn collect_blob(handle: &BlobHandle, blobs: &mut BTreeMap<String, BlobHandle>) {
+    blobs
+        .entry(handle.sha().to_string())
+        .or_insert_with(|| handle.clone());
 }
 
-/// Streams one source file into its content hash and metadata size.
-///
-/// # Errors
-///
-/// Missing and unreadable sources fail as io errors.
-fn hash_source(source: &Path) -> Result<(String, u64)> {
-    let mut file = std::fs::File::open(source)?;
-    let size = file.metadata()?.len();
-    let mut hash = Sha256::new();
-    let mut chunk = [0u8; HASH_CHUNK];
-    loop {
-        let read = file.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        hash.update(&chunk[..read]);
-    }
-    let blob = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok((blob, size))
-}
-
-/// Builds one tree payload streaming member files.
-///
-/// Member hashes cover the extracted files, uniform with
-/// opaque source handling.
-///
-/// # Errors
-///
-/// Missing and unreadable member files fail as io errors.
-fn resolve_tree(
+/// Collects tree members into manifest order with blob handles.
+fn collect_tree(
     members: &[crate::model::TreeMemberDecl],
-    blobs: &mut BTreeMap<String, BlobRef>,
-) -> Result<ManifestData> {
+    blobs: &mut BTreeMap<String, BlobHandle>,
+) -> Vec<confit_core::document::ManifestMember> {
     let mut out = Vec::with_capacity(members.len());
     for member in members {
-        let (blob, size) = hash_source(&member.source)?;
-        blobs.entry(blob.clone()).or_insert_with(|| BlobRef {
-            sha: blob.clone(),
-            size,
-            path: member.source.clone(),
-        });
-        out.push(ManifestMember {
+        collect_blob(&member.blob, blobs);
+        out.push(confit_core::document::ManifestMember {
             relative: member.rel.clone(),
-            blob,
-            size,
+            blob: member.blob.clone(),
             mode: member.mode,
         });
     }
-    Ok(ManifestData::Tree { members: out })
+    out
 }
 
 impl Session {
@@ -956,7 +964,7 @@ impl Session {
             materialize_shell(&mut per_shell.final_entries, shell)
                 .map_err(|error| plan_error(error.to_string()))?;
             out.push(ManifestDocument::new(
-                DocPath::new(shell_path(shell)),
+                shell_route(shell).map_err(|error| plan_error(error.to_string()))?,
                 ManifestData::Rc(per_shell),
             ));
         }
@@ -991,7 +999,7 @@ fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
                     )));
                 }
             };
-            let json = entry.to_json(&format!("{PATCH}: convert"))?;
+            let json = translate_entry(&entry, &format!("{PATCH}: convert"))?;
             crate::surface::document::convert::push_live_entry(
                 &mut profile,
                 &mut config,
@@ -1009,12 +1017,21 @@ fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
     })
 }
 
-/// Derives the rc path for one shell name.
+/// Derives the rc destination route for one shell name.
+fn shell_route(shell: &str) -> Result<Route> {
+    let relative = match shell {
+        "bash" => ".bashrc".to_string(),
+        "zsh" => ".zshrc".to_string(),
+        other => format!(".{other}rc"),
+    };
+    Route::new(RouteBase::Home, relative)
+}
+
+/// Derives the rc path display for one shell name.
 fn shell_path(shell: &str) -> String {
-    match shell {
-        "bash" => "~/.bashrc".to_string(),
-        "zsh" => "~/.zshrc".to_string(),
-        other => format!("~/.{other}rc"),
+    match shell_route(shell) {
+        Ok(route) => route.display(),
+        Err(_) => format!("home:.{shell}rc"),
     }
 }
 
@@ -1026,13 +1043,13 @@ fn materialize_shell(entries: &mut [RcEntry], shell: &str) -> Result<()> {
         match &mut entry.op {
             RcOp::Eval { argv, .. } | RcOp::Cmd { argv, .. } => {
                 for arg in argv {
-                    *arg = render_init(arg, &facts, shell)?;
+                    let Arg::Text(text) = arg else {
+                        continue;
+                    };
+                    *text = render_init(text, &facts, shell)?;
                 }
             }
-            RcOp::Source { path, .. } => {
-                *path = render_init(path, &facts, shell)?;
-            }
-            RcOp::Env { .. } | RcOp::Path { .. } | RcOp::Alias { .. } => {}
+            RcOp::Source { .. } | RcOp::Env { .. } | RcOp::Path { .. } | RcOp::Alias { .. } => {}
         }
     }
     Ok(())

@@ -85,24 +85,6 @@ pub(crate) trait TableExt {
     /// Recursive tables fail as plan errors. Non-object shapes fail as plan errors.
     ///
     fn req_object(&self, ctx: &str, field: &str) -> mlua::Result<BTreeMap<String, Json>>;
-
-    /// Reads the table itself into a dense string array.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - error prefix naming the constructor.
-    /// * `field` - field name naming the table.
-    ///
-    /// # Returns
-    ///
-    /// String items in 1-based index order.
-    ///
-    /// # Errors
-    ///
-    /// Non-integer keys fail as plan errors. Non-string items fail as plan errors.
-    /// Sparse arrays fail as plan errors.
-    ///
-    fn req_string_array(&self, ctx: &str, field: &str) -> mlua::Result<Vec<String>>;
 }
 
 /// Lua value conversion helpers.
@@ -191,24 +173,6 @@ pub(crate) trait ValueExt {
     /// Non-integer values fail as plan errors.
     ///
     fn req_int(self, ctx: &str, field: &str) -> mlua::Result<i64>;
-
-    /// Reads one dense string array value with a uniform shape error.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - error prefix naming the constructor.
-    /// * `field` - field name under reading.
-    ///
-    /// # Returns
-    ///
-    /// String items in 1-based index order.
-    ///
-    /// # Errors
-    ///
-    /// Non-table values fail as plan errors. Non-integer keys fail as plan errors.
-    /// Non-string items fail as plan errors. Sparse arrays fail as plan errors.
-    ///
-    fn req_string_array(self, ctx: &str, field: &str) -> mlua::Result<Vec<String>>;
 
     /// Tests one value for string contents.
     ///
@@ -308,31 +272,6 @@ impl TableExt for Table {
             ))),
         }
     }
-
-    fn req_string_array(&self, ctx: &str, field: &str) -> mlua::Result<Vec<String>> {
-        let mut indexed: Vec<(i64, String)> = Vec::new();
-        for pair in self.pairs::<Value, Value>() {
-            let (key, value) = pair?;
-            let index = key.req_int(ctx, field).map_err(|_| {
-                plan_error(format!("{ctx}: field '{field}' must be a string array"))
-            })?;
-            let item = value.req_str(ctx, field).map_err(|_| {
-                plan_error(format!(
-                    "{ctx}: field '{field}' entry [{index}] must be a string"
-                ))
-            })?;
-            indexed.push((index, item));
-        }
-        indexed.sort_by_key(|(index, _)| *index);
-        for (position, (index, _)) in (1i64..).zip(indexed.iter()) {
-            if *index != position {
-                return Err(plan_error(format!(
-                    "{ctx}: field '{field}' must be a dense string array starting at 1"
-                )));
-            }
-        }
-        Ok(indexed.into_iter().map(|(_, item)| item).collect())
-    }
 }
 
 impl ValueExt for Value {
@@ -377,10 +316,6 @@ impl ValueExt for Value {
                 "{ctx}: field '{field}' must be an integer"
             ))),
         }
-    }
-
-    fn req_string_array(self, ctx: &str, field: &str) -> mlua::Result<Vec<String>> {
-        self.req_table(ctx, field)?.req_string_array(ctx, field)
     }
 
     fn opt_str(self) -> Option<String> {

@@ -3,19 +3,20 @@
 //! Private declaration and patch types behind evaluation.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use serde_json::Value as Json;
 
 use crate::level::Level;
+use confit_core::arg::Arg;
 use confit_core::document::StructuredFormat;
+use confit_core::handles::{BlobHandle, Route};
 use confit_core::hook::Hook;
 
 /// Declared structured document from profile and configs.
 #[derive(Debug, Clone)]
 pub(crate) struct StructuredDecl {
-    /// Destination path.
-    pub(crate) path: String,
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
     /// Serialization format.
     pub(crate) format: StructuredFormat,
     /// Data table in canonical form.
@@ -25,8 +26,8 @@ pub(crate) struct StructuredDecl {
 /// Declared plain text document.
 #[derive(Debug, Clone)]
 pub(crate) struct TextDecl {
-    /// Destination path.
-    pub(crate) path: String,
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
     /// Exact file text.
     pub(crate) content: String,
     /// Unix permission bits, holding `None` for default handling.
@@ -38,32 +39,36 @@ pub(crate) struct TextDecl {
 /// Declared symlink document.
 #[derive(Debug, Clone)]
 pub(crate) struct LinkDecl {
-    /// Link path.
-    pub(crate) path: String,
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
     /// Link target.
     pub(crate) target: String,
 }
 
-/// Declared opaque document holding a source path.
+/// Declared opaque document holding a blob handle.
 #[derive(Debug, Clone)]
 pub(crate) struct OpaqueDecl {
-    /// Destination path.
-    pub(crate) path: String,
-    /// Absolute source file path, resolved under root or cache.
-    pub(crate) source: PathBuf,
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
+    /// Content-addressed file bytes identity.
+    pub(crate) blob: BlobHandle,
+    /// Raw byte count of the file content.
+    pub(crate) size: u64,
     /// Unix permission bits, holding `None` for default handling.
     pub(crate) mode: Option<u32>,
     /// True while presence alone satisfies the document.
     pub(crate) unmanaged: bool,
 }
 
-/// Declared tree member holding destination slot and source.
+/// Declared tree member holding a blob handle.
 #[derive(Debug, Clone)]
 pub(crate) struct TreeMemberDecl {
     /// Destination-relative member path.
     pub(crate) rel: String,
-    /// Absolute extracted file path.
-    pub(crate) source: PathBuf,
+    /// Content-addressed member bytes identity.
+    pub(crate) blob: BlobHandle,
+    /// Raw byte count of the member content.
+    pub(crate) size: u64,
     /// Unix permission bits from the archive member.
     pub(crate) mode: u32,
 }
@@ -71,10 +76,21 @@ pub(crate) struct TreeMemberDecl {
 /// Declared tree document holding one managed file set.
 #[derive(Debug, Clone)]
 pub(crate) struct TreeDecl {
-    /// Destination folder.
-    pub(crate) path: String,
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
     /// Members in relative path order.
     pub(crate) members: Vec<TreeMemberDecl>,
+}
+
+/// Declared secret document holding an apply-time command.
+#[derive(Debug, Clone)]
+pub(crate) struct SecretDecl {
+    /// Late-bound destination route.
+    pub(crate) destination: Route,
+    /// Command and arguments in order.
+    pub(crate) argv: Vec<Arg>,
+    /// Unix permission bits, holding `None` for default handling.
+    pub(crate) mode: Option<u32>,
 }
 
 /// Declared rc entry with its section and canonical JSON form.
@@ -89,7 +105,7 @@ pub(crate) struct RcEntryDecl {
 /// Stored patch handle with owner for live execution.
 #[derive(Debug, Clone)]
 pub(crate) struct StoredPatch {
-    /// Target document key: `rc` or one document path.
+    /// Target document key: `rc` or one destination display.
     pub(crate) target: String,
     /// Structured format for patch-created documents.
     pub(crate) format: Option<StructuredFormat>,
@@ -129,6 +145,8 @@ pub(crate) struct ConfigData {
     pub(crate) opaques: Vec<OpaqueDecl>,
     /// Declared tree documents.
     pub(crate) trees: Vec<TreeDecl>,
+    /// Declared secret documents.
+    pub(crate) secrets: Vec<SecretDecl>,
     /// Optional rc base holding section buckets.
     pub(crate) rc_base: Option<Vec<RcEntryDecl>>,
     /// Patch handles in declaration order.

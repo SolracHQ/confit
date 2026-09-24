@@ -4,11 +4,13 @@
 
 #![deny(missing_docs)]
 
+pub mod arg;
 pub mod condition;
 pub mod document;
 pub mod drift;
 pub mod error;
 pub mod fs;
+pub mod handles;
 pub mod hook;
 pub mod ids;
 pub mod plan;

@@ -3,12 +3,13 @@
 //! Post-config step declarations over argv and opts.
 
 use mlua::{Function, Lua, Table, Value};
-use serde_json::Value as Json;
 
 use super::confit_table;
+use super::handles::LuaRoute;
 use super::runtime::{check_condition_json, condition_from_json};
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, set_marker};
+use confit_core::arg::Arg;
 
 /// Installs the hook namespace on a state.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -23,14 +24,10 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.hook.run";
     let (argv_value, opts_value) = args;
-    let argv = argv_value.req_string_array(CTOR, "argv").map_err(|_| {
-        plan_error(format!(
-            "{CTOR}: field 'argv' must be a dense non-empty string array"
-        ))
-    })?;
+    let argv = read_slots(&argv_value, CTOR, "argv")?;
     if argv.is_empty() {
         return Err(plan_error(format!(
-            "{CTOR}: field 'argv' must be a dense non-empty string array"
+            "{CTOR}: field 'argv' must be a dense non-empty string-or-route array"
         )));
     }
     let opts = match opts_value {
@@ -47,17 +44,9 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     let checks = read_checks(&opts, CTOR)?;
     let timeout_secs = read_timeout(&opts, CTOR)?;
     let table = lua.create_table()?;
-    let argv_table = lua.create_table()?;
-    for (position, item) in argv.iter().enumerate() {
-        argv_table.set((position + 1) as i64, item.as_str())?;
-    }
-    table.set("argv", argv_table)?;
+    write_slots(lua, &table, "argv", &argv)?;
     if !path.is_empty() {
-        let path_table = lua.create_table()?;
-        for (position, item) in path.iter().enumerate() {
-            path_table.set((position + 1) as i64, item.as_str())?;
-        }
-        table.set("path", path_table)?;
+        write_slots(lua, &table, "path", &path)?;
     }
     if let Some(guard) = requires {
         table.set("requires", guard)?;
@@ -75,6 +64,74 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     table.set("timeout_secs", timeout_secs)?;
     set_marker(lua, &table, "hook", None)?;
     Ok(table)
+}
+
+/// Reads one dense string-or-route array value into slots.
+///
+/// Strings run verbatim. Route userdata carries the destination
+/// route. Anything else fails as a plan error naming the field.
+pub(crate) fn read_slots(value: &Value, ctor: &str, field: &str) -> mlua::Result<Vec<Arg>> {
+    const DENSE: &str = "must be a dense string-or-route array";
+    let table = match value.clone() {
+        Value::Table(table) => table,
+        _ => {
+            return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+        }
+    };
+    let mut indexed: Vec<(i64, Value)> = Vec::new();
+    for pair in table.pairs::<Value, Value>() {
+        let (key, item) = pair?;
+        let Some(index) = key.as_integer() else {
+            return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+        };
+        indexed.push((index, item));
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    for (position, (index, _)) in indexed.iter().enumerate() {
+        if *index != position as i64 + 1 {
+            return Err(plan_error(format!(
+                "{ctor}: field '{field}' must be a dense string-or-route array starting at 1"
+            )));
+        }
+    }
+    let mut out = Vec::with_capacity(indexed.len());
+    for (_, item) in indexed {
+        if let Some(text) = item.clone().opt_str() {
+            out.push(Arg::Text(text));
+            continue;
+        }
+        if let Some(data) = item.as_userdata()
+            && let Ok(route) = data.borrow::<LuaRoute>()
+        {
+            out.push(Arg::Route(route.core().clone()));
+            continue;
+        }
+        return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+    }
+    Ok(out)
+}
+
+/// Writes one slot array into a hook declaration table.
+///
+/// Text slots land as strings. Route slots land as route userdata.
+pub(crate) fn write_slots(
+    lua: &Lua,
+    table: &Table,
+    field: &str,
+    slots: &[Arg],
+) -> mlua::Result<()> {
+    let list = lua.create_table()?;
+    for (position, slot) in slots.iter().enumerate() {
+        match slot {
+            Arg::Text(text) => list.set((position + 1) as i64, text.as_str())?,
+            Arg::Route(route) => list.set(
+                (position + 1) as i64,
+                lua.create_userdata(LuaRoute::from(route.clone()))?,
+            )?,
+        }
+    }
+    table.set(field, list)?;
+    Ok(())
 }
 
 /// Rejects unknown keys on the hook opts table.
@@ -97,14 +154,12 @@ fn check_opts_keys(opts: &Table, ctor: &str) -> mlua::Result<()> {
 }
 
 /// Reads the path extension dirs, defaulting to empty.
-fn read_path(opts: &Table, ctor: &str) -> mlua::Result<Vec<String>> {
+fn read_path(opts: &Table, ctor: &str) -> mlua::Result<Vec<Arg>> {
     let value: Value = opts.get("path")?;
     if value.is_nil() {
         return Ok(Vec::new());
     }
-    value
-        .req_string_array(ctor, "path")
-        .map_err(|_| plan_error(format!("{ctor}: field 'path' must be a dense string array")))
+    read_slots(&value, ctor, "path")
 }
 
 /// Reads the capability gate, defaulting to none.
@@ -318,75 +373,100 @@ fn read_timeout(opts: &Table, ctor: &str) -> mlua::Result<u64> {
 pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_core::hook::Hook> {
     use confit_core::hook::Hook;
 
-    let json = table
-        .to_json(&format!("{ctx}: convert"))
-        .map_err(|error| plan_error(format!("{ctx}: convert {error}")))?;
-    let map = match json.as_object() {
-        Some(map) => map,
-        None => return Err(plan_error(format!("{ctx} must be a confit.hook value"))),
+    let argv_value: Value = table.get("argv")?;
+    let argv = match argv_value.is_nil() {
+        true => Vec::new(),
+        false => read_slots(&argv_value, ctx, "argv")?,
     };
-    let strings = |field: &str| -> mlua::Result<Vec<String>> {
-        let mut out = Vec::new();
-        match map.get(field) {
-            None | Some(Json::Null) => return Ok(out),
-            Some(Json::Array(items)) => {
-                for item in items {
-                    match item.as_str() {
-                        Some(text) => out.push(text.to_string()),
-                        None => {
-                            return Err(plan_error(format!(
-                                "{ctx}: field '{field}' must be a string array"
-                            )));
-                        }
-                    }
-                }
-            }
-            Some(_) => {
-                return Err(plan_error(format!(
-                    "{ctx}: field '{field}' must be a string array"
-                )));
-            }
-        }
-        Ok(out)
-    };
-    let argv = strings("argv")?;
     if argv.is_empty() {
         return Err(plan_error(format!(
-            "{ctx}: field 'argv' must be a dense non-empty string array"
+            "{ctx}: field 'argv' must be a dense non-empty string-or-route array"
         )));
     }
-    let path = strings("path")?;
-    let requires = match map.get("requires") {
-        None | Some(Json::Null) => None,
-        Some(cond) => Some(condition_from_json(
-            cond,
-            &format!("{ctx}: field 'requires'"),
-        )?),
+    let path_value: Value = table.get("path")?;
+    let path = match path_value.is_nil() {
+        true => Vec::new(),
+        false => read_slots(&path_value, ctx, "path")?,
     };
-    let when = match map.get("when") {
-        None | Some(Json::Null) => None,
-        Some(cond) => Some(condition_from_json(cond, &format!("{ctx}: field 'when'"))?),
+    let requires = match table.get::<Value>("requires")? {
+        Value::Nil => None,
+        Value::Table(guard) => {
+            let json = guard
+                .to_json(&format!("{ctx}: field 'requires'"))
+                .map_err(|error| plan_error(format!("{ctx}: field 'requires' {error}")))?;
+            Some(condition_from_json(
+                &json,
+                &format!("{ctx}: field 'requires'"),
+            )?)
+        }
+        _ => {
+            return Err(plan_error(format!(
+                "{ctx}: field 'requires' must be a condition table"
+            )));
+        }
+    };
+    let when = match table.get::<Value>("when")? {
+        Value::Nil => None,
+        Value::Table(guard) => {
+            let json = guard
+                .to_json(&format!("{ctx}: field 'when'"))
+                .map_err(|error| plan_error(format!("{ctx}: field 'when' {error}")))?;
+            Some(condition_from_json(&json, &format!("{ctx}: field 'when'"))?)
+        }
+        _ => {
+            return Err(plan_error(format!(
+                "{ctx}: field 'when' must be a condition table"
+            )));
+        }
     };
     let mut checks = Vec::new();
-    match map.get("checks") {
-        None | Some(Json::Null) => {}
-        Some(Json::Array(items)) => {
-            for (position, item) in items.iter().enumerate() {
+    match table.get::<Value>("checks")? {
+        Value::Nil => {}
+        Value::Table(list) => {
+            let mut indexed: Vec<(i64, Value)> = Vec::new();
+            for pair in list.pairs::<Value, Value>() {
+                let (key, item) = pair?;
+                let Some(index) = key.as_integer() else {
+                    return Err(plan_error(format!(
+                        "{ctx}: field 'checks' must be a dense condition array"
+                    )));
+                };
+                indexed.push((index, item));
+            }
+            indexed.sort_by_key(|(index, _)| *index);
+            for (position, (index, _)) in indexed.iter().enumerate() {
+                if *index != position as i64 + 1 {
+                    return Err(plan_error(format!(
+                        "{ctx}: field 'checks' must be a dense condition array"
+                    )));
+                }
+            }
+            for (index, item) in indexed {
+                let Some(cond) = item.opt_table() else {
+                    return Err(plan_error(format!(
+                        "{ctx}: field 'checks[{index}]' must be a condition table"
+                    )));
+                };
+                let json = cond
+                    .to_json(&format!("{ctx}: field 'checks[{index}]'"))
+                    .map_err(|error| {
+                        plan_error(format!("{ctx}: field 'checks[{index}]' {error}"))
+                    })?;
                 checks.push(condition_from_json(
-                    item,
-                    &format!("{ctx}: field 'checks[{}]'", position + 1),
+                    &json,
+                    &format!("{ctx}: field 'checks[{index}]'"),
                 )?);
             }
         }
-        Some(_) => {
+        _ => {
             return Err(plan_error(format!(
                 "{ctx}: field 'checks' must be a dense condition array"
             )));
         }
     }
-    let timeout_secs = match map.get("timeout_secs").and_then(Json::as_u64) {
-        Some(secs) => secs,
-        None => {
+    let timeout_secs = match table.get::<Value>("timeout_secs")? {
+        Value::Integer(secs) if secs >= 0 => secs as u64,
+        _ => {
             return Err(plan_error(format!(
                 "{ctx}: field 'timeout_secs' must be an integer"
             )));

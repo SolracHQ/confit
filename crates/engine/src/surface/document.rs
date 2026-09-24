@@ -1,23 +1,23 @@
 //! Document
 //!
-//! Document and rc entry tables for Lua.
-
-use std::path::{Path, PathBuf};
+//! Document constructors over destination handles.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use super::confit_table;
+use super::handles::{LuaBlobHandle, LuaRoute, blob_for_opaque, req_route};
+use super::hook::{read_slots, write_slots};
 use super::runtime::check_condition_json;
 use crate::error::plan_error;
-use crate::lua::{TableExt, ValueExt, read_marker, set_marker};
-use crate::model::{LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl};
+use crate::lua::{TableExt, ValueExt, set_marker};
+use crate::model::{
+    LinkDecl, OpaqueDecl, RcEntryDecl, SecretDecl, StructuredDecl, TextDecl, TreeDecl,
+    TreeMemberDecl,
+};
+use confit_core::arg::Arg;
 use confit_core::document::{RcData, StructuredFormat};
-use confit_core::progress::{Event, ProgressSender};
 
-pub(crate) mod archive;
 pub(crate) mod convert;
-
-use self::archive::{ensure_extracted, read_members};
 
 /// Declared document in registration form.
 pub(crate) enum Declared {
@@ -27,10 +27,12 @@ pub(crate) enum Declared {
     Text(TextDecl),
     /// Link declaration.
     Link(LinkDecl),
-    /// Opaque declaration holding a source path.
+    /// Opaque declaration holding a blob handle.
     Opaque(OpaqueDecl),
     /// Tree declaration holding one managed file set.
     Tree(TreeDecl),
+    /// Secret declaration holding an apply-time command.
+    Secret(SecretDecl),
     /// Rc base holding section buckets.
     Rc(Vec<RcEntryDecl>),
 }
@@ -52,74 +54,20 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
         "link",
         lua.create_function(|lua, args: (Value, Value)| link_impl(lua, args))?,
     )?;
-    let opaque_root: PathBuf = session.root.clone();
-    let opaque_cache: PathBuf = session.cache.clone();
-    let opaque_extract: PathBuf = session.extract.clone();
+    let opaque_stores = session.stores.clone();
     namespace.set(
         "opaque",
         lua.create_function(move |lua, args: (Value, Value, Option<Value>)| {
-            opaque_impl(lua, &opaque_root, &opaque_cache, &opaque_extract, args)
+            opaque_impl(lua, &opaque_stores, args)
         })?,
     )?;
-    let compressed = CompressedDocs {
-        root: session.root.clone(),
-        cache: session.cache.clone(),
-        extract: session.extract.clone(),
-        progress: session.progress.clone(),
-    };
     namespace.set(
-        "compressed",
-        lua.create_function(move |lua, args: (Value, Value)| {
-            compressed_impl(lua, &compressed, args)
-        })?,
-    )?;
-    let tree = TreeDocs {
-        root: session.root.clone(),
-        cache: session.cache.clone(),
-        extract: session.extract.clone(),
-        progress: session.progress.clone(),
-    };
-    namespace.set(
-        "tree",
-        lua.create_function(move |lua, args: (Value, Value, Value)| tree_impl(lua, &tree, args))?,
+        "secret",
+        lua.create_function(|lua, args: (Value, Value, Option<Value>)| secret_impl(lua, args))?,
     )?;
     install_rc(lua, &namespace)?;
     confit.set("document", namespace)?;
     Ok(())
-}
-
-/// Installs the rc entry constructors on the document namespace.
-fn install_rc(lua: &Lua, namespace: &Table) -> mlua::Result<()> {
-    let rc = lua.create_table()?;
-    rc.set(
-        "new",
-        lua.create_function(|lua, sections: Value| rc_new_impl(lua, sections))?,
-    )?;
-    rc.set(
-        "alias",
-        lua.create_function(|lua, args: (Value, Value, Value)| rc_alias_impl(lua, args))?,
-    )?;
-    rc.set(
-        "env",
-        lua.create_function(|lua, args: (Value, Value, Value)| rc_env_impl(lua, args))?,
-    )?;
-    rc.set(
-        "prepend",
-        lua.create_function(|lua, args: MultiValue| rc_prepend_impl(lua, args))?,
-    )?;
-    rc.set(
-        "eval",
-        lua.create_function(|lua, args: (Value, Value)| rc_eval_impl(lua, args))?,
-    )?;
-    rc.set(
-        "cmd",
-        lua.create_function(|lua, args: (Value, Value)| rc_cmd_impl(lua, args))?,
-    )?;
-    rc.set(
-        "source",
-        lua.create_function(|lua, args: (Value, Value)| rc_source_impl(lua, args))?,
-    )?;
-    namespace.set("rc", rc)
 }
 
 /// Builds a structured document table from format and args.
@@ -134,37 +82,70 @@ fn structured_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
 /// Builds a plain text document table.
 fn text_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.text";
-    let (path_value, content_value, opts) = args;
-    let path = path_value.req_str(CTOR, "path")?;
+    let (dest_value, content_value, opts) = args;
+    let destination = req_route(&dest_value, CTOR, "path")?;
     let content = content_value.req_str(CTOR, "content")?;
     let resolved = DocOpts::resolve(opts, CTOR)?;
-    DocumentTables::text(lua, path, content, resolved.mode, resolved.unmanaged)
+    DocumentTables::text(lua, destination, content, resolved.mode, resolved.unmanaged)
 }
 
 /// Builds a symlink document table.
 fn link_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.link";
-    let (path_value, target_value) = args;
-    let path = path_value.req_str(CTOR, "path")?;
+    let (dest_value, target_value) = args;
+    let destination = req_route(&dest_value, CTOR, "path")?;
     let target = target_value.req_str(CTOR, "target")?;
-    DocumentTables::link(lua, path, target)
+    DocumentTables::link(lua, destination, target)
 }
 
-/// Builds an opaque document table holding a source path.
+/// Builds an opaque document table from a source handle.
 fn opaque_impl(
     lua: &Lua,
-    root: &Path,
-    cache: &Path,
-    extract: &Path,
+    stores: &confit_store::Stores,
     args: (Value, Value, Option<Value>),
 ) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.opaque";
-    let (path_value, source_value, opts) = args;
-    let path = path_value.req_str(CTOR, "path")?;
-    let rel = source_value.req_str(CTOR, "source")?;
-    let source = super::resources::resolve_under_root(root, cache, extract, &rel, CTOR)?;
+    let (dest_value, source_value, opts) = args;
+    let destination = req_route(&dest_value, CTOR, "path")?;
+    let (blob, size) = blob_for_opaque(&source_value, stores, CTOR)?;
     let resolved = DocOpts::resolve(opts, CTOR)?;
-    DocumentTables::opaque(lua, path, source, resolved.mode, resolved.unmanaged)
+    DocumentTables::opaque(
+        lua,
+        destination,
+        blob,
+        size,
+        resolved.mode,
+        resolved.unmanaged,
+    )
+}
+
+/// Builds a secret document table from a command.
+fn secret_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Table> {
+    const CTOR: &str = "confit.document.secret";
+    let (dest_value, cmd_value, opts) = args;
+    let destination = req_route(&dest_value, CTOR, "path")?;
+    let argv = parse_secret_argv(&cmd_value, CTOR)?;
+    let mode = SecretOpts::resolve(opts, CTOR)?;
+    DocumentTables::secret(lua, destination, argv, mode)
+}
+
+/// Parses secret commands from strings and argv tables.
+fn parse_secret_argv(cmd: &Value, ctor: &str) -> mlua::Result<Vec<Arg>> {
+    if let Some(text) = cmd.clone().opt_str() {
+        if text.is_empty() {
+            return Err(plan_error(format!("{ctor}: field 'cmd' must not be empty")));
+        }
+        return Ok(vec![
+            Arg::Text("sh".to_string()),
+            Arg::Text("-c".to_string()),
+            Arg::Text(text),
+        ]);
+    }
+    let argv = read_slots(cmd, ctor, "cmd")?;
+    if argv.is_empty() {
+        return Err(plan_error(format!("{ctor}: field 'cmd' must not be empty")));
+    }
+    Ok(argv)
 }
 
 /// Document table builders holding domain validation.
@@ -172,23 +153,6 @@ struct DocumentTables;
 
 impl DocumentTables {
     /// Builds a structured document table from format and args.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `ctor` - error prefix naming the constructor.
-    /// * `format_name` - raw format name under parsing.
-    /// * `args` - args table holding path and data values.
-    ///
-    /// # Returns
-    ///
-    /// Document table stamped with the structured marker.
-    ///
-    /// # Errors
-    ///
-    /// Unknown formats fail as plan errors. Unknown args fields fail as plan errors.
-    /// Non-string args keys fail as plan errors.
-    ///
     fn structured(lua: &Lua, ctor: &str, format_name: String, args: Table) -> mlua::Result<Table> {
         const KNOWN: &str = "'json', 'toml', or 'yaml'";
         let format = StructuredFormat::parse(&format_name)
@@ -206,9 +170,10 @@ impl DocumentTables {
                 )));
             }
         }
+        let path_value: Value = args.get("path")?;
+        req_route(&path_value, ctor, "path")?;
         let out = lua.create_table()?;
-        let path: Value = args.get("path")?;
-        out.set("path", path)?;
+        out.set("path", path_value)?;
         let data: Value = args.get("data")?;
         out.set("data", data)?;
         set_marker(lua, &out, "structured", Some(("__format", format.name())))?;
@@ -216,28 +181,15 @@ impl DocumentTables {
     }
 
     /// Builds a plain text document table.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `path` - destination path.
-    /// * `content` - exact file text.
-    /// * `mode` - unix permission bits, holding `None` for default handling.
-    /// * `unmanaged` - true while presence alone satisfies the document.
-    ///
-    /// # Returns
-    ///
-    /// Document table stamped with the text marker and the mode marker.
-    ///
     fn text(
         lua: &Lua,
-        path: String,
+        destination: confit_core::handles::Route,
         content: String,
         mode: Option<u32>,
         unmanaged: bool,
     ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
-        out.set("path", path)?;
+        out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
         out.set("content", content)?;
         out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
@@ -247,55 +199,80 @@ impl DocumentTables {
     }
 
     /// Builds a symlink document table.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `path` - link path.
-    /// * `target` - link target.
-    ///
-    /// # Returns
-    ///
-    /// Document table stamped with the link marker.
-    ///
-    fn link(lua: &Lua, path: String, target: String) -> mlua::Result<Table> {
+    fn link(
+        lua: &Lua,
+        destination: confit_core::handles::Route,
+        target: String,
+    ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
-        out.set("path", path)?;
+        out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
         out.set("target", target)?;
         set_marker(lua, &out, "link", None)?;
         Ok(out)
     }
 
-    /// Builds an opaque document table holding a source path.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `path` - destination path.
-    /// * `source` - absolute source file path.
-    /// * `mode` - unix permission bits, holding `None` for default handling.
-    /// * `unmanaged` - true while presence alone satisfies the document.
-    ///
-    /// # Returns
-    ///
-    /// Document table stamped with the opaque marker and the mode marker.
-    ///
+    /// Builds an opaque document table holding a sealed blob handle.
     fn opaque(
         lua: &Lua,
-        path: String,
-        source: PathBuf,
+        destination: confit_core::handles::Route,
+        blob: confit_core::handles::BlobHandle,
+        size: u64,
         mode: Option<u32>,
         unmanaged: bool,
     ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
-        out.set("path", path)?;
-        out.set("source", source.to_string_lossy().as_ref())?;
+        out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
+        out.set("blob", lua.create_userdata(LuaBlobHandle::new(blob))?)?;
+        let size = size.min(i64::MAX as u64) as i64;
+        out.set("size", size)?;
         out.set("unmanaged", unmanaged)?;
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "opaque", extra)?;
         Ok(out)
     }
+
+    /// Builds a secret document table holding an argv array.
+    fn secret(
+        lua: &Lua,
+        destination: confit_core::handles::Route,
+        argv: Vec<Arg>,
+        mode: Option<u32>,
+    ) -> mlua::Result<Table> {
+        let out = lua.create_table()?;
+        out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
+        write_slots(lua, &out, "argv", &argv)?;
+        let text = mode.map(|bits| bits.to_string());
+        let extra = text.as_deref().map(|bits| ("__mode", bits));
+        set_marker(lua, &out, "secret", extra)?;
+        Ok(out)
+    }
+}
+
+/// Builds one tree document table from kept members.
+pub(crate) fn tree_table(
+    lua: &Lua,
+    destination: confit_core::handles::Route,
+    members: Vec<TreeMemberDecl>,
+) -> mlua::Result<Table> {
+    let out = lua.create_table()?;
+    out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
+    let list = lua.create_table()?;
+    for (index, member) in members.iter().enumerate() {
+        let item = lua.create_table()?;
+        item.set("rel", member.rel.as_str())?;
+        item.set(
+            "blob",
+            lua.create_userdata(LuaBlobHandle::new(member.blob.clone()))?,
+        )?;
+        let size = member.size.min(i64::MAX as u64) as i64;
+        item.set("size", size)?;
+        item.set("mode", i64::from(member.mode))?;
+        list.set(index + 1, item)?;
+    }
+    out.set("members", list)?;
+    set_marker(lua, &out, "tree", None)?;
+    Ok(out)
 }
 
 /// Document opts holding mode and the unmanaged flag.
@@ -308,24 +285,6 @@ struct DocOpts {
 
 impl DocOpts {
     /// Resolves the document opts from an opts value.
-    ///
-    /// # Arguments
-    ///
-    /// * `opts` - opts value holding nil, missing, or a table with
-    ///   `mode` and `unmanaged` fields.
-    /// * `ctor` - error prefix naming the constructor.
-    ///
-    /// # Returns
-    ///
-    /// Mode bits, the unmanaged flag, holding defaults for
-    /// missing and nil opts.
-    ///
-    /// # Errors
-    ///
-    /// Non-table opts fail as plan errors. Unknown opts fields fail as plan errors.
-    /// Non-string modes fail as plan errors. Unparsable modes fail as plan errors.
-    /// Non-boolean unmanaged flags fail as plan errors.
-    ///
     fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Self> {
         let Some(opts) = opts else {
             return Ok(Self {
@@ -377,248 +336,45 @@ impl DocOpts {
     }
 }
 
-/// Parses `compressed` args and delegates to `CompressedDocs::build`.
-fn compressed_impl(lua: &Lua, docs: &CompressedDocs, args: (Value, Value)) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.document.compressed";
-    let (path_value, callback_value) = args;
-    let rel = path_value.req_str(CTOR, "path")?;
-    let callback = callback_value.req_func(CTOR, "callback")?;
-    docs.build(lua, CTOR, rel, callback)
-}
+/// Secret opts holding mode alone.
+struct SecretOpts;
 
-/// Archive unpacker holding domain validation.
-struct CompressedDocs {
-    /// Project root for archive reads.
-    root: PathBuf,
-    /// Cache folder for cache-absolute reads.
-    cache: PathBuf,
-    /// Extract folder for member file paths.
-    extract: PathBuf,
-    /// Progress sender holding `None` for silence.
-    progress: Option<ProgressSender>,
-}
-
-impl CompressedDocs {
-    /// Unpacks one archive through a per-member callback.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `ctor` - error prefix naming the constructor.
-    /// * `rel` - archive path under reading.
-    /// * `callback` - per-member document picker.
-    ///
-    /// # Returns
-    ///
-    /// Kept document tables in callback order.
-    ///
-    /// # Errors
-    ///
-    /// Empty paths fail as plan errors. Unreadable archives fail as plan errors.
-    /// Non-document callback returns fail as plan errors.
-    ///
-    fn build(&self, lua: &Lua, ctor: &str, rel: String, callback: Function) -> mlua::Result<Table> {
-        if rel.is_empty() {
-            return Err(plan_error(format!(
-                "{ctor}: field 'path' must not be empty"
-            )));
+impl SecretOpts {
+    /// Resolves the secret mode from an opts value.
+    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Option<u32>> {
+        let Some(opts) = opts else {
+            return Ok(None);
+        };
+        if opts.is_nil() {
+            return Ok(None);
         }
-        let full = super::resources::resolve_under_root(
-            &self.root,
-            &self.cache,
-            &self.extract,
-            &rel,
-            ctor,
-        )?;
-        let start = std::time::Instant::now();
-        let sha = self::archive::archive_sha(&full, &rel, ctor)?;
-        let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
-        let bytes = std::fs::read(&full)
-            .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
-        let members = read_members(&bytes, &rel, ctor)?;
-        let out = lua.create_table()?;
-        let mut kept: i64 = 1;
-        for member in &members {
-            let info = lua.create_table()?;
-            let size = member.size.min(i64::MAX as u64) as i64;
-            info.set("size", size)?;
-            info.set("executable", member.executable)?;
-            let member_path = dir.join(&member.name).to_string_lossy().into_owned();
-            let returned: Value = callback.call((member.name.as_str(), info, member_path))?;
-            if returned.is_nil() {
-                continue;
-            }
-            let Some(table) = returned.opt_table() else {
+        let table = opts.req_table(ctor, "opts")?;
+        for pair in table.pairs::<Value, Value>() {
+            let (key, _) = pair?;
+            let Some(name) = key.opt_str() else {
                 return Err(plan_error(format!(
-                    "{ctor}: callback must return a document or nil"
+                    "{ctor}: field 'opts' must hold string keys"
                 )));
             };
-            if read_marker(&table, "__kind").is_none() {
+            if name != "mode" {
                 return Err(plan_error(format!(
-                    "{ctor}: callback must return a document or nil"
+                    "{ctor}: field 'opts' unknown field '{name}'"
                 )));
             }
-            out.set(kept, table)?;
-            kept += 1;
         }
-        log::debug!(
-            "unpack archive={rel} kept={} total={} took {}ms",
-            out.raw_len(),
-            members.len(),
-            start.elapsed().as_millis()
-        );
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::Unpacked {
-                archive: rel.clone(),
-                kept: out.raw_len(),
-                total: members.len(),
-            });
+        let mode_value: Value = table.get("mode")?;
+        if mode_value.is_nil() {
+            return Ok(None);
         }
-        Ok(out)
-    }
-}
-
-/// Builds one tree document from an archive through a path picker.
-fn tree_impl(lua: &Lua, docs: &TreeDocs, args: (Value, Value, Value)) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.document.tree";
-    let (archive_value, dest_value, callback_value) = args;
-    let rel = archive_value.req_str(CTOR, "archive")?;
-    let dest = dest_value.req_str(CTOR, "dest")?;
-    let callback = callback_value.req_func(CTOR, "callback")?;
-    docs.build(lua, CTOR, rel, dest, callback)
-}
-
-/// Tree builder holding domain validation.
-struct TreeDocs {
-    /// Project root for archive reads.
-    root: PathBuf,
-    /// Cache folder for cache-absolute reads.
-    cache: PathBuf,
-    /// Extract folder for member file paths.
-    extract: PathBuf,
-    /// Progress sender holding `None` for silence.
-    progress: Option<ProgressSender>,
-}
-
-impl TreeDocs {
-    /// Builds one tree document from an archive through a path picker.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `ctor` - error prefix naming the constructor.
-    /// * `rel` - archive path under reading.
-    /// * `dest` - destination folder holding the members.
-    /// * `callback` - per-member destination picker.
-    ///
-    /// # Returns
-    ///
-    /// One tree document table holding the manifest in
-    /// relative path order.
-    ///
-    /// # Errors
-    ///
-    /// Empty archive paths and empty destinations fail as plan
-    /// errors. Unreadable archives fail as plan errors.
-    /// Non-string callback returns fail as plan errors. Empty,
-    /// absolute, and dot-dot relative paths fail as plan
-    /// errors. Repeated relative paths fail as plan errors.
-    /// Empty picks fail as plan errors naming the filter.
-    ///
-    fn build(
-        &self,
-        lua: &Lua,
-        ctor: &str,
-        rel: String,
-        dest: String,
-        callback: Function,
-    ) -> mlua::Result<Table> {
-        if rel.is_empty() {
-            return Err(plan_error(format!(
-                "{ctor}: field 'archive' must not be empty"
-            )));
-        }
-        if dest.is_empty() {
-            return Err(plan_error(format!(
-                "{ctor}: field 'dest' must not be empty"
-            )));
-        }
-        let full = super::resources::resolve_under_root(
-            &self.root,
-            &self.cache,
-            &self.extract,
-            &rel,
-            ctor,
-        )?;
-        let start = std::time::Instant::now();
-        let sha = self::archive::archive_sha(&full, &rel, ctor)?;
-        let dir = ensure_extracted(&full, &rel, ctor, &sha)?;
-        let bytes = std::fs::read(&full)
-            .map_err(|error| plan_error(format!("{ctor}: cannot read '{rel}': {error}")))?;
-        let members = read_members(&bytes, &rel, ctor)?;
-        let mut kept: Vec<(String, u32, PathBuf)> = Vec::new();
-        for member in &members {
-            let info = lua.create_table()?;
-            let size = member.size.min(i64::MAX as u64) as i64;
-            info.set("size", size)?;
-            info.set("executable", member.executable)?;
-            let member_path = dir.join(&member.name);
-            let member_arg = member_path.to_string_lossy().into_owned();
-            let returned: Value = callback.call((member.name.as_str(), info, member_arg))?;
-            if returned.is_nil() {
-                continue;
-            }
-            let Some(relpath) = returned.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: callback must return a destination path or nil"
-                )));
-            };
-            check_rel(ctor, &relpath)?;
-            if kept.iter().any(|(kept_rel, _, _)| kept_rel == &relpath) {
-                return Err(plan_error(format!(
-                    "{ctor}: tree keeps '{relpath}' more than once"
-                )));
-            }
-            let mode = if member.executable { 0o755 } else { 0o644 };
-            kept.push((relpath, mode, member_path));
-        }
-        if kept.is_empty() {
-            return Err(plan_error(format!(
-                "{ctor}: tree kept no members from '{rel}': check the pick filter"
-            )));
-        }
-        kept.sort_by(|left, right| left.0.cmp(&right.0));
-        let list = lua.create_table()?;
-        for (index, (relpath, mode, source)) in kept.iter().enumerate() {
-            let item = lua.create_table()?;
-            item.set("rel", relpath.as_str())?;
-            item.set("mode", i64::from(*mode))?;
-            item.set("source", source.to_string_lossy().as_ref())?;
-            list.set(index + 1, item)?;
-        }
-        let out = lua.create_table()?;
-        out.set("path", dest)?;
-        out.set("members", list)?;
-        set_marker(lua, &out, "tree", None)?;
-        log::debug!(
-            "unpack archive={rel} kept={} total={} took {}ms",
-            kept.len(),
-            members.len(),
-            start.elapsed().as_millis()
-        );
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::Unpacked {
-                archive: rel.clone(),
-                kept: kept.len(),
-                total: members.len(),
-            });
-        }
-        Ok(out)
+        let raw = mode_value.req_str(ctor, "mode")?;
+        confit_core::document::parse_mode(&raw)
+            .map(Some)
+            .map_err(|error| plan_error(format!("{ctor}: {error}")))
     }
 }
 
 /// Rejects destination paths escaping the tree folder.
-fn check_rel(ctor: &str, relpath: &str) -> mlua::Result<()> {
+pub(crate) fn check_rel(ctor: &str, relpath: &str) -> mlua::Result<()> {
     if relpath.is_empty() {
         return Err(plan_error(format!(
             "{ctor}: callback must not return an empty destination path"
@@ -637,6 +393,40 @@ fn check_rel(ctor: &str, relpath: &str) -> mlua::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Installs the rc entry constructors on the document namespace.
+fn install_rc(lua: &Lua, namespace: &Table) -> mlua::Result<()> {
+    let rc = lua.create_table()?;
+    rc.set(
+        "new",
+        lua.create_function(|lua, sections: Value| rc_new_impl(lua, sections))?,
+    )?;
+    rc.set(
+        "alias",
+        lua.create_function(|lua, args: (Value, Value, Value)| rc_alias_impl(lua, args))?,
+    )?;
+    rc.set(
+        "env",
+        lua.create_function(|lua, args: (Value, Value, Value)| rc_env_impl(lua, args))?,
+    )?;
+    rc.set(
+        "prepend",
+        lua.create_function(|lua, args: MultiValue| rc_prepend_impl(lua, args))?,
+    )?;
+    rc.set(
+        "eval",
+        lua.create_function(|lua, args: (Value, Value)| rc_eval_impl(lua, args))?,
+    )?;
+    rc.set(
+        "cmd",
+        lua.create_function(|lua, args: (Value, Value)| rc_cmd_impl(lua, args))?,
+    )?;
+    rc.set(
+        "source",
+        lua.create_function(|lua, args: (Value, Value)| rc_source_impl(lua, args))?,
+    )?;
+    namespace.set("rc", rc)
 }
 
 /// Builds the single rc document table from section lists.
@@ -716,22 +506,21 @@ fn rc_prepend_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.prepend";
     let collected: Vec<Value> = args.into_iter().collect();
     let (name, dir, opts) = match collected.as_slice() {
-        [dir_value] => (
-            "PATH".to_string(),
-            dir_value.clone().req_str(CTOR, "dir")?,
-            Value::Nil,
-        ),
-        [first, second] => match second.clone().opt_str() {
-            Some(dir) => (first.clone().req_str(CTOR, "var")?, dir, Value::Nil),
-            None => (
-                "PATH".to_string(),
-                first.clone().req_str(CTOR, "dir")?,
-                second.clone(),
-            ),
-        },
+        [dir_value] => ("PATH".to_string(), dir_value.clone(), Value::Nil),
+        [first, second] => {
+            if is_route_slot(second) {
+                (
+                    first.clone().req_str(CTOR, "var")?,
+                    second.clone(),
+                    Value::Nil,
+                )
+            } else {
+                ("PATH".to_string(), first.clone(), second.clone())
+            }
+        }
         [var_value, dir_value, opts] => (
             var_value.clone().req_str(CTOR, "var")?,
-            dir_value.clone().req_str(CTOR, "dir")?,
+            dir_value.clone(),
             opts.clone(),
         ),
         _ => {
@@ -740,8 +529,47 @@ fn rc_prepend_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Table> {
             )));
         }
     };
+    check_route_slot(&dir, CTOR, "dir")?;
     let when = OptsGuard::resolve(lua, CTOR, opts)?;
     RcEntries::path(lua, name, dir, when)
+}
+
+/// Reports whether one value holds a string or a route.
+///
+/// Strings run verbatim. Route userdata carries the
+/// destination route. Anything else reads as opts.
+fn is_route_slot(value: &Value) -> bool {
+    if value.clone().opt_str().is_some() {
+        return true;
+    }
+    match value.as_userdata() {
+        Some(data) => data.borrow::<LuaRoute>().is_ok(),
+        None => false,
+    }
+}
+
+/// Rejects one route slot holding neither string nor route.
+///
+/// # Arguments
+///
+/// * `value` - the slot value under checking.
+/// * `ctor` - error prefix naming the constructor.
+/// * `field` - field name under reading.
+///
+/// # Returns
+///
+/// Unit for strings and route userdata.
+///
+/// # Errors
+///
+/// Anything else fails as a plan error naming the field.
+fn check_route_slot(value: &Value, ctor: &str, field: &str) -> mlua::Result<()> {
+    if is_route_slot(value) {
+        return Ok(());
+    }
+    Err(plan_error(format!(
+        "{ctor}: field '{field}' must be a string or a confit.path value"
+    )))
 }
 
 /// Rc entry table builders holding shared shapes.
@@ -794,14 +622,14 @@ impl RcEntries {
     ///
     /// * `lua` - state owning the output table.
     /// * `name` - variable name.
-    /// * `dir` - directory under prepending.
+    /// * `dir` - directory value holding a string or a route.
     /// * `when` - guard table holding `None` for no guard.
     ///
     /// # Returns
     ///
     /// Entry table stamped with the rc-entry marker.
     ///
-    fn path(lua: &Lua, name: String, dir: String, when: Option<Table>) -> mlua::Result<Table> {
+    fn path(lua: &Lua, name: String, dir: Value, when: Option<Table>) -> mlua::Result<Table> {
         let inner = lua.create_table()?;
         inner.set("name", name)?;
         inner.set("dir", dir)?;
@@ -815,8 +643,8 @@ impl RcEntries {
     ///
     /// * `lua` - state owning the output table.
     /// * `shape` - entry shape naming the op.
-    /// * `argv` - command words, empty for source entries.
-    /// * `source` - sourced path for source entries.
+    /// * `argv` - command slots, empty for source entries.
+    /// * `source` - sourced value holding a string or a route.
     /// * `when` - guard table holding `None` for no guard.
     ///
     /// # Returns
@@ -826,19 +654,15 @@ impl RcEntries {
     fn init(
         lua: &Lua,
         shape: &str,
-        argv: Vec<String>,
-        source: Option<String>,
+        argv: Vec<Arg>,
+        source: Option<Value>,
         when: Option<Table>,
     ) -> mlua::Result<Table> {
         let inner = lua.create_table()?;
         if shape == "source" {
             inner.set("path", source.unwrap_or_default())?;
         } else {
-            let argv_table = lua.create_table()?;
-            for (position, item) in argv.iter().enumerate() {
-                argv_table.set((position + 1) as i64, item.as_str())?;
-            }
-            inner.set("argv", argv_table)?;
+            write_slots(lua, &inner, "argv", &argv)?;
         }
         Self::tagged(lua, shape, inner, when)
     }
@@ -871,7 +695,7 @@ impl RcEntries {
 fn rc_eval_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.eval";
     let (argv_value, opts) = args;
-    let argv = argv_value.req_string_array(CTOR, "argv")?;
+    let argv = read_slots(&argv_value, CTOR, "argv")?;
     let when = OptsGuard::resolve(lua, CTOR, opts)?;
     RcEntries::init(lua, "eval", argv, None, when)
 }
@@ -880,7 +704,7 @@ fn rc_eval_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
 fn rc_cmd_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.cmd";
     let (argv_value, opts) = args;
-    let argv = argv_value.req_string_array(CTOR, "argv")?;
+    let argv = read_slots(&argv_value, CTOR, "argv")?;
     let when = OptsGuard::resolve(lua, CTOR, opts)?;
     RcEntries::init(lua, "cmd", argv, None, when)
 }
@@ -889,9 +713,9 @@ fn rc_cmd_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
 fn rc_source_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.source";
     let (path_value, opts) = args;
-    let path = path_value.req_str(CTOR, "path")?;
+    check_route_slot(&path_value, CTOR, "path")?;
     let when = OptsGuard::resolve(lua, CTOR, opts)?;
-    RcEntries::init(lua, "source", Vec::new(), Some(path), when)
+    RcEntries::init(lua, "source", Vec::new(), Some(path_value), when)
 }
 
 /// Opts guard resolver holding domain validation.

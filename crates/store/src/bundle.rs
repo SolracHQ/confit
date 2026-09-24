@@ -2,13 +2,35 @@
 //!
 //! Portable bundle archives holding manifests and blobs.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use confit_core::error::{Error, Result};
+use confit_core::error::Result;
 use confit_core::plan::Bundle;
 use confit_core::progress::ProgressSender;
+
+pub mod file;
+pub mod memory;
+
+/// Bundle file extension imposed on explicit outputs.
+const BUNDLE_EXTENSION: &str = "cb";
+
+/// Ensures one bundle destination carries the bundle extension.
+///
+/// Bare paths gain the suffix, so creators always emit
+/// bundles. Slot outputs never pass here and keep their
+/// own names.
+pub fn ensure_bundle_extension(dest: &Path) -> PathBuf {
+    if dest
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(BUNDLE_EXTENSION))
+    {
+        dest.to_path_buf()
+    } else {
+        let mut name = dest.as_os_str().to_owned();
+        name.push(".cb");
+        PathBuf::from(name)
+    }
+}
 
 /// Portable bundle archive reads and writes.
 ///
@@ -16,10 +38,18 @@ use confit_core::progress::ProgressSender;
 pub trait BundleStore {
     /// Writes one portable bundle holding manifest and blobs.
     ///
+    /// Bare destinations gain the bundle extension; the
+    /// returned path names the written file.
+    ///
     /// # Errors
     ///
     /// Compression and write failures surface as plan errors.
-    fn write(&self, bundle: &Bundle, dest: &Path, progress: Option<&ProgressSender>) -> Result<()>;
+    fn write(
+        &self,
+        bundle: &Bundle,
+        dest: &Path,
+        progress: Option<&ProgressSender>,
+    ) -> Result<PathBuf>;
 
     /// Reads one portable bundle into a live bundle.
     ///
@@ -29,45 +59,34 @@ pub trait BundleStore {
     fn read(&self, path: &Path) -> Result<Bundle>;
 }
 
-/// Memory bundle store for tests.
-///
-/// Bundles ride an in-memory map keyed by destination path.
-#[derive(Debug, Default)]
-pub struct MemoryBundleStore {
-    bundles: Mutex<HashMap<PathBuf, Bundle>>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl MemoryBundleStore {
-    /// Builds an empty memory bundle store.
-    pub fn new() -> Self {
-        Self {
-            bundles: Mutex::new(HashMap::new()),
+    #[test]
+    fn bare_output_gains_cb_suffix() {
+        let out = ensure_bundle_extension(Path::new("plan"));
+        match out.to_str() {
+            Some(text) => assert_eq!(text, "plan.cb"),
+            None => panic!("bare output gains suffix"),
         }
     }
-}
 
-impl BundleStore for MemoryBundleStore {
-    fn write(&self, bundle: &Bundle, dest: &Path, progress: Option<&ProgressSender>) -> Result<()> {
-        let _ = progress;
-        let mut guard = match self.bundles.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.insert(dest.to_path_buf(), bundle.clone());
-        Ok(())
+    #[test]
+    fn cb_suffix_stays_unchanged() {
+        let out = ensure_bundle_extension(Path::new("plan.cb"));
+        match out.to_str() {
+            Some(text) => assert_eq!(text, "plan.cb"),
+            None => panic!("cb output stays unchanged"),
+        }
     }
 
-    fn read(&self, path: &Path) -> Result<Bundle> {
-        let guard = match self.bundles.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        match guard.get(path) {
-            Some(bundle) => Ok(bundle.clone()),
-            None => Err(Error::Plan(format!(
-                "read bundle '{}': missing file",
-                path.display()
-            ))),
+    #[test]
+    fn cb_suffix_match_reads_case_insensitive() {
+        let out = ensure_bundle_extension(Path::new("plan.CB"));
+        match out.to_str() {
+            Some(text) => assert_eq!(text, "plan.CB"),
+            None => panic!("uppercase cb stays untouched"),
         }
     }
 }

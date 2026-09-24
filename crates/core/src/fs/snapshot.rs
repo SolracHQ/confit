@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::Filesystem;
 use crate::document::{ManifestData, ManifestDocument};
-use crate::ids::{DocPath, ReadOutcome};
+use crate::ids::ReadOutcome;
 
 /// One managed file read from a tree destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +112,7 @@ fn walk_tree(
 ///
 /// # Arguments
 ///
-/// * `path` - the document path with a leading tilde for home targets.
+/// * `path` - the expanded destination path under reading.
 /// * `fs` - the backend under reading.
 ///
 /// # Returns
@@ -120,18 +120,17 @@ fn walk_tree(
 /// Absent for missing paths, present bytes, and mode for
 /// readable files, unreadable holding the failure detail otherwise.
 ///
-pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
-    let expanded = path.expand();
-    if let Some(target) = fs.read_link(&expanded) {
+pub fn snapshot(expanded: &Path, fs: &dyn Filesystem) -> ReadOutcome {
+    if let Some(target) = fs.read_link(expanded) {
         return ReadOutcome::Present {
             bytes: target.as_os_str().as_encoded_bytes().to_vec(),
             mode: None,
         };
     }
-    match fs.read(&expanded) {
+    match fs.read(expanded) {
         Ok(bytes) => ReadOutcome::Present {
             bytes,
-            mode: fs.file_mode(&expanded),
+            mode: fs.file_mode(expanded),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => ReadOutcome::Absent,
         Err(error) => ReadOutcome::Unreadable {
@@ -149,7 +148,7 @@ pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
 ///
 /// # Arguments
 ///
-/// * `path` - the document path with a leading tilde for home targets.
+/// * `path` - the expanded destination path under reading.
 /// * `fs` - the backend under reading.
 ///
 /// # Returns
@@ -158,11 +157,10 @@ pub fn snapshot(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
 /// mode for readable files, unreadable holding the failure
 /// detail otherwise.
 ///
-pub fn snapshot_content(path: &DocPath, fs: &dyn Filesystem) -> ReadOutcome {
-    let expanded = path.expand();
-    let target = match fs.read_link(&expanded) {
-        Some(link) => join_link_target(&expanded, &link),
-        None => expanded,
+pub fn snapshot_content(expanded: &Path, fs: &dyn Filesystem) -> ReadOutcome {
+    let target = match fs.read_link(expanded) {
+        Some(link) => join_link_target(expanded, &link),
+        None => expanded.to_path_buf(),
     };
     match fs.read(&target) {
         Ok(bytes) => ReadOutcome::Present {
@@ -221,106 +219,21 @@ fn join_link_target(link: &Path, target: &Path) -> PathBuf {
 /// # Arguments
 ///
 /// * `document` - the recorded document under snapshotting.
+/// * `expanded` - the expanded destination path under reading.
 /// * `fs` - the backend under reading.
 ///
 /// # Returns
 ///
 /// The disk outcome backing drift for the document.
 ///
-pub fn snapshot_document(document: &ManifestDocument, fs: &dyn Filesystem) -> ReadOutcome {
+pub fn snapshot_document(
+    document: &ManifestDocument,
+    expanded: &Path,
+    fs: &dyn Filesystem,
+) -> ReadOutcome {
     if matches!(document.data, ManifestData::Link { .. }) {
-        snapshot(&document.path, fs)
+        snapshot(expanded, fs)
     } else {
-        snapshot_content(&document.path, fs)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fs::memory::MemoryFs;
-
-    fn memory_link(fs: &MemoryFs, link: &str, target: &str, bytes: &[u8]) {
-        assert!(fs.write(std::path::Path::new(target), bytes).is_ok());
-        assert!(
-            fs.symlink(std::path::Path::new(link), std::path::Path::new(target))
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn content_reads_behind_disk_links() {
-        let fs = MemoryFs::new();
-        memory_link(&fs, "link", "behind", b"hi");
-        match snapshot_content(&DocPath::new("link"), &fs) {
-            ReadOutcome::Present { bytes, .. } => assert_eq!(bytes, b"hi"),
-            ReadOutcome::Absent => panic!("link reads absent"),
-            ReadOutcome::Unreadable { reason } => panic!("link reads failed: {reason}"),
-        }
-    }
-
-    #[test]
-    fn content_resolves_relative_targets_beside_the_link() {
-        let fs = MemoryFs::new();
-        assert!(fs.write(std::path::Path::new("behind"), b"hi").is_ok());
-        assert!(
-            fs.symlink(
-                std::path::Path::new("sub/link"),
-                std::path::Path::new("../behind")
-            )
-            .is_ok()
-        );
-        match snapshot_content(&DocPath::new("sub/link"), &fs) {
-            ReadOutcome::Present { bytes, .. } => assert_eq!(bytes, b"hi"),
-            ReadOutcome::Absent => panic!("link reads absent"),
-            ReadOutcome::Unreadable { reason } => panic!("link reads failed: {reason}"),
-        }
-    }
-
-    #[test]
-    fn content_reads_dangling_links_absent() {
-        let fs = MemoryFs::new();
-        assert!(
-            fs.symlink(
-                std::path::Path::new("ghost"),
-                std::path::Path::new("nowhere")
-            )
-            .is_ok()
-        );
-        match snapshot_content(&DocPath::new("ghost"), &fs) {
-            ReadOutcome::Absent => {}
-            ReadOutcome::Present { .. } => panic!("dangling reads present"),
-            ReadOutcome::Unreadable { reason } => panic!("dangling reads failed: {reason}"),
-        }
-    }
-
-    #[test]
-    fn document_reader_routes_link_docs_to_targets() {
-        let fs = MemoryFs::new();
-        memory_link(&fs, "link", "behind", b"hi");
-        let target = ManifestDocument::new(
-            DocPath::new("link"),
-            ManifestData::Link {
-                target: "behind".into(),
-            },
-        );
-        match snapshot_document(&target, &fs) {
-            ReadOutcome::Present { bytes, .. } => assert_eq!(bytes, b"behind"),
-            ReadOutcome::Absent => panic!("target reads absent"),
-            ReadOutcome::Unreadable { reason } => panic!("target reads failed: {reason}"),
-        }
-        let text = ManifestDocument::new(
-            DocPath::new("link"),
-            ManifestData::Text {
-                content: "hi".into(),
-                mode: None,
-                unmanaged: false,
-            },
-        );
-        match snapshot_document(&text, &fs) {
-            ReadOutcome::Present { bytes, .. } => assert_eq!(bytes, b"hi"),
-            ReadOutcome::Absent => panic!("text reads absent"),
-            ReadOutcome::Unreadable { reason } => panic!("text reads failed: {reason}"),
-        }
+        snapshot_content(expanded, fs)
     }
 }

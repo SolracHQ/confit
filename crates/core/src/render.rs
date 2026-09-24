@@ -2,130 +2,57 @@
 //!
 //! Document payloads to on-disk bytes.
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::path::PathBuf;
 
+use crate::arg::{Arg, quote};
 use crate::condition::Condition;
 use crate::document::{
     ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
 };
 use crate::error::{Error, Result};
-use crate::fs::Filesystem;
-use crate::store::blobs::{BlobRef, read_blob_bytes};
+use crate::handles::Route;
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
 impl ManifestDocument {
-    /// Renders one document with inline payloads to exact on-disk bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `blobs` - the blob refs under content hashes.
-    ///
-    /// # Returns
-    ///
-    /// Exact rendered bytes from inline payloads.
+    /// Renders one document to exact on-disk bytes.
     ///
     /// # Errors
     ///
-    /// Opaque and tree payloads fail as plan errors. Serializer
-    /// failures fail as plan errors.
+    /// Opaque and tree payloads fail as plan errors; their
+    /// bytes ride the blob store. Secret payloads fail as
+    /// plan errors; their bytes arrive at apply time.
+    /// Serializer failures fail as plan errors.
     ///
     /// # Examples
     ///
     /// ```rust
+    /// use std::path::PathBuf;
     /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::ids::DocPath;
-    /// use std::collections::BTreeMap;
+    /// use confit_core::handles::{Route, RouteBase};
     ///
     /// let document = ManifestDocument::new(
-    ///     DocPath::new("note"),
+    ///     Route::new(RouteBase::Home, "note").unwrap(),
     ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
-    /// assert!(matches!(document.render(&BTreeMap::new()), Ok(bytes) if bytes == b"hi".to_vec()));
+    /// assert!(matches!(document.render(&|route| PathBuf::from(route.display())), Ok(bytes) if bytes == b"hi".to_vec()));
     /// ```
-    pub fn render(&self, _blobs: &BTreeMap<String, BlobRef>) -> Result<Vec<u8>> {
-        match &self.data {
-            ManifestData::Structured { format, data } => match format {
-                StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
-                StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
-                StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
-            },
-            ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-            ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
-            ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
-            ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
-                "render opaque '{blob}': blob bytes ride bundle refs, read through `bytes`"
-            ))),
-            ManifestData::Tree { .. } => Err(Error::Plan(
-                "render tree: tree documents hold member bytes".to_string(),
-            )),
-        }
-    }
-
-    /// Returns exact on-disk bytes for one document.
-    ///
-    /// Inline payloads render from the manifest without touching
-    /// the backend. Opaque payloads read pool-first through
-    /// their ref. Tree payloads return canonical manifest bytes
-    /// for hashing, never disk bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `blobs` - the blob refs under content hashes.
-    /// * `fs` - the backend under reading.
-    ///
-    /// # Returns
-    ///
-    /// Exact on-disk bytes with blob refs resolved.
-    ///
-    /// # Errors
-    ///
-    /// Missing refs, unreadable files, and serializer
-    /// failures fail as plan errors.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::fs::memory::MemoryFs;
-    /// use confit_core::ids::DocPath;
-    /// use std::collections::BTreeMap;
-    ///
-    /// let document = ManifestDocument::new(
-    ///     DocPath::new("note"),
-    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// );
-    /// assert!(matches!(document.bytes(&BTreeMap::new(), &MemoryFs::new()), Ok(bytes) if bytes == b"hi".to_vec()));
-    /// ```
-    pub fn bytes(&self, blobs: &BTreeMap<String, BlobRef>, fs: &dyn Filesystem) -> Result<Vec<u8>> {
-        match &self.data {
-            ManifestData::Opaque { blob, .. } => read_blob_bytes(blob, blobs, fs),
-            ManifestData::Tree { members } => Ok(crate::document::tree_manifest_bytes(members)),
-            _ => self.render(blobs),
-        }
+    pub fn render(&self, resolve: &dyn Fn(&Route) -> PathBuf) -> Result<Vec<u8>> {
+        render_inline_bytes(&self.data, resolve)
     }
 }
 
 /// Renders inline payload bytes without blob access.
 ///
-/// Structured, text, link, and rc payloads render. Opaque
-/// and tree payloads fail, reads use `bytes` instead.
-///
-/// # Arguments
-///
-/// * `data` - the persisted payload under rendering.
-///
-/// # Returns
-///
-/// Exact bytes for inline payloads.
-///
 /// # Errors
 ///
-/// Opaque, tree payloads, and serializer failures fail
+/// Opaque, tree, secret, and serializer failures fail
 /// as plan errors.
-pub(crate) fn render_inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
+pub(crate) fn render_inline_bytes(
+    data: &ManifestData,
+    resolve: &dyn Fn(&Route) -> PathBuf,
+) -> Result<Vec<u8>> {
     match data {
         ManifestData::Structured { format, data } => match format {
             StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
@@ -134,13 +61,20 @@ pub(crate) fn render_inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
         },
         ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
         ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
-        ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
+        ManifestData::Rc(data) => Ok(render_rc(data, resolve).into_bytes()),
         ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
-            "render opaque '{blob}': blob bytes ride bundle refs, read through `bytes`"
+            "render opaque '{}': blob bytes ride the blob store",
+            blob.sha()
         ))),
         ManifestData::Tree { .. } => Err(Error::Plan(
             "render tree: tree documents hold member bytes".to_string(),
         )),
+        ManifestData::Secret { argv, .. } => Err(Error::Plan(format!(
+            "render secret '{}': secret bytes arrive at apply time",
+            argv.first()
+                .map(Arg::display)
+                .unwrap_or_else(|| "secret".to_string())
+        ))),
     }
 }
 
@@ -161,10 +95,10 @@ fn render_yaml(table: &Table) -> Result<String> {
 }
 
 /// Renders rc data to shell text with trailing newline.
-fn render_rc(data: &RcData) -> String {
-    let profile = section_lines(&data.profile);
-    let config = section_lines(&data.config);
-    let finals = section_lines(&data.final_entries);
+fn render_rc(data: &RcData, resolve: &dyn Fn(&Route) -> PathBuf) -> String {
+    let profile = section_lines(&data.profile, resolve);
+    let config = section_lines(&data.config, resolve);
+    let finals = section_lines(&data.final_entries, resolve);
     let mut blocks: Vec<String> = Vec::new();
     if !profile.is_empty() {
         blocks.push(profile.join("\n"));
@@ -187,29 +121,34 @@ fn render_rc(data: &RcData) -> String {
 }
 
 /// Collects one section lines in declaration order.
-fn section_lines(entries: &[RcEntry]) -> Vec<String> {
-    entries.iter().flat_map(render_entry).collect()
+fn section_lines(entries: &[RcEntry], resolve: &dyn Fn(&Route) -> PathBuf) -> Vec<String> {
+    entries
+        .iter()
+        .flat_map(|entry| render_entry(entry, resolve))
+        .collect()
 }
 
 /// Renders one rc entry as shell lines.
-fn render_entry(entry: &RcEntry) -> Vec<String> {
+fn render_entry(entry: &RcEntry, resolve: &dyn Fn(&Route) -> PathBuf) -> Vec<String> {
     let line = match &entry.op {
         RcOp::Env { name, value } => {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
         RcOp::Path { name, dir, .. } => {
-            let placed = escape_argv(std::slice::from_ref(dir));
+            let expanded = resolve(dir).to_string_lossy().into_owned();
+            let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")
         }
         RcOp::Alias { name, expansion } => {
             let expanded = escape_argv(std::slice::from_ref(expansion));
             format!("alias {name}={expanded}")
         }
-        RcOp::Eval { argv, .. } => format!("eval \"$({})\"", escape_argv(argv)),
-        RcOp::Cmd { argv, .. } => escape_argv(argv),
+        RcOp::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv, resolve)),
+        RcOp::Cmd { argv, .. } => escape_args(argv, resolve),
         RcOp::Source { path, .. } => {
-            format!("source {}", escape_argv(std::slice::from_ref(path)))
+            let expanded = resolve(path).to_string_lossy().into_owned();
+            format!("source {}", quote(&expanded))
         }
     };
     match entry.when.as_ref() {
@@ -255,7 +194,7 @@ fn render_guard(guard: &Condition) -> String {
     }
 }
 
-/// Joins nested guards under one operator, grouping mixed shapes.
+/// Joins nested guards under one operator.
 fn join_guards(items: &[Condition], op: &str) -> String {
     items
         .iter()
@@ -277,228 +216,27 @@ fn group_guard(item: &Condition, parent: &str) -> String {
 /// Renders argv as one shell line with Bourne quoting.
 fn escape_argv(argv: &[String]) -> String {
     argv.iter()
-        .map(|arg| quote_word(arg))
+        .map(|arg| quote(arg).into_owned())
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-/// Quotes one word, borrowing safe words intact.
-fn quote_word(word: &str) -> Cow<'_, str> {
-    if !word.is_empty() && word.bytes().all(is_safe_byte) {
-        Cow::Borrowed(word)
-    } else if word.is_empty() {
-        Cow::Borrowed("''")
-    } else {
-        Cow::Owned(format!("'{}'", word.replace('\'', "'\\''")))
-    }
+/// Renders slots as one shell line with Bourne quoting.
+fn escape_args(slots: &[Arg], resolve: &dyn Fn(&Route) -> PathBuf) -> String {
+    slots
+        .iter()
+        .map(|slot| escape_slot(slot, resolve))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-/// Reports whether a byte passes through unquoted.
-fn is_safe_byte(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'_'
-            | b'@'
-            | b'%'
-            | b'+'
-            | b'='
-            | b':'
-            | b','
-            | b'.'
-            | b'/'
-            | b'-'
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::document::{PathOp, RcEntry, RcOp};
-    use crate::ids::DocPath;
-
-    fn rc_document(data: RcData) -> ManifestDocument {
-        ManifestDocument::new(DocPath::new("~/.bashrc"), ManifestData::Rc(data))
-    }
-
-    fn entry(op: RcOp, when: Option<Condition>) -> RcEntry {
-        RcEntry { op, when }
-    }
-
-    fn env(name: &str, value: &str) -> RcEntry {
-        entry(
-            RcOp::Env {
-                name: name.to_string(),
-                value: value.to_string(),
-            },
-            None,
-        )
-    }
-
-    fn alias(name: &str, expansion: &str) -> RcEntry {
-        entry(
-            RcOp::Alias {
-                name: name.to_string(),
-                expansion: expansion.to_string(),
-            },
-            None,
-        )
-    }
-
-    fn path(dir: &str) -> RcEntry {
-        entry(
-            RcOp::Path {
-                name: "PATH".to_string(),
-                dir: dir.to_string(),
-                op: PathOp::Prepend,
-            },
-            None,
-        )
-    }
-
-    fn eval(argv: &[&str]) -> RcEntry {
-        entry(
-            RcOp::Eval {
-                argv: argv.iter().map(|item| (*item).to_string()).collect(),
-            },
-            None,
-        )
-    }
-
-    fn cmd(argv: &[&str]) -> RcEntry {
-        entry(
-            RcOp::Cmd {
-                argv: argv.iter().map(|item| (*item).to_string()).collect(),
-            },
-            None,
-        )
-    }
-
-    #[test]
-    fn rc_golden_layout_with_guards() {
-        let data = RcData::new(
-            vec![path("/home/u/.local/bin"), env("EDITOR", "hx")],
-            vec![
-                alias("ll", "ls -l"),
-                entry(
-                    RcOp::Alias {
-                        name: "cat".to_string(),
-                        expansion: "bat".to_string(),
-                    },
-                    Some(Condition::InPath { name: "bat".into() }),
-                ),
-            ],
-            vec![
-                eval(&["mise", "activate", "bash"]),
-                eval(&["starship", "init", "bash"]),
-                cmd(&["sdkman", "init"]),
-            ],
-        );
-        let bytes = match rc_document(data).render(&BTreeMap::new()) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("rc renders: {error}"),
-        };
-        assert_eq!(
-            String::from_utf8_lossy(&bytes),
-            "export PATH=/home/u/.local/bin:\"${PATH}\"\n\
-             export EDITOR=hx\n\
-             \n\
-             case $- in\n\
-             *i*) ;;\n\
-             *) return ;;\n\
-             esac\n\
-             \n\
-             alias ll='ls -l'\n\
-             if command -v bat >/dev/null 2>&1; then\n\
-             \x20 alias cat=bat\n\
-             fi\n\
-             \n\
-             eval \"$(mise activate bash)\"\n\
-             eval \"$(starship init bash)\"\n\
-             sdkman init\n"
-        );
-    }
-
-    #[test]
-    fn setup_only_skips_guard() {
-        let data = RcData::new(vec![path("/a")], Vec::new(), Vec::new());
-        let bytes = match rc_document(data).render(&BTreeMap::new()) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("rc renders: {error}"),
-        };
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(!text.contains("case $- in"));
-        assert_eq!(text, "export PATH=/a:\"${PATH}\"\n");
-    }
-
-    #[test]
-    fn alias_in_profile_renders_in_setup_block() {
-        let data = RcData::new(
-            vec![alias("ll", "ls -l"), env("EDITOR", "hx")],
-            Vec::new(),
-            Vec::new(),
-        );
-        let bytes = match rc_document(data).render(&BTreeMap::new()) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("rc renders: {error}"),
-        };
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(!text.contains("case $- in"));
-        assert_eq!(text, "alias ll='ls -l'\nexport EDITOR=hx\n");
-    }
-
-    #[test]
-    fn env_in_final_renders_in_final_block() {
-        let data = RcData::new(Vec::new(), Vec::new(), vec![env("EDITOR", "hx")]);
-        let bytes = match rc_document(data).render(&BTreeMap::new()) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("rc renders: {error}"),
-        };
-        assert_eq!(
-            String::from_utf8_lossy(&bytes),
-            "case $- in\n*i*) ;;\n*) return ;;\nesac\n\nexport EDITOR=hx\n"
-        );
-    }
-
-    #[test]
-    fn mixed_section_keeps_declaration_order() {
-        let data = RcData::new(
-            vec![cmd(&["zzz"]), env("EDITOR", "hx"), eval(&["aaa"])],
-            Vec::new(),
-            vec![cmd(&["z-last"]), eval(&["a-first"]), cmd(&["m-mid"])],
-        );
-        let bytes = match rc_document(data).render(&BTreeMap::new()) {
-            Ok(bytes) => bytes,
-            Err(error) => panic!("rc renders: {error}"),
-        };
-        assert_eq!(
-            String::from_utf8_lossy(&bytes),
-            "zzz\n\
-             export EDITOR=hx\n\
-             eval \"$(aaa)\"\n\
-             \n\
-             case $- in\n\
-             *i*) ;;\n\
-             *) return ;;\n\
-             esac\n\
-             \n\
-             z-last\n\
-             eval \"$(a-first)\"\n\
-             m-mid\n"
-        );
-    }
-
-    #[test]
-    fn null_toml_value_fails_as_plan_error() {
-        let data: Table = [("name".to_string(), serde_json::Value::Null)]
-            .into_iter()
-            .collect();
-        let error = match render_toml(&data) {
-            Ok(_) => panic!("null toml renders"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, Error::Plan(_)));
+/// Renders one slot with Bourne quoting.
+fn escape_slot(slot: &Arg, resolve: &dyn Fn(&Route) -> PathBuf) -> String {
+    match slot {
+        Arg::Text(text) => quote(text).into_owned(),
+        Arg::Route(route) => {
+            let expanded = resolve(route).to_string_lossy().into_owned();
+            quote(&expanded).into_owned()
+        }
     }
 }

@@ -11,10 +11,10 @@ use serde_json::Value as Json;
 
 use crate::error::plan_error;
 use crate::level::Level;
-use crate::lua::{JsonExt, TableExt, ValueExt, read_marker};
+use crate::lua::{JsonExt, ValueExt, read_marker};
 use crate::model::StoredPatch;
 use crate::path_expr::{Segment, flatten_json, parse_path};
-use crate::surface::document::convert::entry_slot;
+use crate::surface::document::convert::{entry_slot, translate_entry};
 use confit_core::progress::{Event, ProgressSender};
 
 /// Winner map from slot key to owner name.
@@ -737,7 +737,7 @@ impl RcPatch {
                 "{ctx}: field 'value' must be an rc entry table"
             )));
         }
-        let json = table.to_json(&format!("{ctx}: field 'value'"))?;
+        let json = translate_entry(&table, &format!("{ctx}: field 'value'"))?;
         Executor {
             lua,
             progress: None,

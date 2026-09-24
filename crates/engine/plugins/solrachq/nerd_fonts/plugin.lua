@@ -12,16 +12,16 @@
 --
 -- Only existing primitives compose this module: confit.config,
 -- confit.document plus confit.hook, confit.runtime plus
--- confit.resources plus confit.path. Failures raise through
+-- confit.fetch plus confit.path. Failures raise through
 -- confit.plugin.helpers.error so they attribute this plugin file.
 
 -- Releases feed backing latest-version resolution for `font()`.
 -- Latest release reads first, so the first tag wins.
 local FONTS_RELEASES_URL = "https://api.github.com/repos/ryanoasis/nerd-fonts/releases"
 
--- Managed folder holding one font, nested under the data fonts
+-- Managed destination holding one font, nested under the data fonts
 -- folder so each font lands apart from the rest.
-local function managed_dir(name)
+local function managed_dest(name)
 	return confit.path.data("fonts", name)
 end
 
@@ -34,7 +34,7 @@ local function resolve_version(version)
 	if version ~= nil then
 		return version
 	end
-	local body = confit.resources.fetch_text(FONTS_RELEASES_URL)
+	local body = confit.fetch(FONTS_RELEASES_URL):text()
 	local tag = body:match('"tag_name"%s*:%s*"([^"]+)"')
 	if tag == nil then
 		confit.plugin.helpers.error("nerd_fonts: cannot resolve the latest release from the releases feed")
@@ -65,13 +65,13 @@ local function font(name, version)
 		.. "/"
 		.. name
 		.. ".zip"
-	local archive = confit.resources.fetch_file(url)
-	local dest = managed_dir(name)
-	local tree = confit.document.tree(archive, dest, function(path, _, _)
-		if not path:match("%.ttf$") then
+	local archive = confit.fetch(url)
+	local dest = managed_dest(name)
+	local tree = archive:tree(dest, function(member)
+		if not member:name():match("%.ttf$") then
 			return nil
 		end
-		return path:match("([^/]+)$")
+		return { path = member:name() }
 	end)
 	local config = confit.config(name)
 	config:add_document(tree)

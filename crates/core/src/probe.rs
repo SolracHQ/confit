@@ -164,12 +164,9 @@ impl PathProbe for MemoryProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::{Hook, resolve_hook};
-    use crate::runtime::Runtime;
 
     struct Fixture {
         probe: MemoryProbe,
-        hook: PathBuf,
         first: PathBuf,
         second: PathBuf,
     }
@@ -179,17 +176,15 @@ mod tests {
             Ok(dir) => dir,
             Err(error) => panic!("scratch dir builds: {error}"),
         };
-        let hook = guard.path().join("hook");
         let first = guard.path().join("first");
         let second = guard.path().join("second");
-        for dir in [&hook, &first, &second] {
+        for dir in [&first, &second] {
             match std::fs::create_dir_all(dir) {
                 Ok(()) => {}
                 Err(error) => panic!("scratch dir builds {}: {error}", dir.display()),
             }
         }
         let mut probe = MemoryProbe::new();
-        place(&mut probe, &hook.join("tool"), 0o755);
         place(&mut probe, &first.join("tool"), 0o755);
         place(&mut probe, &first.join("regular"), 0o644);
         place(&mut probe, &second.join("tool"), 0o755);
@@ -204,7 +199,6 @@ mod tests {
             guard,
             Fixture {
                 probe,
-                hook,
                 first,
                 second,
             },
@@ -230,17 +224,6 @@ mod tests {
         match std::os::unix::fs::symlink(target, link) {
             Ok(()) => {}
             Err(error) => panic!("disk links {}: {error}", link.display()),
-        }
-    }
-
-    fn hook_with(path: Vec<String>) -> Hook {
-        Hook {
-            argv: vec!["tool".to_string()],
-            path,
-            requires: None,
-            when: None,
-            checks: Vec::new(),
-            timeout_secs: 60,
         }
     }
 
@@ -300,25 +283,5 @@ mod tests {
             assert_eq!(disk, mem, "find parity {name}");
             assert_eq!(mem, want, "find {name}");
         }
-    }
-
-    #[test]
-    fn differential_hook_dirs_win_over_path_dirs() {
-        let (_dir, fx) = fixture();
-        let os = OsProbe;
-        let rt = Runtime {
-            vars: Default::default(),
-            path_dirs: vec![fx.first.clone(), fx.second.clone()],
-        };
-        let hooked = hook_with(vec![fx.hook.display().to_string()]);
-        let disk = resolve_hook(&hooked, &rt, &os);
-        let mem = resolve_hook(&hooked, &rt, &fx.probe);
-        assert_eq!(disk, mem, "hooked parity");
-        assert_eq!(mem, Some(fx.hook.join("tool")), "hook dir wins");
-        let bare = hook_with(Vec::new());
-        let disk = resolve_hook(&bare, &rt, &os);
-        let mem = resolve_hook(&bare, &rt, &fx.probe);
-        assert_eq!(disk, mem, "path parity");
-        assert_eq!(mem, Some(fx.first.join("tool")), "first path dir wins");
     }
 }
