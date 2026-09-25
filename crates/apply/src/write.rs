@@ -8,15 +8,12 @@ use confit_core::error::{Error, Result};
 use confit_core::handles::Route;
 
 use crate::Applier;
-use crate::secret::run_secret_command;
 
 impl Applier {
     /// Writes every document to its resolved destination.
     ///
     /// Present unmanaged documents stay untouched while
     /// their destination reads absent from the changed set.
-    /// Secret documents execute their command at apply time;
-    /// stdout bytes land on disk and never enter a bundle or preview.
     ///
     /// # Errors
     ///
@@ -80,14 +77,6 @@ impl Applier {
                     .disk
                     .write_link(&expanded, Path::new(target))
                     .map_err(Error::from),
-                ManifestData::Secret { argv, .. } => {
-                    let bytes = run_secret_command(argv, &document.destination, &|route| {
-                        self.resolve(route)
-                    })?;
-                    self.disk
-                        .write_bytes(&expanded, &bytes)
-                        .map_err(Error::from)
-                }
                 ManifestData::Text { .. }
                 | ManifestData::Structured { .. }
                 | ManifestData::Rc(_) => {

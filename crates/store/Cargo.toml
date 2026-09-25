@@ -16,4 +16,5 @@ ureq = "3.4.2"
 zip = "8.6.0"
 
 [dev-dependencies]
+crossbeam-channel = "0.5.17"
 tempfile.workspace = true

@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+### Added
+
+- `confit.fetch` returns one handle for urls and project files
+  alike. Views decode on the handle: `:text()` reads the body,
+  `:toml()`, `:json()`, and `:yaml()` decode it into a table,
+  `:sha()` names the digest. Handles print one-line identities,
+  so errors and verbose logs stay readable.
+- Destinations ride `confit.path` routes now. `home`, `config`,
+  `data`, and `cache` join segments under portable bases,
+  `literal` carries host paths verbatim. Bundles store the
+  portable form (`config:mise/config.toml`), apply resolves per
+     host, previews show the portable text.
+- Archive members travel as handles. `:archive()` seals a fetched
+  or project source once, `:members()` lists names without reading
+  bytes, `:extract_member(name)` picks one member for opaque
+  documents, `:tree(dest, callback)` builds a managed file set
+  where nil skips, true keeps, and a `{ path, mode }` table
+  renames.
+- Zip archives read again beside tar and gzip, so zipped releases
+  and font packs enter trees and member picks.
+
+### Changed
+
+- Every document constructor takes a `confit.path` route for its
+  destination. Plain path strings fail the plan naming the field,
+  profiles move each destination to its base.
+- `confit.document.opaque` takes a fetch, resource, or member
+  handle as its source. Cache-path and project-path strings fail
+  the plan, callers pass the handle itself.
+- `confit.document.tree` takes a destination route and a callback
+  receiving one member handle per entry. The old
+  `(path, info, member)` triple dies, `member:name()` and
+  `member:keep()` read on the handle.
+- `confit.document.compressed` retires. Archive trees and
+  single-member picks ride the handle verbs instead.
+- The `confit.resources` namespace leaves the surface.
+  `fetch_text` and `fetch_file` become `confit.fetch` and a view,
+  `load_text`, `load_toml`, and siblings become `confit.fetch`
+  of a root-relative path and a view.
+- Hook `path` dirs and secret commands and runtime `changed`
+  and `exists` gates take routes. Bare `~` strings fail the plan,
+  profiles wrap them in `confit.path`.
+- `confit.path.*` joins many segments now, so
+  `confit.path.home(".local/bin", "mise")` replaces string
+  concatenation. `confroot` leaves the surface, root-relative
+  loads ride `confit.fetch`.
+- Fetch cache layout moves to content addresses behind a url
+  index. Old caches miss on first run and redownload, nothing
+  migrates.
+- Old bundles and saved slots fail the plan naming the file.
+  Manifests carry routes and handle shapes now, unknown fields
+  still fail.
+- Editor stubs still describe the old string surface. Completion
+  for the handle verbs lands with stub generation, hand edits fill
+  the gap until then.
+
 ## [0.8.1] (never released)
 
 ### Fixed

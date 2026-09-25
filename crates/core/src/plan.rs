@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use crate::arg::Arg;
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
 use crate::handles::{BlobHandle, Sha};
@@ -20,9 +19,7 @@ pub const BUNDLE_VERSION: u32 = 7;
 ///
 /// The manifest holds version, documents, and
 /// hooks as the only document language. The blob map holds
-/// blob handles under content hashes beside it. Secret
-/// documents hold no hashes here; their bytes arrive at
-/// apply time. The bundle holds no duplicate fields.
+/// blob handles under content hashes beside it.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
@@ -137,9 +134,7 @@ impl ManifestDocument {
     /// separately through status and drift. Opaque hashes
     /// copy the blob handle, since the handle is the
     /// SHA-256 over raw bytes. Tree hashes cover canonical
-    /// manifest bytes over blob handles. Secret hashes
-    /// cover the command argv, since secret bytes arrive
-    /// at apply time alone.
+    /// manifest bytes over blob handles.
     ///
     /// # Returns
     ///
@@ -170,11 +165,6 @@ impl ManifestDocument {
             }
             ManifestData::Tree { members } => {
                 self.data_hash = Sha::hash(&crate::document::tree_manifest_bytes(members)).hex();
-                Ok(())
-            }
-            ManifestData::Secret { argv, .. } => {
-                let joined = argv.iter().map(Arg::display).collect::<Vec<_>>().join("\0");
-                self.data_hash = Sha::hash(joined.as_bytes()).hex();
                 Ok(())
             }
             inline => {
@@ -236,8 +226,7 @@ impl Bundle {
     /// Builds the desired state bundle from documents.
     ///
     /// Fills data hashes, then sorts documents by destination.
-    /// The caller holds one document per destination. Secret
-    /// payloads hash their command alone and ride no blobs.
+    /// The caller holds one document per destination.
     /// Counts generate through `summary` against a previous manifest.
     ///
     /// # Arguments

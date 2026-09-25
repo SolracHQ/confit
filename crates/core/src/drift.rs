@@ -170,7 +170,6 @@ impl ManifestDocument {
                 }
             }
             ManifestData::Tree { .. } => Vec::new(),
-            ManifestData::Secret { .. } => Vec::new(),
         };
         if let Some(wanted) = self.mode()
             && let Some(seen) = disk_mode

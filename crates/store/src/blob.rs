@@ -39,6 +39,14 @@ pub trait BlobStore {
     /// Pool write failures surface as plan or io errors.
     fn put_source(&self, source: &dyn TrustedHandle) -> Result<BlobHandle>;
 
+    /// Stores streamed bytes sealing both identities.
+    ///
+    /// # Errors
+    ///
+    /// Stream reads fail as plan errors. Pool write failures
+    /// surface as plan or io errors.
+    fn put_reader(&self, reader: &mut dyn std::io::Read) -> Result<BlobHandle>;
+
     /// Reports whether one handle reads present.
     fn has(&self, handle: &BlobHandle) -> bool;
 

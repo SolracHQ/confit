@@ -75,6 +75,17 @@ impl BlobStore for MemoryBlobStore {
         Ok(handle)
     }
 
+    fn put_reader(&self, reader: &mut dyn std::io::Read) -> Result<BlobHandle> {
+        let bytes = read_stream(reader)?;
+        let handle = BlobHandle::new(Sha::hash(&bytes), Sha::hash(&bytes))?;
+        let mut guard = match self.blobs.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.entry(handle.stored().hex()).or_insert(bytes);
+        Ok(handle)
+    }
+
     fn has(&self, handle: &BlobHandle) -> bool {
         let guard = match self.blobs.lock() {
             Ok(guard) => guard,
@@ -113,6 +124,26 @@ fn read_source(path: &Path) -> Result<Vec<u8>> {
         let read = file
             .read(&mut chunk)
             .map_err(|error| Error::Plan(format!("read source '{}': {error}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok(bytes)
+}
+
+/// Raw bytes for one byte stream.
+///
+/// # Errors
+///
+/// Unreadable streams fail as plan errors.
+fn read_stream(reader: &mut dyn std::io::Read) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; SOURCE_CHUNK];
+    loop {
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|error| Error::Plan(format!("read blob stream: {error}")))?;
         if read == 0 {
             break;
         }
@@ -248,5 +279,23 @@ mod tests {
             Ok(_) => panic!("forged blob opens"),
             Err(error) => assert!(error.to_string().contains("fails verification")),
         }
+    }
+
+    #[test]
+    fn put_reader_matches_put_for_identical_content() {
+        let store = MemoryBlobStore::new();
+        let raw = large_source_bytes();
+        assert!(raw.len() > SOURCE_CHUNK);
+        let via_put = store.put(&raw).unwrap();
+        let mut reader = std::io::Cursor::new(raw.clone());
+        let via_reader = store.put_reader(&mut reader).unwrap();
+        assert_eq!(via_reader, via_put, "reader path keeps sealed identity");
+        let mut found = Vec::new();
+        store
+            .open(&via_reader)
+            .unwrap()
+            .read_to_end(&mut found)
+            .unwrap();
+        assert_eq!(found, raw);
     }
 }

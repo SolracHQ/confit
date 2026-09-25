@@ -9,8 +9,7 @@ use super::Declared;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, read_marker};
 use crate::model::{
-    LinkDecl, OpaqueDecl, RcEntryDecl, SecretDecl, StructuredDecl, TextDecl, TreeDecl,
-    TreeMemberDecl,
+    LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
 };
 use crate::surface::handles::{LuaBlobHandle, LuaRoute};
 use crate::surface::runtime::condition_from_json;
@@ -131,20 +130,6 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             Ok(Declared::Tree(TreeDecl {
                 destination,
                 members,
-            }))
-        }
-        "secret" => {
-            let destination = req_destination(table, ctx)?;
-            let argv_value: Value = table.get("argv")?;
-            let argv = crate::surface::hook::read_slots(&argv_value, ctx, "argv")?;
-            if argv.is_empty() {
-                return Err(plan_error(format!("{ctx}: field 'argv' must not be empty")));
-            }
-            let mode = read_mode(table, ctx)?;
-            Ok(Declared::Secret(SecretDecl {
-                destination,
-                argv,
-                mode,
             }))
         }
         "rc" => {

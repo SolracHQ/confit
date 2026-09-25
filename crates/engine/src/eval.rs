@@ -363,8 +363,6 @@ struct ProfileDeclared {
     opaques: Vec<crate::model::OpaqueDecl>,
     /// Tree declarations in profile order.
     trees: Vec<crate::model::TreeDecl>,
-    /// Secret declarations in profile order.
-    secrets: Vec<crate::model::SecretDecl>,
     /// Optional rc base from one rc.new table.
     rc_base: Option<Vec<crate::model::RcEntryDecl>>,
 }
@@ -379,7 +377,6 @@ impl ProfileDeclared {
             Declared::Link(decl) => self.links.push(decl),
             Declared::Opaque(decl) => self.opaques.push(decl),
             Declared::Tree(decl) => self.trees.push(decl),
-            Declared::Secret(decl) => self.secrets.push(decl),
             Declared::Rc(entries) => {
                 if self.rc_base.is_some() {
                     return Err(crate::error::plan_error(format!(
@@ -524,7 +521,7 @@ impl Profile {
         out
     }
 
-    /// Assembles text, link, opaque, tree, and secret documents in route order.
+    /// Assembles text, link, opaque, and tree documents in route order.
     fn text_link(
         &self,
         ctx: &str,
@@ -734,7 +731,7 @@ fn exec_list(refs: &[&StoredPatch]) -> Vec<ExecPatch> {
         .collect()
 }
 
-/// Assembles text, link, opaque, tree, and secret documents in route order.
+/// Assembles text, link, opaque, and tree documents in route order.
 fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
@@ -788,18 +785,6 @@ fn assemble_text_link(
             .or_default()
             .push((ManifestData::Tree { members }, "profile".to_string()));
     }
-    for item in &declared.secrets {
-        grouped
-            .entry(item.destination.display())
-            .or_default()
-            .push((
-                ManifestData::Secret {
-                    argv: item.argv.clone(),
-                    mode: item.mode,
-                },
-                "profile".to_string(),
-            ));
-    }
     for config in configs {
         for item in &config.texts {
             grouped
@@ -846,18 +831,6 @@ fn assemble_text_link(
                 .entry(item.destination.display())
                 .or_default()
                 .push((ManifestData::Tree { members }, config.name.clone()));
-        }
-        for item in &config.secrets {
-            grouped
-                .entry(item.destination.display())
-                .or_default()
-                .push((
-                    ManifestData::Secret {
-                        argv: item.argv.clone(),
-                        mode: item.mode,
-                    },
-                    config.name.clone(),
-                ));
         }
     }
     let mut out = Vec::with_capacity(grouped.len());

@@ -154,6 +154,49 @@ impl BlobStore for FileBlobStore {
         Ok(handle)
     }
 
+    fn put_reader(&self, reader: &mut dyn std::io::Read) -> Result<BlobHandle> {
+        std::fs::create_dir_all(&self.pool).map_err(|error| {
+            Error::Plan(format!("cannot write '{}': {error}", self.pool.display()))
+        })?;
+        let staging = staging_path(&self.pool);
+        let staged = std::fs::File::create(&staging).map_err(|error| {
+            Error::Plan(format!("cannot write '{}': {error}", staging.display()))
+        })?;
+        let mut encoder = flate2::write::GzEncoder::new(
+            StoredWriter::new(staged),
+            flate2::Compression::new(BLOB_GZIP_LEVEL),
+        );
+        let mut content = sha2::Sha256::new();
+        let mut chunk = [0u8; SOURCE_CHUNK];
+        loop {
+            let read = reader
+                .read(&mut chunk)
+                .map_err(|error| Error::Plan(format!("read blob stream: {error}")))?;
+            if read == 0 {
+                break;
+            }
+            content.update(&chunk[..read]);
+            encoder
+                .write_all(&chunk[..read])
+                .map_err(|error| Error::Plan(format!("compress blob: {error}")))?;
+        }
+        let writer = encoder
+            .finish()
+            .map_err(|error| Error::Plan(format!("compress blob: {error}")))?;
+        let handle = BlobHandle::new(Sha::finish(content), writer.digest())?;
+        let dest = self.pool.join(handle.stored().hex());
+        if dest.exists() {
+            std::fs::remove_file(&staging).map_err(|error| {
+                Error::Plan(format!("cannot write '{}': {error}", dest.display()))
+            })?;
+        } else {
+            std::fs::rename(&staging, &dest).map_err(|error| {
+                Error::Plan(format!("cannot write '{}': {error}", dest.display()))
+            })?;
+        }
+        Ok(handle)
+    }
+
     fn has(&self, handle: &BlobHandle) -> bool {
         self.pool.join(handle.stored().hex()).exists()
     }

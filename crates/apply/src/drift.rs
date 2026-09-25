@@ -17,8 +17,7 @@ const COMPARE_CHUNK: usize = 8192;
 impl Applier {
     /// Reports manual edits between recorded documents and disk.
     ///
-    /// Link documents compare target text. Secret documents
-    /// report absent or unreadable alone. Entries follow
+    /// Link documents compare target text. Entries follow
     /// recorded destination order. Content compares streaming.
     pub fn drift(&self, bundle: &Bundle, order: DriftOrder) -> Vec<Drift> {
         let mut out = Vec::new();
@@ -30,19 +29,6 @@ impl Applier {
                     &self.snapshot_tree(document),
                     order,
                 ));
-                continue;
-            }
-            if document.is_secret() {
-                match self.snapshot_doc(document) {
-                    Snapshot::Absent => out.push(Drift::Missing {
-                        path: document.destination.clone(),
-                    }),
-                    Snapshot::Unreadable { reason } => out.push(Drift::Unreadable {
-                        path: document.destination.clone(),
-                        reason,
-                    }),
-                    Snapshot::Present { .. } => {}
-                }
                 continue;
             }
             let Some(mut recorded) = self.recorded_reader(document) else {

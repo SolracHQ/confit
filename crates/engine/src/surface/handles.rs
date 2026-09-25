@@ -178,6 +178,71 @@ fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua:
     Ok(bytes)
 }
 
+/// Opens member bytes from their archive spill.
+///
+/// # Errors
+///
+/// Unknown members fail as plan errors.
+fn member_reader(
+    member: &ResourceHandle,
+    stores: &Stores,
+    caller: &str,
+) -> mlua::Result<Box<dyn std::io::Read>> {
+    match stores.archives().open_decompressed(member) {
+        Ok(reader) => Ok(reader),
+        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+    }
+}
+
+/// Pools streamed bytes under content identity.
+///
+/// # Errors
+///
+/// Pool write failures fail as plan errors.
+fn pool_reader(
+    stores: &Stores,
+    reader: &mut dyn std::io::Read,
+    caller: &str,
+) -> mlua::Result<(BlobHandle, u64)> {
+    let blobs = stores.blobs();
+    let handle = match blobs.put_reader(reader) {
+        Ok(handle) => handle,
+        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+    };
+    let size = match blobs.len(&handle) {
+        Ok(size) => size,
+        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+    };
+    Ok((handle, size))
+}
+
+/// Pools trusted source bytes under content identity.
+///
+/// # Errors
+///
+/// Pool write failures fail as plan errors.
+fn pool_source(
+    stores: &Stores,
+    source: &dyn TrustedHandle,
+    caller: &str,
+) -> mlua::Result<(BlobHandle, u64)> {
+    let blobs = stores.blobs();
+    let handle = match blobs.put_source(source) {
+        Ok(handle) => handle,
+        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+    };
+    let size = match blobs.len(&handle) {
+        Ok(size) => size,
+        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
+        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+    };
+    Ok((handle, size))
+}
+
 /// Structured document format for handle decode views.
 enum DecodeFormat {
     Toml,
@@ -277,54 +342,18 @@ pub(crate) fn blob_for_opaque(
         )));
     };
     if let Ok(handle) = data.borrow::<LuaFetchHandle>() {
-        let bytes = match stores.fetch().read(&handle.handle) {
-            Ok(bytes) => bytes,
-            Err(Error::Plan(message)) => return Err(plan_error(format!("{ctor}: {message}"))),
-            Err(Error::Io(error)) => return Err(plan_error(format!("{ctor}: {error}"))),
-        };
-        return pool_bytes(stores, &bytes, ctor);
+        return pool_source(stores, &handle.handle, ctor);
     }
     if let Ok(handle) = data.borrow::<LuaResourceHandle>() {
         if handle.archive.is_some() {
-            let bytes = member_bytes(&handle.handle, stores, ctor)?;
-            return pool_bytes(stores, &bytes, ctor);
+            let mut reader = member_reader(&handle.handle, stores, ctor)?;
+            return pool_reader(stores, &mut *reader, ctor);
         }
-        let blobs = stores.blobs();
-        let pooled = match blobs.put_source(&handle.handle) {
-            Ok(pooled) => pooled,
-            Err(Error::Plan(message)) => return Err(plan_error(format!("{ctor}: {message}"))),
-            Err(Error::Io(error)) => return Err(plan_error(format!("{ctor}: {error}"))),
-        };
-        let size = match blobs.len(&pooled) {
-            Ok(size) => size,
-            Err(Error::Plan(message)) => return Err(plan_error(format!("{ctor}: {message}"))),
-            Err(Error::Io(error)) => return Err(plan_error(format!("{ctor}: {error}"))),
-        };
-        return Ok((pooled, size));
+        return pool_source(stores, &handle.handle, ctor);
     }
     Err(plan_error(format!(
         "{ctor}: field 'src' must be a fetch, resource, or archive member handle"
     )))
-}
-
-/// Pools raw bytes under content identity.
-///
-/// # Errors
-///
-/// Pool write failures fail as plan errors.
-fn pool_bytes(stores: &Stores, bytes: &[u8], ctor: &str) -> mlua::Result<(BlobHandle, u64)> {
-    let blobs = stores.blobs();
-    let handle = match blobs.put(bytes) {
-        Ok(handle) => handle,
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{ctor}: {message}"))),
-        Err(Error::Io(error)) => return Err(plan_error(format!("{ctor}: {error}"))),
-    };
-    let size = match blobs.len(&handle) {
-        Ok(size) => size,
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{ctor}: {message}"))),
-        Err(Error::Io(error)) => return Err(plan_error(format!("{ctor}: {error}"))),
-    };
-    Ok((handle, size))
 }
 
 /// Builds one tree document table from a sealed archive.
@@ -381,8 +410,8 @@ fn tree_from_archive(
                 pick.rel
             )));
         }
-        let bytes = member_bytes(&member, stores, caller)?;
-        let (blob, size) = pool_bytes(stores, &bytes, caller)?;
+        let mut reader = member_reader(&member, stores, caller)?;
+        let (blob, size) = pool_reader(stores, &mut *reader, caller)?;
         kept.push(TreeMemberDecl {
             rel: pick.rel,
             blob,

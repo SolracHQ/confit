@@ -203,7 +203,6 @@ fn push_declared(data: &mut ConfigData, table: &Table, ctx: &str) -> mlua::Resul
         Declared::Link(decl) => data.links.push(decl),
         Declared::Opaque(decl) => data.opaques.push(decl),
         Declared::Tree(decl) => data.trees.push(decl),
-        Declared::Secret(decl) => data.secrets.push(decl),
         Declared::Rc(entries) => {
             if data.rc_base.is_some() {
                 return Err(plan_error(format!(

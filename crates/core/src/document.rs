@@ -338,8 +338,6 @@ pub enum DocumentKind {
     Opaque,
     /// Managed file set from one archive under one folder.
     Tree,
-    /// Apply-time secret from command stdout.
-    Secret,
 }
 
 impl DocumentKind {
@@ -357,7 +355,6 @@ impl DocumentKind {
             Self::Rc => "rc",
             Self::Opaque => "opaque",
             Self::Tree => "tree",
-            Self::Secret => "secret",
         }
     }
 }
@@ -385,7 +382,6 @@ pub struct ManifestMember {
 /// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
 /// Text, structured, rc, and link payloads stay inline.
 /// Opaque and tree payloads hold blob handles alone.
-/// Secret payloads hold the apply-time command alone, never bytes.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -437,17 +433,6 @@ pub enum ManifestData {
         /// Holds members in destination-relative order.
         members: Vec<ManifestMember>,
     },
-    /// Holds one apply-time secret command.
-    ///
-    /// Bytes arrive at apply time from command stdout and
-    /// never land in a bundle or preview.
-    Secret {
-        /// Holds the command and arguments in order.
-        argv: Vec<Arg>,
-        /// Holds unix permission bits. None applies the umask default.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<u32>,
-    },
 }
 
 impl ManifestData {
@@ -465,18 +450,17 @@ impl ManifestData {
             Self::Rc(_) => DocumentKind::Rc,
             Self::Opaque { .. } => DocumentKind::Opaque,
             Self::Tree { .. } => DocumentKind::Tree,
-            Self::Secret { .. } => DocumentKind::Secret,
         }
     }
 
     /// Reads the unix permission bits for this payload.
     ///
-    /// Text, opaque, and secret payloads carry an optional
+    /// Text and opaque payloads carry an optional
     /// mode. Every other payload reads as None.
     ///
     /// # Returns
     ///
-    /// The mode bits for text, opaque, and secret payloads,
+    /// The mode bits for text and opaque payloads,
     /// else None.
     ///
     /// # Examples
@@ -489,9 +473,7 @@ impl ManifestData {
     /// ```
     pub fn mode(&self) -> Option<u32> {
         match self {
-            Self::Text { mode, .. } | Self::Opaque { mode, .. } | Self::Secret { mode, .. } => {
-                *mode
-            }
+            Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
         }
     }
@@ -508,11 +490,7 @@ impl ManifestData {
     pub fn unmanaged(&self) -> bool {
         match self {
             Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
-            Self::Structured { .. }
-            | Self::Link { .. }
-            | Self::Rc(_)
-            | Self::Tree { .. }
-            | Self::Secret { .. } => false,
+            Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => false,
         }
     }
 
@@ -534,11 +512,9 @@ impl ManifestData {
         match self {
             Self::Opaque { blob, .. } => vec![blob],
             Self::Tree { members } => members.iter().map(|member| &member.blob).collect(),
-            Self::Structured { .. }
-            | Self::Text { .. }
-            | Self::Link { .. }
-            | Self::Rc(_)
-            | Self::Secret { .. } => Vec::new(),
+            Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
+                Vec::new()
+            }
         }
     }
 }
@@ -633,16 +609,6 @@ impl ManifestDocument {
     ///
     pub fn is_opaque(&self) -> bool {
         matches!(self.kind(), DocumentKind::Opaque)
-    }
-
-    /// Reports whether the document carries an apply-time secret.
-    ///
-    /// # Returns
-    ///
-    /// True for the secret kind only.
-    ///
-    pub fn is_secret(&self) -> bool {
-        matches!(self.kind(), DocumentKind::Secret)
     }
 }
 

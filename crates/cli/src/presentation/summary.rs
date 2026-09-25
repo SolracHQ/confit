@@ -823,9 +823,6 @@ fn entry_bodies(document: &ManifestDocument) -> Vec<String> {
             vec![format!("opaque ({size} bytes)")]
         }
         ManifestData::Tree { members } => vec![format!("tree ({} files)", members.len())],
-        ManifestData::Secret { argv, .. } => {
-            vec![format!("secret ({})", Arg::join(argv))]
-        }
         ManifestData::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {

@@ -84,7 +84,7 @@ pub struct Evaluation {
 ///
 /// # Returns
 ///
-/// Structured, text, link, secret documents, one rc document per
+/// Structured, text, and link documents, one rc document per
 /// shell, in deterministic order, and merged hooks.
 ///
 /// # Errors

@@ -1,6 +1,6 @@
 //! Apply
 //!
-//! Destination writes, removals, drift, and secret execution.
+//! Destination writes, removals, and drift.
 
 #![deny(missing_docs)]
 
@@ -8,12 +8,10 @@ mod disk;
 mod drift;
 mod remove;
 mod resolve;
-mod secret;
 mod snapshot;
 mod write;
 
 pub use disk::{Disk, DiskKind, HostDisk, MemoryDisk};
-pub use secret::run_secret_command;
 pub use snapshot::{Snapshot, TreeMemberSnapshot};
 
 use confit_store::{StoreRoots, Stores};

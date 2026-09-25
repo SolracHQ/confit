@@ -11,10 +11,9 @@ pub mod memory;
 
 /// Content-addressed fetch cache for remote bytes.
 ///
-/// One folder holds downloads under URL hashes beside sha
-/// sidecars. Tampered entries read as misses.
-/// Offline hits call no fetcher. User shas check fatal
-/// after hit-or-download.
+/// Bodies rest under content hashes beside a `urls` index.
+/// Tampered entries read as misses. Offline hits call no
+/// fetcher. User shas check fatal after hit-or-download.
 pub trait FetchCache {
     /// Fetches one URL into a fetch handle.
     ///
@@ -37,4 +36,12 @@ pub trait FetchCache {
     /// Missing and unreadable cache files fail as plan errors
     /// naming the origin.
     fn read(&self, handle: &FetchHandle) -> Result<Vec<u8>>;
+
+    /// Opens cached bytes behind one fetch handle.
+    ///
+    /// # Errors
+    ///
+    /// Missing and unreadable cache files fail as plan errors
+    /// naming the origin.
+    fn open(&self, handle: &FetchHandle) -> Result<Box<dyn std::io::Read>>;
 }

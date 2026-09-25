@@ -21,8 +21,7 @@ impl ManifestDocument {
     /// # Errors
     ///
     /// Opaque and tree payloads fail as plan errors; their
-    /// bytes ride the blob store. Secret payloads fail as
-    /// plan errors; their bytes arrive at apply time.
+    /// bytes ride the blob store.
     /// Serializer failures fail as plan errors.
     ///
     /// # Examples
@@ -47,7 +46,7 @@ impl ManifestDocument {
 ///
 /// # Errors
 ///
-/// Opaque, tree, secret, and serializer failures fail
+/// Opaque, tree, and serializer failures fail
 /// as plan errors.
 pub(crate) fn render_inline_bytes(
     data: &ManifestData,
@@ -69,12 +68,6 @@ pub(crate) fn render_inline_bytes(
         ManifestData::Tree { .. } => Err(Error::Plan(
             "render tree: tree documents hold member bytes".to_string(),
         )),
-        ManifestData::Secret { argv, .. } => Err(Error::Plan(format!(
-            "render secret '{}': secret bytes arrive at apply time",
-            argv.first()
-                .map(Arg::display)
-                .unwrap_or_else(|| "secret".to_string())
-        ))),
     }
 }
 

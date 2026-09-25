@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use serde_json::Value as Json;
 
 use crate::level::Level;
-use confit_core::arg::Arg;
 use confit_core::document::StructuredFormat;
 use confit_core::handles::{BlobHandle, Route};
 use confit_core::hook::Hook;
@@ -82,17 +81,6 @@ pub(crate) struct TreeDecl {
     pub(crate) members: Vec<TreeMemberDecl>,
 }
 
-/// Declared secret document holding an apply-time command.
-#[derive(Debug, Clone)]
-pub(crate) struct SecretDecl {
-    /// Late-bound destination route.
-    pub(crate) destination: Route,
-    /// Command and arguments in order.
-    pub(crate) argv: Vec<Arg>,
-    /// Unix permission bits, holding `None` for default handling.
-    pub(crate) mode: Option<u32>,
-}
-
 /// Declared rc entry with its section and canonical JSON form.
 #[derive(Debug, Clone)]
 pub(crate) struct RcEntryDecl {
@@ -145,8 +133,6 @@ pub(crate) struct ConfigData {
     pub(crate) opaques: Vec<OpaqueDecl>,
     /// Declared tree documents.
     pub(crate) trees: Vec<TreeDecl>,
-    /// Declared secret documents.
-    pub(crate) secrets: Vec<SecretDecl>,
     /// Optional rc base holding section buckets.
     pub(crate) rc_base: Option<Vec<RcEntryDecl>>,
     /// Patch handles in declaration order.

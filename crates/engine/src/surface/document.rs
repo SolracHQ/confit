@@ -11,8 +11,7 @@ use super::runtime::check_condition_json;
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, set_marker};
 use crate::model::{
-    LinkDecl, OpaqueDecl, RcEntryDecl, SecretDecl, StructuredDecl, TextDecl, TreeDecl,
-    TreeMemberDecl,
+    LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
 };
 use confit_core::arg::Arg;
 use confit_core::document::{RcData, StructuredFormat};
@@ -31,8 +30,6 @@ pub(crate) enum Declared {
     Opaque(OpaqueDecl),
     /// Tree declaration holding one managed file set.
     Tree(TreeDecl),
-    /// Secret declaration holding an apply-time command.
-    Secret(SecretDecl),
     /// Rc base holding section buckets.
     Rc(Vec<RcEntryDecl>),
 }
@@ -60,10 +57,6 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
         lua.create_function(move |lua, args: (Value, Value, Option<Value>)| {
             opaque_impl(lua, &opaque_stores, args)
         })?,
-    )?;
-    namespace.set(
-        "secret",
-        lua.create_function(|lua, args: (Value, Value, Option<Value>)| secret_impl(lua, args))?,
     )?;
     install_rc(lua, &namespace)?;
     confit.set("document", namespace)?;
@@ -117,35 +110,6 @@ fn opaque_impl(
         resolved.mode,
         resolved.unmanaged,
     )
-}
-
-/// Builds a secret document table from a command.
-fn secret_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Table> {
-    const CTOR: &str = "confit.document.secret";
-    let (dest_value, cmd_value, opts) = args;
-    let destination = req_route(&dest_value, CTOR, "path")?;
-    let argv = parse_secret_argv(&cmd_value, CTOR)?;
-    let mode = SecretOpts::resolve(opts, CTOR)?;
-    DocumentTables::secret(lua, destination, argv, mode)
-}
-
-/// Parses secret commands from strings and argv tables.
-fn parse_secret_argv(cmd: &Value, ctor: &str) -> mlua::Result<Vec<Arg>> {
-    if let Some(text) = cmd.clone().opt_str() {
-        if text.is_empty() {
-            return Err(plan_error(format!("{ctor}: field 'cmd' must not be empty")));
-        }
-        return Ok(vec![
-            Arg::Text("sh".to_string()),
-            Arg::Text("-c".to_string()),
-            Arg::Text(text),
-        ]);
-    }
-    let argv = read_slots(cmd, ctor, "cmd")?;
-    if argv.is_empty() {
-        return Err(plan_error(format!("{ctor}: field 'cmd' must not be empty")));
-    }
-    Ok(argv)
 }
 
 /// Document table builders holding domain validation.
@@ -229,22 +193,6 @@ impl DocumentTables {
         let text = mode.map(|bits| bits.to_string());
         let extra = text.as_deref().map(|bits| ("__mode", bits));
         set_marker(lua, &out, "opaque", extra)?;
-        Ok(out)
-    }
-
-    /// Builds a secret document table holding an argv array.
-    fn secret(
-        lua: &Lua,
-        destination: confit_core::handles::Route,
-        argv: Vec<Arg>,
-        mode: Option<u32>,
-    ) -> mlua::Result<Table> {
-        let out = lua.create_table()?;
-        out.set("path", lua.create_userdata(LuaRoute::from(destination))?)?;
-        write_slots(lua, &out, "argv", &argv)?;
-        let text = mode.map(|bits| bits.to_string());
-        let extra = text.as_deref().map(|bits| ("__mode", bits));
-        set_marker(lua, &out, "secret", extra)?;
         Ok(out)
     }
 }
@@ -333,43 +281,6 @@ impl DocOpts {
             }
         };
         Ok(Self { mode, unmanaged })
-    }
-}
-
-/// Secret opts holding mode alone.
-struct SecretOpts;
-
-impl SecretOpts {
-    /// Resolves the secret mode from an opts value.
-    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Option<u32>> {
-        let Some(opts) = opts else {
-            return Ok(None);
-        };
-        if opts.is_nil() {
-            return Ok(None);
-        }
-        let table = opts.req_table(ctor, "opts")?;
-        for pair in table.pairs::<Value, Value>() {
-            let (key, _) = pair?;
-            let Some(name) = key.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' must hold string keys"
-                )));
-            };
-            if name != "mode" {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' unknown field '{name}'"
-                )));
-            }
-        }
-        let mode_value: Value = table.get("mode")?;
-        if mode_value.is_nil() {
-            return Ok(None);
-        }
-        let raw = mode_value.req_str(ctor, "mode")?;
-        confit_core::document::parse_mode(&raw)
-            .map(Some)
-            .map_err(|error| plan_error(format!("{ctor}: {error}")))
     }
 }
 
