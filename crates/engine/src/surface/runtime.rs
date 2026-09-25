@@ -50,37 +50,36 @@ fn in_path_impl(lua: &Lua, name: Value) -> mlua::Result<Table> {
 /// Builds an `exists` condition table.
 fn exists_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.runtime.exists";
-    let path = req_condition_path(&path, CTOR, "path")?;
-    CondTables::leaf(lua, "exists", "path", path)
+    let route = req_condition_route(&path, CTOR, "path")?;
+    CondTables::route_leaf(lua, "exists", &route)
 }
 
 /// Builds a `changed` condition table.
 fn changed_impl(lua: &Lua, path: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.runtime.changed";
-    let path = req_condition_path(&path, CTOR, "path")?;
-    CondTables::leaf(lua, "changed", "path", path)
+    let route = req_condition_route(&path, CTOR, "path")?;
+    CondTables::route_leaf(lua, "changed", &route)
 }
 
-/// Reads one condition path from a string or a route.
+/// Reads one condition route from a route value.
 ///
-/// Route values translate to their portable display, so
-/// changed gates name the same text the plan keys carry.
-/// Plain strings pass through intact.
+/// Plain strings refuse: evaluation cannot name an unexpanded path.
 ///
 /// # Errors
 ///
-/// Non-string non-route values fail as plan errors.
-fn req_condition_path(value: &Value, ctor: &str, field: &str) -> mlua::Result<String> {
-    if let Some(text) = value.clone().opt_str() {
-        return Ok(text);
-    }
+/// Non-route values fail as plan errors.
+fn req_condition_route(
+    value: &Value,
+    ctor: &str,
+    field: &str,
+) -> mlua::Result<confit_model::handles::Route> {
     if let Some(data) = value.as_userdata()
         && let Ok(route) = data.borrow::<super::handles::LuaRoute>()
     {
-        return Ok(route.core().display());
+        return Ok(route.core().clone());
     }
     Err(plan_error(format!(
-        "{ctor}: field '{field}' must be a string or a confit.path value"
+        "{ctor}: field '{field}' must be a confit.path value"
     )))
 }
 
@@ -196,6 +195,29 @@ impl CondTables {
     fn leaf(lua: &Lua, shape: &str, field: &str, value: String) -> mlua::Result<Table> {
         let inner = lua.create_table()?;
         inner.set(field, value)?;
+        let outer = lua.create_table()?;
+        outer.set(shape, inner)?;
+        Ok(outer)
+    }
+
+    /// Wraps one route into a one-shape condition table.
+    ///
+    /// The route lands as a base plus relative object, so the
+    /// JSON shape matches serde and old string artifacts fail.
+    ///
+    /// # Errors
+    ///
+    /// Table builds fail as Lua errors.
+    fn route_leaf(
+        lua: &Lua,
+        shape: &str,
+        route: &confit_model::handles::Route,
+    ) -> mlua::Result<Table> {
+        let body = lua.create_table()?;
+        body.set("base", route.base().name())?;
+        body.set("relative", route.relative().to_string_lossy().into_owned())?;
+        let inner = lua.create_table()?;
+        inner.set("route", body)?;
         let outer = lua.create_table()?;
         outer.set(shape, inner)?;
         Ok(outer)
@@ -402,11 +424,11 @@ pub(crate) fn check_condition_json(json: &Json, ctx: &str) -> Result<(), String>
             Ok(())
         }
         "exists" => {
-            check_leaf(inner, ctx, &["path"])?;
+            check_route(inner, ctx)?;
             Ok(())
         }
         "changed" => {
-            check_leaf(inner, ctx, &["path"])?;
+            check_route(inner, ctx)?;
             Ok(())
         }
         "all" | "any" => {
@@ -421,6 +443,58 @@ pub(crate) fn check_condition_json(json: &Json, ctx: &str) -> Result<(), String>
         }
         "nop" => check_condition_json(inner, &format!("{ctx}.nop")),
         other => Err(format!("{ctx} unknown condition shape '{other}'")),
+    }
+}
+
+/// Validates one route condition inner object.
+///
+/// The inner object holds one `route` object with base plus relative.
+///
+/// # Errors
+///
+/// Non-objects, unknown fields, and bad bases fail with detail.
+fn check_route(inner: &Json, ctx: &str) -> Result<(), String> {
+    let map = match inner {
+        Json::Object(map) => map,
+        _ => return Err(format!("{ctx} must be a condition table")),
+    };
+    if map.len() != 1 || !map.contains_key("route") {
+        return Err(format!("{ctx} must hold one 'route' field"));
+    }
+    let Some(body) = map.get("route") else {
+        return Err(format!("{ctx} must hold one 'route' field"));
+    };
+    check_route_body(body, ctx)
+}
+
+/// Validates one route body object.
+///
+/// Bases name home, config, data, cache, or literal. Relative
+/// paths read non-empty.
+///
+/// # Errors
+///
+/// Bad shapes fail with detail.
+fn check_route_body(body: &Json, ctx: &str) -> Result<(), String> {
+    let map = match body {
+        Json::Object(map) => map,
+        _ => return Err(format!("{ctx} field 'route' must be a route table")),
+    };
+    if map.len() != 2 {
+        return Err(format!("{ctx} field 'route' must hold base plus relative"));
+    }
+    let base = match map.get("base").and_then(Json::as_str) {
+        Some(base) => base,
+        None => return Err(format!("{ctx} field 'route' must hold base plus relative")),
+    };
+    if !matches!(base, "home" | "config" | "data" | "cache" | "literal") {
+        return Err(format!("{ctx} field 'route' holds unknown base '{base}'"));
+    }
+    match map.get("relative").and_then(Json::as_str) {
+        Some(relative) if !relative.is_empty() => Ok(()),
+        _ => Err(format!(
+            "{ctx} field 'route' must hold a non-empty relative path"
+        )),
     }
 }
 
@@ -444,12 +518,51 @@ fn check_leaf(inner: &Json, ctx: &str, known: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// Parses one route condition body into the core shape.
+///
+/// Old string artifacts fail here: the body must hold a route object.
+///
+/// # Errors
+///
+/// Non-object bodies and bad routes fail as plan errors.
+fn route_from_json(inner: &Json, ctx: &str) -> mlua::Result<confit_model::handles::Route> {
+    let body = match inner.get("route") {
+        Some(body) => body.clone(),
+        None => {
+            return Err(plan_error(format!("{ctx} must hold one 'route' field")));
+        }
+    };
+    serde_json::from_value(body).map_err(|error| plan_error(format!("{ctx} {error}")))
+}
+
+/// Parses one condition array into core shapes.
+///
+/// # Errors
+///
+/// Non-arrays and bad members fail as plan errors.
+fn conditions_from_array(
+    inner: &Json,
+    ctx: &str,
+) -> mlua::Result<Vec<confit_model::condition::Condition>> {
+    let Json::Array(items) = inner else {
+        return Err(plan_error(format!("{ctx} must be a dense condition array")));
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for (position, item) in items.iter().enumerate() {
+        out.push(condition_from_json(
+            item,
+            &format!("{ctx}[{}]", position + 1),
+        )?);
+    }
+    Ok(out)
+}
+
 /// Parses one condition JSON value into the core shape.
 pub(crate) fn condition_from_json(
     json: &Json,
     ctx: &str,
-) -> mlua::Result<confit_core::condition::Condition> {
-    use confit_core::condition::Condition;
+) -> mlua::Result<confit_model::condition::Condition> {
+    use confit_model::condition::Condition;
     check_condition_json(json, ctx).map_err(crate::error::plan_error)?;
     let map = match json {
         Json::Object(map) => map,
@@ -477,35 +590,13 @@ pub(crate) fn condition_from_json(
             name: leaf("name")?,
         }),
         "exists" => Ok(Condition::Exists {
-            path: leaf("path")?,
+            route: route_from_json(inner, ctx)?,
         }),
         "changed" => Ok(Condition::Changed {
-            path: leaf("path")?,
+            route: route_from_json(inner, ctx)?,
         }),
-        "all" => {
-            let mut out = Vec::new();
-            if let Json::Array(items) = inner {
-                for (position, item) in items.iter().enumerate() {
-                    out.push(condition_from_json(
-                        item,
-                        &format!("{ctx}[{}]", position + 1),
-                    )?);
-                }
-            }
-            Ok(Condition::All(out))
-        }
-        "any" => {
-            let mut out = Vec::new();
-            if let Json::Array(items) = inner {
-                for (position, item) in items.iter().enumerate() {
-                    out.push(condition_from_json(
-                        item,
-                        &format!("{ctx}[{}]", position + 1),
-                    )?);
-                }
-            }
-            Ok(Condition::Any(out))
-        }
+        "all" => Ok(Condition::All(conditions_from_array(inner, ctx)?)),
+        "any" => Ok(Condition::Any(conditions_from_array(inner, ctx)?)),
         "nop" => Ok(Condition::Not(Box::new(condition_from_json(
             inner,
             &format!("{ctx}.nop"),

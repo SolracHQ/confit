@@ -4,15 +4,16 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::{Error, Result};
-use confit_core::plan::Bundle;
-use confit_core::store::SlotKind;
-use confit_core::store::manifest::manifest_json;
+use confit_model::error::{Error, Result};
+use confit_model::manifest::manifest_json;
+use confit_store::Stores;
+use confit_store::bundle::Bundle;
+use confit_store::slot::SlotKind;
 use confit_store::slot::SlotStore;
 
 use crate::cli::ExportArgs;
 
-use crate::seams::{Seams, timed};
+use crate::seams::{Sinks, timed};
 
 /// Auto-name stem for exports of the applied slot.
 const APPLIED_STEM: &str = "applied";
@@ -28,40 +29,42 @@ pub struct ExportReport {
     pub manifest: Option<String>,
 }
 
-/// One export run from flags on injected seams.
+/// One export run from flags to a bundle file or manifest print.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::export::ExportRunner;
-/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::ExportArgs;
-/// use confit_core::fs::memory::MemoryFs;
-/// use confit_core::probe::MemoryProbe;
-/// use std::io::Cursor;
+/// use confit_store::{StoreRoots, Stores};
 ///
 /// let args = ExportArgs { picker: None, output: None, manifest: true };
-/// let fs = MemoryFs::new();
-/// let probe = MemoryProbe::new();
-/// let mut input = Cursor::new(String::new());
-/// let report = ExportRunner::run(&args, Seams::memory(&fs, &probe, &mut input));
+/// let stores = Stores::new(StoreRoots::standard());
+/// let report = ExportRunner { args: &args, stores, sinks: Default::default() }.execute();
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
 pub struct ExportRunner<'a> {
     /// Holds the export flags under running.
     pub args: &'a ExportArgs,
-    /// Holds the injected filesystem, output, and sink.
-    pub seams: Seams<'a>,
+    /// Holds the write capabilities for the run.
+    pub stores: Stores,
+    /// Holds the output senders for the run.
+    pub sinks: Sinks,
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Reads flags and runs the full export flow on injected seams.
-    pub fn run(args: &'a ExportArgs, seams: Seams<'a>) -> Result<ExportReport> {
-        Self { args, seams }.execute()
+    /// Reads flags and runs the full export flow.
+    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Result<ExportReport> {
+        Self {
+            args,
+            stores,
+            sinks,
+        }
+        .execute()
     }
 
     /// Resolves the picker, then writes the bundle file or
-    /// renders pretty manifest JSON through injected seams.
+    /// renders pretty manifest JSON.
     ///
     /// The destination rides `-o` as a literal file path and
     /// gains `.cb` unless present. Omitted destinations derive
@@ -78,15 +81,16 @@ impl<'a> ExportRunner<'a> {
     /// io errors. `-o` and `--manifest` together refuse.
     pub fn execute(self) -> Result<ExportReport> {
         let args = self.args;
-        let seams = self.seams;
+        let stores = self.stores;
+        let sinks = self.sinks;
         if args.manifest && args.output.is_some() {
             return Err(Error::Plan(
                 "export: '-o' plus '--manifest' refuse together, pick one".to_string(),
             ));
         }
-        let slots = seams.stores.slots();
+        let slots = stores.slots();
         let (bundle, auto) = timed("export load", || {
-            resolve_slot_bundle(args.picker.as_deref(), &*slots)
+            resolve_slot_bundle(args.picker.as_deref(), &slots)
         })?;
         if args.manifest {
             let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
@@ -99,12 +103,11 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        seams.emit_writing_manifest(bundle.manifest.documents.len());
+        sinks.emit_writing_manifest(bundle.manifest.documents.len());
         let dest = timed("export write", || {
-            seams
-                .stores
+            stores
                 .bundles()
-                .write(&bundle, &dest, seams.progress.as_ref())
+                .write(&bundle, &dest, sinks.progress.as_ref())
         })?;
         Ok(ExportReport {
             dest: Some(dest),
@@ -134,20 +137,16 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,no_run
 /// use confit_cli::actions::export::resolve_slot_bundle;
-/// use confit_store::slot::memory::MemorySlotStore;
 /// use confit_store::slot::SlotStore;
+/// use confit_store::StoreRoots;
 ///
-/// let slots = MemorySlotStore::new();
-/// assert!(matches!(resolve_slot_bundle(None, &slots), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("@missing"), &slots), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("%1"), &slots), Err(_)));
+/// let slots = SlotStore::new(&StoreRoots::standard());
+/// let (bundle, dest) = resolve_slot_bundle(None, &slots).unwrap();
+/// assert_eq!(dest.extension().and_then(|ext| ext.to_str()), Some("cb"));
 /// ```
-pub fn resolve_slot_bundle(
-    picker: Option<&str>,
-    slots: &dyn SlotStore,
-) -> Result<(Bundle, PathBuf)> {
+pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Bundle, PathBuf)> {
     let (bundle, kind) = slots.resolve(picker).map_err(|error| match error {
         Error::Plan(detail) => Error::Plan(format!("export: {detail}")),
         other => other,

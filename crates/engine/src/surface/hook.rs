@@ -9,7 +9,7 @@ use super::handles::LuaRoute;
 use super::runtime::{check_condition_json, condition_from_json};
 use crate::error::plan_error;
 use crate::lua::{TableExt, ValueExt, set_marker};
-use confit_core::arg::Arg;
+use confit_model::arg::Arg;
 
 /// Installs the hook namespace on a state.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -370,8 +370,8 @@ fn read_timeout(opts: &Table, ctor: &str) -> mlua::Result<u64> {
 }
 
 /// Converts one hook declaration table into core data.
-pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_core::hook::Hook> {
-    use confit_core::hook::Hook;
+pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_model::hook::Hook> {
+    use confit_model::hook::Hook;
 
     let argv_value: Value = table.get("argv")?;
     let argv = match argv_value.is_nil() {

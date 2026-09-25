@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use serde_json::Value as Json;
 
 use crate::level::Level;
-use confit_core::document::StructuredFormat;
-use confit_core::handles::{BlobHandle, Route};
-use confit_core::hook::Hook;
+use confit_model::document::StructuredFormat;
+use confit_model::handles::{BlobHandle, Route};
+use confit_model::hook::Hook;
 
 /// Declared structured document from profile and configs.
 #[derive(Debug, Clone)]

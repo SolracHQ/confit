@@ -1,0 +1,21 @@
+[package]
+name = "confit-runtime"
+version = "0.8.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-model = { version = "0.8.0", path = "../model" }
+confit-driver = { version = "0.8.0", path = "../driver" }
+confit-store = { version = "0.8.0", path = "../store" }
+dirs = "7.0.0"
+serde_json.workspace = true
+toml.workspace = true
+noyalib.workspace = true
+sha2 = "0.11.0"
+
+[dev-dependencies]
+confit-driver = { path = "../driver", features = ["test-support"] }
+tempfile.workspace = true

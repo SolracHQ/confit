@@ -13,8 +13,8 @@ workspace = true
 [dependencies]
 anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
-confit-apply = { path = "../apply" }
-confit-core = { path = "../core" }
+confit-runtime = { path = "../runtime" }
+confit-model = { path = "../model" }
 confit-engine = { path = "../engine" }
 confit-store = { path = "../store" }
 crossbeam-channel = "0.5.17"
@@ -26,8 +26,10 @@ log.workspace = true
 rayon = "1.12.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+confit-driver = { version = "0.8.0", path = "../driver" }
 
 [dev-dependencies]
+confit-driver = { path = "../driver", features = ["test-support"] }
 flate2 = "1.1.10"
 tar = "0.4.46"
 tempfile.workspace = true

@@ -28,7 +28,7 @@ pub(crate) fn confit_table(lua: &Lua) -> mlua::Result<Table> {
 }
 
 /// Installs the confit global and every namespace on a session.
-pub(crate) fn install(session: &crate::eval::Session) -> confit_core::error::Result<()> {
+pub(crate) fn install(session: &crate::eval::Session) -> confit_model::error::Result<()> {
     let lua = &session.lua;
     let fresh = lua.create_table().map_err(plan)?;
     lua.globals().set("confit", fresh).map_err(plan)?;
@@ -45,6 +45,6 @@ pub(crate) fn install(session: &crate::eval::Session) -> confit_core::error::Res
 }
 
 /// Maps an install-time Lua failure onto a plan error.
-fn plan(error: mlua::Error) -> confit_core::error::Error {
+fn plan(error: mlua::Error) -> confit_model::error::Error {
     crate::error::plan(error.to_string())
 }

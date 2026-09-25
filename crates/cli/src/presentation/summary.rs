@@ -4,14 +4,15 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
-use confit_core::arg::Arg;
-use confit_core::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
-use confit_core::drift::Drift;
-use confit_core::handles::{Route, Sha};
-use confit_core::hook::HookLifecycle;
-use confit_core::plan::{Bundle, DocumentStatus};
+use confit_model::arg::Arg;
+use confit_model::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
+use confit_model::drift::Drift;
+use confit_model::handles::{Route, Sha};
+use confit_model::hook::HookLifecycle;
+use confit_model::plan::DocumentStatus;
+use confit_model::render::inline_bytes;
+use confit_store::bundle::Bundle;
 
 use crate::presentation::drift::drift_lines;
 use crate::presentation::hooks::{EvaluatedHook, lifecycle_lines, render_evaluated};
@@ -191,9 +192,9 @@ impl HookCounts {
 ///
 /// ```rust
 /// use confit_cli::presentation::summary::{Hooks, Summary};
-/// use confit_core::handles::{Route, RouteBase};
-/// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::plan::Bundle;
+/// use confit_model::handles::{Route, RouteBase};
+/// use confit_model::document::{ManifestData, ManifestDocument};
+/// use confit_store::bundle::Bundle;
 ///
 /// let document = ManifestDocument::new(
 ///     Route::new(RouteBase::Home, "note").unwrap(),
@@ -268,7 +269,7 @@ impl Summary<'_> {
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.manifest.documents {
-            let status = document.status(self.previous);
+            let status = document.status(&self.previous.manifest);
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
             }
@@ -311,9 +312,9 @@ impl Summary<'_> {
     ///
     /// ```rust
     /// use confit_cli::presentation::summary::{Hooks, Summary};
-    /// use confit_core::document::{ManifestData, ManifestDocument};
-    /// use confit_core::handles::{Route, RouteBase};
-    /// use confit_core::plan::Bundle;
+    /// use confit_model::document::{ManifestData, ManifestDocument};
+    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_store::bundle::Bundle;
     ///
     /// let first = ManifestDocument::new(Route::new(RouteBase::Home, "a").unwrap(), ManifestData::Text { content: "a".into(), mode: None, unmanaged: false});
     /// let second = ManifestDocument::new(Route::new(RouteBase::Home, "b").unwrap(), ManifestData::Text { content: "b".into(), mode: None, unmanaged: false});
@@ -420,7 +421,7 @@ impl Summary<'_> {
 
     /// Renders entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &ManifestDocument) -> Vec<String> {
-        match document.status(self.previous) {
+        match document.status(&self.previous.manifest) {
             DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  {} {body}", Sigil::Add.mark())))
@@ -934,7 +935,7 @@ fn update_lines(
             }
         }
         (ManifestData::Tree { members: new }, ManifestData::Tree { members: old }) => {
-            let changed = confit_core::document::tree_changed(old, new);
+            let changed = confit_model::document::tree_changed(old, new);
             vec![painter.paint(
                 Sigil::Update,
                 &format!(
@@ -995,11 +996,11 @@ fn rc_update_lines(
     document: &ManifestDocument,
     recorded: &ManifestDocument,
 ) -> Vec<String> {
-    let old_bytes = match recorded.render(&|route| PathBuf::from(route.display())) {
+    let old_bytes = match inline_bytes(&recorded.data) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
-    let new_bytes = match document.render(&|route| PathBuf::from(route.display())) {
+    let new_bytes = match inline_bytes(&document.data) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };

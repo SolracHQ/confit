@@ -20,13 +20,13 @@ use crate::surface::config::ConfigBuilder;
 use crate::surface::document::Declared;
 use crate::surface::document::convert::translate_entry;
 use crate::surface::utils;
-use confit_core::arg::Arg;
-use confit_core::document::ManifestDocument;
-use confit_core::document::{ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
-use confit_core::error::{Error, Result};
-use confit_core::handles::{BlobHandle, Route, RouteBase};
-use confit_core::hook::{Hook, merge_hooks};
-use confit_core::progress::{Event, ProgressSender};
+use confit_model::arg::Arg;
+use confit_model::document::ManifestDocument;
+use confit_model::document::{ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
+use confit_model::error::{Error, Result};
+use confit_model::handles::{BlobHandle, Route, RouteBase};
+use confit_model::hook::{Hook, merge_hooks};
+use confit_model::progress::{Event, ProgressSender};
 use confit_store::Stores;
 
 /// One evaluation holding the Lua state and its context.
@@ -58,7 +58,7 @@ impl Session {
         let root = absolutize(&resolve_root(profile, &opts.root))?;
         let stores = match opts.stores {
             Some(stores) => stores,
-            None => Stores::host(confit_store::StoreRoots::standard()),
+            None => Stores::new(confit_store::StoreRoots::standard()),
         };
         let lua = Lua::new_with(
             StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
@@ -170,11 +170,11 @@ fn wrap(error: mlua::Error) -> Error {
 /// Rejects changed gates naming documents outside the built set.
 fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Result<()> {
     const CTOR: &str = "confit.runtime.changed";
-    let built: std::collections::BTreeSet<String> = documents
+    let built: std::collections::BTreeSet<Route> = documents
         .iter()
-        .map(|document| document.destination.display())
+        .map(|document| document.destination.clone())
         .collect();
-    let mut paths = Vec::new();
+    let mut paths: Vec<Route> = Vec::new();
     for hook in hooks {
         if let Some(gate) = hook.requires.as_ref() {
             gate.collect_changed(&mut paths);
@@ -189,7 +189,8 @@ fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Res
     for path in paths {
         if !built.contains(&path) {
             return Err(crate::error::plan_error(format!(
-                "{CTOR}: unknown document '{path}'"
+                "{CTOR}: unknown document '{}'",
+                path.display()
             )));
         }
     }
@@ -860,11 +861,11 @@ fn collect_blob(handle: &BlobHandle, blobs: &mut BTreeMap<String, BlobHandle>) {
 fn collect_tree(
     members: &[crate::model::TreeMemberDecl],
     blobs: &mut BTreeMap<String, BlobHandle>,
-) -> Vec<confit_core::document::ManifestMember> {
+) -> Vec<confit_model::document::ManifestMember> {
     let mut out = Vec::with_capacity(members.len());
     for member in members {
         collect_blob(&member.blob, blobs);
-        out.push(confit_core::document::ManifestMember {
+        out.push(confit_model::document::ManifestMember {
             relative: member.rel.clone(),
             blob: member.blob.clone(),
             mode: member.mode,

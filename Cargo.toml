@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-  "crates/core",
+  "crates/model",
+  "crates/driver",
   "crates/engine",
   "crates/cli",
   "crates/store",
-  "crates/apply",
+  "crates/runtime",
 ]
 
 [workspace.dependencies]

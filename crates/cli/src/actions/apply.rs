@@ -3,26 +3,28 @@
 //! Desired documents to disk writes with prompts.
 
 use std::collections::BTreeSet;
+use std::io::BufRead;
 use std::path::PathBuf;
 
-use confit_core::arg::Arg;
-use confit_core::drift::{Drift, DriftOrder};
-use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
-use confit_core::handles::Route;
-use confit_core::plan::Bundle;
-use confit_core::probe::PathProbe;
-use confit_core::runtime::Runtime;
+use confit_driver as driver;
+use confit_model::arg::Arg;
+use confit_model::drift::{Drift, DriftOrder};
+use confit_model::error::{Error, Result};
+use confit_model::handles::Route;
+use confit_runtime::Applier;
+use confit_runtime::Checks;
+use confit_store::Stores;
+use confit_store::bundle::Bundle;
 
 use crate::cli::ApplyArgs;
-use crate::hooks::{HookRunner, OsRunner, append_hook_log};
+use crate::hooks::{self, append_hook_log};
 use crate::presentation::drift::drift_lines;
 use crate::presentation::hooks::{describe_condition, evaluate_hooks, resolve_hook};
 use crate::presentation::summary::{Hooks, Summary};
 
-use crate::seams::{Seams, evaluate_shared, log_processed, timed};
+use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
 
-use confit_core::progress::Event;
+use confit_model::progress::Event;
 
 /// Outcome of one successful apply run.
 ///
@@ -36,35 +38,22 @@ pub struct ApplyReport {
     pub stored: PathBuf,
 }
 
-/// Shared hook-run context for one apply run.
-struct HookCtx<'x> {
-    /// Holds the runtime facts under reading.
-    rt: &'x Runtime,
-    /// Holds the backend under writing logs.
-    fs: &'x dyn Filesystem,
-    /// Holds the probe under stating.
-    probe: &'x dyn PathProbe,
-    /// Holds the changed display strings under reading.
-    changed: &'x BTreeSet<String>,
-}
-
 /// One apply run from desired documents to disk writes.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::apply::ApplyRunner;
-/// use confit_cli::seams::Seams;
-/// use confit_core::document::{ManifestData, ManifestDocument};
-/// use confit_core::fs::memory::MemoryFs;
-/// use confit_core::handles::{Route, RouteBase};
-/// use confit_core::plan::Bundle;
-/// use confit_core::probe::MemoryProbe;
+/// use confit_model::document::{ManifestData, ManifestDocument};
+/// use confit_model::handles::{Route, RouteBase};
+/// use confit_runtime::Applier;
+/// use confit_store::bundle::Bundle;
+/// use confit_store::{StoreRoots, Stores};
 /// use std::io::Cursor;
 ///
-/// let fs = MemoryFs::new();
-/// let probe = MemoryProbe::new();
 /// let mut input = Cursor::new("yes\n");
+/// let stores = Stores::new(StoreRoots::standard());
+/// let applier = Applier::with_stores(stores.clone());
 /// let manifest = match Bundle::build(
 ///     vec![ManifestDocument::new(
 ///         Route::new(RouteBase::Home, "note").unwrap(),
@@ -79,7 +68,13 @@ struct HookCtx<'x> {
 ///     manifest,
 ///     previous: Bundle::empty(),
 ///     force: false,
-///     seams: Seams::memory(&fs, &probe, &mut input),
+///     input: &mut input,
+///     stores,
+///     applier,
+///     sinks: Default::default(),
+///     log_file: None,
+///     checks: Default::default(),
+///     changed: Default::default(),
 /// };
 /// assert!(matches!(runner.execute(), Ok(_) | Err(_)));
 /// ```
@@ -90,12 +85,24 @@ pub struct ApplyRunner<'a> {
     pub previous: Bundle,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
-    /// Holds the injected filesystem, prompts, and sink.
-    pub seams: Seams<'a>,
+    /// Gains the confirmation answer, stdin on the host.
+    pub input: &'a mut dyn BufRead,
+    /// Holds the write capabilities for the run.
+    pub stores: Stores,
+    /// Holds the destination reads and writes for the run.
+    pub applier: Applier,
+    /// Holds the output senders for the run.
+    pub sinks: Sinks,
+    /// Gains hook output bytes, holding `None` for no log.
+    pub log_file: Option<PathBuf>,
+    /// Holds the check facts, populated at execute start.
+    pub checks: Checks,
+    /// Holds the changed routes, populated at execute start.
+    pub changed: BTreeSet<Route>,
 }
 
 impl<'a> ApplyRunner<'a> {
-    /// Reads desired documents from flags on injected seams.
+    /// Reads desired documents from flags with explicit run fields.
     ///
     /// The positional sniffs its shape: `@name` reads a named
     /// slot, `%N` reads history newest-first from one, `.cb`
@@ -105,7 +112,11 @@ impl<'a> ApplyRunner<'a> {
     /// # Arguments
     ///
     /// * `args` - the apply flags under running.
-    /// * `seams` - the injected filesystem, prompts, and sink.
+    /// * `input` - the answer source under prompting.
+    /// * `stores` - the write capabilities for the run.
+    /// * `applier` - the destination reads and writes for the run.
+    /// * `sinks` - the output senders for the run.
+    /// * `log_file` - the hook log path, `None` for no log.
     ///
     /// # Returns
     ///
@@ -120,10 +131,9 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_core::fs::memory::MemoryFs;
-    /// use confit_core::probe::MemoryProbe;
+    /// use confit_runtime::Applier;
+    /// use confit_store::{StoreRoots, Stores};
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -136,80 +146,117 @@ impl<'a> ApplyRunner<'a> {
     ///     },
     ///     force: true,
     /// };
-    /// let fs = MemoryFs::new();
-    /// let probe = MemoryProbe::new();
     /// let mut input = Cursor::new(String::new());
-    /// let seams = Seams::memory(&fs, &probe, &mut input);
-    /// let runner = ApplyRunner::from_args(&args, seams);
+    /// let stores = Stores::new(StoreRoots::standard());
+    /// let applier = Applier::with_stores(stores.clone());
+    /// let runner = ApplyRunner::from_args(&args, &mut input, stores, applier, Default::default(), None);
     /// assert!(matches!(runner, Ok(_) | Err(_)));
     /// ```
-    pub fn from_args(args: &ApplyArgs, seams: Seams<'a>) -> Result<Self> {
+    pub fn from_args(
+        args: &ApplyArgs,
+        input: &'a mut dyn BufRead,
+        stores: Stores,
+        applier: Applier,
+        sinks: Sinks,
+        log_file: Option<PathBuf>,
+    ) -> Result<Self> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
         if raw.starts_with('@') || raw.starts_with('%') {
-            let (slot_manifest, _) = seams
-                .stores
+            let (slot_manifest, _) = stores
                 .slots()
                 .resolve(Some(raw))
                 .map_err(prefix_command("apply"))?;
-            return Self::from_slot(slot_manifest, args.force, seams);
+            return Self::from_slot(
+                slot_manifest,
+                args.force,
+                input,
+                stores,
+                applier,
+                sinks,
+                log_file,
+            );
         }
         if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
-            seams.emit_reading_plan(positional);
-            let file_manifest = timed("apply plan load", || {
-                seams.stores.bundles().read(positional)
-            })?;
-            let previous = seams.stores.slots().load()?;
+            sinks.emit_reading_plan(positional);
+            let file_manifest = timed("apply plan load", || stores.bundles().read(positional))?;
+            let previous = stores.slots().load()?;
             return Ok(Self {
                 manifest: file_manifest,
                 previous,
                 force: args.force,
-                seams,
+                input,
+                stores,
+                applier,
+                sinks,
+                log_file,
+                checks: Checks::default(),
+                changed: BTreeSet::new(),
             });
         }
-        if !seams.fs.exists(positional) {
+        if !driver::exists(positional) {
             return Err(Error::Plan(format!(
                 "apply reads no profile '{}'",
                 positional.display()
             )));
         }
-        let evaluation = evaluate_shared(
-            &args.shared,
-            positional,
-            seams.progress.clone(),
-            &seams.stores,
-        )?;
-        let previous = seams.stores.slots().load()?;
+        let evaluation =
+            evaluate_shared(&args.shared, positional, sinks.progress.clone(), &stores)?;
+        let previous = stores.slots().load()?;
         let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)?;
         manifest.blobs = evaluation.blobs;
         Ok(Self {
             manifest,
             previous,
             force: args.force,
-            seams,
+            input,
+            stores,
+            applier,
+            sinks,
+            log_file,
+            checks: Checks::default(),
+            changed: BTreeSet::new(),
         })
     }
 
     /// Builds a slot-backed runner with preview and prompts.
-    fn from_slot(slot_manifest: Bundle, force: bool, seams: Seams<'a>) -> Result<Self> {
-        let previous = seams.stores.slots().load()?;
+    fn from_slot(
+        slot_manifest: Bundle,
+        force: bool,
+        input: &'a mut dyn BufRead,
+        stores: Stores,
+        applier: Applier,
+        sinks: Sinks,
+        log_file: Option<PathBuf>,
+    ) -> Result<Self> {
+        let previous = stores.slots().load()?;
         Ok(Self {
             manifest: slot_manifest,
             previous,
             force,
-            seams,
+            input,
+            stores,
+            applier,
+            sinks,
+            log_file,
+            checks: Checks::default(),
+            changed: BTreeSet::new(),
         })
     }
 
-    /// Reads flags and runs the full apply flow on injected seams.
+    /// Reads flags and runs the full apply flow with explicit run fields.
     ///
     /// # Arguments
     ///
     /// * `args` - the apply flags under running.
-    /// * `seams` - the injected filesystem, prompts, and sink.
+    /// * `input` - the answer source under prompting.
+    /// * `stores` - the write capabilities for the run.
+    /// * `applier` - the destination reads and writes for the run.
+    /// * `sinks` - the output senders for the run.
+    /// * `log_file` - the hook log path, `None` for no log.
     ///
     /// # Returns
     ///
@@ -224,10 +271,9 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// ```rust,no_run
     /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::seams::Seams;
     /// use confit_cli::cli::ApplyArgs;
-    /// use confit_core::fs::memory::MemoryFs;
-    /// use confit_core::probe::MemoryProbe;
+    /// use confit_runtime::Applier;
+    /// use confit_store::{StoreRoots, Stores};
     /// use std::io::Cursor;
     /// use std::path::PathBuf;
     ///
@@ -240,15 +286,21 @@ impl<'a> ApplyRunner<'a> {
     ///     },
     ///     force: true,
     /// };
-    /// let fs = MemoryFs::new();
-    /// let probe = MemoryProbe::new();
     /// let mut input = Cursor::new(String::new());
-    /// let seams = Seams::memory(&fs, &probe, &mut input);
-    /// let report = ApplyRunner::run(&args, seams);
+    /// let stores = Stores::new(StoreRoots::standard());
+    /// let applier = Applier::with_stores(stores.clone());
+    /// let report = ApplyRunner::run(&args, &mut input, stores, applier, Default::default(), None);
     /// assert!(matches!(report, Ok(_) | Err(_)));
     /// ```
-    pub fn run(args: &ApplyArgs, seams: Seams<'a>) -> Result<ApplyReport> {
-        Self::from_args(args, seams)?.execute()
+    pub fn run(
+        args: &ApplyArgs,
+        input: &'a mut dyn BufRead,
+        stores: Stores,
+        applier: Applier,
+        sinks: Sinks,
+        log_file: Option<PathBuf>,
+    ) -> Result<ApplyReport> {
+        Self::from_args(args, input, stores, applier, sinks, log_file)?.execute()
     }
 
     /// Applies desired documents with preview, prompts, and rotation.
@@ -267,24 +319,24 @@ impl<'a> ApplyRunner<'a> {
     /// Build, prompt, and write failures surface as plan or
     /// io errors. A non-`yes` answer aborts as a plan error.
     pub fn execute(mut self) -> Result<ApplyReport> {
-        self.seams.emit_hashing();
+        self.sinks.emit_hashing();
         let built = std::mem::replace(&mut self.manifest, Bundle::empty());
         log_processed(&built, &self.previous);
-        let first_run = self.seams.stores.slots().is_first_run();
+        let first_run = self.stores.slots().is_first_run();
         let reference = if first_run { &built } else { &self.previous };
         let order = if first_run {
             DriftOrder::DiskFirst
         } else {
             DriftOrder::RecordedFirst
         };
-        let baseline = self.seams.applier.drift(reference, order);
-        let rt = Runtime::current();
-        let probe: &dyn PathProbe = self.seams.probe;
-        let changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let changed_ids: BTreeSet<String> = changed.iter().map(|route| route.display()).collect();
-        let evaluated = evaluate_hooks(&built, &rt, probe, &changed_ids, &self.seams.applier)?;
-        let lifecycle =
-            confit_core::hook::diff_lifecycle(&built.manifest.hooks, &self.previous.manifest.hooks);
+        let baseline = self.applier.drift(reference, order);
+        self.checks = Checks::current();
+        self.changed = changed_paths(&built, &self.previous, &baseline, first_run);
+        let evaluated = evaluate_hooks(&built, &self.checks, &self.changed, &self.applier)?;
+        let lifecycle = confit_model::hook::diff_lifecycle(
+            &built.manifest.hooks,
+            &self.previous.manifest.hooks,
+        );
         let report = Summary {
             built: &built,
             previous: &self.previous,
@@ -296,25 +348,25 @@ impl<'a> ApplyRunner<'a> {
             },
         };
         let text = report.render();
-        self.seams.print_line(text);
-        if !self.force && !self.seams.confirm()? {
+        self.sinks.print_line(text);
+        if !self.force && !self.sinks.confirm(self.input)? {
             return Err(Error::Plan(
                 "apply aborted: answer reads no 'yes'".to_string(),
             ));
         }
-        let fresh = self.seams.applier.drift(reference, order);
+        let fresh = self.applier.drift(reference, order);
         if fresh != baseline {
             for line in drift_lines(&fresh) {
-                self.seams.print_line(line);
+                self.sinks.print_line(line);
             }
-            if !self.seams.confirm()? {
+            if !self.sinks.confirm(self.input)? {
                 return Err(Error::Plan(
                     "apply aborted: answer reads no 'yes'".to_string(),
                 ));
             }
         }
         let notify_written;
-        let notify = if let Some(sender) = self.seams.progress.clone() {
+        let notify = if let Some(sender) = self.sinks.progress.clone() {
             notify_written = move |route: &Route| {
                 let _ = sender.send(Event::DocumentWritten {
                     path: route.display(),
@@ -325,28 +377,24 @@ impl<'a> ApplyRunner<'a> {
             None
         };
         let written =
-            self.seams
-                .applier
-                .write_documents(&built.manifest.documents, &changed, notify)?;
+            self.applier
+                .write_documents(&built.manifest.documents, &self.changed, notify)?;
         let removed = self
-            .seams
             .applier
             .remove_orphans(&self.previous.manifest.documents, &built.manifest.documents)?;
         let removed = removed
-            + self.seams.applier.remove_tree_members(
+            + self.applier.remove_tree_members(
                 &self.previous.manifest.documents,
                 &built.manifest.documents,
             )?;
-        self.seams
+        self.sinks
             .emit_writing_manifest(built.manifest.documents.len());
         let stored = self
-            .seams
             .stores
             .slots()
-            .store(&built, self.seams.progress.as_ref())?;
-        self.seams.stores.blobs().prune()?;
-        let fs: &dyn Filesystem = self.seams.fs;
-        self.run_hooks(&built, &rt, fs, probe, &changed_ids)?;
+            .store(&built, self.sinks.progress.as_ref())?;
+        self.stores.blobs().prune()?;
+        self.run_hooks(&built)?;
         Ok(ApplyReport {
             written,
             removed,
@@ -358,48 +406,30 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// Closed gates skip with a line, passing checks skip silently.
     /// Failures abort the rest.
-    fn run_hooks(
-        &mut self,
-        built: &Bundle,
-        rt: &Runtime,
-        fs: &dyn Filesystem,
-        probe: &dyn PathProbe,
-        changed: &BTreeSet<String>,
-    ) -> Result<()> {
+    fn run_hooks(&mut self, built: &Bundle) -> Result<()> {
         let total = built.manifest.hooks.len();
-        let real = OsRunner;
-        let runner: &dyn HookRunner = match self.seams.hook_runner {
-            Some(runner) => runner,
-            None => &real,
-        };
-        let ctx = HookCtx {
-            rt,
-            fs,
-            probe,
-            changed,
-        };
         for (index, hook) in built.manifest.hooks.iter().enumerate() {
             let position = index + 1;
-            if let Some(line) = gate_line(hook, &ctx) {
-                self.seams.print_line(line);
+            if let Some(line) = self.gate_line(hook) {
+                self.sinks.print_line(line);
                 continue;
             }
             if !hook.checks.is_empty()
                 && hook
                     .checks
                     .iter()
-                    .all(|check| ctx.rt.evaluate(check, ctx.probe, ctx.changed))
+                    .all(|check| self.checks.check(check, &self.changed, &self.applier))
             {
                 let line = format!("skipped: {} (checks pass)", Arg::join(&hook.argv));
-                self.seams.print_line(line);
+                self.sinks.print_line(line);
                 continue;
             }
-            self.spawn_hook(hook, position, total, &ctx, runner)?;
+            self.spawn_hook(hook, position, total)?;
         }
         Ok(())
     }
 
-    /// Runs one open hook through the runner.
+    /// Runs one open hook through the registry runner.
     ///
     /// # Errors
     ///
@@ -407,34 +437,27 @@ impl<'a> ApplyRunner<'a> {
     /// post-checks fail as plan errors.
     fn spawn_hook(
         &mut self,
-        hook: &confit_core::hook::Hook,
+        hook: &confit_model::hook::Hook,
         position: usize,
         total: usize,
-        ctx: &HookCtx<'_>,
-        runner: &dyn HookRunner,
     ) -> Result<()> {
         let argv_text = Arg::join(&hook.argv);
-        let binary =
-            resolve_hook(hook, ctx.rt, ctx.probe, &self.seams.applier).ok_or_else(|| {
-                let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-                Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
-            })?;
+        let binary = resolve_hook(hook, &self.checks, &self.applier).ok_or_else(|| {
+            let head = hook.argv.first().map(Arg::display).unwrap_or_default();
+            Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
+        })?;
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for slot in hook.argv.iter().skip(1) {
             match slot {
                 Arg::Text(text) => spawn.push(text.clone()),
-                Arg::Route(route) => spawn.push(
-                    self.seams
-                        .applier
-                        .resolve(route)
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
+                Arg::Route(route) => {
+                    spawn.push(self.applier.resolve(route).to_string_lossy().into_owned())
+                }
             }
         }
         let line = format!("hook {position} of {total}: {argv_text}");
-        self.seams.print_line(line.clone());
-        if let Some(sender) = self.seams.progress.as_ref() {
+        self.sinks.print_line(line.clone());
+        if let Some(sender) = self.sinks.progress.as_ref() {
             let _ = sender.send(Event::HookRunning {
                 position,
                 total,
@@ -445,12 +468,12 @@ impl<'a> ApplyRunner<'a> {
         for slot in &hook.path {
             match slot {
                 Arg::Text(text) => path_dirs.push(std::path::PathBuf::from(text)),
-                Arg::Route(route) => path_dirs.push(self.seams.applier.resolve(route)),
+                Arg::Route(route) => path_dirs.push(self.applier.resolve(route)),
             }
         }
-        let outcome = runner.run(&spawn, &path_dirs, hook.timeout_secs)?;
-        if let Some(log) = self.seams.log_file.clone() {
-            append_hook_log(ctx.fs, &log, &line, &outcome.output)?;
+        let outcome = hooks::run(&spawn, &path_dirs, hook.timeout_secs)?;
+        if let Some(log) = self.log_file.clone() {
+            append_hook_log(&log, &line, &outcome.output)?;
         }
         if outcome.code != 0 {
             return Err(Error::Plan(format!(
@@ -458,61 +481,61 @@ impl<'a> ApplyRunner<'a> {
                 outcome.code
             )));
         }
-        verify_post_checks(hook, ctx)?;
+        self.verify_post_checks(hook)?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
         Ok(())
     }
-}
 
-/// Renders the skip line for the first closed gate, else none.
-fn gate_line(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Option<String> {
-    let argv_text = Arg::join(&hook.argv);
-    if let Some(gate) = hook.requires.as_ref()
-        && !ctx.rt.evaluate(gate, ctx.probe, ctx.changed)
-    {
-        return Some(format!(
-            "warn: {argv_text} cannot run ({})",
-            describe_condition(gate)
-        ));
+    /// Renders the skip line for the first closed gate, else none.
+    fn gate_line(&self, hook: &confit_model::hook::Hook) -> Option<String> {
+        let argv_text = Arg::join(&hook.argv);
+        if let Some(gate) = hook.requires.as_ref()
+            && !self.checks.check(gate, &self.changed, &self.applier)
+        {
+            return Some(format!(
+                "warn: {argv_text} cannot run ({})",
+                describe_condition(gate)
+            ));
+        }
+        if let Some(gate) = hook.when.as_ref()
+            && !self.checks.check(gate, &self.changed, &self.applier)
+        {
+            return Some(format!(
+                "skipped: {argv_text} (no need: {})",
+                describe_condition(gate)
+            ));
+        }
+        None
     }
-    if let Some(gate) = hook.when.as_ref()
-        && !ctx.rt.evaluate(gate, ctx.probe, ctx.changed)
-    {
-        return Some(format!(
-            "skipped: {argv_text} (no need: {})",
-            describe_condition(gate)
-        ));
-    }
-    None
-}
 
-/// Fails naming post-checks one run leaves unmet.
-///
-/// # Errors
-///
-/// Unmet post-checks fail as plan errors naming the hook.
-fn verify_post_checks(hook: &confit_core::hook::Hook, ctx: &HookCtx<'_>) -> Result<()> {
-    if hook.checks.is_empty() {
-        return Ok(());
+    /// Fails naming post-checks one run leaves unmet.
+    ///
+    /// # Errors
+    ///
+    /// Unmet post-checks fail as plan errors naming the hook.
+    fn verify_post_checks(&self, hook: &confit_model::hook::Hook) -> Result<()> {
+        if hook.checks.is_empty() {
+            return Ok(());
+        }
+        let argv_text = Arg::join(&hook.argv);
+        let failed: Vec<String> = hook
+            .checks
+            .iter()
+            .filter(|check| !self.checks.check(check, &self.changed, &self.applier))
+            .map(describe_condition)
+            .collect();
+        if failed.is_empty() {
+            return Ok(());
+        }
+        log::warn!(
+            "hook '{argv_text}' failed checks after run: {}",
+            failed.join(", ")
+        );
+        Err(Error::Plan(format!(
+            "hook '{argv_text}' failed checks after run: {}",
+            failed.join(", ")
+        )))
     }
-    let argv_text = Arg::join(&hook.argv);
-    let failed: Vec<String> = hook
-        .checks
-        .iter()
-        .filter(|check| !ctx.rt.evaluate(check, ctx.probe, ctx.changed))
-        .map(describe_condition)
-        .collect();
-    if failed.is_empty() {
-        return Ok(());
-    }
-    log::warn!(
-        "hook '{argv_text}' failed checks after run: {}",
-        failed.join(", ")
-    );
-    Err(Error::Plan(format!(
-        "hook '{argv_text}' failed checks after run: {}",
-        failed.join(", ")
-    )))
 }
 
 /// Prefixes slot errors with the calling command name.
@@ -536,7 +559,7 @@ fn changed_paths(
     drifts: &[Drift],
     first_run: bool,
 ) -> BTreeSet<Route> {
-    use confit_core::plan::DocumentStatus;
+    use confit_model::plan::DocumentStatus;
 
     if first_run {
         return built
@@ -548,7 +571,10 @@ fn changed_paths(
     }
     let mut out = BTreeSet::new();
     for document in &built.manifest.documents {
-        if !matches!(document.status(previous), DocumentStatus::Unchanged) {
+        if !matches!(
+            document.status(&previous.manifest),
+            DocumentStatus::Unchanged
+        ) {
             out.insert(document.destination.clone());
         }
     }

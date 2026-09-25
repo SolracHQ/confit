@@ -8,7 +8,7 @@ use super::confit_table;
 use super::handles::LuaRoute;
 use crate::error::plan_error;
 use crate::lua::ValueExt;
-use confit_core::handles::{Route, RouteBase};
+use confit_model::handles::{Route, RouteBase};
 
 /// Installs the path namespace on a state.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {

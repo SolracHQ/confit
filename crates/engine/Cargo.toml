@@ -7,7 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-confit-core = { path = "../core" }
+confit-model = { path = "../model" }
 confit-store = { version = "0.8.0", path = "../store" }
 log.workspace = true
 minijinja.workspace = true

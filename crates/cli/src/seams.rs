@@ -1,136 +1,35 @@
-//! Seams
+//! Sinks
 //!
-//! Injected effects shared by command runners.
+//! Output senders plus shared helpers behind command runners.
 
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
-use confit_core::probe::{OsProbe, PathProbe};
+use confit_model::error::{Error, Result};
+use confit_model::plan::DocumentStatus;
+use confit_store::Stores;
+use confit_store::bundle::Bundle;
 
-use crate::fs::OsFs;
-use confit_apply::{Applier, DiskKind};
-use confit_core::plan::{Bundle, DocumentStatus};
-
-use confit_core::progress::{Event, ProgressSender};
-use confit_store::{StoreRoots, Stores};
+use confit_model::progress::{Event, ProgressSender};
 
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
-use crate::hooks::HookRunner;
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 
-/// Host filesystem under sharing by host seams.
-static HOST_FS: OsFs = OsFs;
-
-/// Host path probe under sharing by host seams.
-static HOST_PROBE: OsProbe = OsProbe;
-
-/// Injected effects under one command run.
+/// Output senders behind one command run.
 ///
-/// Host runs pass stdin and print senders. Tests pass memory fakes.
-pub struct Seams<'a> {
-    /// Reads and writes backend, memory under tests.
-    pub fs: &'a dyn Filesystem,
-    /// Reads path facts, memory under tests.
-    pub probe: &'a dyn PathProbe,
-    /// Gains the confirmation answer, stdin on the host.
-    pub input: &'a mut dyn BufRead,
+/// Silent by default. Host runs attach live senders at the
+/// call site through the fields directly.
+#[derive(Debug, Clone, Default)]
+pub struct Sinks {
     /// Gains stderr lines through the renderer, holding `None` for silence.
     pub print: Option<PrintSender>,
     /// Gains engine facts, holding `None` for silence.
     pub progress: Option<ProgressSender>,
     /// Parks widgets across prompts, holding `None` while headless.
     pub suspend: Option<SuspendControl>,
-    /// Runs hook subprocesses, holding `None` for the host runner.
-    pub hook_runner: Option<&'a dyn HookRunner>,
-    /// Gains hook output bytes, holding `None` for no log.
-    pub log_file: Option<PathBuf>,
-    /// Holds the write capabilities for the run.
-    pub stores: Stores,
-    /// Holds the destination reads and writes for the run.
-    pub applier: Applier,
 }
 
-impl<'a> Seams<'a> {
-    /// Bundles host stdin with the host filesystem.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - the stdin reader under prompting.
-    ///
-    /// # Returns
-    ///
-    /// Silent host seams gaining senders through the fields.
-    ///
-    pub fn host(input: &'a mut dyn BufRead) -> Self {
-        let stores = Stores::host(StoreRoots::standard());
-        let applier = Applier::with_stores(stores.clone(), DiskKind::Host);
-        Self {
-            fs: &HOST_FS,
-            probe: &HOST_PROBE,
-            input,
-            print: None,
-            progress: None,
-            suspend: None,
-            hook_runner: None,
-            log_file: None,
-            stores,
-            applier,
-        }
-    }
-
-    /// Bundles memory fakes for tests.
-    ///
-    /// # Arguments
-    ///
-    /// * `fs` - the memory backend under reading and writing.
-    /// * `probe` - the memory probe under stating.
-    /// * `input` - the answer source under prompting.
-    ///
-    /// # Returns
-    ///
-    /// Silent memory seams gaining a sender through chaining.
-    ///
-    pub fn memory(
-        fs: &'a dyn Filesystem,
-        probe: &'a dyn PathProbe,
-        input: &'a mut dyn BufRead,
-    ) -> Self {
-        let stores = Stores::memory(StoreRoots::default());
-        let applier = Applier::with_stores(stores.clone(), DiskKind::Memory);
-        Self {
-            fs,
-            probe,
-            input,
-            print: None,
-            progress: None,
-            suspend: None,
-            hook_runner: None,
-            log_file: None,
-            stores,
-            applier,
-        }
-    }
-
-    /// Attaches the engine progress sender for chaining.
-    pub fn with_progress(mut self, sender: ProgressSender) -> Self {
-        self.progress = Some(sender);
-        self
-    }
-
-    /// Attaches the stderr print sender for chaining.
-    pub fn with_print(mut self, sender: PrintSender) -> Self {
-        self.print = Some(sender);
-        self
-    }
-
-    /// Attaches the prompt suspend control for chaining.
-    pub fn with_suspend(mut self, control: SuspendControl) -> Self {
-        self.suspend = Some(control);
-        self
-    }
-
+impl Sinks {
     /// Sends one stderr line through the renderer while present.
     ///
     /// # Arguments
@@ -145,7 +44,11 @@ impl<'a> Seams<'a> {
     /// Prompts for the literal `yes` confirmation.
     ///
     /// Hosted runs ask through the suspend control with widgets
-    /// parked. Memory runs read one input line directly.
+    /// parked. Headless runs read one input line directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - the answer source under prompting.
     ///
     /// # Returns
     ///
@@ -157,19 +60,15 @@ impl<'a> Seams<'a> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use confit_cli::seams::Seams;
-    /// use confit_core::fs::memory::MemoryFs;
-    /// use confit_core::probe::MemoryProbe;
+    /// ```rust,no_run
+    /// use confit_cli::seams::Sinks;
     /// use std::io::Cursor;
     ///
-    /// let fs = MemoryFs::new();
-    /// let probe = MemoryProbe::new();
+    /// let sinks = Sinks::default();
     /// let mut input = Cursor::new("yes\n");
-    /// let mut seams = Seams::memory(&fs, &probe, &mut input);
-    /// assert!(matches!(seams.confirm(), Ok(true)));
+    /// assert!(matches!(sinks.confirm(&mut input), Ok(true)));
     /// ```
-    pub fn confirm(&mut self) -> Result<bool> {
+    pub fn confirm(&self, input: &mut dyn BufRead) -> Result<bool> {
         if let Some(control) = self.suspend.clone() {
             return control
                 .ask("\nApply these changes? Type 'yes' to continue: ")
@@ -177,7 +76,7 @@ impl<'a> Seams<'a> {
         }
         log::debug!("prompt waiting for answer");
         let mut answer = String::new();
-        let reads = self.input.read_line(&mut answer).map_err(Error::from)?;
+        let reads = input.read_line(&mut answer).map_err(Error::from)?;
         log::debug!("prompt read {reads} bytes");
         Ok(answer.trim() == "yes")
     }
@@ -251,7 +150,7 @@ pub fn evaluate_shared(
 /// Logs finished documents with lifecycle status.
 pub fn log_processed(built: &Bundle, previous: &Bundle) {
     for document in &built.manifest.documents {
-        let status = match document.status(previous) {
+        let status = match document.status(&previous.manifest) {
             DocumentStatus::Create => "create",
             DocumentStatus::Update => "update",
             DocumentStatus::Unchanged => "unchanged",

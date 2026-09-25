@@ -2,7 +2,7 @@
 //!
 //! Display lines over core drift entries.
 
-use confit_core::drift::Drift;
+use confit_model::drift::Drift;
 
 /// Renders drift entries as display lines.
 ///
@@ -12,8 +12,8 @@ use confit_core::drift::Drift;
 ///
 /// ```rust
 /// use confit_cli::presentation::drift::drift_lines;
-/// use confit_core::drift::Drift;
-/// use confit_core::handles::{Route, RouteBase};
+/// use confit_model::drift::Drift;
+/// use confit_model::handles::{Route, RouteBase};
 ///
 /// let entries = vec![
 ///     Drift::Key {

@@ -2,11 +2,11 @@
 //!
 //! Named slot removal with orphan pruning.
 
-use confit_core::error::{Error, Result};
+use confit_model::error::{Error, Result};
+
+use confit_store::Stores;
 
 use crate::cli::DeleteArgs;
-
-use crate::seams::Seams;
 
 /// Outcome of one delete run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,35 +34,29 @@ pub struct DeleteReport {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::DeleteArgs;
-/// use confit_core::fs::memory::MemoryFs;
-/// use confit_core::probe::MemoryProbe;
-/// use std::io::Cursor;
+/// use confit_store::{StoreRoots, Stores};
 ///
 /// let args = DeleteArgs { name: "@personal".to_string() };
-/// let fs = MemoryFs::new();
-/// let probe = MemoryProbe::new();
-/// let mut input = Cursor::new(String::new());
-/// let report = confit_cli::actions::delete::run(&args, Seams::memory(&fs, &probe, &mut input));
+/// let stores = Stores::new(StoreRoots::standard());
+/// let report = confit_cli::actions::delete::run(&args, stores);
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
-pub fn run(args: &DeleteArgs, seams: Seams<'_>) -> Result<DeleteReport> {
+pub fn run(args: &DeleteArgs, stores: Stores) -> Result<DeleteReport> {
     let Some(name) = args.name.strip_prefix('@') else {
         return Err(Error::Plan(format!(
             "delete: '{}' reads unsupported, want '@name'; history and the current slot never delete",
             args.name
         )));
     };
-    seams
-        .stores
+    stores
         .slots()
         .delete_named(name)
         .map_err(|error| match error {
             Error::Plan(detail) => Error::Plan(format!("delete: {detail}")),
             other => other,
         })?;
-    let pruned = seams.stores.blobs().prune()?;
+    let pruned = stores.blobs().prune()?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,

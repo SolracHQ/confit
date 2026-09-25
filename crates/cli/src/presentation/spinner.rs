@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use confit_core::progress::{Event, ProgressSender};
+use confit_model::progress::{Event, ProgressSender};
 
 /// Sender for already formatted stderr lines.
 ///

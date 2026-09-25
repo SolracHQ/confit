@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit_core::document::ManifestDocument;
-use confit_core::handles::BlobHandle;
-use confit_core::hook::Hook;
-use confit_core::progress::ProgressSender;
+use confit_model::document::ManifestDocument;
+use confit_model::handles::BlobHandle;
+use confit_model::hook::Hook;
+use confit_model::progress::ProgressSender;
 use confit_store::Stores;
 
 mod error;
@@ -101,6 +101,6 @@ pub struct Evaluation {
 /// let outcome = evaluate(Path::new("/nonexistent-profile.lua"), EvalOpts::default());
 /// assert!(matches!(outcome, Err(_)));
 /// ```
-pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_core::error::Result<Evaluation> {
+pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_model::error::Result<Evaluation> {
     eval::Session::run(profile, opts)
 }

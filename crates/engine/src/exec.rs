@@ -15,7 +15,7 @@ use crate::lua::{JsonExt, ValueExt, read_marker};
 use crate::model::StoredPatch;
 use crate::path_expr::{Segment, flatten_json, parse_path};
 use crate::surface::document::convert::{entry_slot, translate_entry};
-use confit_core::progress::{Event, ProgressSender};
+use confit_model::progress::{Event, ProgressSender};
 
 /// Winner map from slot key to owner name.
 pub(crate) type OwnerMap = BTreeMap<String, String>;

@@ -34,12 +34,12 @@ function RuntimeNs.env_set(opts) end
 function RuntimeNs.in_path(name) end
 
 -- Builds an exists condition table from a path.
----@param path string # File path.
+---@param path table # Destination route, e.g. confit.path.home("tool").
 ---@return table
 function RuntimeNs.exists(path) end
 
 -- Builds a changed condition table from a document path.
----@param path string # Built document path watched for changes. Unknown documents fail the plan.
+---@param path table # Built document route watched for changes. Unknown documents fail the plan.
 ---@return table
 function RuntimeNs.changed(path) end
 

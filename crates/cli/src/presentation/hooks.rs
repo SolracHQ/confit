@@ -2,14 +2,14 @@
 //!
 //! Hook preview lines for plans beside documents.
 
-use confit_apply::Applier;
-use confit_core::arg::Arg;
-use confit_core::condition::Condition;
-use confit_core::error::Result;
-use confit_core::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
-use confit_core::plan::Bundle;
-use confit_core::probe::PathProbe;
-use confit_core::runtime::Runtime;
+use confit_model::arg::Arg;
+use confit_model::condition::Condition;
+use confit_model::error::Result;
+use confit_model::handles::Route;
+use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
+use confit_runtime::Applier;
+use confit_runtime::Checks;
+use confit_store::bundle::Bundle;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -60,7 +60,7 @@ pub struct EvaluatedHook<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::condition::Condition;
+/// use confit_model::condition::Condition;
 /// use confit_cli::presentation::hooks::describe_condition;
 ///
 /// let cond = Condition::InPath { name: "mise".into() };
@@ -72,8 +72,8 @@ pub fn describe_condition(cond: &Condition) -> String {
             Condition::EnvEq { key, value } => format!("env_eq({key}={value})"),
             Condition::EnvSet { key } => format!("env_set({key})"),
             Condition::InPath { name } => format!("in_path({name})"),
-            Condition::Exists { path } => format!("exists({path})"),
-            Condition::Changed { path } => format!("changed({path})"),
+            Condition::Exists { route } => format!("exists({})", route.display()),
+            Condition::Changed { route } => format!("changed({})", route.display()),
             Condition::All(items) if items.is_empty() => "true".to_string(),
             Condition::Any(items) if items.is_empty() => "false".to_string(),
             Condition::All(items) => format!(
@@ -103,11 +103,11 @@ pub fn describe_condition(cond: &Condition) -> String {
 /// # Examples
 ///
 /// ```rust
-/// use confit_core::hook::{Hook, diff_lifecycle};
+/// use confit_model::hook::{Hook, diff_lifecycle};
 /// use confit_cli::presentation::hooks::lifecycle_lines;
 ///
 /// let hook = Hook {
-///     argv: vec![confit_core::arg::Arg::Text("mise".to_string())],
+///     argv: vec![confit_model::arg::Arg::Text("mise".to_string())],
 ///     path: vec![],
 ///     requires: None,
 ///     when: None,
@@ -172,13 +172,12 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 /// Unresolvable binaries fail as plan errors naming the hook.
 fn decide<'a>(
     hook: &'a Hook,
-    rt: &Runtime,
-    probe: &dyn PathProbe,
-    changed: &BTreeSet<String>,
+    checks: &Checks,
+    changed: &BTreeSet<Route>,
     applier: &Applier,
 ) -> Result<EvaluatedHook<'a>> {
     if let Some(gate) = hook.requires.as_ref()
-        && !rt.evaluate(gate, probe, changed)
+        && !checks.check(gate, changed, applier)
     {
         return Ok(EvaluatedHook {
             hook,
@@ -186,22 +185,22 @@ fn decide<'a>(
         });
     }
     if let Some(gate) = hook.when.as_ref()
-        && !rt.evaluate(gate, probe, changed)
+        && !checks.check(gate, changed, applier)
     {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::WhenClosed(describe_condition(gate)),
         });
     }
-    if checks_pass(hook, rt, probe, changed) {
+    if checks_pass(hook, checks, changed, applier) {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::ChecksPass,
         });
     }
-    let Some(binary) = resolve_hook(hook, rt, probe, applier) else {
+    let Some(binary) = resolve_hook(hook, checks, applier) else {
         let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-        return Err(confit_core::error::Error::Plan(format!(
+        return Err(confit_model::error::Error::Plan(format!(
             "hook '{}' cannot resolve '{head}'",
             Arg::join(&hook.argv)
         )));
@@ -217,12 +216,7 @@ fn decide<'a>(
 /// Hook path entries search first, runtime dirs follow. Route
 /// slots expand through the resolver; text runs verbatim.
 /// First existing executable wins. No hook copy.
-pub fn resolve_hook(
-    hook: &Hook,
-    rt: &Runtime,
-    probe: &dyn PathProbe,
-    applier: &Applier,
-) -> Option<PathBuf> {
+pub fn resolve_hook(hook: &Hook, checks: &Checks, applier: &Applier) -> Option<PathBuf> {
     let head = match hook.argv.first()? {
         Arg::Text(head) => head.clone(),
         Arg::Route(route) => applier.resolve(route).to_string_lossy().into_owned(),
@@ -235,8 +229,8 @@ pub fn resolve_hook(
             Arg::Route(route) => applier.resolve(route),
         })
         .collect();
-    dirs.extend(rt.path_dirs.iter().cloned());
-    probe.find_executable(&head, &dirs)
+    dirs.extend(checks.path_dirs.iter().cloned());
+    confit_runtime::find_executable(&head, &dirs)
 }
 
 /// Evaluates one preview outcome per hook in plan order.
@@ -246,16 +240,15 @@ pub fn resolve_hook(
 /// Unresolvable binaries fail as plan errors naming the hook.
 pub fn evaluate_hooks<'a>(
     bundle: &'a Bundle,
-    rt: &Runtime,
-    probe: &dyn PathProbe,
-    changed: &BTreeSet<String>,
+    checks: &Checks,
+    changed: &BTreeSet<Route>,
     applier: &Applier,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
     bundle
         .manifest
         .hooks
         .iter()
-        .map(|hook| decide(hook, rt, probe, changed, applier))
+        .map(|hook| decide(hook, checks, changed, applier))
         .collect()
 }
 
@@ -288,17 +281,12 @@ pub fn render_evaluated(evaluated: &[EvaluatedHook]) -> Vec<String> {
 }
 
 /// Reports whether one hook reads satisfied with passing checks.
-fn checks_pass(
-    hook: &Hook,
-    rt: &Runtime,
-    probe: &dyn PathProbe,
-    changed: &BTreeSet<String>,
-) -> bool {
+fn checks_pass(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>, applier: &Applier) -> bool {
     !hook.checks.is_empty()
         && hook
             .checks
             .iter()
-            .all(|check| rt.evaluate(check, probe, changed))
+            .all(|check| checks.check(check, changed, applier))
 }
 
 /// Renders one preview line for a runnable hook.
@@ -414,27 +402,26 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_core::hook::merge_hooks;
+    use confit_driver::TestGuard;
+    use confit_model::hook::merge_hooks;
 
     fn preview_hook(
         hook: &Hook,
-        rt: &Runtime,
-        probe: &dyn PathProbe,
-        changed: &BTreeSet<String>,
+        checks: &Checks,
+        changed: &BTreeSet<Route>,
         applier: &Applier,
     ) -> Result<String> {
-        Ok(render_preview(&decide(hook, rt, probe, changed, applier)?))
+        Ok(render_preview(&decide(hook, checks, changed, applier)?))
     }
 
     fn hook_preview(
         bundle: &Bundle,
-        rt: &Runtime,
-        probe: &dyn PathProbe,
-        changed: &BTreeSet<String>,
+        checks: &Checks,
+        changed: &BTreeSet<Route>,
         applier: &Applier,
     ) -> Result<Vec<String>> {
         Ok(render_evaluated(&evaluate_hooks(
-            bundle, rt, probe, changed, applier,
+            bundle, checks, changed, applier,
         )?))
     }
 
@@ -468,7 +455,7 @@ mod tests {
     }
 
     fn render_lifecycle(current: &[Hook], previous: &[Hook]) -> Vec<String> {
-        lifecycle_lines(&confit_core::hook::diff_lifecycle(current, previous))
+        lifecycle_lines(&confit_model::hook::diff_lifecycle(current, previous))
     }
 
     #[test]
@@ -489,7 +476,21 @@ mod tests {
 
     fn changed(path: &str) -> Condition {
         Condition::Changed {
-            path: path.to_string(),
+            route: confit_model::handles::Route::new(
+                confit_model::handles::RouteBase::Literal,
+                path,
+            )
+            .unwrap(),
+        }
+    }
+
+    fn exists(path: &std::path::Path) -> Condition {
+        Condition::Exists {
+            route: confit_model::handles::Route::new(
+                confit_model::handles::RouteBase::Literal,
+                path,
+            )
+            .unwrap(),
         }
     }
 
@@ -499,7 +500,7 @@ mod tests {
         let merged = Condition::Any(vec![gate(), gate(), gate(), gate(), gate()]);
         assert_eq!(
             describe_condition(&merged).as_str(),
-            "(in_path(mise) and changed(~/.config/mise/config.toml))"
+            "(in_path(mise) and changed(literal:~/.config/mise/config.toml))"
         );
     }
 
@@ -536,107 +537,128 @@ mod tests {
         );
     }
 
-    fn preview_state() -> (Runtime, confit_core::probe::MemoryProbe) {
-        let mut probe = confit_core::probe::MemoryProbe::new();
-        probe.exec(std::path::Path::new("/opt/tool"));
-        probe.file(std::path::Path::new("/opt/probe"));
-        let rt = Runtime {
-            vars: Default::default(),
-            path_dirs: vec![std::path::PathBuf::from("/opt")],
-        };
-        (rt, probe)
+    fn preview_state() -> (tempfile::TempDir, TestGuard, Checks) {
+        seed_preview()
     }
 
-    fn changed_set(dests: &[&str]) -> BTreeSet<String> {
-        dests.iter().map(|dest| dest.to_string()).collect()
+    fn seed_preview() -> (tempfile::TempDir, TestGuard, Checks) {
+        use confit_driver as driver;
+
+        let test_guard = TestGuard::install();
+        let guard = tempfile::tempdir().unwrap();
+        let dir = guard.path();
+        driver::create_dir_all(dir).unwrap();
+        driver::write(&dir.join("tool"), b"run").unwrap();
+        driver::set_mode(&dir.join("tool"), 0o755).unwrap();
+        driver::write(&dir.join("probe"), b"data").unwrap();
+        let checks = Checks {
+            vars: Default::default(),
+            path_dirs: vec![dir.to_path_buf()],
+        };
+        (guard, test_guard, checks)
+    }
+
+    fn changed_set(dests: &[&str]) -> BTreeSet<Route> {
+        dests
+            .iter()
+            .map(|dest| {
+                confit_model::handles::Route::new(confit_model::handles::RouteBase::Literal, dest)
+                    .unwrap()
+            })
+            .collect()
     }
 
     fn preview_line(
         hook: &Hook,
-        rt: &Runtime,
-        probe: &dyn PathProbe,
-        changed: &BTreeSet<String>,
+        checks: &Checks,
+        changed: &BTreeSet<Route>,
         applier: &Applier,
     ) -> String {
-        match preview_hook(hook, rt, probe, changed, applier) {
+        match preview_hook(hook, checks, changed, applier) {
             Ok(line) => line,
             Err(error) => panic!("preview renders: {error}"),
         }
     }
 
+    fn tool_line(checks: &Checks, rest: &str) -> String {
+        let binary = checks.path_dirs[0].join("tool");
+        if rest.is_empty() {
+            format!("! run: {}", binary.display())
+        } else {
+            format!("! run: {} {rest}", binary.display())
+        }
+    }
+
     #[test]
     fn closed_requires_beats_open_when() {
-        let (rt, probe) = preview_state();
+        let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
         hook.requires = Some(changed("missing"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
-            "warn: tool cannot run (changed(missing))"
+            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            "warn: tool cannot run (changed(literal:missing))"
         );
     }
 
     #[test]
     fn closed_when_beats_passing_checks() {
-        let (rt, probe) = preview_state();
+        let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
+        let probe_path = checks.path_dirs[0].join("probe");
         let mut hook = hook(
             &["tool"],
             &[],
             Some(changed("missing")),
-            vec![Condition::Exists {
-                path: "/opt/probe".into(),
-            }],
+            vec![exists(&probe_path)],
             600,
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
-            "skipped: tool (no need: changed(missing))"
+            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            "skipped: tool (no need: changed(literal:missing))"
         );
     }
 
     #[test]
     fn open_gates_with_passing_checks_skip_on_checks() {
-        let (rt, probe) = preview_state();
+        let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
+        let probe_path = checks.path_dirs[0].join("probe");
         let mut hook = hook(
             &["tool"],
             &[],
             Some(changed("touched")),
-            vec![Condition::Exists {
-                path: "/opt/probe".into(),
-            }],
+            vec![exists(&probe_path)],
             600,
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
+            preview_line(&hook, &checks, &touched, &applier).as_str(),
             "skipped: tool (checks pass)"
         );
     }
 
     #[test]
     fn open_gates_with_failing_checks_run() {
-        let (rt, probe) = preview_state();
+        let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
+        let absent = checks.path_dirs[0].join("absent");
         let mut hook = hook(
             &["tool"],
             &[],
             Some(changed("touched")),
-            vec![Condition::Exists {
-                path: "/opt/absent".into(),
-            }],
+            vec![exists(&absent)],
             600,
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &rt, &probe, &touched, &applier).as_str(),
-            "! run: /opt/tool"
+            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            tool_line(&checks, "")
         );
     }
 
@@ -655,7 +677,7 @@ mod tests {
             vec![
                 "+ mise install".to_string(),
                 "  + requires (in_path(mise))".to_string(),
-                "  + when (changed(dest))".to_string(),
+                "  + when (changed(literal:dest))".to_string(),
                 "  + checks (in_path(probe))".to_string(),
             ]
         );
@@ -777,22 +799,12 @@ mod tests {
         );
     }
 
-    fn preview_runtime() -> (
-        confit_core::runtime::Runtime,
-        confit_core::probe::MemoryProbe,
-    ) {
-        let mut probe = confit_core::probe::MemoryProbe::new();
-        probe.exec(std::path::Path::new("/opt/tool"));
-        probe.file(std::path::Path::new("/opt/probe"));
-        let rt = confit_core::runtime::Runtime {
-            vars: std::collections::BTreeMap::new(),
-            path_dirs: vec![std::path::PathBuf::from("/opt")],
-        };
-        (rt, probe)
+    fn preview_runtime() -> (tempfile::TempDir, TestGuard, confit_runtime::Checks) {
+        seed_preview()
     }
 
-    fn hook_fixture(argv: &[&str]) -> confit_core::hook::Hook {
-        confit_core::hook::Hook {
+    fn hook_fixture(argv: &[&str]) -> confit_model::hook::Hook {
+        confit_model::hook::Hook {
             argv: argv
                 .iter()
                 .map(|item| Arg::Text(item.to_string()))
@@ -801,29 +813,34 @@ mod tests {
             requires: None,
             when: None,
             checks: Vec::new(),
-            timeout_secs: confit_core::runtime::DEFAULT_HOOK_TIMEOUT_SECS,
+            timeout_secs: confit_runtime::DEFAULT_HOOK_TIMEOUT_SECS,
         }
     }
 
     #[test]
     fn hook_preview_renders_run_skip_warn_lines() {
-        use confit_core::condition::Condition;
+        use confit_model::handles::{Route, RouteBase};
 
-        let (rt, probe) = preview_runtime();
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        fn literal(path: &std::path::Path) -> Route {
+            Route::new(RouteBase::Literal, path).unwrap()
+        }
+
+        let (_guard, _test, checks) = preview_runtime();
+        let probe_path = checks.path_dirs[0].join("probe");
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let bundle = Bundle {
-            manifest: confit_core::store::manifest::Manifest {
-                version: confit_core::plan::BUNDLE_VERSION,
+            manifest: confit_model::manifest::Manifest {
+                version: confit_store::bundle::BUNDLE_VERSION,
                 documents: Vec::new(),
                 hooks: vec![
                     hook_fixture(&["tool", "--flag"]),
-                    confit_core::hook::Hook {
-                        checks: vec![Condition::Exists {
-                            path: "/opt/probe".into(),
+                    confit_model::hook::Hook {
+                        checks: vec![confit_model::condition::Condition::Exists {
+                            route: literal(&probe_path),
                         }],
                         ..hook_fixture(&["tool"])
                     },
-                    confit_core::hook::Hook {
+                    confit_model::hook::Hook {
                         when: Some(Condition::InPath {
                             name: "absent".into(),
                         }),
@@ -833,14 +850,14 @@ mod tests {
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
         assert_eq!(
             lines,
             vec![
-                "! run: /opt/tool --flag".to_string(),
+                tool_line(&checks, "--flag"),
                 "skipped: tool (checks pass)".to_string(),
                 "skipped: tool (no need: in_path(absent))".to_string(),
             ]
@@ -849,43 +866,48 @@ mod tests {
 
     #[test]
     fn hook_preview_runs_on_failing_checks() {
-        use confit_core::condition::Condition;
+        use confit_model::handles::{Route, RouteBase};
 
-        let (rt, probe) = preview_runtime();
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        fn literal(path: &std::path::Path) -> Route {
+            Route::new(RouteBase::Literal, path).unwrap()
+        }
+
+        let (_guard, _test, checks) = preview_runtime();
+        let absent = checks.path_dirs[0].join("absent");
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let bundle = Bundle {
-            manifest: confit_core::store::manifest::Manifest {
-                version: confit_core::plan::BUNDLE_VERSION,
+            manifest: confit_model::manifest::Manifest {
+                version: confit_store::bundle::BUNDLE_VERSION,
                 documents: Vec::new(),
-                hooks: vec![confit_core::hook::Hook {
-                    checks: vec![Condition::Exists {
-                        path: "/opt/absent".into(),
+                hooks: vec![confit_model::hook::Hook {
+                    checks: vec![confit_model::condition::Condition::Exists {
+                        route: literal(&absent),
                     }],
                     ..hook_fixture(&["tool"])
                 }],
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        let lines = match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
-        assert_eq!(lines, vec!["! run: /opt/tool".to_string()]);
+        assert_eq!(lines, vec![tool_line(&checks, "")]);
     }
 
     #[test]
     fn hook_preview_miss_fails_naming_hook() {
-        let (rt, probe) = preview_runtime();
-        let applier = confit_apply::Applier::memory(confit_store::StoreRoots::default());
+        let (_guard, _test, checks) = preview_runtime();
+        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let bundle = Bundle {
-            manifest: confit_core::store::manifest::Manifest {
-                version: confit_core::plan::BUNDLE_VERSION,
+            manifest: confit_model::manifest::Manifest {
+                version: confit_store::bundle::BUNDLE_VERSION,
                 documents: Vec::new(),
                 hooks: vec![hook_fixture(&["absent", "install"])],
             },
             blobs: std::collections::BTreeMap::new(),
         };
-        match hook_preview(&bundle, &rt, &probe, &BTreeSet::new(), &applier) {
+        match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

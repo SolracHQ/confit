@@ -8,7 +8,7 @@ use super::confit_table;
 use crate::error::plan_error;
 use crate::level::Level;
 use crate::lua::ValueExt;
-use confit_core::document::StructuredFormat;
+use confit_model::document::StructuredFormat;
 
 /// Patch handle built by the constructors.
 #[derive(Clone)]

@@ -13,11 +13,11 @@ use super::document::{check_rel, tree_table};
 use crate::error::plan_error;
 use crate::lua::{JsonExt, ValueExt};
 use crate::model::TreeMemberDecl;
-use confit_core::error::Error;
-use confit_core::handles::{
+use confit_model::error::Error;
+use confit_model::handles::{
     ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, Route, Sha, TrustedHandle,
 };
-use confit_core::progress::ProgressSender;
+use confit_model::progress::ProgressSender;
 use confit_store::Stores;
 
 /// Fetch userdata returned by the fetch constructor.
@@ -497,7 +497,7 @@ fn parse_tree_pick(returned: &Value, name: &str, caller: &str) -> mlua::Result<O
         Some(bits as u32)
     } else if let Some(raw) = mode_value.opt_str() {
         Some(
-            confit_core::document::parse_mode(&raw)
+            confit_model::document::parse_mode(&raw)
                 .map_err(|error| plan_error(format!("{caller}: {error}")))?,
         )
     } else {

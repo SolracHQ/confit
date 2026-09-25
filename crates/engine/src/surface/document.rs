@@ -13,8 +13,8 @@ use crate::lua::{TableExt, ValueExt, set_marker};
 use crate::model::{
     LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
 };
-use confit_core::arg::Arg;
-use confit_core::document::{RcData, StructuredFormat};
+use confit_model::arg::Arg;
+use confit_model::document::{RcData, StructuredFormat};
 
 pub(crate) mod convert;
 
@@ -147,7 +147,7 @@ impl DocumentTables {
     /// Builds a plain text document table.
     fn text(
         lua: &Lua,
-        destination: confit_core::handles::Route,
+        destination: confit_model::handles::Route,
         content: String,
         mode: Option<u32>,
         unmanaged: bool,
@@ -165,7 +165,7 @@ impl DocumentTables {
     /// Builds a symlink document table.
     fn link(
         lua: &Lua,
-        destination: confit_core::handles::Route,
+        destination: confit_model::handles::Route,
         target: String,
     ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
@@ -178,8 +178,8 @@ impl DocumentTables {
     /// Builds an opaque document table holding a sealed blob handle.
     fn opaque(
         lua: &Lua,
-        destination: confit_core::handles::Route,
-        blob: confit_core::handles::BlobHandle,
+        destination: confit_model::handles::Route,
+        blob: confit_model::handles::BlobHandle,
         size: u64,
         mode: Option<u32>,
         unmanaged: bool,
@@ -200,7 +200,7 @@ impl DocumentTables {
 /// Builds one tree document table from kept members.
 pub(crate) fn tree_table(
     lua: &Lua,
-    destination: confit_core::handles::Route,
+    destination: confit_model::handles::Route,
     members: Vec<TreeMemberDecl>,
 ) -> mlua::Result<Table> {
     let out = lua.create_table()?;
@@ -266,7 +266,7 @@ impl DocOpts {
         } else {
             let raw = mode_value.req_str(ctor, "mode")?;
             Some(
-                confit_core::document::parse_mode(&raw)
+                confit_model::document::parse_mode(&raw)
                     .map_err(|error| plan_error(format!("{ctor}: {error}")))?,
             )
         };
@@ -377,10 +377,10 @@ impl RcDocs {
             };
             if let Err(error) = RcData::check_section_name(&name) {
                 match error {
-                    confit_core::error::Error::Plan(message) => {
+                    confit_model::error::Error::Plan(message) => {
                         return Err(plan_error(format!("{ctor}: {message}")));
                     }
-                    confit_core::error::Error::Io(error) => {
+                    confit_model::error::Error::Io(error) => {
                         return Err(plan_error(format!("{ctor}: {error}")));
                     }
                 }

@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
+use confit_driver as driver;
+use confit_model::error::{Error, Result};
 
 use crate::cli::InitArgs;
 
@@ -89,28 +89,22 @@ pub struct InitReport {
     pub written: usize,
 }
 
-/// One init run from flags on an injected backend.
+/// One init run from flags on the host driver.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,no_run
 /// use confit_cli::actions::init::InitRunner;
 /// use confit_cli::cli::InitArgs;
-/// use confit_core::fs::{Filesystem, memory::MemoryFs};
-/// use std::path::{Path, PathBuf};
+/// use std::path::PathBuf;
 ///
-/// let fs = MemoryFs::new();
 /// let args = InitArgs { dir: PathBuf::from("demo") };
-/// let runner = InitRunner { args: &args, fs: &fs };
-/// assert!(matches!(runner.execute(), Ok(_)));
-/// assert!(fs.exists(Path::new("demo/profile.lua")));
-/// assert!(fs.exists(Path::new("demo/stubs/confit.d.lua")));
+/// let report = InitRunner { args: &args }.execute().unwrap();
+/// assert_eq!(report.profile, PathBuf::from("demo/profile.lua"));
 /// ```
 pub struct InitRunner<'a> {
     /// Holds the init flags under running.
     pub args: &'a InitArgs,
-    /// Holds the backend under reading and writing.
-    pub fs: &'a dyn Filesystem,
 }
 
 impl InitRunner<'_> {
@@ -131,31 +125,44 @@ impl InitRunner<'_> {
         let mut dests = vec![profile.clone()];
         dests.extend(STUB_FILES.iter().map(|entry| self.args.dir.join(entry.0)));
         let stubs_dir = self.args.dir.join("stubs");
-        if self.fs.exists(&stubs_dir) {
+        if driver::exists(&stubs_dir) {
             return Err(Error::Plan(format!(
                 "init: '{}' already exists, remove it or pick another target",
                 stubs_dir.display()
             )));
         }
         for dest in &dests {
-            if self.fs.exists(dest) {
+            if driver::exists(dest) {
                 return Err(Error::Plan(format!(
                     "init: '{}' already exists, remove it or pick another target",
                     dest.display()
                 )));
             }
         }
-        self.fs
-            .write(&profile, PROFILE_TEXT.as_bytes())
-            .map_err(Error::from)?;
+        write_file(&profile, PROFILE_TEXT.as_bytes())?;
         for (rel, text) in STUB_FILES.iter().copied() {
-            self.fs
-                .write(&self.args.dir.join(rel), text.as_bytes())
-                .map_err(Error::from)?;
+            write_file(&self.args.dir.join(rel), text.as_bytes())?;
         }
         Ok(InitReport {
             profile,
             written: dests.len(),
         })
     }
+}
+
+/// Writes one scaffold file creating parent folders first.
+///
+/// The old seam created parents inside `write`; the driver
+/// does not, so init names the step explicitly.
+///
+/// # Errors
+///
+/// Unwritable folders and files fail as io errors.
+fn write_file(dest: &std::path::Path, text: &[u8]) -> Result<()> {
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        driver::create_dir_all(parent).map_err(Error::from)?;
+    }
+    driver::write(dest, text).map_err(Error::from)
 }

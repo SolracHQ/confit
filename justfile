@@ -46,6 +46,6 @@ check:
 
 # Bump all three crates to one version. The release flow tags from cli.
 set-version VERSION:
-  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml
+  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/model/Cargo.toml crates/driver/Cargo.toml crates/engine/Cargo.toml crates/runtime/Cargo.toml crates/cli/Cargo.toml crates/store/Cargo.toml
   cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
-  grep -h '^version' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml
+  grep -h '^version' crates/model/Cargo.toml crates/driver/Cargo.toml crates/engine/Cargo.toml crates/runtime/Cargo.toml crates/cli/Cargo.toml crates/store/Cargo.toml

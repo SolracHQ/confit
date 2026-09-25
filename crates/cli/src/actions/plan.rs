@@ -4,13 +4,15 @@
 
 use std::path::Path;
 
-use confit_core::drift::{Drift, DriftOrder};
-use confit_core::error::Result;
-use confit_core::plan::Bundle;
+use confit_model::drift::{Drift, DriftOrder};
+use confit_model::error::Result;
+use confit_runtime::Applier;
+use confit_store::Stores;
+use confit_store::bundle::Bundle;
 
 use crate::cli::PlanArgs;
 
-use crate::seams::{Seams, evaluate_shared, log_processed, timed};
+use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
 
 /// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
@@ -32,11 +34,9 @@ pub struct PlanOutcome {
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::plan::PlanRunner;
-/// use confit_cli::seams::Seams;
 /// use confit_cli::cli::{PlanArgs, SharedArgs};
-/// use confit_core::fs::memory::MemoryFs;
-/// use confit_core::probe::MemoryProbe;
-/// use std::io::Cursor;
+/// use confit_runtime::Applier;
+/// use confit_store::{StoreRoots, Stores};
 /// use std::path::PathBuf;
 ///
 /// let args = PlanArgs {
@@ -48,24 +48,26 @@ pub struct PlanOutcome {
 ///     },
 ///     output: None,
 /// };
-/// let fs = MemoryFs::new();
-/// let probe = MemoryProbe::new();
-/// let mut input = Cursor::new(String::new());
-/// let runner = PlanRunner { args: &args, seams: Seams::memory(&fs, &probe, &mut input) };
+/// let stores = Stores::new(StoreRoots::standard());
+/// let applier = Applier::with_stores(stores.clone());
+/// let runner = PlanRunner { args: &args, stores, applier, sinks: Default::default() };
 /// let outcome = runner.execute();
 /// assert!(matches!(outcome, Ok(_) | Err(_)));
 /// ```
 pub struct PlanRunner<'a> {
     /// Holds the plan flags under running.
     pub args: &'a PlanArgs,
-    /// Holds the injected filesystem, output, and sink.
-    pub seams: Seams<'a>,
+    /// Holds the write capabilities for the run.
+    pub stores: Stores,
+    /// Holds the destination reads and writes for the run.
+    pub applier: Applier,
+    /// Holds the output senders for the run.
+    pub sinks: Sinks,
 }
 
 impl PlanRunner<'_> {
     /// Evaluates the engine, loads previous manifest, diffs drift,
-    /// builds the core bundle, and writes the payload on demand
-    /// through injected seams.
+    /// builds the core bundle, and writes the payload on demand.
     ///
     /// # Returns
     ///
@@ -79,30 +81,28 @@ impl PlanRunner<'_> {
         let evaluation = evaluate_shared(
             &self.args.shared,
             &self.args.profile,
-            self.seams.progress.clone(),
-            &self.seams.stores,
+            self.sinks.progress.clone(),
+            &self.stores,
         )?;
         let documents = evaluation.documents;
-        let slots = self.seams.stores.slots();
+        let slots = self.stores.slots();
         let first_run = slots.is_first_run();
         let previous = slots.load()?;
 
-        self.seams.emit_hashing();
+        self.sinks.emit_hashing();
         let mut built = timed("hash", || Bundle::build(documents, evaluation.hooks))?;
         built.blobs = evaluation.blobs;
         log_processed(&built, &previous);
 
         let drifts = timed("drift", || {
             if first_run {
-                self.seams.applier.drift(&built, DriftOrder::DiskFirst)
+                self.applier.drift(&built, DriftOrder::DiskFirst)
             } else {
-                self.seams
-                    .applier
-                    .drift(&previous, DriftOrder::RecordedFirst)
+                self.applier.drift(&previous, DriftOrder::RecordedFirst)
             }
         });
         if self.args.output.is_some() {
-            self.seams
+            self.sinks
                 .emit_writing_manifest(built.manifest.documents.len());
         }
         timed("write", || match self.args.output.as_deref() {
@@ -114,10 +114,9 @@ impl PlanRunner<'_> {
                 slots.store_named(name, &built)
             }
             Some(dest) => self
-                .seams
                 .stores
                 .bundles()
-                .write(&built, dest, self.seams.progress.as_ref())
+                .write(&built, dest, self.sinks.progress.as_ref())
                 .map(|_| ()),
             None => Ok(()),
         })?;

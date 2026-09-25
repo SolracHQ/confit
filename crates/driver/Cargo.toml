@@ -1,0 +1,17 @@
+[package]
+name = "confit-driver"
+version = "0.8.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+vfs = "0.13"
+
+[dependencies]
+vfs = { version = "0.13", optional = true }
+
+[features]
+test-support = ["dep:vfs"]
