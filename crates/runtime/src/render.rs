@@ -30,7 +30,6 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 /// ```rust
 /// use confit_model::document::{ManifestData, ManifestDocument};
 /// use confit_model::handles::{Route, RouteBase};
-/// use confit_runtime::render::render_document;
 /// use confit_store::StoreRoots;
 /// use confit_runtime::Applier;
 ///
@@ -39,25 +38,37 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
 /// );
 /// let applier = Applier::host(StoreRoots::default());
-/// assert!(matches!(render_document(&document, &applier), Ok(bytes) if bytes == b"hi".to_vec()));
+/// assert!(matches!(applier.render_document(&document), Ok(bytes) if bytes == b"hi".to_vec()));
 /// ```
-pub fn render_document(document: &ManifestDocument, applier: &Applier) -> Result<Vec<u8>> {
-    match &document.data {
-        ManifestData::Structured { format, data } => match format {
-            StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
-        },
-        ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-        ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
-        ManifestData::Rc(data) => Ok(render_rc(data, applier).into_bytes()),
-        ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
-            "render opaque '{}': blob bytes ride the blob store",
-            blob.sha()
-        ))),
-        ManifestData::Tree { .. } => Err(Error::Plan(
-            "render tree: tree documents hold member bytes".to_string(),
-        )),
+impl crate::Applier {
+    /// Renders one document to exact on-disk bytes.
+    ///
+    /// Routes expand against the applier host folders, so shell
+    /// payloads carry resolved paths.
+    ///
+    /// # Errors
+    ///
+    /// Opaque and tree payloads fail as plan errors; their
+    /// bytes ride the blob store.
+    /// Serializer failures fail as plan errors.
+    pub fn render_document(&self, document: &ManifestDocument) -> Result<Vec<u8>> {
+        match &document.data {
+            ManifestData::Structured { format, data } => match format {
+                StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
+                StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
+                StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
+            },
+            ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+            ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
+            ManifestData::Rc(data) => Ok(render_rc(data, self).into_bytes()),
+            ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
+                "render opaque '{}': blob bytes ride the blob store",
+                blob.sha()
+            ))),
+            ManifestData::Tree { .. } => Err(Error::Plan(
+                "render tree: tree documents hold member bytes".to_string(),
+            )),
+        }
     }
 }
 
@@ -161,9 +172,7 @@ fn render_guard(guard: &Condition, applier: &Applier) -> String {
             let candidate = escape_argv(std::slice::from_ref(&expanded));
             format!("[ -e {candidate} ]")
         }
-        // Changed never reaches shell guards: rc guards holding it fail
-        // as plan errors at build time. Render false so entries stay
-        // quiet if the invariant ever breaks.
+        // Changed holds no shell form and renders false.
         Condition::Changed { .. } => "false".to_string(),
         Condition::All(items) if items.is_empty() => "true".to_string(),
         Condition::Any(items) if items.is_empty() => "false".to_string(),

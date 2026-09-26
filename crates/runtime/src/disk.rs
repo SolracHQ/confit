@@ -42,8 +42,9 @@ pub enum Live {
 
 /// Live disk state behind one tree member.
 ///
-/// Members absent from disk never enter the map, so absence
-/// reads as a map miss and no `Absent` variant rides here.
+/// Present and unreadable members enter the map keyed by
+/// relative path. Missing members stay out, so absence
+/// reads as a map miss.
 pub enum LiveMember {
     /// Failing read carrying the raw failure detail.
     Unreadable {

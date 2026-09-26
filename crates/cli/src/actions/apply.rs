@@ -34,8 +34,6 @@ pub struct ApplyReport {
     pub written: usize,
     /// Counts recorded orphans and dropped tree members removed from disk.
     pub removed: usize,
-    /// Holds the stored manifest path backing apply of the past.
-    pub stored: PathBuf,
 }
 
 /// One apply run from desired documents to disk writes.
@@ -365,20 +363,9 @@ impl<'a> ApplyRunner<'a> {
                 ));
             }
         }
-        let notify_written;
-        let notify = if let Some(sender) = self.sinks.progress.clone() {
-            notify_written = move |route: &Route| {
-                let _ = sender.send(Event::DocumentWritten {
-                    path: route.display(),
-                });
-            };
-            Some(&notify_written as &dyn Fn(&Route))
-        } else {
-            None
-        };
-        let written =
-            self.applier
-                .write_documents(&built.manifest.documents, &self.changed, notify)?;
+        let written = self
+            .applier
+            .write_documents(&built.manifest.documents, &self.changed)?;
         let removed = self
             .applier
             .remove_orphans(&self.previous.manifest.documents, &built.manifest.documents)?;
@@ -389,17 +376,13 @@ impl<'a> ApplyRunner<'a> {
             )?;
         self.sinks
             .emit_writing_manifest(built.manifest.documents.len());
-        let stored = self
+        let _ = self
             .stores
             .slots()
             .store(&built, self.sinks.progress.as_ref())?;
         self.stores.blobs().prune()?;
         self.run_hooks(&built)?;
-        Ok(ApplyReport {
-            written,
-            removed,
-            stored,
-        })
+        Ok(ApplyReport { written, removed })
     }
 
     /// Runs built hooks after files, state, and history land.

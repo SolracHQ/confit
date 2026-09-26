@@ -40,6 +40,11 @@ impl FileMeta {
     }
 }
 
+/// Seekable streamed reading for one path.
+pub trait SeekRead: std::io::Read + std::io::Seek {}
+
+impl<T: std::io::Read + std::io::Seek> SeekRead for T {}
+
 pub use imp::*;
 
 #[cfg(test)]
@@ -438,11 +443,16 @@ mod imp {
         std::fs::File::open(path).map(|file| Box::new(file) as Box<dyn io::Read>)
     }
 
-    /// Reads the last bytes of one file seeking the tail.
+    /// Opens one file for seekable streamed reading.
     ///
-    /// Short files fail loud instead of serving short
-    /// reads. The pool footer reads this way, so blob
-    /// lengths never load whole pool files.
+    /// # Errors
+    ///
+    /// Missing and unreadable files fail as io errors.
+    pub fn open_seek(path: &Path) -> io::Result<Box<dyn super::SeekRead>> {
+        std::fs::File::open(path).map(|file| Box::new(file) as Box<dyn super::SeekRead>)
+    }
+
+    /// Reads the last bytes of one file seeking the tail.
     ///
     /// # Errors
     ///
@@ -685,6 +695,17 @@ mod imp {
     pub fn open_read(path: &Path) -> io::Result<Box<dyn io::Read>> {
         let root = rooted()?;
         mem_open_read(&root, path)
+    }
+
+    /// Opens one backend file for seekable streamed reading.
+    ///
+    /// # Errors
+    ///
+    /// Missing and unreadable files fail as io errors.
+    pub fn open_seek(path: &Path) -> io::Result<Box<dyn super::SeekRead>> {
+        let root = rooted()?;
+        let bytes = mem_read(&root, path)?;
+        Ok(Box::new(io::Cursor::new(bytes)) as Box<dyn super::SeekRead>)
     }
 
     /// Reads the last bytes of one backend file.

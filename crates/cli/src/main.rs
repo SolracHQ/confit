@@ -112,7 +112,7 @@ fn run_apply(
         args,
         &mut input,
         stores.clone(),
-        Applier::with_stores(stores),
+        Applier::with_stores(stores).with_progress(sinks.progress.clone()),
         sinks,
         Some(log_path.to_path_buf()),
     ) {
@@ -130,7 +130,7 @@ fn run_apply(
         report.written,
         report.removed
     );
-    anstream::println!("previous: {}", report.stored.display());
+    anstream::println!("restore: confit apply %1");
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())

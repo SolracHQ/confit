@@ -4,13 +4,12 @@ use std::collections::BTreeMap;
 
 use confit_model::document::{ManifestData, ManifestDocument, render_mode};
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::handles::{BlobHandle, Route, Sha};
+use confit_model::handles::{Route, Sha};
 use confit_model::plan::opaque_id;
 use confit_store::bundle::Bundle;
 
 use crate::Applier;
 use crate::disk::{Live, LiveMember, drain};
-use crate::render::render_document;
 
 /// Chunk size for streaming drift comparison.
 const COMPARE_CHUNK: usize = 8192;
@@ -32,9 +31,6 @@ impl Applier {
                 ));
                 continue;
             }
-            let Some(mut recorded) = self.recorded_reader(document) else {
-                continue;
-            };
             match self.disk.live_doc(document) {
                 Live::Absent => out.push(Drift::Missing {
                     path: document.destination.clone(),
@@ -44,28 +40,14 @@ impl Applier {
                     reason,
                 }),
                 Live::Present { mut reader, mode } => {
-                    if streams_equal(&mut recorded, &mut reader) {
-                        if let Some(wanted) = document.mode()
-                            && let Some(seen) = mode
-                            && wanted != seen
-                        {
-                            let (old, new) = match order {
-                                DriftOrder::RecordedFirst => (
-                                    serde_json::Value::String(render_mode(wanted)),
-                                    serde_json::Value::String(render_mode(seen)),
-                                ),
-                                DriftOrder::DiskFirst => (
-                                    serde_json::Value::String(render_mode(seen)),
-                                    serde_json::Value::String(render_mode(wanted)),
-                                ),
-                            };
-                            out.push(Drift::Key {
-                                path: document.destination.clone(),
-                                key: "mode".to_string(),
-                                old: Some(old),
-                                new: Some(new),
-                            });
-                        }
+                    if !matches!(&document.data, ManifestData::Opaque { .. }) {
+                        let Some(recorded_bytes) = self.render_document(document).ok() else {
+                            continue;
+                        };
+                        let Ok(disk_bytes) = drain(&mut reader) else {
+                            continue;
+                        };
+                        out.extend(document.disk_drift(&recorded_bytes, &disk_bytes, mode, order));
                         continue;
                     }
                     if let ManifestData::Opaque { blob, .. } = &document.data {
@@ -77,6 +59,30 @@ impl Applier {
                             Some(label) => label,
                             None => continue,
                         };
+                        if recorded_label == disk_label {
+                            if let Some(wanted) = document.mode()
+                                && let Some(seen) = mode
+                                && wanted != seen
+                            {
+                                let (old, new) = match order {
+                                    DriftOrder::RecordedFirst => (
+                                        serde_json::Value::String(render_mode(wanted)),
+                                        serde_json::Value::String(render_mode(seen)),
+                                    ),
+                                    DriftOrder::DiskFirst => (
+                                        serde_json::Value::String(render_mode(seen)),
+                                        serde_json::Value::String(render_mode(wanted)),
+                                    ),
+                                };
+                                out.push(Drift::Key {
+                                    path: document.destination.clone(),
+                                    key: "mode".to_string(),
+                                    old: Some(old),
+                                    new: Some(new),
+                                });
+                            }
+                            continue;
+                        }
                         out.push(opaque_content_drift(
                             &document.destination,
                             "content",
@@ -86,13 +92,6 @@ impl Applier {
                         ));
                         continue;
                     }
-                    let Some(recorded_bytes) = self.recorded_bytes(document) else {
-                        continue;
-                    };
-                    let Some(disk_bytes) = self.disk_bytes(document) else {
-                        continue;
-                    };
-                    out.extend(document.disk_drift(&recorded_bytes, &disk_bytes, mode, order));
                 }
             }
         }
@@ -101,7 +100,8 @@ impl Applier {
 
     /// Collects drift entries for one tree destination walk.
     ///
-    /// Disk extras stay quiet; hand-placed files never drift.
+    /// Extra disk files stay out of the entries; hand-placed
+    /// files read untouched.
     fn tree_drift(
         &self,
         destination: &Route,
@@ -112,9 +112,6 @@ impl Applier {
         let mut out = Vec::new();
         for member in members {
             let member_path = destination.join(&member.relative);
-            if self.member_reader(&member.blob).is_none() {
-                continue;
-            }
             match disk.get(&member.relative) {
                 None => out.push(Drift::Missing { path: member_path }),
                 Some(LiveMember::Unreadable { reason }) => out.push(Drift::Unreadable {
@@ -123,38 +120,6 @@ impl Applier {
                 }),
                 Some(LiveMember::Present { mode, .. }) => {
                     let seen_mode = *mode;
-                    let disk_snapshot = self.live_tree_member(destination, &member.relative);
-                    let Some(mut disk_reader) = disk_snapshot else {
-                        continue;
-                    };
-                    let mut recorded = match self.member_reader(&member.blob) {
-                        Some(reader) => reader,
-                        None => continue,
-                    };
-                    if streams_equal(&mut recorded, &mut disk_reader) {
-                        if let Some(seen) = seen_mode
-                            && seen != member.mode
-                        {
-                            let (old, new) = match order {
-                                DriftOrder::RecordedFirst => (
-                                    serde_json::Value::String(render_mode(member.mode)),
-                                    serde_json::Value::String(render_mode(seen)),
-                                ),
-                                DriftOrder::DiskFirst => (
-                                    serde_json::Value::String(render_mode(seen)),
-                                    serde_json::Value::String(render_mode(member.mode)),
-                                ),
-                            };
-                            out.push(Drift::Key {
-                                path: destination.clone(),
-                                key: format!("{}:mode", member.relative),
-                                old: Some(old),
-                                new: Some(new),
-                            });
-                        }
-                        continue;
-                    }
-                    let _ = recorded;
                     let recorded_label = match self.stores.blobs().len(&member.blob) {
                         Ok(len) => opaque_id(member.blob.sha(), len),
                         Err(_) => continue,
@@ -163,13 +128,15 @@ impl Applier {
                     else {
                         continue;
                     };
-                    out.push(opaque_content_drift(
-                        destination,
-                        &member.relative,
-                        &recorded_label,
-                        &disk_label,
-                        order,
-                    ));
+                    if recorded_label != disk_label {
+                        out.push(opaque_content_drift(
+                            destination,
+                            &member.relative,
+                            &recorded_label,
+                            &disk_label,
+                            order,
+                        ));
+                    }
                     if let Some(seen) = seen_mode
                         && seen != member.mode
                     {
@@ -196,57 +163,7 @@ impl Applier {
         out
     }
 
-    /// Opens a streaming reader for one recorded non-tree document.
-    ///
-    /// Inline payloads render from the manifest. Opaque
-    /// payloads stream from the blob pool.
-    fn recorded_reader(&self, document: &ManifestDocument) -> Option<Box<dyn std::io::Read>> {
-        match &document.data {
-            ManifestData::Opaque { blob, .. } => {
-                let blobs = self.stores.blobs();
-                blobs.open(blob).ok()
-            }
-            _ => render_document(document, self)
-                .ok()
-                .map(|bytes| Box::new(std::io::Cursor::new(bytes)) as Box<dyn std::io::Read>),
-        }
-    }
-
-    /// Reads recorded bytes for one inline document.
-    ///
-    /// Opaque payloads never arrive here: their drift
-    /// labels from handle identity alone.
-    fn recorded_bytes(&self, document: &ManifestDocument) -> Option<Vec<u8>> {
-        render_document(document, self).ok()
-    }
-
-    /// Opens a streaming reader for one member blob.
-    fn member_reader(&self, handle: &BlobHandle) -> Option<Box<dyn std::io::Read>> {
-        let blobs = self.stores.blobs();
-        blobs.open(handle).ok()
-    }
-
-    /// Opens a fresh streaming reader for one tree member path.
-    fn live_tree_member(
-        &self,
-        destination: &Route,
-        relative: &str,
-    ) -> Option<Box<dyn std::io::Read>> {
-        self.disk.open_member(destination, relative)
-    }
-
-    /// Reads one document destination into bytes for detail lines.
-    fn disk_bytes(&self, document: &ManifestDocument) -> Option<Vec<u8>> {
-        match self.disk.live_doc(document) {
-            Live::Present { mut reader, .. } => drain(&mut reader).ok(),
-            Live::Absent | Live::Unreadable { .. } => None,
-        }
-    }
-
-    /// Labels one disk document streaming hash plus length.
-    ///
-    /// Reopens the destination, so consumed compare readers
-    /// never need rewinding. Nothing materializes.
+    /// Labels one disk document with its content hash and byte count.
     fn disk_label(&self, document: &ManifestDocument) -> Option<String> {
         match self.disk.live_doc(document) {
             Live::Present { mut reader, .. } => {
@@ -257,21 +174,15 @@ impl Applier {
         }
     }
 
-    /// Labels one tree member path streaming hash plus length.
-    ///
-    /// Reopens the member, so consumed compare readers
-    /// never need rewinding. Nothing materializes.
+    /// Labels one tree member path with its content hash and byte count.
     fn tree_member_label(&self, destination: &Route, relative: &str) -> Option<String> {
-        let mut reader = self.live_tree_member(destination, relative)?;
+        let mut reader = self.disk.open_member(destination, relative)?;
         let (sha, len) = hash_count(&mut reader).ok()?;
         Some(opaque_id(&sha, len))
     }
 }
 
 /// Builds one opaque content key from two labels.
-///
-/// Streams already proved the sides differ, so labels
-/// always differ too: differing bytes hash differing.
 fn opaque_content_drift(
     path: &Route,
     key: &str,
@@ -293,8 +204,9 @@ fn opaque_content_drift(
 
 /// Hashes one reader streaming while counting bytes.
 ///
-/// Content never materializes; labels need the digest
-/// plus the length alone.
+/// # Returns
+///
+/// The content hash with the byte count.
 fn hash_count(reader: &mut dyn std::io::Read) -> std::io::Result<(Sha, u64)> {
     use sha2::Digest as _;
 
@@ -308,31 +220,6 @@ fn hash_count(reader: &mut dyn std::io::Read) -> std::io::Result<(Sha, u64)> {
         }
         len += read as u64;
         hasher.update(&chunk[..read]);
-    }
-}
-
-/// Compares two readers chunk by chunk without loading either side.
-fn streams_equal(left: &mut dyn std::io::Read, right: &mut dyn std::io::Read) -> bool {
-    let mut left_buf = [0u8; COMPARE_CHUNK];
-    let mut right_buf = [0u8; COMPARE_CHUNK];
-    loop {
-        let left_read = match left.read(&mut left_buf) {
-            Ok(read) => read,
-            Err(_) => return false,
-        };
-        let right_read = match right.read(&mut right_buf) {
-            Ok(read) => read,
-            Err(_) => return false,
-        };
-        if left_read != right_read {
-            return false;
-        }
-        if left_read == 0 {
-            return true;
-        }
-        if left_buf[..left_read] != right_buf[..right_read] {
-            return false;
-        }
     }
 }
 
@@ -378,7 +265,7 @@ mod tests {
             )),
         );
         let applier = Applier::host(confit_store::StoreRoots::default());
-        let recorded = render_document(&document, &applier).unwrap();
+        let recorded = applier.render_document(&document).unwrap();
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),

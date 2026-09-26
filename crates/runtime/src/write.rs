@@ -6,9 +6,9 @@ use std::path::Path;
 use confit_model::document::{ManifestData, ManifestDocument};
 use confit_model::error::{Error, Result};
 use confit_model::handles::Route;
+use confit_model::progress::Event;
 
 use crate::Applier;
-use crate::render::render_document;
 
 impl Applier {
     /// Writes every document to its resolved destination.
@@ -23,7 +23,6 @@ impl Applier {
         &self,
         documents: &[ManifestDocument],
         changed: &BTreeSet<Route>,
-        on_written: Option<&dyn Fn(&Route)>,
     ) -> Result<usize> {
         let blobs = self.stores.blobs();
         let mut written = 0;
@@ -45,9 +44,7 @@ impl Applier {
                         expanded.display()
                     )));
                 }
-                if let Some(notify) = on_written {
-                    notify(&document.destination);
-                }
+                self.emit_written(&document.destination);
                 written += count;
                 continue;
             }
@@ -67,9 +64,7 @@ impl Applier {
                         expanded.display()
                     )));
                 }
-                if let Some(notify) = on_written {
-                    notify(&document.destination);
-                }
+                self.emit_written(&document.destination);
                 written += 1;
                 continue;
             }
@@ -87,7 +82,7 @@ impl Applier {
                             expanded.display()
                         )));
                     }
-                    let bytes = render_document(document, self)?;
+                    let bytes = self.render_document(document)?;
                     self.disk
                         .write_bytes(&expanded, &bytes)
                         .map_err(Error::from)
@@ -110,11 +105,17 @@ impl Applier {
                     expanded.display()
                 )));
             }
-            if let Some(notify) = on_written {
-                notify(&document.destination);
-            }
+            self.emit_written(&document.destination);
             written += 1;
         }
         Ok(written)
+    }
+
+    fn emit_written(&self, destination: &Route) {
+        if let Some(sender) = self.progress.as_ref() {
+            let _ = sender.send(Event::DocumentWritten {
+                path: destination.display(),
+            });
+        }
     }
 }

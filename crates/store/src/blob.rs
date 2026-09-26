@@ -354,9 +354,7 @@ impl std::io::Read for VerifiedBlobReader {
 
 /// Raw byte count for one pool file.
 ///
-/// The count rides the gzip footer, so the tail read
-/// seeks the last four bytes instead of loading the
-/// pool file whole.
+/// Reads the count from the gzip footer.
 ///
 /// # Errors
 ///

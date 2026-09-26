@@ -18,8 +18,7 @@ pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 /// Host facts under condition checks.
 ///
 /// Vars hold the process environment snapshot. Path dirs hold
-/// the PATH entries in order. Tests build fixed values, so
-/// checks never read ambient state.
+/// the PATH entries in order.
 ///
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checks {
@@ -49,9 +48,9 @@ impl Checks {
 
     /// Reports one condition verdict against facts and the driver.
     ///
-    /// `Exists` reads the applier-expanded path, so checks never
-    /// name an unexpanded route. `Changed` reads membership in the
-    /// changed route set. `All`, `Any` and `Not` recurse.
+    /// `Exists` reads the applier-expanded path. `Changed` reads
+    /// membership in the changed route set. `All`, `Any` and `Not`
+    /// recurse.
     ///
     /// # Examples
     ///

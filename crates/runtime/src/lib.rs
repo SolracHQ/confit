@@ -8,7 +8,7 @@ pub mod checks;
 mod disk;
 mod drift;
 mod remove;
-pub mod render;
+mod render;
 mod resolve;
 mod write;
 
@@ -16,19 +16,19 @@ pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, find_executable};
 
 pub use disk::{HostDisk, Live, LiveMember};
 
+use confit_model::progress::ProgressSender;
 use confit_store::{StoreRoots, Stores};
 
 /// Destination applier behind live reads, writes, and drift.
 ///
-/// Roots arrive explicit at construction. Disk reads ride
-/// the driver: host paths in production, memory under a
-/// test guard. Blob bytes resolve through the held stores
-/// alone.
+/// Roots arrive explicit at construction.
 pub struct Applier {
-    /// Holds the write capabilities behind blob resolution.
+    /// Write capabilities behind blob resolution.
     pub(crate) stores: Stores,
-    /// Serves every disk read and write behind the verbs.
+    /// Disk reads and writes.
     pub(crate) disk: HostDisk,
+    /// Write events, `None` for silence.
+    pub(crate) progress: Option<ProgressSender>,
 }
 
 impl Applier {
@@ -48,7 +48,16 @@ impl Applier {
         Self {
             stores,
             disk: HostDisk,
+            progress: None,
         }
+    }
+
+    /// Builder carrying the progress sender behind write events.
+    ///
+    /// `None` holds silence.
+    pub fn with_progress(mut self, progress: Option<ProgressSender>) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Reads the write capabilities behind blob resolution.

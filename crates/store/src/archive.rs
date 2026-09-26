@@ -2,6 +2,10 @@
 //!
 //! Member listing and extraction for compressed archives.
 
+mod gzip;
+mod tar;
+mod zip;
+
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +15,9 @@ use sha2::Digest as _;
 
 use crate::StoreRoots;
 use confit_driver as driver;
+use gzip::GzipBackend;
+use tar::{GzippedTarBackend, TarBackend};
+use zip::ZipBackend;
 
 /// Staging suffix for atomic archive unpacks.
 const STAGING_SUFFIX: &str = ".part";
@@ -19,7 +26,7 @@ const STAGING_SUFFIX: &str = ".part";
 const EXTRACT_DIR: &str = "extract";
 
 /// Copy chunk size for member streaming.
-const ENTRY_CHUNK: usize = 8192;
+pub(crate) const ENTRY_CHUNK: usize = 8192;
 
 /// Fallback mode for members without distinct bits.
 const DEFAULT_MEMBER_MODE: u32 = 0o644;
@@ -31,9 +38,31 @@ const ZIP_LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
 const ZIP_EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 
 /// Archive member with a streamed content hash.
-struct BornMember {
-    name: String,
-    sha: Sha,
+pub(crate) struct BornMember {
+    pub(crate) name: String,
+    pub(crate) sha: Sha,
+}
+
+/// Streaming backend behind one sniffed archive shape.
+///
+/// Names list archive-relative members with forward
+/// slashes. Unpack spills decoded members under staging
+/// with per-entry hashes.
+trait ArchiveBackend {
+    /// Lists member names without reading content.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable archives fail as plan errors.
+    fn names(&self, source: &Path) -> Result<Vec<String>>;
+
+    /// Spills decoded members under staging with hashes.
+    ///
+    /// # Errors
+    ///
+    /// Decoder and spill failures surface as plan errors
+    /// naming the source.
+    fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>>;
 }
 
 /// File-backed archive member listing and extraction.
@@ -75,23 +104,18 @@ impl ArchiveStore {
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         let source = archive.canonical();
         if peek_is_zip(source)? {
-            return stream_zip_names(source);
+            return ZipBackend.names(source);
         }
         if !peek_is_gzip(source)? {
-            let file = driver::open_read(source).map_err(|error| {
-                Error::Plan(format!("cannot read '{}': {error}", source.display()))
-            })?;
-            return stream_names(file, source);
+            return TarBackend.names(source);
         }
-        let file = driver::open_read(source)
-            .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-        match stream_names(flate2::read::GzDecoder::new(file), source) {
+        match GzippedTarBackend.names(source) {
             Ok(names) => Ok(names),
             Err(_) if wants_tar(source) => Err(Error::Plan(format!(
                 "cannot unpack '{}': not a tar archive",
                 source.display()
             ))),
-            Err(_) => Ok(vec![single_name(source)]),
+            Err(_) => GzipBackend.names(source),
         }
     }
 
@@ -110,54 +134,65 @@ impl ArchiveStore {
             return spilled_handles(&dest, source);
         }
         if peek_is_zip(source)? {
-            check_zip_names(source)?;
-            let staging = staging_path(&dest);
-            if driver::exists(&staging) {
-                driver::remove_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
-            }
-            driver::create_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
-            let born = match unpack_zip_entries(source, &staging) {
-                Ok(born) => born,
-                Err(error) => {
-                    let _ = driver::remove_dir_all(&staging);
-                    return Err(error);
-                }
-            };
-            return finish_unpack(source, &dest, &staging, &born);
+            check_backend_names(source, &ZipBackend)?;
+            return self.run_backend(source, &dest, &ZipBackend);
         }
-        let gzipped = peek_is_gzip(source)?;
-        check_unpack_names(source, gzipped)?;
-        let staging = staging_path(&dest);
+        if !peek_is_gzip(source)? {
+            check_backend_names(source, &TarBackend)?;
+            return self.run_backend(source, &dest, &TarBackend);
+        }
+        match GzippedTarBackend.names(source) {
+            Ok(names) => {
+                for name in &names {
+                    check_member_path(name, source)?;
+                }
+            }
+            Err(_) if wants_tar(source) => {
+                return Err(Error::Plan(format!(
+                    "cannot unpack '{}': not a tar archive",
+                    source.display()
+                )));
+            }
+            Err(_) => {}
+        }
+        match self.run_backend(source, &dest, &GzippedTarBackend) {
+            Ok(handles) => Ok(handles),
+            Err(_) if wants_tar(source) => Err(Error::Plan(format!(
+                "cannot unpack '{}': not a tar archive",
+                source.display()
+            ))),
+            Err(_) => self.run_backend(source, &dest, &GzipBackend),
+        }
+    }
+
+    /// Unpacks one backend spill through staging into place.
+    ///
+    /// Members spill one entry at a time under staging
+    /// before the atomic rename. A present destination
+    /// wins the rename race.
+    ///
+    /// # Errors
+    ///
+    /// Unreadable archives and write failures fail as plan errors.
+    fn run_backend(
+        &self,
+        source: &Path,
+        dest: &Path,
+        backend: &dyn ArchiveBackend,
+    ) -> Result<Vec<ResourceHandle>> {
+        let staging = staging_path(dest);
         if driver::exists(&staging) {
             driver::remove_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
         }
         driver::create_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
-        if !gzipped {
-            let born = match unpack_tar_file(source, &staging) {
-                Ok(born) => born,
-                Err(error) => {
-                    let _ = driver::remove_dir_all(&staging);
-                    return Err(error);
-                }
-            };
-            return finish_unpack(source, &dest, &staging, &born);
-        }
-        match unpack_gzipped_tar(source, &staging) {
-            Ok(born) => finish_unpack(source, &dest, &staging, &born),
-            Err(_) if wants_tar(source) => {
+        let born = match backend.unpack(source, &staging) {
+            Ok(born) => born,
+            Err(error) => {
                 let _ = driver::remove_dir_all(&staging);
-                Err(Error::Plan(format!(
-                    "cannot unpack '{}': not a tar archive",
-                    source.display()
-                )))
+                return Err(error);
             }
-            Err(_) => {
-                let _ = driver::remove_dir_all(&staging);
-                driver::create_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
-                let born = unpack_single_entry(source, &staging)?;
-                finish_unpack(source, &dest, &staging, &born)
-            }
-        }
+        };
+        finish_unpack(source, dest, &staging, &born)
     }
 
     /// Opens one member stream from the unpack spill.
@@ -220,46 +255,22 @@ impl ArchiveStore {
 /// the source.
 fn check_compressed_source(source: &Path) -> Result<()> {
     if peek_is_zip(source)? {
-        return verify_zip_body(source);
+        return ZipBackend
+            .names(source)
+            .map(|_| ())
+            .map_err(|_| not_archive(source));
     }
     if !peek_is_gzip(source)? {
         return Err(not_archive(source));
     }
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    match stream_names(flate2::read::GzDecoder::new(file), source) {
+    match GzippedTarBackend.names(source) {
         Ok(_) => Ok(()),
         Err(_) if wants_tar(source) => Err(not_archive(source)),
-        Err(_) => verify_gzip_body(source),
+        Err(_) => GzipBackend
+            .names(source)
+            .map(|_| ())
+            .map_err(|_| not_archive(source)),
     }
-}
-
-/// Proves one gzip body decodes.
-///
-/// # Errors
-///
-/// Undecodable sources fail as plan errors naming the source.
-fn verify_gzip_body(source: &Path) -> Result<()> {
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    std::io::copy(
-        &mut flate2::read::GzDecoder::new(file),
-        &mut std::io::sink(),
-    )
-    .map_err(|_| not_archive(source))?;
-    Ok(())
-}
-
-/// Proves one zip body decodes.
-///
-/// # Errors
-///
-/// Undecodable sources fail as plan errors naming the source.
-fn verify_zip_body(source: &Path) -> Result<()> {
-    let bytes = driver::read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| not_archive(source))?;
-    Ok(())
 }
 
 /// Builds one non-archive error naming the source.
@@ -356,195 +367,30 @@ fn peek_is_zip(source: &Path) -> Result<bool> {
     }
 }
 
-/// Unpacks plain tar members from disk with streaming hashes.
+/// Spills one decoded member stream under staging with a hash.
 ///
-/// Each entry checks escape before its bytes spill.
-///
-/// # Errors
-///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
-fn unpack_tar_file(source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    unpack_tar_entries(file, source, staging)
-}
-
-/// Unpacks gzipped tar members from disk with streaming hashes.
-///
-/// Each entry checks escape before its bytes spill.
+/// Parents arrive created, bytes stream in entry chunks
+/// feeding the member hash.
 ///
 /// # Errors
 ///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
-fn unpack_gzipped_tar(source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    unpack_tar_entries(flate2::read::GzDecoder::new(file), source, staging)
-}
-
-/// Unpacks tar entries with per-entry streaming hashes.
-///
-/// Skipped entries drain to a sink. Escape checks run before
-/// each spill. Chunk copies feed the member hash.
-///
-/// # Errors
-///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
-fn unpack_tar_entries<R: std::io::Read>(
-    reader: R,
+/// Spill failures surface as plan errors naming the source.
+pub(crate) fn spill_entry(
     source: &Path,
     staging: &Path,
-) -> Result<Vec<BornMember>> {
+    name: &str,
+    reader: impl std::io::Read,
+) -> Result<BornMember> {
     use std::io::Write as _;
 
-    let mut archive = tar::Archive::new(reader);
-    let entries = archive
-        .entries()
-        .map_err(|error| unpack_failure(source, error))?;
-    let mut born = Vec::new();
-    for entry in entries {
-        let mut entry = entry.map_err(|error| unpack_failure(source, error))?;
-        let Some(name) = entry_name(&entry, source)? else {
-            std::io::copy(&mut entry, &mut std::io::sink())
-                .map_err(|error| unpack_failure(source, error))?;
-            continue;
-        };
-        check_member_path(&name, source)?;
-        let path = staging.join(&name);
-        if let Some(parent) = path.parent()
-            && let Err(error) = driver::create_dir_all(parent)
-        {
-            let _ = driver::remove_dir_all(staging);
-            return Err(unpack_failure(source, error));
-        }
-        let mut out = match driver::create(&path) {
-            Ok(out) => out,
-            Err(error) => {
-                let _ = driver::remove_dir_all(staging);
-                return Err(unpack_failure(source, error));
-            }
-        };
-        let mut hasher = sha2::Sha256::new();
-        let mut chunk = [0u8; ENTRY_CHUNK];
-        loop {
-            let read = match entry.read(&mut chunk) {
-                Ok(read) => read,
-                Err(error) => {
-                    let _ = driver::remove_dir_all(staging);
-                    return Err(unpack_failure(source, error));
-                }
-            };
-            if read == 0 {
-                break;
-            }
-            hasher.update(&chunk[..read]);
-            if let Err(error) = out.write_all(&chunk[..read]) {
-                let _ = driver::remove_dir_all(staging);
-                return Err(unpack_failure(source, error));
-            }
-        }
-        born.push(BornMember {
-            name,
-            sha: Sha::finish(hasher),
-        });
-    }
-    Ok(born)
-}
-
-/// Unpacks zip members from disk with streaming hashes.
-///
-/// Folders plus links skip as absent. Escape checks run before
-/// each spill. Chunk copies feed the member hash.
-///
-/// # Errors
-///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
-fn unpack_zip_entries(source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-    use std::io::Write as _;
-
-    let bytes = driver::read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|error| unpack_failure(source, error))?;
-    let mut born = Vec::with_capacity(archive.len());
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| unpack_failure(source, error))?;
-        if !entry.is_file() {
-            continue;
-        }
-        let name = entry.name().to_owned();
-        if name.is_empty() {
-            continue;
-        }
-        check_member_path(&name, source)?;
-        let path = staging.join(&name);
-        if let Some(parent) = path.parent()
-            && let Err(error) = driver::create_dir_all(parent)
-        {
-            let _ = driver::remove_dir_all(staging);
-            return Err(unpack_failure(source, error));
-        }
-        let mut out = match driver::create(&path) {
-            Ok(out) => out,
-            Err(error) => {
-                let _ = driver::remove_dir_all(staging);
-                return Err(unpack_failure(source, error));
-            }
-        };
-        let mut hasher = sha2::Sha256::new();
-        let mut chunk = [0u8; ENTRY_CHUNK];
-        loop {
-            let read = match entry.read(&mut chunk) {
-                Ok(read) => read,
-                Err(error) => {
-                    let _ = driver::remove_dir_all(staging);
-                    return Err(unpack_failure(source, error));
-                }
-            };
-            if read == 0 {
-                break;
-            }
-            hasher.update(&chunk[..read]);
-            if let Err(error) = out.write_all(&chunk[..read]) {
-                let _ = driver::remove_dir_all(staging);
-                return Err(unpack_failure(source, error));
-            }
-        }
-        born.push(BornMember {
-            name,
-            sha: Sha::finish(hasher),
-        });
-    }
-    Ok(born)
-}
-
-/// Unpacks one single-file gzip member with a streaming hash.
-///
-/// # Errors
-///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
-fn unpack_single_entry(source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-    use std::io::Write as _;
-
-    let name = single_name(source);
-    check_member_path(&name, source)?;
-    let path = staging.join(&name);
+    check_member_path(name, source)?;
+    let path = staging.join(name);
     if let Some(parent) = path.parent()
         && let Err(error) = driver::create_dir_all(parent)
     {
         let _ = driver::remove_dir_all(staging);
         return Err(unpack_failure(source, error));
     }
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    let mut decoder = flate2::read::GzDecoder::new(file);
     let mut out = match driver::create(&path) {
         Ok(out) => out,
         Err(error) => {
@@ -552,10 +398,11 @@ fn unpack_single_entry(source: &Path, staging: &Path) -> Result<Vec<BornMember>>
             return Err(unpack_failure(source, error));
         }
     };
+    let mut reader = reader;
     let mut hasher = sha2::Sha256::new();
     let mut chunk = [0u8; ENTRY_CHUNK];
     loop {
-        let read = match decoder.read(&mut chunk) {
+        let read = match reader.read(&mut chunk) {
             Ok(read) => read,
             Err(error) => {
                 let _ = driver::remove_dir_all(staging);
@@ -571,10 +418,10 @@ fn unpack_single_entry(source: &Path, staging: &Path) -> Result<Vec<BornMember>>
             return Err(unpack_failure(source, error));
         }
     }
-    Ok(vec![BornMember {
-        name,
+    Ok(BornMember {
+        name: name.to_string(),
         sha: Sha::finish(hasher),
-    }])
+    })
 }
 
 /// Reads born handles back for one present spill.
@@ -696,37 +543,15 @@ fn unpack_failure(archive: &Path, error: impl std::fmt::Display) -> Error {
 
 /// Rejects escaping member names before one unpack.
 ///
-/// Names stream with content sunk. Decoder failures pass
-/// through untouched so the unpack fallback still decides
-/// tar-shaped names over non-tar bytes.
+/// Decoder failures pass through untouched, so the unpack
+/// fallback still decides tar-shaped names over non-tar
+/// bytes.
 ///
 /// # Errors
 ///
 /// Escaping members fail as plan errors naming the member.
-fn check_unpack_names(source: &Path, gzipped: bool) -> Result<()> {
-    let file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    let names = if gzipped {
-        match stream_names(flate2::read::GzDecoder::new(file), source) {
-            Ok(names) => names,
-            Err(_) => return Ok(()),
-        }
-    } else {
-        stream_names(file, source)?
-    };
-    for name in &names {
-        check_member_path(name, source)?;
-    }
-    Ok(())
-}
-
-/// Rejects escaping zip member names before one unpack.
-///
-/// # Errors
-///
-/// Escaping members fail as plan errors naming the member.
-fn check_zip_names(source: &Path) -> Result<()> {
-    for name in &stream_zip_names(source)? {
+fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -> Result<()> {
+    for name in &backend.names(source)? {
         check_member_path(name, source)?;
     }
     Ok(())
@@ -739,87 +564,6 @@ fn staging_path(dest: &Path) -> PathBuf {
     let mut staging = dest.as_os_str().to_owned();
     staging.push(STAGING_SUFFIX);
     PathBuf::from(staging)
-}
-
-/// Lists file member names from a tar stream without keeping content.
-///
-/// Entry bytes stream to a sink, so listings hold names only.
-///
-/// # Errors
-///
-/// Malformed archives fail as plan errors naming the archive.
-fn stream_names<R: std::io::Read>(reader: R, archive: &Path) -> Result<Vec<String>> {
-    let mut reader = tar::Archive::new(reader);
-    let entries = reader
-        .entries()
-        .map_err(|error| unpack_failure(archive, error))?;
-    let mut names = Vec::new();
-    for entry in entries {
-        let mut entry = entry.map_err(|error| unpack_failure(archive, error))?;
-        if let Some(name) = entry_name(&entry, archive)? {
-            names.push(name);
-        }
-        std::io::copy(&mut entry, &mut std::io::sink())
-            .map_err(|error| unpack_failure(archive, error))?;
-    }
-    Ok(names)
-}
-
-/// Lists file member names from a zip archive without keeping content.
-///
-/// Entry bytes stay unread, so listings hold names only.
-///
-/// # Errors
-///
-/// Malformed archives fail as plan errors naming the archive.
-fn stream_zip_names(source: &Path) -> Result<Vec<String>> {
-    let bytes = driver::read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|error| unpack_failure(source, error))?;
-    let mut names = Vec::with_capacity(archive.len());
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|error| unpack_failure(source, error))?;
-        if !entry.is_file() {
-            continue;
-        }
-        let name = entry.name().to_owned();
-        if name.is_empty() {
-            continue;
-        }
-        names.push(name);
-    }
-    Ok(names)
-}
-
-/// Reads the file name for one tar entry.
-///
-/// Folders, non-files, and empty names skip as absent.
-///
-/// # Errors
-///
-/// Undecodable entry paths fail as plan errors naming the
-/// archive.
-fn entry_name<R: std::io::Read>(
-    entry: &tar::Entry<'_, R>,
-    archive: &Path,
-) -> Result<Option<String>> {
-    let kind = entry.header().entry_type();
-    if kind.is_dir() || !kind.is_file() {
-        return Ok(None);
-    }
-    let name = entry
-        .path()
-        .map_err(|error| unpack_failure(archive, error))?
-        .to_string_lossy()
-        .into_owned();
-    if name.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(name))
-    }
 }
 
 /// Rejects member paths escaping the unpack folder.
@@ -857,21 +601,6 @@ fn wants_tar(archive: &Path) -> bool {
     lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar")
 }
 
-/// Derives the single-file member name from an archive path.
-fn single_name(archive: &Path) -> String {
-    let base = archive
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".to_string());
-    if base.to_lowercase().ends_with(".gz") && base.len() > 3 {
-        base[..base.len() - 3].to_string()
-    } else if base.is_empty() {
-        "file".to_string()
-    } else {
-        base
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,9 +621,9 @@ mod tests {
 
     fn tar_gz_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
         let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
-        let mut builder = tar::Builder::new(encoder);
+        let mut builder = ::tar::Builder::new(encoder);
         for (name, bytes) in members {
-            let mut header = tar::Header::new_gnu();
+            let mut header = ::tar::Header::new_gnu();
             header.set_size(bytes.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
@@ -1203,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn single_gzip_lists_and_opens_derived_member() {
+    fn gzip_lists_and_opens_derived_member() {
         use std::io::Write as _;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1214,11 +943,11 @@ mod tests {
         let archive = born_archive(&store, dir.path(), "note.gz", &encoder.finish().unwrap());
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["note"]),
-            Err(error) => panic!("single gzip lists: {error}"),
+            Err(error) => panic!("gzip lists: {error}"),
         }
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
-            Err(error) => panic!("single gzip extracts: {error}"),
+            Err(error) => panic!("gzip extracts: {error}"),
         };
         assert_eq!(handles.len(), 1);
         assert_eq!(handles[0].sha(), &Sha::hash(b"plain"));
@@ -1228,7 +957,7 @@ mod tests {
                 reader.read_to_end(&mut found).unwrap();
                 assert_eq!(found, b"plain");
             }
-            Err(error) => panic!("single gzip opens: {error}"),
+            Err(error) => panic!("gzip opens: {error}"),
         }
     }
 
@@ -1328,15 +1057,16 @@ mod tests {
     }
 
     fn zip_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
+        use ::zip::write::SimpleFileOptions;
 
         let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = zip::ZipWriter::new(cursor);
+        let mut writer = ::zip::ZipWriter::new(cursor);
         for (name, bytes) in members {
             writer
                 .start_file(
                     *name,
-                    SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                    SimpleFileOptions::default()
+                        .compression_method(::zip::CompressionMethod::Stored),
                 )
                 .unwrap();
             writer.write_all(bytes).unwrap();
@@ -1345,24 +1075,24 @@ mod tests {
     }
 
     fn zip_bytes_with_dir() -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
+        use ::zip::write::SimpleFileOptions;
 
         let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = zip::ZipWriter::new(cursor);
+        let mut writer = ::zip::ZipWriter::new(cursor);
         writer
             .add_directory("sub/", SimpleFileOptions::default())
             .unwrap();
         writer
             .start_file(
                 "a.txt",
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
             )
             .unwrap();
         writer.write_all(b"alpha").unwrap();
         writer
             .start_file(
                 "sub/b.txt",
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
             )
             .unwrap();
         writer.write_all(b"beta").unwrap();
@@ -1370,14 +1100,14 @@ mod tests {
     }
 
     fn evil_zip_bytes() -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
+        use ::zip::write::SimpleFileOptions;
 
         let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = zip::ZipWriter::new(cursor);
+        let mut writer = ::zip::ZipWriter::new(cursor);
         writer
             .start_file(
                 "../evil.txt",
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
             )
             .unwrap();
         writer.write_all(b"x").unwrap();
@@ -1385,10 +1115,10 @@ mod tests {
     }
 
     fn symlink_zip_bytes() -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
+        use ::zip::write::SimpleFileOptions;
 
         let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = zip::ZipWriter::new(cursor);
+        let mut writer = ::zip::ZipWriter::new(cursor);
         writer
             .add_symlink("link.txt", "a.txt", SimpleFileOptions::default())
             .unwrap();
