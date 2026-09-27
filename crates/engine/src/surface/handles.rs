@@ -18,6 +18,7 @@ use confit_model::progress::ProgressSender;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
 use confit_store::Stores;
+use confit_store::blob::BlobSource;
 use confit_store::handles::{
     ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, TrustedHandle,
 };
@@ -180,47 +181,6 @@ fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua:
     Ok(bytes)
 }
 
-/// Opens member bytes from their archive spill.
-///
-/// # Errors
-///
-/// Unknown members fail as plan errors.
-fn member_reader(
-    member: &ResourceHandle,
-    stores: &Stores,
-    caller: &str,
-) -> mlua::Result<Box<dyn std::io::Read>> {
-    match stores.archives().open_decompressed(member) {
-        Ok(reader) => Ok(reader),
-        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
-        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
-    }
-}
-
-/// Pools streamed bytes under content identity.
-///
-/// # Errors
-///
-/// Pool write failures fail as plan errors.
-fn pool_reader(
-    stores: &Stores,
-    reader: &mut dyn std::io::Read,
-    caller: &str,
-) -> mlua::Result<(BlobHandle, u64)> {
-    let blobs = stores.blobs();
-    let handle = match blobs.put_reader(reader) {
-        Ok(handle) => handle,
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
-    };
-    let size = match blobs.len(&handle) {
-        Ok(size) => size,
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
-    };
-    Ok((handle, size))
-}
-
 /// Pools trusted source bytes under content identity.
 ///
 /// # Errors
@@ -232,7 +192,7 @@ fn pool_source(
     caller: &str,
 ) -> mlua::Result<(BlobHandle, u64)> {
     let blobs = stores.blobs();
-    let handle = match blobs.put_source(source) {
+    let handle = match blobs.put(BlobSource::Handle(source)) {
         Ok(handle) => handle,
         Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
         Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
@@ -347,10 +307,6 @@ pub(crate) fn blob_for_opaque(
         return pool_source(stores, &handle.handle, ctor);
     }
     if let Ok(handle) = data.borrow::<LuaResourceHandle>() {
-        if handle.archive.is_some() {
-            let mut reader = member_reader(&handle.handle, stores, ctor)?;
-            return pool_reader(stores, &mut *reader, ctor);
-        }
         return pool_source(stores, &handle.handle, ctor);
     }
     Err(plan_error(format!(
@@ -412,8 +368,7 @@ fn tree_from_archive(
                 pick.rel
             )));
         }
-        let mut reader = member_reader(&member, stores, caller)?;
-        let (blob, size) = pool_reader(stores, &mut *reader, caller)?;
+        let (blob, size) = pool_source(stores, &member, caller)?;
         kept.push(TreeMemberDecl {
             rel: pick.rel,
             blob,

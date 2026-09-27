@@ -890,49 +890,40 @@ mod tests {
 
     #[test]
     fn pooled_paths_agree_for_identical_content() {
-        use crate::blob::BlobStore;
+        use crate::blob::{BlobSource, BlobStore};
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = StoreRoots {
             config_base: dir.path().join("config"),
-            ..Default::default()
+            cache_base: dir.path().join("cache"),
+            temp_base: dir.path().join("temp"),
         };
         let store = BlobStore::new(&roots);
         let small = b"shared pool bytes".to_vec();
-        let via_put = store.put(&small).unwrap();
-        let mut reader = std::io::Cursor::new(small.clone());
-        let via_reader = store.put_reader(&mut reader).unwrap();
+        let via_put = store.put(BlobSource::Bytes(&small)).unwrap();
         let source_path = dir.path().join("source.bin");
         driver::write(&source_path, &small).unwrap();
         let source = FetchHandle::new(source_path, Sha::hash(&small), URL).unwrap();
-        let via_source = store.put_source(&source).unwrap();
-        assert_eq!(via_reader, via_put, "reader path keeps sealed identity");
+        let via_source = store.put(BlobSource::Handle(&source)).unwrap();
         assert_eq!(via_source, via_put, "trusted source keeps sealed identity");
         let large: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
         assert!(large.len() > STREAM_BUF_BYTES);
-        let large_put = store.put(&large).unwrap();
-        let mut large_reader = std::io::Cursor::new(large.clone());
-        let large_streamed = store.put_reader(&mut large_reader).unwrap();
+        let large_put = store.put(BlobSource::Bytes(&large)).unwrap();
         let large_path = dir.path().join("large.bin");
         driver::write(&large_path, &large).unwrap();
         let large_source = FetchHandle::new(large_path, Sha::hash(&large), URL).unwrap();
-        let large_sourced = store.put_source(&large_source).unwrap();
-        assert_eq!(
-            large_streamed.sha(),
-            large_put.sha(),
-            "streamed bytes keep content hash"
-        );
+        let large_sourced = store.put(BlobSource::Handle(&large_source)).unwrap();
         assert_eq!(
             large_sourced.sha(),
             large_put.sha(),
             "sourced bytes keep content hash"
         );
         assert_eq!(
-            large_streamed, large_sourced,
-            "streaming paths keep one sealed identity"
+            large_put, large_sourced,
+            "both shapes keep one sealed identity"
         );
-        for handle in [&large_put, &large_streamed, &large_sourced] {
+        for handle in [&large_put, &large_sourced] {
             let mut found = Vec::new();
             store.open(handle).unwrap().read_to_end(&mut found).unwrap();
             assert_eq!(found, large, "pooled bytes round-trip");

@@ -380,6 +380,13 @@ impl<'a> ApplyRunner<'a> {
             .stores
             .slots()
             .store(&built, self.sinks.progress.as_ref())?;
+        let mut handles = Vec::new();
+        for document in &built.manifest.documents {
+            for blob in document.data.blob_refs() {
+                handles.push(self.stores.blobs().resolve(blob)?);
+            }
+        }
+        self.stores.blobs().persist(&handles)?;
         self.stores.blobs().prune()?;
         self.run_hooks(&built)?;
         Ok(ApplyReport { written, removed })

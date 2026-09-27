@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use confit_model::document::{BlobRef, ManifestDocument};
 use confit_model::error::{Error, Result};
@@ -16,6 +17,7 @@ use confit_model::sha::Sha;
 use sha2::Digest as _;
 
 use crate::StoreRoots;
+use crate::blob::BlobStore;
 use confit_driver as driver;
 
 /// Bundle file extension imposed on explicit outputs.
@@ -207,18 +209,26 @@ impl Bundle {
 /// Portable bundle archive reads and writes.
 ///
 /// Archives hold the manifest first with blob entries after.
+/// Writes source blob bytes from the cache with fallback
+/// to the pool. Reads stage entries into the cache.
 #[derive(Debug, Clone)]
 pub struct BundleStore {
-    pool: PathBuf,
+    blobs: Arc<BlobStore>,
+    cache: PathBuf,
 }
 
 impl BundleStore {
-    /// Builds a file bundle store under the config base.
+    /// Builds a file bundle store under the cache base.
     ///
-    /// Roots arrive explicit from store construction.
-    pub fn new(roots: &StoreRoots) -> Self {
+    /// # Arguments
+    ///
+    /// * `roots` - the store roots backing construction. The cache
+    ///   rides the cache base beside the fetch cache.
+    /// * `blobs` - the shared blob store behind blob reads.
+    pub fn new(roots: &StoreRoots, blobs: Arc<BlobStore>) -> Self {
         Self {
-            pool: roots.config_base.join(BLOBS_DIR),
+            blobs,
+            cache: roots.cache_base.join(BLOBS_DIR),
         }
     }
 
@@ -255,7 +265,7 @@ impl BundleStore {
         let mut builder = tar::Builder::new(encoder);
         append_bundle_entry(&mut builder, BUNDLE_MANIFEST, &manifest, &dest)?;
         for handle in bundle.blobs.values() {
-            append_pool_entry(&mut builder, handle.stored(), &self.pool, &dest)?;
+            append_cached_entry(&mut builder, handle.stored(), &self.blobs, &dest)?;
         }
         let encoder = builder
             .into_inner()
@@ -334,7 +344,7 @@ impl BundleStore {
                         path.display()
                     )));
                 }
-                let staging = stage_entry_to_pool(&mut entry, &stored, &self.pool, path)?;
+                let staging = stage_entry_to_cache(&mut entry, &stored, &self.cache, path)?;
                 staged.push((stored, staging));
             } else {
                 return Err(Error::Plan(format!(
@@ -392,7 +402,7 @@ impl BundleStore {
                 })?;
                 blobs.insert(content.clone(), BlobRef::new(content_sha, stored_sha));
             }
-            land_staged_blob(staging, entry_stored, &self.pool)?;
+            land_staged_blob(staging, entry_stored, &self.cache)?;
             sizes.insert(content, len);
         }
         for document in &stored.documents {
@@ -433,20 +443,22 @@ fn append_bundle_entry(
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
 }
 
-/// Streams one pool file into a bundle entry verbatim.
+/// Streams one blob file into a bundle entry verbatim.
+///
+/// The cache wins while present.
 ///
 /// # Errors
 ///
-/// Missing pool files and archive failures surface as plan
+/// Missing blob files and archive failures surface as plan
 /// errors naming the bundle.
-fn append_pool_entry(
+fn append_cached_entry(
     builder: &mut tar::Builder<flate2::write::GzEncoder<Box<dyn std::io::Write>>>,
     stored: &Sha,
-    pool: &Path,
+    blobs: &BlobStore,
     dest: &Path,
 ) -> Result<()> {
-    let pooled = pool.join(stored.hex());
-    let source = match driver::open_read(&pooled) {
+    let source = blobs.stored_path(stored);
+    let file = match driver::open_read(&source) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(Error::Plan(format!(
@@ -461,7 +473,7 @@ fn append_pool_entry(
             )));
         }
     };
-    let len = driver::metadata(&pooled)
+    let len = driver::metadata(&source)
         .map_err(|error| {
             Error::Plan(format!(
                 "render bundle '{}': read blob '{stored}': {error}",
@@ -474,11 +486,7 @@ fn append_pool_entry(
     header.set_mode(0o644);
     header.set_cksum();
     builder
-        .append_data(
-            &mut header,
-            format!("{BUNDLE_BLOBS_PREFIX}{stored}"),
-            source,
-        )
+        .append_data(&mut header, format!("{BUNDLE_BLOBS_PREFIX}{stored}"), file)
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
 }
 
@@ -491,21 +499,21 @@ fn collect_manifest_refs(manifest: &Manifest) -> Vec<BlobRef> {
     refs
 }
 
-/// Stages one bundle entry to a pool scratch file with stored proof.
+/// Stages one bundle entry to a cache scratch file with stored proof.
 ///
 /// # Errors
 ///
 /// Write and stored-hash mismatch failures surface as plan errors
 /// naming the bundle plus hash. Mismatches remove staging.
-fn stage_entry_to_pool(
+fn stage_entry_to_cache(
     entry: &mut impl std::io::Read,
     stored: &str,
-    pool: &Path,
+    cache: &Path,
     bundle: &Path,
 ) -> Result<PathBuf> {
-    driver::create_dir_all(pool)
-        .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", pool.display())))?;
-    let staging = pool.join(format!("{stored}{STAGING_SUFFIX}"));
+    driver::create_dir_all(cache)
+        .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", cache.display())))?;
+    let staging = cache.join(format!("{stored}{STAGING_SUFFIX}"));
     let mut staged = driver::create(&staging)
         .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", staging.display())))?;
     let mut hasher = sha2::Sha256::new();
@@ -582,16 +590,16 @@ fn verify_staged_content(
     Ok((content, len))
 }
 
-/// Moves one staged entry into the pool.
+/// Moves one staged entry into the cache.
 ///
-/// A present destination wins, so repeat reads share pool files.
+/// A present destination wins.
 ///
 /// # Errors
 ///
 /// Removal and rename failures surface as plan errors
 /// naming the destination.
-fn land_staged_blob(staging: &Path, stored: &str, pool: &Path) -> Result<()> {
-    let dest = pool.join(stored);
+fn land_staged_blob(staging: &Path, stored: &str, cache: &Path) -> Result<()> {
+    let dest = cache.join(stored);
     if driver::exists(&dest) {
         driver::remove_file(staging)
             .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))
@@ -622,25 +630,28 @@ mod tests {
     use confit_model::document::{ManifestData, ManifestDocument};
     use confit_model::routes::{Route, RouteBase};
 
-    use crate::blob::BlobStore;
+    use crate::blob::{BlobSource, BlobStore};
     use confit_driver::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
-            ..Default::default()
+            cache_base: dir.join("cache"),
+            temp_base: dir.join("temp"),
         }
     }
 
     fn opaque_bundle(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Bundle) {
+        use std::sync::Arc;
+
         let roots = test_roots(dir);
-        let pools = BlobStore::new(&roots);
+        let blobs = Arc::new(BlobStore::new(&roots));
         let mut documents = Vec::new();
         let mut bundle = Bundle::empty();
         for (index, body) in bodies.iter().enumerate() {
-            let handle = match pools.put(body) {
+            let handle = match blobs.put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
-                Err(error) => panic!("pool stores: {error}"),
+                Err(error) => panic!("cache stores: {error}"),
             };
             documents.push(ManifestDocument::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
@@ -656,7 +667,7 @@ mod tests {
         match Bundle::build(documents, Vec::new()) {
             Ok(built) => {
                 bundle.manifest = built.manifest;
-                (BundleStore::new(&roots), bundle)
+                (BundleStore::new(&roots, blobs), bundle)
             }
             Err(error) => panic!("bundle builds: {error}"),
         }
@@ -671,6 +682,61 @@ mod tests {
             names.push(entry.path().unwrap().to_string_lossy().into_owned());
         }
         names
+    }
+
+    #[test]
+    fn write_sources_cache_with_empty_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (store, bundle) = opaque_bundle(dir.path(), &[b"cache-only bytes"]);
+        let roots = test_roots(dir.path());
+        assert!(
+            driver::read_dir(&roots.config_base.join("blobs"))
+                .unwrap_or_default()
+                .is_empty(),
+            "plan output sources the cache with zero pool bytes"
+        );
+        let dest = match store.write(&bundle, &dir.path().join("plan"), None) {
+            Ok(dest) => dest,
+            Err(error) => panic!("bundle writes: {error}"),
+        };
+        let names = entry_names(&dest);
+        assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
+        assert_eq!(names.len(), 2, "the cache blob rides along");
+    }
+
+    #[test]
+    fn write_falls_back_to_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (store, bundle) = opaque_bundle(dir.path(), &[b"pool bytes"]);
+        let roots = test_roots(dir.path());
+        let pools = BlobStore::new(&roots);
+        let mut handles = Vec::new();
+        for blob in bundle.blobs.values() {
+            match pools.resolve(blob) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => panic!("persist proves: {error}"),
+            }
+        }
+        match pools.persist(&handles) {
+            Ok(_) => {}
+            Err(error) => panic!("persist lands: {error}"),
+        }
+        let cached = match driver::read_dir(&roots.cache_base.join("blobs")) {
+            Ok(cached) => cached,
+            Err(error) => panic!("cache lists: {error}"),
+        };
+        for path in cached {
+            driver::remove_file(&path).unwrap();
+        }
+        let dest = match store.write(&bundle, &dir.path().join("plan"), None) {
+            Ok(dest) => dest,
+            Err(error) => panic!("bundle writes: {error}"),
+        };
+        let names = entry_names(&dest);
+        assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
+        assert_eq!(names.len(), 2, "the pool blob rides along");
     }
 
     #[test]
@@ -770,15 +836,16 @@ mod tests {
     #[test]
     fn read_refuses_missing_blob() {
         use flate2::write::GzEncoder;
+        use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let pools = BlobStore::new(&roots);
-        let store = BundleStore::new(&roots);
-        let handle = match pools.put(b"wanted bytes") {
+        let blobs = Arc::new(BlobStore::new(&roots));
+        let store = BundleStore::new(&roots, blobs.clone());
+        let handle = match blobs.put(BlobSource::Bytes(b"wanted bytes")) {
             Ok(handle) => handle,
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("cache stores: {error}"),
         };
         let mut bundle = match Bundle::build(
             vec![ManifestDocument::new(
