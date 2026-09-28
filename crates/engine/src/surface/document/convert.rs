@@ -15,7 +15,8 @@ use crate::surface::handles::{LuaBlobHandle, LuaRoute};
 use crate::surface::runtime::condition_from_json;
 use confit_model::arg::Arg;
 use confit_model::document::{PathOp, RcEntry, RcOp, StructuredFormat};
-use confit_model::handles::{BlobHandle, Route, RouteBase};
+use confit_model::routes::{Route, RouteBase};
+use confit_store::handles::BlobHandle;
 
 /// Converts one document table into registration form.
 pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declared> {

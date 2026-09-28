@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_model::condition::Condition;
-use confit_model::handles::Route;
+use confit_model::routes::Route;
 
 use crate::Applier;
 
@@ -116,7 +116,7 @@ mod tests {
     use super::*;
     use confit_driver as driver;
     use confit_driver::TestGuard;
-    use confit_model::handles::{Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()

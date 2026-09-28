@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{BUNDLE_VERSION, Bundle};
+use confit_model::document::BlobRef;
 use confit_model::error::{Error, Result};
-use confit_model::handles::BlobHandle;
 use confit_model::manifest::{Manifest, manifest_json};
 use confit_model::progress::ProgressSender;
 
@@ -209,9 +209,9 @@ impl SlotStore {
     }
 }
 
-/// Loads one manifest file with blob handle resolution.
+/// Loads one manifest file with blob ref resolution.
 ///
-/// Missing files read as empty. Handles carry content
+/// Missing files read as empty. Refs carry content
 /// identity, so no disk or pool check runs here.
 ///
 /// # Errors
@@ -247,17 +247,17 @@ fn load_bundle(path: &Path) -> Result<Bundle> {
     Ok(hydrate_bundle(&stored))
 }
 
-/// Rebuilds one bundle with handle-only blob resolution.
+/// Rebuilds one bundle with ref-only blob resolution.
 ///
-/// Blob handles carry content plus stored identity, so resolution
-/// clones manifest handles without touching disk.
+/// Blob refs carry content plus stored identity, so resolution
+/// clones manifest refs without touching disk.
 fn hydrate_bundle(stored: &Manifest) -> Bundle {
-    let mut blobs: BTreeMap<String, BlobHandle> = BTreeMap::new();
+    let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
     for document in &stored.documents {
-        for handle in document.data.blob_handles() {
+        for blob in document.data.blob_refs() {
             blobs
-                .entry(handle.sha().hex())
-                .or_insert_with(|| handle.clone());
+                .entry(blob.sha().hex())
+                .or_insert_with(|| blob.clone());
         }
     }
     Bundle {
@@ -398,7 +398,7 @@ fn check_slot_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use confit_model::document::{ManifestData, ManifestDocument};
-    use confit_model::handles::{Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
 
     use confit_driver::TestGuard;
 

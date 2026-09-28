@@ -5,8 +5,8 @@ use std::path::Path;
 
 use confit_model::document::{ManifestData, ManifestDocument};
 use confit_model::error::{Error, Result};
-use confit_model::handles::Route;
 use confit_model::progress::Event;
+use confit_model::routes::Route;
 
 use crate::Applier;
 

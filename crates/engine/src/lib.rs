@@ -7,8 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit_model::document::ManifestDocument;
-use confit_model::handles::BlobHandle;
+use confit_model::document::{BlobRef, ManifestDocument};
 use confit_model::hook::Hook;
 use confit_model::progress::ProgressSender;
 use confit_store::Stores;
@@ -61,7 +60,7 @@ impl std::fmt::Debug for EvalOpts {
 /// Finished evaluation holding documents, blobs, and hooks.
 ///
 /// Documents hold one rc document per shell in deterministic
-/// order. Blobs hold blob handles under SHA-256 hex, one
+/// order. Blobs hold blob refs under SHA-256 hex, one
 /// entry per referenced blob. Hooks hold merged
 /// post-config steps in first-seen declaration order.
 ///
@@ -69,8 +68,8 @@ impl std::fmt::Debug for EvalOpts {
 pub struct Evaluation {
     /// Holds finished documents in deterministic order.
     pub documents: Vec<ManifestDocument>,
-    /// Holds blob handles under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, BlobHandle>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
     /// Holds merged hooks in first-seen declaration order.
     pub hooks: Vec<Hook>,
 }

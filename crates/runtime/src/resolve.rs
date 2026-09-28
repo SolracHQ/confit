@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use confit_model::handles::{Route, RouteBase};
+use confit_model::routes::{Route, RouteBase};
 
 use crate::Applier;
 

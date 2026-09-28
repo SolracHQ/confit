@@ -22,12 +22,13 @@ use crate::surface::document::convert::translate_entry;
 use crate::surface::utils;
 use confit_model::arg::Arg;
 use confit_model::document::ManifestDocument;
-use confit_model::document::{ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
+use confit_model::document::{BlobRef, ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
 use confit_model::error::{Error, Result};
-use confit_model::handles::{BlobHandle, Route, RouteBase};
 use confit_model::hook::{Hook, merge_hooks};
 use confit_model::progress::{Event, ProgressSender};
+use confit_model::routes::{Route, RouteBase};
 use confit_store::Stores;
+use confit_store::handles::BlobHandle;
 
 /// One evaluation holding the Lua state and its context.
 ///
@@ -108,7 +109,7 @@ impl Session {
         {
             let _ = sender.send(Event::PatchesStarted { patches: total });
         }
-        let mut blobs: BTreeMap<String, BlobHandle> = BTreeMap::new();
+        let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
         let mut out = session
             .assemble_structured(&profile, &patches, &profile_ctx)
             .map_err(wrap)?;
@@ -523,10 +524,7 @@ impl Profile {
     }
 
     /// Assembles text, link, opaque, and tree documents in route order.
-    fn text_link(
-        &self,
-        ctx: &str,
-    ) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobHandle>)> {
+    fn text_link(&self, ctx: &str) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobRef>)> {
         assemble_text_link(&self.declared, &self.configs, ctx)
     }
 }
@@ -737,9 +735,9 @@ fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
     ctx: &str,
-) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobHandle>)> {
+) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobRef>)> {
     let mut grouped: BTreeMap<String, Vec<(ManifestData, String)>> = BTreeMap::new();
-    let mut blobs: BTreeMap<String, BlobHandle> = BTreeMap::new();
+    let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
     for item in &declared.texts {
         grouped
             .entry(item.destination.display())
@@ -771,7 +769,7 @@ fn assemble_text_link(
             .or_default()
             .push((
                 ManifestData::Opaque {
-                    blob: item.blob.clone(),
+                    blob: item.blob.to_ref(),
                     size: item.size,
                     mode: item.mode,
                     unmanaged: item.unmanaged,
@@ -818,7 +816,7 @@ fn assemble_text_link(
                 .or_default()
                 .push((
                     ManifestData::Opaque {
-                        blob: item.blob.clone(),
+                        blob: item.blob.to_ref(),
                         size: item.size,
                         mode: item.mode,
                         unmanaged: item.unmanaged,
@@ -851,23 +849,23 @@ fn assemble_text_link(
 }
 
 /// Collects one blob handle under its content hash.
-fn collect_blob(handle: &BlobHandle, blobs: &mut BTreeMap<String, BlobHandle>) {
+fn collect_blob(handle: &BlobHandle, blobs: &mut BTreeMap<String, BlobRef>) {
     blobs
         .entry(handle.sha().hex())
-        .or_insert_with(|| handle.clone());
+        .or_insert_with(|| handle.to_ref());
 }
 
-/// Collects tree members into manifest order with blob handles.
+/// Collects tree members into manifest order with blob refs.
 fn collect_tree(
     members: &[crate::model::TreeMemberDecl],
-    blobs: &mut BTreeMap<String, BlobHandle>,
+    blobs: &mut BTreeMap<String, BlobRef>,
 ) -> Vec<confit_model::document::ManifestMember> {
     let mut out = Vec::with_capacity(members.len());
     for member in members {
         collect_blob(&member.blob, blobs);
         out.push(confit_model::document::ManifestMember {
             relative: member.rel.clone(),
-            blob: member.blob.clone(),
+            blob: member.blob.to_ref(),
             mode: member.mode,
         });
     }

@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use confit_model::document::{ManifestData, ManifestDocument, render_mode};
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::handles::{Route, Sha};
 use confit_model::plan::opaque_id;
+use confit_model::routes::Route;
+use confit_model::sha::Sha;
 use confit_store::bundle::Bundle;
 
 use crate::Applier;
@@ -51,7 +52,11 @@ impl Applier {
                         continue;
                     }
                     if let ManifestData::Opaque { blob, .. } = &document.data {
-                        let recorded_label = match self.stores.blobs().len(blob) {
+                        let store = self.stores.blobs();
+                        let Ok(handle) = store.resolve(blob) else {
+                            continue;
+                        };
+                        let recorded_label = match store.len(&handle) {
                             Ok(len) => opaque_id(blob.sha(), len),
                             Err(_) => continue,
                         };
@@ -120,7 +125,11 @@ impl Applier {
                 }),
                 Some(LiveMember::Present { mode, .. }) => {
                     let seen_mode = *mode;
-                    let recorded_label = match self.stores.blobs().len(&member.blob) {
+                    let store = self.stores.blobs();
+                    let Ok(handle) = store.resolve(&member.blob) else {
+                        continue;
+                    };
+                    let recorded_label = match store.len(&handle) {
                         Ok(len) => opaque_id(member.blob.sha(), len),
                         Err(_) => continue,
                     };
@@ -229,7 +238,7 @@ mod tests {
     use confit_driver as driver;
     use confit_driver::TestGuard;
     use confit_model::document::{ManifestData, ManifestDocument, RcData, RcEntry, RcOp};
-    use confit_model::handles::{Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
     use confit_store::bundle::BUNDLE_VERSION;
 
     fn literal(path: &std::path::Path) -> Route {

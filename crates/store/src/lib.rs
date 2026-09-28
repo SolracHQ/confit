@@ -11,6 +11,7 @@ pub mod archive;
 pub mod blob;
 pub mod bundle;
 pub mod fetch;
+pub mod handles;
 pub mod resources;
 pub mod slot;
 

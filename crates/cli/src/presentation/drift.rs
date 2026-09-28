@@ -13,7 +13,7 @@ use confit_model::drift::Drift;
 /// ```rust
 /// use confit_cli::presentation::drift::drift_lines;
 /// use confit_model::drift::Drift;
-/// use confit_model::handles::{Route, RouteBase};
+/// use confit_model::routes::{Route, RouteBase};
 ///
 /// let entries = vec![
 ///     Drift::Key {

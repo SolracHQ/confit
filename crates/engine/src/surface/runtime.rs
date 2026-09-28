@@ -72,7 +72,7 @@ fn req_condition_route(
     value: &Value,
     ctor: &str,
     field: &str,
-) -> mlua::Result<confit_model::handles::Route> {
+) -> mlua::Result<confit_model::routes::Route> {
     if let Some(data) = value.as_userdata()
         && let Ok(route) = data.borrow::<super::handles::LuaRoute>()
     {
@@ -211,7 +211,7 @@ impl CondTables {
     fn route_leaf(
         lua: &Lua,
         shape: &str,
-        route: &confit_model::handles::Route,
+        route: &confit_model::routes::Route,
     ) -> mlua::Result<Table> {
         let body = lua.create_table()?;
         body.set("base", route.base().name())?;
@@ -525,7 +525,7 @@ fn check_leaf(inner: &Json, ctx: &str, known: &[&str]) -> Result<(), String> {
 /// # Errors
 ///
 /// Non-object bodies and bad routes fail as plan errors.
-fn route_from_json(inner: &Json, ctx: &str) -> mlua::Result<confit_model::handles::Route> {
+fn route_from_json(inner: &Json, ctx: &str) -> mlua::Result<confit_model::routes::Route> {
     let body = match inner.get("route") {
         Some(body) => body.clone(),
         None => {

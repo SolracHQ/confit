@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
-use confit_model::document::{ManifestData, ManifestDocument, ManifestMember};
+use confit_model::document::{BlobRef, ManifestData, ManifestDocument, ManifestMember};
 use confit_model::error::{Error, Result};
-use confit_model::handles::{BlobHandle, Route};
+use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
 
 use crate::Applier;
@@ -112,8 +112,8 @@ impl HostDisk {
     }
 
     /// Streams one blob to its destination through the blob pool.
-    pub fn write_blob(&self, dest: &Path, handle: &BlobHandle, blobs: &BlobStore) -> Result<()> {
-        copy_blob(dest, handle, blobs)
+    pub fn write_blob(&self, dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
+        copy_blob(dest, blob, blobs)
             .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))
     }
 
@@ -359,10 +359,11 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
 /// Dangling hashes fail as plan errors naming the hash.
 /// Unreadable sources and unwritable destinations fail as
 /// plan or io errors.
-fn copy_blob(dest: &Path, handle: &BlobHandle, blobs: &BlobStore) -> Result<()> {
+fn copy_blob(dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
     use std::io::Write as _;
 
-    let mut reader = blobs.open(handle)?;
+    let handle = blobs.resolve(blob)?;
+    let mut reader = blobs.open(&handle)?;
     ensure_parent(dest).map_err(Error::from)?;
     let mut out = driver::create(dest).map_err(Error::from)?;
     std::io::copy(&mut reader, &mut out).map_err(Error::from)?;
@@ -374,7 +375,7 @@ fn copy_blob(dest: &Path, handle: &BlobHandle, blobs: &BlobStore) -> Result<()> 
 mod live_tests {
     use super::*;
     use confit_driver::TestGuard;
-    use confit_model::handles::{Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()

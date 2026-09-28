@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::arg::Arg;
 use crate::condition::Condition;
 use crate::error::{Error, Result};
-use crate::handles::{BlobHandle, Route};
+use crate::routes::Route;
+use crate::sha::Sha;
 
 /// JSON shaped data table for structured documents.
 ///
@@ -365,23 +366,66 @@ impl std::fmt::Display for DocumentKind {
     }
 }
 
-/// One persisted tree member holding a blob handle.
+/// Content-addressed bytes ref for manifests.
+///
+/// The content hash names payload bytes and the stored hash names
+/// pool bytes. Both hashes hold 64 hex characters. The store
+/// resolves refs into handles at the bundle edge, so manifests carry
+/// values alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BlobRef {
+    /// Holds the content hash naming payload bytes.
+    pub sha256: Sha,
+    /// Holds the pool-bytes hash naming gzip bytes.
+    pub stored: Sha,
+}
+
+impl BlobRef {
+    /// Builds one blob ref from sealed content and stored hashes.
+    ///
+    /// # Arguments
+    ///
+    /// * `sha256` - the content hash naming payload bytes.
+    /// * `stored` - the pool-bytes hash naming gzip bytes.
+    ///
+    /// # Returns
+    ///
+    /// The ref carrying both hashes.
+    ///
+    pub fn new(sha256: Sha, stored: Sha) -> Self {
+        Self { sha256, stored }
+    }
+
+    /// Reads the content hash.
+    ///
+    pub fn sha(&self) -> &Sha {
+        &self.sha256
+    }
+
+    /// Reads the pool-bytes hash.
+    ///
+    pub fn stored(&self) -> &Sha {
+        &self.stored
+    }
+}
+
+/// One persisted tree member holding a blob ref.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMember {
     /// Holds the destination-relative member path.
     pub relative: String,
     /// Holds the content-addressed member bytes identity.
-    pub blob: BlobHandle,
+    pub blob: BlobRef,
     /// Holds unix permission bits for the member file.
     pub mode: u32,
 }
 
-/// Persisted document payload with binary bytes as handles.
+/// Persisted document payload with binary bytes as refs.
 ///
 /// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
 /// Text, structured, rc, and link payloads stay inline.
-/// Opaque and tree payloads hold blob handles alone.
+/// Opaque and tree payloads hold blob refs alone.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -418,7 +462,7 @@ pub enum ManifestData {
     /// bytes. Missing unmanaged documents read as missing.
     Opaque {
         /// Holds the content-addressed file bytes identity.
-        blob: BlobHandle,
+        blob: BlobRef,
         /// Holds the raw byte count of the file content.
         size: u64,
         /// Holds unix permission bits. None applies the umask default.
@@ -507,8 +551,8 @@ impl ManifestData {
         }
     }
 
-    /// Reads every blob handle in document order.
-    pub fn blob_handles(&self) -> Vec<&BlobHandle> {
+    /// Reads every blob ref in document order.
+    pub fn blob_refs(&self) -> Vec<&BlobRef> {
         match self {
             Self::Opaque { blob, .. } => vec![blob],
             Self::Tree { members } => members.iter().map(|member| &member.blob).collect(),
@@ -589,7 +633,7 @@ impl ManifestDocument {
     ///
     /// ```rust
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     ///
     /// let stored = ManifestDocument::new(
     ///     Route::new(RouteBase::Home, "x").unwrap(),
@@ -617,11 +661,11 @@ impl ManifestDocument {
 /// # Examples
 ///
 /// ```rust
-/// use confit_model::document::{ManifestMember, tree_changed};
-/// use confit_model::handles::{BlobHandle, Sha};
+/// use confit_model::document::{BlobRef, ManifestMember, tree_changed};
+/// use confit_model::sha::Sha;
 ///
-/// fn sealed(content: String, stored: String) -> BlobHandle {
-///     BlobHandle::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap()).unwrap()
+/// fn sealed(content: String, stored: String) -> BlobRef {
+///     BlobRef::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap())
 /// }
 ///
 /// let old = vec![ManifestMember { relative: "a".into(), blob: sealed("aa".repeat(32), "aa".repeat(32)), mode: 0o644 }];

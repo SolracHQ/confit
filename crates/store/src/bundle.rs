@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use confit_model::document::ManifestDocument;
+use confit_model::document::{BlobRef, ManifestDocument};
 use confit_model::error::{Error, Result};
-use confit_model::handles::{BlobHandle, Sha};
 use confit_model::hook::Hook;
 use confit_model::manifest::Manifest;
 use confit_model::plan::{DocumentStatus, Summary};
 use confit_model::progress::ProgressSender;
+use confit_model::sha::Sha;
 use sha2::Digest as _;
 
 use crate::StoreRoots;
@@ -68,14 +68,14 @@ pub const BUNDLE_VERSION: u32 = 7;
 ///
 /// The manifest holds version, documents, and
 /// hooks as the only document language. The blob map holds
-/// blob handles under content hashes beside it.
+/// blob refs under content hashes beside it.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     /// Holds the portable manifest as the only document language.
     pub manifest: Manifest,
-    /// Holds blob handles under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, BlobHandle>,
+    /// Holds blob refs under SHA-256 hex hashes.
+    pub blobs: BTreeMap<String, BlobRef>,
 }
 
 impl Bundle {
@@ -119,7 +119,7 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     /// use confit_store::bundle::Bundle;
     ///
     /// let document = ManifestDocument::new(
@@ -162,7 +162,7 @@ impl Bundle {
     ///
     /// ```rust
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     /// use confit_store::bundle::Bundle;
     ///
     /// let mut previous = Bundle::empty();
@@ -353,16 +353,16 @@ impl BundleStore {
                 path.display()
             )));
         };
-        let manifest_handles = collect_manifest_handles(&stored);
+        let manifest_refs = collect_manifest_refs(&stored);
         let mut want_content: BTreeMap<String, String> = BTreeMap::new();
         let mut want_stored: BTreeMap<String, String> = BTreeMap::new();
-        let mut handles: BTreeMap<String, BlobHandle> = BTreeMap::new();
-        for handle in &manifest_handles {
-            want_content.insert(handle.stored().hex(), handle.sha().hex());
-            want_stored.insert(handle.sha().hex(), handle.stored().hex());
-            handles
-                .entry(handle.sha().hex())
-                .or_insert_with(|| handle.clone());
+        let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
+        for blob in &manifest_refs {
+            want_content.insert(blob.stored().hex(), blob.sha().hex());
+            want_stored.insert(blob.sha().hex(), blob.stored().hex());
+            blobs
+                .entry(blob.sha().hex())
+                .or_insert_with(|| blob.clone());
         }
         let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
         for (entry_stored, staging) in &staged {
@@ -377,7 +377,7 @@ impl BundleStore {
                     path.display()
                 )));
             }
-            if !handles.contains_key(&content) {
+            if !blobs.contains_key(&content) {
                 let content_sha = Sha::new(content.clone()).map_err(|_| {
                     Error::Plan(format!(
                         "read bundle '{}': bad blob entry '{entry_stored}'",
@@ -390,31 +390,25 @@ impl BundleStore {
                         path.display()
                     ))
                 })?;
-                let handle = BlobHandle::new(content_sha, stored_sha).map_err(|_| {
-                    Error::Plan(format!(
-                        "read bundle '{}': bad blob entry '{entry_stored}'",
-                        path.display()
-                    ))
-                })?;
-                handles.insert(content.clone(), handle);
+                blobs.insert(content.clone(), BlobRef::new(content_sha, stored_sha));
             }
             land_staged_blob(staging, entry_stored, &self.pool)?;
             sizes.insert(content, len);
         }
         for document in &stored.documents {
-            for handle in document.data.blob_handles() {
-                if !sizes.contains_key(handle.sha().hex().as_str()) {
+            for blob in document.data.blob_refs() {
+                if !sizes.contains_key(blob.sha().hex().as_str()) {
                     return Err(Error::Plan(format!(
                         "read bundle '{}': missing blob '{}'",
                         path.display(),
-                        handle.sha()
+                        blob.sha()
                     )));
                 }
             }
         }
         Ok(Bundle {
             manifest: stored,
-            blobs: handles,
+            blobs,
         })
     }
 }
@@ -488,13 +482,13 @@ fn append_pool_entry(
         .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
 }
 
-/// Cloned blob handles for one manifest in document order.
-fn collect_manifest_handles(manifest: &Manifest) -> Vec<BlobHandle> {
-    let mut handles = Vec::new();
+/// Cloned blob refs for one manifest in document order.
+fn collect_manifest_refs(manifest: &Manifest) -> Vec<BlobRef> {
+    let mut refs = Vec::new();
     for document in &manifest.documents {
-        handles.extend(document.data.blob_handles().into_iter().cloned());
+        refs.extend(document.data.blob_refs().into_iter().cloned());
     }
-    handles
+    refs
 }
 
 /// Stages one bundle entry to a pool scratch file with stored proof.
@@ -626,7 +620,7 @@ fn check_blob_id(sha: &str) -> Result<()> {
 mod tests {
     use super::*;
     use confit_model::document::{ManifestData, ManifestDocument};
-    use confit_model::handles::{Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
 
     use crate::blob::BlobStore;
     use confit_driver::TestGuard;
@@ -651,13 +645,13 @@ mod tests {
             documents.push(ManifestDocument::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 ManifestData::Opaque {
-                    blob: handle.clone(),
+                    blob: handle.to_ref(),
                     size: body.len() as u64,
                     mode: None,
                     unmanaged: false,
                 },
             ));
-            bundle.blobs.insert(handle.sha().hex(), handle);
+            bundle.blobs.insert(handle.sha().hex(), handle.to_ref());
         }
         match Bundle::build(documents, Vec::new()) {
             Ok(built) => {
@@ -790,7 +784,7 @@ mod tests {
             vec![ManifestDocument::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 ManifestData::Opaque {
-                    blob: handle.clone(),
+                    blob: handle.to_ref(),
                     size: 12,
                     mode: None,
                     unmanaged: false,
@@ -801,7 +795,7 @@ mod tests {
             Ok(bundle) => bundle,
             Err(error) => panic!("bundle builds: {error}"),
         };
-        bundle.blobs.insert(handle.sha().hex(), handle.clone());
+        bundle.blobs.insert(handle.sha().hex(), handle.to_ref());
         let raw = serde_json::to_vec(&bundle.manifest).unwrap();
         let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
         let mut builder = tar::Builder::new(encoder);

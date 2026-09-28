@@ -12,12 +12,13 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use confit_model::error::{Error, Result};
-use confit_model::handles::{FetchHandle, Sha, TrustedHandle};
 use confit_model::progress::{Event, ProgressSender};
+use confit_model::sha::Sha;
 use sha2::Digest as _;
 
 use self::transport::BODY_LIMIT_BYTES;
 use crate::StoreRoots;
+use crate::handles::{FetchHandle, TrustedHandle};
 use confit_driver as driver;
 
 /// Chunk size for streamed cache writes.

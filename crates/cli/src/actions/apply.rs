@@ -10,7 +10,7 @@ use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_model::drift::{Drift, DriftOrder};
 use confit_model::error::{Error, Result};
-use confit_model::handles::Route;
+use confit_model::routes::Route;
 use confit_runtime::Applier;
 use confit_runtime::Checks;
 use confit_store::Stores;
@@ -43,7 +43,7 @@ pub struct ApplyReport {
 /// ```rust,no_run
 /// use confit_cli::actions::apply::ApplyRunner;
 /// use confit_model::document::{ManifestData, ManifestDocument};
-/// use confit_model::handles::{Route, RouteBase};
+/// use confit_model::routes::{Route, RouteBase};
 /// use confit_runtime::Applier;
 /// use confit_store::bundle::Bundle;
 /// use confit_store::{StoreRoots, Stores};

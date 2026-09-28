@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::{ManifestDocument, StructuredFormat, Table};
-use crate::handles::Route;
 use crate::plan::opaque_label;
+use crate::routes::Route;
 
 /// Manual edit behind one recorded destination.
 ///

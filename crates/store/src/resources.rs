@@ -5,9 +5,10 @@
 use std::path::Path;
 
 use confit_model::error::{Error, Result};
-use confit_model::handles::{ResourceHandle, Sha, TrustedHandle};
+use confit_model::sha::Sha;
 
 use crate::StoreRoots;
+use crate::handles::{ResourceHandle, TrustedHandle};
 use confit_driver as driver;
 
 /// Trusted project files behind exec-rooted handles.

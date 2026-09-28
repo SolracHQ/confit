@@ -14,11 +14,13 @@ use crate::error::plan_error;
 use crate::lua::{JsonExt, ValueExt};
 use crate::model::TreeMemberDecl;
 use confit_model::error::Error;
-use confit_model::handles::{
-    ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, Route, Sha, TrustedHandle,
-};
 use confit_model::progress::ProgressSender;
+use confit_model::routes::Route;
+use confit_model::sha::Sha;
 use confit_store::Stores;
+use confit_store::handles::{
+    ArchiveHandle, BlobHandle, FetchHandle, ResourceHandle, TrustedHandle,
+};
 
 /// Fetch userdata returned by the fetch constructor.
 ///

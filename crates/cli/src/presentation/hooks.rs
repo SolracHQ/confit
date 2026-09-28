@@ -5,8 +5,8 @@
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::error::Result;
-use confit_model::handles::Route;
 use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
+use confit_model::routes::Route;
 use confit_runtime::Applier;
 use confit_runtime::Checks;
 use confit_store::bundle::Bundle;
@@ -476,21 +476,15 @@ mod tests {
 
     fn changed(path: &str) -> Condition {
         Condition::Changed {
-            route: confit_model::handles::Route::new(
-                confit_model::handles::RouteBase::Literal,
-                path,
-            )
-            .unwrap(),
+            route: confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, path)
+                .unwrap(),
         }
     }
 
     fn exists(path: &std::path::Path) -> Condition {
         Condition::Exists {
-            route: confit_model::handles::Route::new(
-                confit_model::handles::RouteBase::Literal,
-                path,
-            )
-            .unwrap(),
+            route: confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, path)
+                .unwrap(),
         }
     }
 
@@ -562,7 +556,7 @@ mod tests {
         dests
             .iter()
             .map(|dest| {
-                confit_model::handles::Route::new(confit_model::handles::RouteBase::Literal, dest)
+                confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, dest)
                     .unwrap()
             })
             .collect()
@@ -819,7 +813,7 @@ mod tests {
 
     #[test]
     fn hook_preview_renders_run_skip_warn_lines() {
-        use confit_model::handles::{Route, RouteBase};
+        use confit_model::routes::{Route, RouteBase};
 
         fn literal(path: &std::path::Path) -> Route {
             Route::new(RouteBase::Literal, path).unwrap()
@@ -866,7 +860,7 @@ mod tests {
 
     #[test]
     fn hook_preview_runs_on_failing_checks() {
-        use confit_model::handles::{Route, RouteBase};
+        use confit_model::routes::{Route, RouteBase};
 
         fn literal(path: &std::path::Path) -> Route {
             Route::new(RouteBase::Literal, path).unwrap()

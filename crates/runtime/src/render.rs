@@ -29,7 +29,7 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// ```rust
 /// use confit_model::document::{ManifestData, ManifestDocument};
-/// use confit_model::handles::{Route, RouteBase};
+/// use confit_model::routes::{Route, RouteBase};
 /// use confit_store::StoreRoots;
 /// use confit_runtime::Applier;
 ///

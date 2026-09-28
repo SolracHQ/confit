@@ -10,10 +10,11 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use confit_model::error::{Error, Result};
-use confit_model::handles::{ArchiveHandle, ResourceHandle, Sha, TrustedHandle};
+use confit_model::sha::Sha;
 use sha2::Digest as _;
 
 use crate::StoreRoots;
+use crate::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
 use confit_driver as driver;
 use gzip::GzipBackend;
 use tar::{GzippedTarBackend, TarBackend};
@@ -698,7 +699,7 @@ mod tests {
 
     #[test]
     fn birth_seals_proof_for_compressed_source() {
-        use confit_model::handles::ArchiveProof;
+        use crate::handles::ArchiveProof;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -1127,7 +1128,7 @@ mod tests {
 
     #[test]
     fn zip_birth_seals_and_rejects_plain() {
-        use confit_model::handles::ArchiveProof;
+        use crate::handles::ArchiveProof;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();

@@ -4,8 +4,8 @@
 
 use crate::document::{ManifestData, ManifestDocument};
 use crate::error::Result;
-use crate::handles::Sha;
 use crate::manifest::Manifest;
+use crate::sha::Sha;
 
 /// Lifecycle counts for one bundle against a previous manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,7 @@ impl ManifestDocument {
     ///
     /// ```rust
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     /// use confit_model::plan::DocumentStatus;
     /// use confit_model::manifest::Manifest;
     ///
@@ -87,9 +87,9 @@ impl ManifestDocument {
     ///
     /// The hash covers rendered bytes only. Modes compare
     /// separately through status and drift. Opaque hashes
-    /// copy the blob handle, since the handle is the
+    /// copy the blob ref, since the ref carries the
     /// SHA-256 over raw bytes. Tree hashes cover canonical
-    /// manifest bytes over blob handles.
+    /// manifest bytes over blob refs.
     ///
     /// # Returns
     ///
@@ -103,7 +103,7 @@ impl ManifestDocument {
     ///
     /// ```rust
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     ///
     /// let mut document = ManifestDocument::new(
     ///     Route::new(RouteBase::Home, "x").unwrap(),
@@ -191,7 +191,7 @@ pub fn opaque_id(sha: &Sha, len: u64) -> String {
 mod tests {
     use super::*;
     use crate::document::{RcData, RcEntry, RcOp, StructuredFormat, Table};
-    use crate::handles::{Route, RouteBase};
+    use crate::routes::{Route, RouteBase};
 
     fn literal(relative: &str) -> Route {
         Route::new(RouteBase::Literal, relative).unwrap()

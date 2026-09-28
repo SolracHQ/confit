@@ -8,10 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use confit_model::arg::Arg;
 use confit_model::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
 use confit_model::drift::Drift;
-use confit_model::handles::{Route, Sha};
 use confit_model::hook::HookLifecycle;
 use confit_model::plan::DocumentStatus;
 use confit_model::render::inline_bytes;
+use confit_model::routes::Route;
+use confit_model::sha::Sha;
 use confit_store::bundle::Bundle;
 
 use crate::presentation::drift::drift_lines;
@@ -192,7 +193,7 @@ impl HookCounts {
 ///
 /// ```rust
 /// use confit_cli::presentation::summary::{Hooks, Summary};
-/// use confit_model::handles::{Route, RouteBase};
+/// use confit_model::routes::{Route, RouteBase};
 /// use confit_model::document::{ManifestData, ManifestDocument};
 /// use confit_store::bundle::Bundle;
 ///
@@ -313,7 +314,7 @@ impl Summary<'_> {
     /// ```rust
     /// use confit_cli::presentation::summary::{Hooks, Summary};
     /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::handles::{Route, RouteBase};
+    /// use confit_model::routes::{Route, RouteBase};
     /// use confit_store::bundle::Bundle;
     ///
     /// let first = ManifestDocument::new(Route::new(RouteBase::Home, "a").unwrap(), ManifestData::Text { content: "a".into(), mode: None, unmanaged: false});

@@ -7,13 +7,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use confit_model::document::BlobRef;
 use confit_model::error::{Error, Result};
-use confit_model::handles::{BlobHandle, Sha, TrustedHandle};
 use confit_model::manifest::Manifest;
+use confit_model::sha::Sha;
 use sha2::Digest;
 
 use crate::StoreRoots;
 use crate::bundle::BUNDLE_VERSION;
+use crate::handles::{BlobHandle, TrustedHandle};
 use confit_driver as driver;
 
 /// Pool folder name under the config base.
@@ -65,6 +67,28 @@ impl BlobStore {
         Self {
             config_base: roots.config_base.clone(),
             pool: roots.config_base.join(BLOBS_DIR),
+        }
+    }
+
+    /// Resolves one manifest ref into its handle.
+    ///
+    /// # Arguments
+    ///
+    /// * `blob` - the manifest ref under resolving.
+    ///
+    /// # Returns
+    ///
+    /// The handle sealing both hashes.
+    ///
+    /// # Errors
+    ///
+    /// Missing blobs fail as plan errors naming the hash.
+    pub fn resolve(&self, blob: &BlobRef) -> Result<BlobHandle> {
+        let handle = BlobHandle::new(blob.sha().clone(), blob.stored().clone())?;
+        if self.has(&handle) {
+            Ok(handle)
+        } else {
+            Err(Error::Plan(format!("missing blob '{}'", blob.sha())))
         }
     }
 
@@ -413,9 +437,9 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
         keep.extend(
             document
                 .data
-                .blob_handles()
+                .blob_refs()
                 .into_iter()
-                .map(|handle| handle.stored().hex()),
+                .map(|blob| blob.stored().hex()),
         );
     }
 }
@@ -424,9 +448,10 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
 mod tests {
     use super::*;
     use confit_model::document::{ManifestData, ManifestDocument};
-    use confit_model::handles::{FetchHandle, Route, RouteBase};
+    use confit_model::routes::{Route, RouteBase};
 
     use crate::bundle::Bundle;
+    use crate::handles::FetchHandle;
 
     use crate::slot::SlotStore;
     use confit_driver::TestGuard;
@@ -565,7 +590,7 @@ mod tests {
             vec![ManifestDocument::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 ManifestData::Opaque {
-                    blob: kept.clone(),
+                    blob: kept.to_ref(),
                     size: 10,
                     mode: None,
                     unmanaged: false,
@@ -576,7 +601,7 @@ mod tests {
             Ok(bundle) => bundle,
             Err(error) => panic!("bundle builds: {error}"),
         };
-        bundle.blobs.insert(kept.sha().hex(), kept.clone());
+        bundle.blobs.insert(kept.sha().hex(), kept.to_ref());
         match slots.store(&bundle, None) {
             Ok(_) => {}
             Err(error) => panic!("referencing bundle stores: {error}"),

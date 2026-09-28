@@ -147,7 +147,7 @@ impl DocumentTables {
     /// Builds a plain text document table.
     fn text(
         lua: &Lua,
-        destination: confit_model::handles::Route,
+        destination: confit_model::routes::Route,
         content: String,
         mode: Option<u32>,
         unmanaged: bool,
@@ -165,7 +165,7 @@ impl DocumentTables {
     /// Builds a symlink document table.
     fn link(
         lua: &Lua,
-        destination: confit_model::handles::Route,
+        destination: confit_model::routes::Route,
         target: String,
     ) -> mlua::Result<Table> {
         let out = lua.create_table()?;
@@ -178,8 +178,8 @@ impl DocumentTables {
     /// Builds an opaque document table holding a sealed blob handle.
     fn opaque(
         lua: &Lua,
-        destination: confit_model::handles::Route,
-        blob: confit_model::handles::BlobHandle,
+        destination: confit_model::routes::Route,
+        blob: confit_store::handles::BlobHandle,
         size: u64,
         mode: Option<u32>,
         unmanaged: bool,
@@ -200,7 +200,7 @@ impl DocumentTables {
 /// Builds one tree document table from kept members.
 pub(crate) fn tree_table(
     lua: &Lua,
-    destination: confit_model::handles::Route,
+    destination: confit_model::routes::Route,
     members: Vec<TreeMemberDecl>,
 ) -> mlua::Result<Table> {
     let out = lua.create_table()?;

@@ -127,7 +127,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Returns
 ///
-/// The live bundle holding blob handles, plus the slot-derived
+/// The live bundle holding blob refs, plus the slot-derived
 /// bundle destination carrying `.cb`.
 ///
 /// # Errors

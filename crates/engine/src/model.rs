@@ -8,8 +8,9 @@ use serde_json::Value as Json;
 
 use crate::level::Level;
 use confit_model::document::StructuredFormat;
-use confit_model::handles::{BlobHandle, Route};
 use confit_model::hook::Hook;
+use confit_model::routes::Route;
+use confit_store::handles::BlobHandle;
 
 /// Declared structured document from profile and configs.
 #[derive(Debug, Clone)]
