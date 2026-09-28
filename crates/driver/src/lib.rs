@@ -393,6 +393,15 @@ mod imp {
         std::fs::rename(from, to)
     }
 
+    /// Copies one file onto a new path overwriting any entry.
+    ///
+    /// # Errors
+    ///
+    /// Missing sources and unwritable destinations fail as io errors.
+    pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
+        std::fs::copy(from, to)
+    }
+
     /// Deletes one file.
     ///
     /// # Errors
@@ -644,6 +653,19 @@ mod imp {
     pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
         let root = rooted()?;
         mem_rename(&root, from, to)
+    }
+
+    /// Copies one file onto a new path overwriting any entry.
+    ///
+    /// # Errors
+    ///
+    /// Missing sources and unwritable destinations fail as io errors.
+    pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
+        let root = rooted()?;
+        let bytes = mem_read(&root, from)?;
+        let len = bytes.len() as u64;
+        mem_write(&root, to, &bytes)?;
+        Ok(len)
     }
 
     /// Deletes one file.

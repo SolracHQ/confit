@@ -210,6 +210,59 @@ impl BlobStore {
             || driver::exists(&self.pool.join(stored.hex()))
     }
 
+    /// Lands already-compressed bytes from a trusted member into the cache.
+    ///
+    /// Presence wins and proof rides lazy at open.
+    ///
+    /// # Arguments
+    ///
+    /// * `stored` - the stored hash naming the cache file.
+    /// * `source` - the trusted member holding compressed bytes.
+    ///
+    /// # Errors
+    ///
+    /// Cache write failures surface as plan errors naming
+    /// the destination.
+    pub(crate) fn receive(&self, stored: &Sha, source: &dyn TrustedHandle) -> Result<()> {
+        let dest = self.cache.join(stored.hex());
+        if driver::exists(&dest) {
+            return Ok(());
+        }
+        driver::create_dir_all(&self.cache)
+            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+        let staging = staging_path(&self.cache);
+        driver::copy(source.canonical(), &staging)
+            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+        driver::rename(&staging, &dest)
+            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+        Ok(())
+    }
+
+    /// Opens raw stored bytes with their encoded length.
+    ///
+    /// Reads ride the stored hash from the cache with
+    /// fallback to the pool. Bytes stay encoded for
+    /// verbatim egress.
+    ///
+    /// # Errors
+    ///
+    /// Missing blobs fail as plan errors naming the hash.
+    pub(crate) fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
+        let path = self.live_path(handle);
+        let len = driver::metadata(&path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    Error::Plan(format!("missing blob '{}'", handle.sha()))
+                } else {
+                    Error::Plan(format!("read blob '{}': {error}", handle.sha()))
+                }
+            })?
+            .len();
+        let file = driver::open_read(&path)
+            .map_err(|error| Error::Plan(format!("read blob '{}': {error}", handle.sha())))?;
+        Ok((len, file))
+    }
+
     /// Reads the raw byte count for one handle.
     ///
     /// The count reads from the cache with fallback
@@ -267,18 +320,6 @@ impl BlobStore {
             cached
         } else {
             self.pool.join(handle.stored().hex())
-        }
-    }
-
-    /// Derives the live stored file for one stored hash.
-    ///
-    /// The cache wins while present.
-    pub(crate) fn stored_path(&self, stored: &Sha) -> PathBuf {
-        let cached = self.cache.join(stored.hex());
-        if driver::exists(&cached) {
-            cached
-        } else {
-            self.pool.join(stored.hex())
         }
     }
 

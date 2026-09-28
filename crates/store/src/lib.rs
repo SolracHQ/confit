@@ -96,12 +96,13 @@ impl Stores {
     /// through the transport registry functions.
     pub fn new(roots: StoreRoots) -> Self {
         let blobs = Arc::new(BlobStore::new(&roots));
+        let archives = Arc::new(ArchiveStore::new(&roots));
         Self {
             resources: Arc::new(Resources::new(&roots)),
             blobs: blobs.clone(),
             fetch: Arc::new(FetchCache::new(&roots)),
-            archives: Arc::new(ArchiveStore::new(&roots)),
-            bundles: Arc::new(BundleStore::new(&roots, blobs)),
+            archives: archives.clone(),
+            bundles: Arc::new(BundleStore::new(archives, blobs)),
             slots: Arc::new(SlotStore::new(&roots)),
             roots,
         }

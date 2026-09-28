@@ -97,6 +97,20 @@ impl ArchiveStore {
         ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
     }
 
+    /// Seals one file path as a verified archive.
+    ///
+    /// The proof seals at birth and downstream code trusts the type.
+    ///
+    /// # Errors
+    ///
+    /// Missing and non-archive sources fail as plan errors naming
+    /// the source.
+    pub fn seal(&self, source: &Path) -> Result<ArchiveHandle> {
+        let sha = file_sha(source)?;
+        check_compressed_source(source)?;
+        ArchiveHandle::new(source.to_path_buf(), sha)
+    }
+
     /// Lists member names without reading content.
     ///
     /// # Errors
@@ -243,6 +257,19 @@ impl ArchiveStore {
         }
         driver::mode(path).map_err(|_| missing_member(path))
     }
+}
+
+/// Hashes one source file with a stream.
+///
+/// # Errors
+///
+/// Missing and unreadable files fail as plan errors naming
+/// the source.
+fn file_sha(source: &Path) -> Result<Sha> {
+    let mut file = driver::open_read(source)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    Sha::read(&mut file)
+        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))
 }
 
 /// Proves one source holds a compressed archive.
