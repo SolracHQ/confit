@@ -6,12 +6,12 @@
 //! Tampered entries read as misses. Offline hits call no
 //! fetcher. User shas check fatal after hit-or-download.
 
+pub mod error;
 pub mod transport;
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use confit_model::error::{Error, Result};
 use confit_model::progress::{Event, ProgressSender};
 use confit_model::sha::Sha;
 use sha2::Digest as _;
@@ -20,6 +20,7 @@ use self::transport::BODY_LIMIT_BYTES;
 use crate::StoreRoots;
 use crate::handles::{FetchHandle, TrustedHandle};
 use confit_driver as driver;
+use error::{FetchError, Result};
 
 /// Chunk size for streamed cache writes.
 const STREAM_BUF_BYTES: usize = 8 * 1024;
@@ -94,8 +95,7 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Cached hits failing the user sha fail as plan errors
-    /// naming the URL.
+    /// - [`FetchError::DigestMismatch`] for cached hits failing the user sha.
     fn fetch_hit(
         &self,
         url: &str,
@@ -119,8 +119,12 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Transport failures fail as plan errors naming the URL.
-    /// Sha mismatches fail as plan errors naming the URL.
+    /// - [`FetchError::Status`] for refused statuses.
+    /// - [`FetchError::Timeout`] for timeouts.
+    /// - [`FetchError::Missing`] for missing cache paths.
+    /// - [`FetchError::Denied`] for denied cache paths.
+    /// - [`FetchError::Unknown`] for other cache failures.
+    /// - [`FetchError::DigestMismatch`] for sha mismatches.
     fn fetch_download(
         &self,
         url: &str,
@@ -135,14 +139,22 @@ impl FetchCache {
             });
         }
         check_sha(url, &sha, expected_sha)?;
-        FetchHandle::new(path, sha, url)
+        FetchHandle::new(path, sha, url).map_err(|error| FetchError::Unknown {
+            url: url.to_owned(),
+            message: error.to_string(),
+        })
     }
 
     /// Downloads one URL body into the cache through staging.
     ///
     /// # Errors
     ///
-    /// Transport failures fail as plan errors naming the URL.
+    /// - [`FetchError::Status`] for refused statuses.
+    /// - [`FetchError::Timeout`] for timeouts.
+    /// - [`FetchError::Unknown`] for other transport and cache failures.
+    /// - [`FetchError::Unscripted`] for unscripted test urls.
+    /// - [`FetchError::Missing`] for missing cache paths.
+    /// - [`FetchError::Denied`] for denied cache paths.
     fn download(&self, url: &str) -> Result<(PathBuf, Sha, usize)> {
         let reader = transport::download(url)?;
         self.store_stream(url, reader)
@@ -152,14 +164,13 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Unwritable folders and files fail as plan errors naming
-    /// the URL. Read failures on the body reader fail as plan
-    /// errors naming the URL.
+    /// - [`FetchError::Missing`] for missing folders.
+    /// - [`FetchError::Denied`] for denied folders.
+    /// - [`FetchError::Unknown`] for other failures.
     fn store_stream(&self, url: &str, reader: impl std::io::Read) -> Result<(PathBuf, Sha, usize)> {
         let staging = self.staging_path(url);
         if let Some(parent) = staging.parent() {
-            driver::create_dir_all(parent)
-                .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+            driver::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
         }
         let outcome = self.stream_to_staging(url, reader, &staging);
         let (digest, bytes) = match outcome {
@@ -172,9 +183,7 @@ impl FetchCache {
         let content = self.content_path(&digest.hex());
         if let Err(error) = driver::rename(&staging, &content) {
             let _ = driver::remove_file(&staging);
-            return Err(Error::Plan(format!(
-                "cannot write cache for '{url}': {error}"
-            )));
+            return Err(FetchError::from_io(url, error));
         }
         self.write_index(url, &digest)?;
         Ok((content, digest, bytes))
@@ -184,33 +193,32 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Unwritable index folders and files fail as plan errors
-    /// naming the URL.
+    /// - [`FetchError::Missing`] for missing folders.
+    /// - [`FetchError::Denied`] for denied folders.
+    /// - [`FetchError::Unknown`] for other failures.
     fn write_index(&self, url: &str, digest: &Sha) -> Result<()> {
         let index = self.index_path(url);
         if let Some(parent) = index.parent() {
-            driver::create_dir_all(parent)
-                .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+            driver::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
         }
         driver::write(&index, digest.hex().as_bytes())
-            .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))
+            .map_err(|error| FetchError::from_io(url, error))
     }
 
     /// Streams one body into staging while hashing.
     ///
     /// # Errors
     ///
-    /// Unwritable staging files fail as plan errors naming
-    /// the URL. Read failures on the body reader fail as plan
-    /// errors naming the URL.
+    /// - [`FetchError::Missing`] for missing staging files.
+    /// - [`FetchError::Denied`] for denied staging files.
+    /// - [`FetchError::Unknown`] for other failures.
     fn stream_to_staging(
         &self,
         url: &str,
         reader: impl std::io::Read,
         staging: &Path,
     ) -> Result<(Sha, usize)> {
-        let file = driver::create(staging)
-            .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+        let file = driver::create(staging).map_err(|error| FetchError::from_io(url, error))?;
         let mut writer = std::io::BufWriter::new(file);
         let mut limited = reader.take(BODY_LIMIT_BYTES);
         let mut hasher = sha2::Sha256::new();
@@ -219,7 +227,7 @@ impl FetchCache {
         loop {
             let read = limited
                 .read(&mut buf)
-                .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+                .map_err(|error| FetchError::from_io(url, error))?;
             if read == 0 {
                 break;
             }
@@ -227,11 +235,11 @@ impl FetchCache {
             hasher.update(&buf[..read]);
             writer
                 .write_all(&buf[..read])
-                .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+                .map_err(|error| FetchError::from_io(url, error))?;
         }
         writer
             .flush()
-            .map_err(|error| Error::Plan(format!("cannot write cache for '{url}': {error}")))?;
+            .map_err(|error| FetchError::from_io(url, error))?;
         let digest = Sha::finish(hasher);
         Ok((digest, usize::try_from(bytes).unwrap_or(0)))
     }
@@ -242,8 +250,13 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Transport failures fail as plan errors. Sha mismatches
-    /// fail as plan errors naming the URL.
+    /// - [`FetchError::Status`] for refused statuses.
+    /// - [`FetchError::Timeout`] for timeouts.
+    /// - [`FetchError::Unknown`] for other transport and cache failures.
+    /// - [`FetchError::Unscripted`] for unscripted test urls.
+    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    /// - [`FetchError::Missing`] for missing cache paths.
+    /// - [`FetchError::Denied`] for denied cache paths.
     pub fn fetch(
         &self,
         url: &str,
@@ -266,30 +279,24 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// Missing and unreadable cache files fail as plan errors
-    /// naming the origin.
+    /// - [`FetchError::Missing`] for missing cache files.
+    /// - [`FetchError::Denied`] for denied cache files.
+    /// - [`FetchError::Unknown`] for other failures.
     pub fn read(&self, handle: &FetchHandle) -> Result<Vec<u8>> {
-        driver::read(handle.canonical()).map_err(|error| {
-            Error::Plan(format!(
-                "cannot read '{}': {error}",
-                handle.canonical().display()
-            ))
-        })
+        driver::read(handle.canonical())
+            .map_err(|error| FetchError::from_io(handle.origin(), error))
     }
 
     /// Opens cached bytes behind one fetch handle.
     ///
     /// # Errors
     ///
-    /// Missing and unreadable cache files fail as plan errors
-    /// naming the origin.
+    /// - [`FetchError::Missing`] for missing cache files.
+    /// - [`FetchError::Denied`] for denied cache files.
+    /// - [`FetchError::Unknown`] for other failures.
     pub fn open(&self, handle: &FetchHandle) -> Result<Box<dyn std::io::Read>> {
-        driver::open_read(handle.canonical()).map_err(|error| {
-            Error::Plan(format!(
-                "cannot read '{}': {error}",
-                handle.canonical().display()
-            ))
-        })
+        driver::open_read(handle.canonical())
+            .map_err(|error| FetchError::from_io(handle.origin(), error))
     }
 }
 
@@ -307,15 +314,17 @@ fn file_len(path: &Path) -> usize {
 ///
 /// # Errors
 ///
-/// Mismatches fail as plan errors naming the URL.
+/// - [`FetchError::DigestMismatch`] for mismatches.
 fn check_sha(url: &str, actual: &Sha, expected: Option<&Sha>) -> Result<()> {
     let Some(wanted) = expected else {
         return Ok(());
     };
     if actual != wanted {
-        return Err(Error::Plan(format!(
-            "sha256 mismatch for '{url}': want {wanted}, got {actual}"
-        )));
+        return Err(FetchError::DigestMismatch {
+            url: url.to_owned(),
+            want: wanted.clone(),
+            got: actual.clone(),
+        });
     }
     Ok(())
 }
@@ -734,17 +743,10 @@ mod tests {
         let handle = FetchHandle::new(missing.clone(), Sha::hash(b"absent"), URL).unwrap();
         match cache.open(&handle) {
             Ok(_) => panic!("missing body opens"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("cannot read"),
-                    "missing reads as plan error: {text}"
-                );
-                assert!(
-                    text.contains(&missing.display().to_string()),
-                    "error names the cache path: {text}"
-                );
+            Err(FetchError::Missing { url }) => {
+                assert_eq!(url, URL, "missing open keeps the origin url")
             }
+            Err(error) => panic!("wrong missing variant: {error}"),
         }
     }
 

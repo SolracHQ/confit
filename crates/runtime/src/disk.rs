@@ -135,11 +135,6 @@ impl HostDisk {
                     path.display()
                 )),
                 rendered @ Error::Render { .. } => Error::Plan(rendered.to_string()),
-                Error::Io(error) => Error::Plan(format!(
-                    "cannot write '{}': cannot write '{}': {error}",
-                    dest.display(),
-                    path.display()
-                )),
             })?;
             driver::set_mode(&path, member.mode).map_err(|error| {
                 Error::Plan(format!(
@@ -364,12 +359,17 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
 fn copy_blob(dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
     use std::io::Write as _;
 
-    let handle = blobs.resolve(blob)?;
-    let mut reader = blobs.open(&handle)?;
-    ensure_parent(dest).map_err(Error::from)?;
-    let mut out = driver::create(dest).map_err(Error::from)?;
-    std::io::copy(&mut reader, &mut out).map_err(Error::from)?;
-    out.flush().map_err(Error::from)?;
+    let handle = blobs
+        .resolve(blob)
+        .map_err(|error| Error::Plan(error.to_string()))?;
+    let mut reader = blobs
+        .open(&handle)
+        .map_err(|error| Error::Plan(error.to_string()))?;
+    ensure_parent(dest).map_err(|error| Error::Plan(error.to_string()))?;
+    let mut out = driver::create(dest).map_err(|error| Error::Plan(error.to_string()))?;
+    std::io::copy(&mut reader, &mut out).map_err(|error| Error::Plan(error.to_string()))?;
+    out.flush()
+        .map_err(|error| Error::Plan(error.to_string()))?;
     Ok(())
 }
 

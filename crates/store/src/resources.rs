@@ -2,14 +2,16 @@
 //!
 //! Trusted-source birth and text reads.
 
+pub mod error;
+
 use std::path::Path;
 
-use confit_model::error::{Error, Result};
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
 use crate::handles::{ResourceHandle, TrustedHandle};
 use confit_driver as driver;
+use error::{ResourceError, Result};
 
 /// Trusted project files behind exec-rooted handles.
 ///
@@ -35,34 +37,35 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// Escaping, missing, and unreadable files fail as plan or io errors.
+    /// - [`ResourceError::Escape`] for escaping files.
+    /// - [`ResourceError::Missing`] for missing files.
+    /// - [`ResourceError::Denied`] for denied files.
+    /// - [`ResourceError::Unknown`] for other failures.
     pub fn resource(&self, exec_root: &Path, path: &Path) -> Result<ResourceHandle> {
         if !path.starts_with(exec_root) {
-            return Err(Error::Plan(format!(
-                "resource path '{}' escapes exec root '{}'",
-                path.display(),
-                exec_root.display()
-            )));
+            return Err(ResourceError::Escape {
+                path: path.to_path_buf(),
+            });
         }
         let mut file = match driver::open_read(path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::Plan(format!(
-                    "cannot read '{}': missing file",
-                    path.display()
-                )));
+            Err(error) => {
+                return Err(ResourceError::from_io(path, error));
             }
-            Err(error) => return Err(Error::from(error)),
         };
-        let sha = Sha::read(&mut file)?;
-        ResourceHandle::new(exec_root, path.to_path_buf(), sha)
+        let sha = Sha::read(&mut file).map_err(|failure| ResourceError::from_io(path, failure))?;
+        ResourceHandle::new(exec_root, path.to_path_buf(), sha).map_err(|_| ResourceError::Escape {
+            path: path.to_path_buf(),
+        })
     }
 
     /// Reads one trusted file as text.
     ///
     /// # Errors
     ///
-    /// Missing files and invalid text fail as plan errors.
+    /// - [`ResourceError::Missing`] for missing files.
+    /// - [`ResourceError::Denied`] for denied files.
+    /// - [`ResourceError::Unknown`] for other failures.
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         read_text(handle.canonical())
     }
@@ -70,22 +73,18 @@ impl Resources {
 
 /// Reads one file as text.
 ///
-/// Missing files and invalid text fail as plan errors.
-///
 /// # Errors
 ///
-/// Missing files fail as plan errors naming absence, invalid
-/// text fails as plan errors, unreadable files surface as io
-/// errors.
+/// - [`ResourceError::Unknown`] for invalid text and other failures.
+/// - [`ResourceError::Missing`] for missing files.
+/// - [`ResourceError::Denied`] for denied files.
 fn read_text(path: &Path) -> Result<String> {
     match driver::read(path) {
-        Ok(bytes) => String::from_utf8(bytes)
-            .map_err(|_| Error::Plan(format!("cannot read '{}': invalid text", path.display()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Error::Plan(format!(
-            "cannot read '{}': missing file",
-            path.display()
-        ))),
-        Err(error) => Err(Error::from(error)),
+        Ok(bytes) => String::from_utf8(bytes).map_err(|error| ResourceError::Unknown {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }),
+        Err(error) => Err(ResourceError::from_io(path, error)),
     }
 }
 
@@ -131,18 +130,10 @@ mod tests {
         driver::write(&outside, b"return {}").unwrap();
         match store.resource(&root, &outside) {
             Ok(_) => panic!("escaping resource passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("escapes"), "escape reports itself: {text}");
-                assert!(
-                    text.contains(&outside.display().to_string()),
-                    "escape names the path: {text}"
-                );
-                assert!(
-                    text.contains(&root.display().to_string()),
-                    "escape names the root: {text}"
-                );
+            Err(ResourceError::Escape { path }) => {
+                assert_eq!(path, outside, "escape names the path")
             }
+            Err(error) => panic!("wrong escape variant: {error}"),
         }
         let nested = root.join("sub").join("note.lua");
         driver::create_dir_all(nested.parent().unwrap()).unwrap();
@@ -150,10 +141,8 @@ mod tests {
         let other_root = dir.path().join("other");
         match store.resource(&other_root, &nested) {
             Ok(_) => panic!("foreign root passes"),
-            Err(error) => assert!(
-                error.to_string().contains("escapes"),
-                "foreign root reports escape: {error}"
-            ),
+            Err(ResourceError::Escape { .. }) => {}
+            Err(error) => panic!("wrong foreign variant: {error}"),
         }
     }
 
@@ -190,10 +179,10 @@ mod tests {
         match store.resource(&root, &path) {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
-                Err(error) => assert!(
-                    error.to_string().contains("invalid text"),
-                    "binary reports text loss: {error}"
-                ),
+                Err(ResourceError::Unknown { path: found, .. }) => {
+                    assert_eq!(found, path, "binary reports the path")
+                }
+                Err(error) => panic!("wrong text variant: {error}"),
             },
             Err(error) => panic!("binary resource births: {error}"),
         }

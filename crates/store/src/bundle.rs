@@ -2,6 +2,7 @@
 //!
 //! Portable bundle archives holding manifests and blobs.
 
+pub mod error;
 mod pack;
 mod unpack;
 
@@ -10,13 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use confit_model::document::{BlobRef, ManifestDocument};
-use confit_model::error::Result;
 use confit_model::hook::Hook;
 use confit_model::manifest::Manifest;
 use confit_model::plan::{DocumentStatus, Summary};
 
 use crate::archive::ArchiveStore;
 use crate::blob::BlobStore;
+use error::{BundleError, Result};
 
 /// Bundle file extension imposed on explicit outputs.
 const BUNDLE_EXTENSION: &str = "cb";
@@ -95,7 +96,7 @@ impl Bundle {
     ///
     /// # Errors
     ///
-    /// Serializer failures fail as plan errors.
+    /// - [`BundleError::Unhashable`] for hash failures.
     ///
     /// # Examples
     ///
@@ -114,7 +115,12 @@ impl Bundle {
     /// ```
     pub fn build(mut documents: Vec<ManifestDocument>, hooks: Vec<Hook>) -> Result<Self> {
         for document in &mut documents {
-            document.fill_hash()?;
+            document
+                .fill_hash()
+                .map_err(|error| BundleError::Unhashable {
+                    document: document.destination.display(),
+                    reason: error.to_string(),
+                })?;
         }
         documents.sort_by_key(|document| document.destination.display());
         Ok(Self {

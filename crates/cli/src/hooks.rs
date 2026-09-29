@@ -159,7 +159,7 @@ pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
     let mut bytes = match driver::read(log) {
         Ok(held) => held,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(Error::from(error)),
+        Err(error) => return Err(Error::Plan(error.to_string())),
     };
     bytes.extend_from_slice(header.as_bytes());
     bytes.extend_from_slice(b"\n");
@@ -167,7 +167,7 @@ pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
     if !output.ends_with(b"\n") {
         bytes.extend_from_slice(b"\n");
     }
-    driver::write(log, &bytes).map_err(Error::from)?;
+    driver::write(log, &bytes).map_err(|error| Error::Plan(error.to_string()))?;
     Ok(())
 }
 

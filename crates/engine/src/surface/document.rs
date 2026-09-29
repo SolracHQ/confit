@@ -14,7 +14,7 @@ use crate::model::{
     LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
 };
 use confit_model::arg::Arg;
-use confit_model::document::{RcData, StructuredFormat};
+use confit_model::document::{RcSection, StructuredFormat};
 
 pub(crate) mod convert;
 
@@ -375,21 +375,8 @@ impl RcDocs {
                     "{ctor}: field 'sections' must hold section names"
                 )));
             };
-            if let Err(error) = RcData::check_section_name(&name) {
-                match error {
-                    parsed @ confit_model::error::Error::Parse { .. } => {
-                        return Err(plan_error(format!("{ctor}: {parsed}")));
-                    }
-                    confit_model::error::Error::Plan(message) => {
-                        return Err(plan_error(format!("{ctor}: {message}")));
-                    }
-                    rendered @ confit_model::error::Error::Render { .. } => {
-                        return Err(plan_error(format!("{ctor}: {rendered}")));
-                    }
-                    confit_model::error::Error::Io(error) => {
-                        return Err(plan_error(format!("{ctor}: {error}")));
-                    }
-                }
+            if let Err(parsed) = RcSection::parse(&name) {
+                return Err(plan_error(format!("{ctor}: {parsed}")));
             }
             out.set(name.as_str(), value)?;
         }

@@ -72,11 +72,13 @@ impl Sinks {
         if let Some(control) = self.suspend.clone() {
             return control
                 .ask("\nApply these changes? Type 'yes' to continue: ")
-                .map_err(Error::from);
+                .map_err(|error| Error::Plan(error.to_string()));
         }
         log::debug!("prompt waiting for answer");
         let mut answer = String::new();
-        let reads = input.read_line(&mut answer).map_err(Error::from)?;
+        let reads = input
+            .read_line(&mut answer)
+            .map_err(|error| Error::Plan(error.to_string()))?;
         log::debug!("prompt read {reads} bytes");
         Ok(answer.trim() == "yes")
     }

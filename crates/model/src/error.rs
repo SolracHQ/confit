@@ -28,9 +28,6 @@ pub enum Error {
     /// Plan failure with a human readable reason.
     #[error("{0}")]
     Plan(String),
-    /// Filesystem failure from the caller seam.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
 }
 
 /// Core result alias.

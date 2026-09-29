@@ -162,7 +162,7 @@ fn write_file(dest: &std::path::Path, text: &[u8]) -> Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        driver::create_dir_all(parent).map_err(Error::from)?;
+        driver::create_dir_all(parent).map_err(|error| Error::Plan(error.to_string()))?;
     }
-    driver::write(dest, text).map_err(Error::from)
+    driver::write(dest, text).map_err(|error| Error::Plan(error.to_string()))
 }

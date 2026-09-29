@@ -98,7 +98,7 @@ impl FetchHandle {
     ///
     /// # Errors
     ///
-    /// Empty cache paths fail as plan errors.
+    /// - plan errors for empty cache paths.
     ///
     pub(crate) fn new(
         cache_path: impl Into<PathBuf>,
@@ -136,7 +136,7 @@ impl ResourceHandle {
     ///
     /// # Errors
     ///
-    /// Paths outside the exec root fail as plan errors.
+    /// - plan errors for paths outside the exec root.
     ///
     pub(crate) fn new(exec_root: &Path, path: impl Into<PathBuf>, sha256: Sha) -> Result<Self> {
         let path = path.into();
@@ -195,7 +195,7 @@ impl ArchiveHandle {
     ///
     /// # Errors
     ///
-    /// Empty source paths fail as plan errors.
+    /// - plan errors for empty source paths.
     ///
     pub(crate) fn new(source_path: impl Into<PathBuf>, source_sha256: Sha) -> Result<Self> {
         let source_path = source_path.into();

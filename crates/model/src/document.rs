@@ -230,12 +230,52 @@ impl RcEntry {
     }
 }
 
-/// Accepted rc section names.
-///
-/// The engine validates Lua section keys against this list.
-/// Misspells fail as plan errors.
-///
-pub const RC_SECTION_NAMES: [&str; 3] = ["profile", "config", "final"];
+/// Accepted rc section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RcSection {
+    /// Entries rendering before the guard.
+    Profile,
+    /// Entries rendering after the guard.
+    Config,
+    /// Entries rendering last.
+    Final,
+}
+
+impl RcSection {
+    /// Parses one raw section name.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - the raw section name.
+    ///
+    /// # Returns
+    ///
+    /// The section for profile, config, or final.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Parse`] when the name matches no known section.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_model::document::RcSection;
+    ///
+    /// assert!(matches!(RcSection::parse("config"), Ok(RcSection::Config)));
+    /// assert!(matches!(RcSection::parse("confg"), Err(_)));
+    /// ```
+    pub fn parse(name: &str) -> Result<Self> {
+        match name {
+            "profile" => Ok(Self::Profile),
+            "config" => Ok(Self::Config),
+            "final" => Ok(Self::Final),
+            _ => Err(Error::Parse {
+                input: name.to_owned(),
+                want: "one of 'profile', 'config', 'final'".to_owned(),
+            }),
+        }
+    }
+}
 
 /// Rc data holding three entry groups.
 ///
@@ -273,39 +313,6 @@ impl RcData {
             profile,
             config,
             final_entries,
-        }
-    }
-
-    /// Validates one rc section name.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - the raw section name.
-    ///
-    /// # Returns
-    ///
-    /// Unit for profile, config, or final.
-    ///
-    /// # Errors
-    ///
-    /// Unknown names fail as parse errors holding the name.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::RcData;
-    ///
-    /// assert!(matches!(RcData::check_section_name("config"), Ok(())));
-    /// assert!(matches!(RcData::check_section_name("confg"), Err(_)));
-    /// ```
-    pub fn check_section_name(name: &str) -> Result<()> {
-        if RC_SECTION_NAMES.contains(&name) {
-            Ok(())
-        } else {
-            Err(Error::Parse {
-                input: name.to_owned(),
-                want: "one of 'profile', 'config', 'final'".to_owned(),
-            })
         }
     }
 }
@@ -855,11 +862,14 @@ mod tests {
 
     #[test]
     fn unknown_rc_section_fails_as_plan_error() {
-        assert!(matches!(RcData::check_section_name("profile"), Ok(())));
-        assert!(matches!(RcData::check_section_name("config"), Ok(())));
-        assert!(matches!(RcData::check_section_name("final"), Ok(())));
-        let error = match RcData::check_section_name("confg") {
-            Ok(()) => panic!("misspelled section passes"),
+        assert!(matches!(
+            RcSection::parse("profile"),
+            Ok(RcSection::Profile)
+        ));
+        assert!(matches!(RcSection::parse("config"), Ok(RcSection::Config)));
+        assert!(matches!(RcSection::parse("final"), Ok(RcSection::Final)));
+        let error = match RcSection::parse("confg") {
+            Ok(_) => panic!("misspelled section passes"),
             Err(error) => error,
         };
         assert!(matches!(error, Error::Parse { .. }));

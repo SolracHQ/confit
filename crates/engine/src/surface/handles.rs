@@ -13,7 +13,6 @@ use super::document::{check_rel, tree_table};
 use crate::error::plan_error;
 use crate::lua::{JsonExt, ValueExt};
 use crate::model::TreeMemberDecl;
-use confit_model::error::Error;
 use confit_model::progress::ProgressSender;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
@@ -151,13 +150,10 @@ impl LuaBlobHandle {
 /// # Errors
 ///
 /// Non-archives fail as plan errors naming the source.
-fn seal(source: &dyn TrustedHandle, stores: &Stores, caller: &str) -> mlua::Result<ArchiveHandle> {
+fn seal(source: &dyn TrustedHandle, stores: &Stores, _caller: &str) -> mlua::Result<ArchiveHandle> {
     match stores.archives().archive(source) {
         Ok(handle) => Ok(handle),
-        Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{caller}: {parsed}"))),
-        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => Err(plan_error(format!("{caller}: {rendered}"))),
-        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => Err(plan_error(error.to_string())),
     }
 }
 
@@ -170,14 +166,7 @@ fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua:
     let archives = stores.archives();
     let mut reader = match archives.open_decompressed(member) {
         Ok(reader) => reader,
-        Err(parsed @ Error::Parse { .. }) => {
-            return Err(plan_error(format!("{caller}: {parsed}")));
-        }
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => {
-            return Err(plan_error(format!("{caller}: {rendered}")));
-        }
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => return Err(plan_error(error.to_string())),
     };
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes).map_err(|error| {
@@ -197,30 +186,16 @@ fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua:
 fn pool_source(
     stores: &Stores,
     source: &dyn TrustedHandle,
-    caller: &str,
+    _caller: &str,
 ) -> mlua::Result<(BlobHandle, u64)> {
     let blobs = stores.blobs();
     let handle = match blobs.put(BlobSource::Handle(source)) {
         Ok(handle) => handle,
-        Err(parsed @ Error::Parse { .. }) => {
-            return Err(plan_error(format!("{caller}: {parsed}")));
-        }
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => {
-            return Err(plan_error(format!("{caller}: {rendered}")));
-        }
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => return Err(plan_error(error.to_string())),
     };
     let size = match blobs.len(&handle) {
         Ok(size) => size,
-        Err(parsed @ Error::Parse { .. }) => {
-            return Err(plan_error(format!("{caller}: {parsed}")));
-        }
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => {
-            return Err(plan_error(format!("{caller}: {rendered}")));
-        }
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => return Err(plan_error(error.to_string())),
     };
     Ok((handle, size))
 }
@@ -237,13 +212,10 @@ enum DecodeFormat {
 /// # Errors
 ///
 /// Unreadable cache files fail as plan errors.
-fn fetch_bytes(handle: &LuaFetchHandle, caller: &str) -> mlua::Result<Vec<u8>> {
+fn fetch_bytes(handle: &LuaFetchHandle, _caller: &str) -> mlua::Result<Vec<u8>> {
     match handle.stores.fetch().read(&handle.handle) {
         Ok(bytes) => Ok(bytes),
-        Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{caller}: {parsed}"))),
-        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => Err(plan_error(format!("{caller}: {rendered}"))),
-        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => Err(plan_error(error.to_string())),
     }
 }
 
@@ -252,16 +224,13 @@ fn fetch_bytes(handle: &LuaFetchHandle, caller: &str) -> mlua::Result<Vec<u8>> {
 /// # Errors
 ///
 /// Unreadable files fail as plan errors.
-fn resource_bytes(handle: &LuaResourceHandle, caller: &str) -> mlua::Result<Vec<u8>> {
+fn resource_bytes(handle: &LuaResourceHandle, _caller: &str) -> mlua::Result<Vec<u8>> {
     if handle.archive.is_some() {
-        return member_bytes(&handle.handle, &handle.stores, caller);
+        return member_bytes(&handle.handle, &handle.stores, _caller);
     }
     match handle.stores.resources().read_text(&handle.handle) {
         Ok(text) => Ok(text.into_bytes()),
-        Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{caller}: {parsed}"))),
-        Err(Error::Plan(message)) => Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => Err(plan_error(format!("{caller}: {rendered}"))),
-        Err(Error::Io(error)) => Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => Err(plan_error(error.to_string())),
     }
 }
 
@@ -360,27 +329,13 @@ fn tree_from_archive(
     let archives = stores.archives();
     let names = match archives.members(sealed) {
         Ok(names) => names,
-        Err(parsed @ Error::Parse { .. }) => {
-            return Err(plan_error(format!("{caller}: {parsed}")));
-        }
-        Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => {
-            return Err(plan_error(format!("{caller}: {rendered}")));
-        }
-        Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+        Err(error) => return Err(plan_error(error.to_string())),
     };
     let mut kept: Vec<TreeMemberDecl> = Vec::new();
     for name in &names {
         let member = match archives.extract_member(sealed, name) {
             Ok(member) => member,
-            Err(parsed @ Error::Parse { .. }) => {
-                return Err(plan_error(format!("{caller}: {parsed}")));
-            }
-            Err(Error::Plan(message)) => return Err(plan_error(format!("{caller}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                return Err(plan_error(format!("{caller}: {rendered}")));
-            }
-            Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+            Err(error) => return Err(plan_error(error.to_string())),
         };
         let lua_member =
             LuaResourceHandle::new(member.clone(), stores.clone(), Some(sealed.clone()));
@@ -392,16 +347,7 @@ fn tree_from_archive(
             Some(mode) => mode,
             None => match archives.mode(&member) {
                 Ok(mode) => mode,
-                Err(parsed @ Error::Parse { .. }) => {
-                    return Err(plan_error(format!("{caller}: {parsed}")));
-                }
-                Err(Error::Plan(message)) => {
-                    return Err(plan_error(format!("{caller}: {message}")));
-                }
-                Err(rendered @ Error::Render { .. }) => {
-                    return Err(plan_error(format!("{caller}: {rendered}")));
-                }
-                Err(Error::Io(error)) => return Err(plan_error(format!("{caller}: {error}"))),
+                Err(error) => return Err(plan_error(error.to_string())),
             },
         };
         if kept.iter().any(|item| item.rel == pick.rel) {
@@ -519,14 +465,7 @@ impl LuaFetchHandle {
         const CALLER: &str = "FetchHandle:text";
         let bytes = match self.stores.fetch().read(&self.handle) {
             Ok(bytes) => bytes,
-            Err(parsed @ Error::Parse { .. }) => {
-                return Err(plan_error(format!("{CALLER}: {parsed}")));
-            }
-            Err(Error::Plan(message)) => return Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                return Err(plan_error(format!("{CALLER}: {rendered}")));
-            }
-            Err(Error::Io(error)) => return Err(plan_error(format!("{CALLER}: {error}"))),
+            Err(error) => return Err(plan_error(error.to_string())),
         };
         String::from_utf8(bytes).map_err(|error| {
             plan_error(format!(
@@ -625,12 +564,7 @@ impl LuaFetchHandle {
                 self.stores.clone(),
                 Some(sealed),
             )),
-            Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-            Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                Err(plan_error(format!("{CALLER}: {rendered}")))
-            }
-            Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+            Err(error) => Err(plan_error(error.to_string())),
         }
     }
 
@@ -661,12 +595,7 @@ impl LuaResourceHandle {
         if self.archive.is_none() {
             return match self.stores.resources().read_text(&self.handle) {
                 Ok(text) => Ok(text),
-                Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-                Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-                Err(rendered @ Error::Render { .. }) => {
-                    Err(plan_error(format!("{CALLER}: {rendered}")))
-                }
-                Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+                Err(error) => Err(plan_error(error.to_string())),
             };
         }
         let bytes = member_bytes(&self.handle, &self.stores, CALLER)?;
@@ -796,12 +725,7 @@ impl LuaResourceHandle {
                 self.stores.clone(),
                 Some(sealed),
             )),
-            Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-            Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                Err(plan_error(format!("{CALLER}: {rendered}")))
-            }
-            Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+            Err(error) => Err(plan_error(error.to_string())),
         }
     }
 
@@ -824,15 +748,9 @@ impl LuaArchiveHandle {
     ///
     /// Unreadable archives fail as plan errors.
     fn members(&self) -> mlua::Result<Vec<String>> {
-        const CALLER: &str = "ArchiveHandle:members";
         match self.stores.archives().members(&self.handle) {
             Ok(names) => Ok(names),
-            Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-            Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                Err(plan_error(format!("{CALLER}: {rendered}")))
-            }
-            Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+            Err(error) => Err(plan_error(error.to_string())),
         }
     }
 
@@ -856,19 +774,13 @@ impl LuaArchiveHandle {
     ///
     /// Unknown members fail as plan errors naming the member.
     fn extract_member(&self, name: String) -> mlua::Result<LuaResourceHandle> {
-        const CALLER: &str = "ArchiveHandle:extract_member";
         match self.stores.archives().extract_member(&self.handle, &name) {
             Ok(member) => Ok(LuaResourceHandle::new(
                 member,
                 self.stores.clone(),
                 Some(self.handle.clone()),
             )),
-            Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-            Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                Err(plan_error(format!("{CALLER}: {rendered}")))
-            }
-            Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+            Err(error) => Err(plan_error(error.to_string())),
         }
     }
 
@@ -1024,14 +936,7 @@ fn fetch_impl(
             Ok(handle) => lua
                 .create_userdata(LuaFetchHandle::new(handle, stores.clone()))
                 .map(Value::UserData),
-            Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-            Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-            Err(rendered @ Error::Render { .. }) => {
-                Err(plan_error(format!("{CALLER}: {rendered}")))
-            }
-            Err(Error::Io(error)) => Err(plan_error(format!(
-                "{CALLER}: fetch '{url}' failed: {error}"
-            ))),
+            Err(error) => Err(plan_error(error.to_string())),
         };
     }
     if opts.is_some_and(|opts| !opts.is_nil()) {
@@ -1049,10 +954,7 @@ fn fetch_impl(
         Ok(handle) => lua
             .create_userdata(LuaResourceHandle::new(handle, stores.clone(), None))
             .map(Value::UserData),
-        Err(parsed @ Error::Parse { .. }) => Err(plan_error(format!("{CALLER}: {parsed}"))),
-        Err(Error::Plan(message)) => Err(plan_error(format!("{CALLER}: {message}"))),
-        Err(rendered @ Error::Render { .. }) => Err(plan_error(format!("{CALLER}: {rendered}"))),
-        Err(Error::Io(error)) => Err(plan_error(format!("{CALLER}: {error}"))),
+        Err(error) => Err(plan_error(error.to_string())),
     }
 }
 

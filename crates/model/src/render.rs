@@ -17,7 +17,8 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// # Errors
 ///
-/// Opaque, tree, and serializer failures fail as parse and render errors.
+/// - [`Error::Parse`] for opaque and tree documents.
+/// - [`Error::Render`] for serializer failures.
 pub fn inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
     match data {
         ManifestData::Structured { format, data } => match format {

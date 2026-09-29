@@ -9,7 +9,7 @@
 
 use std::io::Read;
 
-use confit_model::error::Result;
+use super::error::Result;
 
 /// Body cap shared by download and cache writes.
 pub(crate) const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
@@ -22,7 +22,10 @@ pub(crate) const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 ///
 /// # Errors
 ///
-/// Transport failures fail as plan errors naming the URL.
+/// - [`FetchError::Status`] for refused statuses.
+/// - [`FetchError::Timeout`] for timeouts.
+/// - [`FetchError::Unknown`] for other transport failures.
+/// - [`FetchError::Unscripted`] for unscripted test urls.
 pub fn download(url: &str) -> Result<Box<dyn Read>> {
     #[cfg(test)]
     {
@@ -30,17 +33,42 @@ pub fn download(url: &str) -> Result<Box<dyn Read>> {
     }
     #[cfg(not(test))]
     {
-        use confit_model::error::Error;
-
         let response = ureq::get(url)
             .call()
-            .map_err(|error| Error::Plan(format!("cannot fetch '{url}': {error}")))?;
+            .map_err(|error| from_ureq(url, error))?;
         let reader = response
             .into_body()
             .into_with_config()
             .limit(BODY_LIMIT_BYTES)
             .reader();
         Ok(Box::new(reader))
+    }
+}
+
+/// Maps one ureq failure into its fetch error.
+#[cfg(not(test))]
+fn from_ureq(url: &str, error: ureq::Error) -> super::error::FetchError {
+    match error {
+        ureq::Error::StatusCode(code) => super::error::FetchError::Status {
+            url: url.to_owned(),
+            code,
+        },
+        ureq::Error::Timeout(_) => super::error::FetchError::Timeout {
+            url: url.to_owned(),
+        },
+        ureq::Error::Io(error) => super::error::FetchError::from_io(url, error),
+        other => unknown(url, other.to_string()),
+    }
+}
+
+/// Builds one honest Unknown naming the url with a message.
+///
+/// Scripted failures and uninterpretable transport errors
+/// carry the url with the message alone.
+fn unknown(url: &str, message: String) -> super::error::FetchError {
+    super::error::FetchError::Unknown {
+        url: url.to_owned(),
+        message,
     }
 }
 
@@ -57,7 +85,7 @@ pub(crate) mod registry {
     use std::collections::HashMap;
     use std::io::Read;
 
-    use confit_model::error::{Error, Result};
+    use crate::fetch::error::{FetchError, Result};
 
     struct Scripts {
         bodies: HashMap<String, Vec<u8>>,
@@ -107,19 +135,23 @@ pub(crate) mod registry {
     }
 
     /// Serves one scripted download recording the call.
+    ///
+    /// Scripted failures ride Unknown with the scripted
+    /// message. Bodies serve verbatim. Unscripted urls fail
+    /// naming the url.
     pub(super) fn download(url: &str) -> Result<Box<dyn Read>> {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();
             let count = scripts.calls.get(url).copied().unwrap_or(0);
             scripts.calls.insert(url.to_string(), count + 1);
             if let Some(message) = scripts.failures.get(url).cloned() {
-                return Err(Error::Plan(format!("cannot fetch '{url}': {message}")));
+                return Err(super::unknown(url, message));
             }
             match scripts.bodies.get(url).cloned() {
                 Some(body) => Ok(Box::new(std::io::Cursor::new(body)) as Box<dyn Read>),
-                None => Err(Error::Plan(format!(
-                    "cannot fetch '{url}': no scripted body"
-                ))),
+                None => Err(FetchError::Unscripted {
+                    url: url.to_owned(),
+                }),
             }
         })
     }

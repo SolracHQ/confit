@@ -30,7 +30,11 @@ impl Applier {
                 continue;
             }
             let expanded = self.resolve(&old.destination);
-            if self.disk.remove(&expanded).map_err(Error::from)? {
+            if self
+                .disk
+                .remove(&expanded)
+                .map_err(|error| Error::Plan(error.to_string()))?
+            {
                 removed += 1;
             }
         }
@@ -64,7 +68,11 @@ impl Applier {
                     continue;
                 }
                 let path = dest.join(&member.relative);
-                if self.disk.remove(&path).map_err(Error::from)? {
+                if self
+                    .disk
+                    .remove(&path)
+                    .map_err(|error| Error::Plan(error.to_string()))?
+                {
                     removed += 1;
                 }
             }

@@ -2,6 +2,7 @@
 //!
 //! Member listing and extraction for compressed archives.
 
+pub mod error;
 mod gzip;
 mod tar;
 mod zip;
@@ -9,13 +10,13 @@ mod zip;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use confit_model::error::{Error, Result};
 use confit_model::sha::Sha;
 use sha2::Digest as _;
 
 use crate::StoreRoots;
 use crate::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
 use confit_driver as driver;
+use error::{ArchiveError, Result};
 use gzip::GzipBackend;
 use tar::{GzippedTarBackend, TarBackend};
 use zip::ZipBackend;
@@ -54,15 +55,24 @@ trait ArchiveBackend {
     ///
     /// # Errors
     ///
-    /// Unreadable archives fail as plan errors.
+    /// - [`ArchiveError::Missing`] for missing sources.
+    /// - [`ArchiveError::Denied`] for denied sources.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+    /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+    /// - [`ArchiveError::Unknown`] for other failures.
     fn names(&self, source: &Path) -> Result<Vec<String>>;
 
     /// Spills decoded members under staging with hashes.
     ///
     /// # Errors
     ///
-    /// Decoder and spill failures surface as plan errors
-    /// naming the source.
+    /// - [`ArchiveError::Missing`] for missing sources.
+    /// - [`ArchiveError::Denied`] for denied sources.
+    /// - [`ArchiveError::Unknown`] for other decoder and spill failures.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+    /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
     fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>>;
 }
 
@@ -90,11 +100,11 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Non-archives fail as plan errors naming the source.
+    /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn archive(&self, source: &dyn TrustedHandle) -> Result<ArchiveHandle> {
         let path = source.canonical();
         check_compressed_source(path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
+        ArchiveHandle::new(path.to_path_buf(), source.sha().clone()).map_err(|_| not_archive(path))
     }
 
     /// Seals one file path as a verified archive.
@@ -103,19 +113,26 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Missing and non-archive sources fail as plan errors naming
-    /// the source.
+    /// - [`ArchiveError::Missing`] for missing sources.
+    /// - [`ArchiveError::Denied`] for denied sources.
+    /// - [`ArchiveError::Unknown`] for other failures.
+    /// - [`ArchiveError::NotArchive`] for non-archive sources.
     pub fn seal(&self, source: &Path) -> Result<ArchiveHandle> {
         let sha = file_sha(source)?;
         check_compressed_source(source)?;
-        ArchiveHandle::new(source.to_path_buf(), sha)
+        ArchiveHandle::new(source.to_path_buf(), sha).map_err(|_| not_archive(source))
     }
 
     /// Lists member names without reading content.
     ///
     /// # Errors
     ///
-    /// Unreadable archives fail as plan errors.
+    /// - [`ArchiveError::Missing`] for missing archives.
+    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+    /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+    /// - [`ArchiveError::Unknown`] for other failures.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         let source = archive.canonical();
         if peek_is_zip(source)? {
@@ -126,10 +143,7 @@ impl ArchiveStore {
         }
         match GzippedTarBackend.names(source) {
             Ok(names) => Ok(names),
-            Err(_) if wants_tar(source) => Err(Error::Plan(format!(
-                "cannot unpack '{}': not a tar archive",
-                source.display()
-            ))),
+            Err(_) if wants_tar(source) => Err(not_archive(source)),
             Err(_) => GzipBackend.names(source),
         }
     }
@@ -141,7 +155,13 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Unreadable archives and write failures fail as plan errors.
+    /// - [`ArchiveError::Missing`] for missing archives.
+    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+    /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+    /// - [`ArchiveError::Unknown`] for other failures.
+    /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
         let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
@@ -163,19 +183,13 @@ impl ArchiveStore {
                 }
             }
             Err(_) if wants_tar(source) => {
-                return Err(Error::Plan(format!(
-                    "cannot unpack '{}': not a tar archive",
-                    source.display()
-                )));
+                return Err(not_archive(source));
             }
             Err(_) => {}
         }
         match self.run_backend(source, &dest, &GzippedTarBackend) {
             Ok(handles) => Ok(handles),
-            Err(_) if wants_tar(source) => Err(Error::Plan(format!(
-                "cannot unpack '{}': not a tar archive",
-                source.display()
-            ))),
+            Err(_) if wants_tar(source) => Err(not_archive(source)),
             Err(_) => self.run_backend(source, &dest, &GzipBackend),
         }
     }
@@ -188,7 +202,9 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Unreadable archives and write failures fail as plan errors.
+    /// - [`ArchiveError::Missing`] for missing archives.
+    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::Unknown`] for other failures.
     fn run_backend(
         &self,
         source: &Path,
@@ -197,9 +213,10 @@ impl ArchiveStore {
     ) -> Result<Vec<ResourceHandle>> {
         let staging = staging_path(dest);
         if driver::exists(&staging) {
-            driver::remove_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
+            driver::remove_dir_all(&staging)
+                .map_err(|error| ArchiveError::from_io(source, error))?;
         }
-        driver::create_dir_all(&staging).map_err(|error| unpack_failure(source, error))?;
+        driver::create_dir_all(&staging).map_err(|error| ArchiveError::from_io(source, error))?;
         let born = match backend.unpack(source, &staging) {
             Ok(born) => born,
             Err(error) => {
@@ -214,11 +231,19 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Unknown members fail as plan errors naming the member.
+    /// - [`ArchiveError::UnknownMember`] for unknown members.
+    /// - [`ArchiveError::Denied`] for denied members.
+    /// - [`ArchiveError::Unknown`] for other failures.
     pub fn open_decompressed(&self, member: &ResourceHandle) -> Result<Box<dyn std::io::Read>> {
         check_member_handle(member)?;
         let path = member.canonical();
-        let file = driver::open_read(path).map_err(|_| missing_member(path))?;
+        let file = driver::open_read(path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => missing_member(path),
+            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+                path: path.to_path_buf(),
+            },
+            _ => ArchiveError::from_io(path, error),
+        })?;
         Ok(Box::new(file) as Box<dyn std::io::Read>)
     }
 
@@ -228,7 +253,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Unknown members fail as plan errors naming the member.
+    /// - [`ArchiveError::UnknownMember`] for unknown members.
     pub fn extract_member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
         let members = self.extract(archive)?;
         let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
@@ -236,11 +261,9 @@ impl ArchiveStore {
         members
             .into_iter()
             .find(|member| member.canonical() == wanted)
-            .ok_or_else(|| {
-                Error::Plan(format!(
-                    "cannot unpack '{}': unknown member '{name}'",
-                    archive.canonical().display()
-                ))
+            .ok_or_else(|| ArchiveError::UnknownMember {
+                path: archive.canonical().to_path_buf(),
+                name: name.to_owned(),
             })
     }
 
@@ -248,14 +271,22 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// Missing members fail as plan errors naming the member.
+    /// - [`ArchiveError::UnknownMember`] for missing members.
+    /// - [`ArchiveError::Denied`] for denied members.
+    /// - [`ArchiveError::Unknown`] for other failures.
     pub fn mode(&self, member: &ResourceHandle) -> Result<u32> {
         check_member_handle(member)?;
         let path = member.canonical();
         if driver::read_link(path).is_ok() {
             return Ok(DEFAULT_MEMBER_MODE);
         }
-        driver::mode(path).map_err(|_| missing_member(path))
+        driver::mode(path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => missing_member(path),
+            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+                path: path.to_path_buf(),
+            },
+            _ => ArchiveError::from_io(path, error),
+        })
     }
 }
 
@@ -263,13 +294,13 @@ impl ArchiveStore {
 ///
 /// # Errors
 ///
-/// Missing and unreadable files fail as plan errors naming
-/// the source.
+/// - [`ArchiveError::Missing`] for missing sources.
+/// - [`ArchiveError::Denied`] for denied sources.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn file_sha(source: &Path) -> Result<Sha> {
-    let mut file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
-    Sha::read(&mut file)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))
+    let mut file =
+        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
+    Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
 }
 
 /// Proves one source holds a compressed archive.
@@ -279,8 +310,10 @@ fn file_sha(source: &Path) -> Result<Sha> {
 ///
 /// # Errors
 ///
-/// Plain and undecodable sources fail as plan errors naming
-/// the source.
+/// - [`ArchiveError::NotArchive`] for plain sources.
+/// - [`ArchiveError::Missing`] for missing sources.
+/// - [`ArchiveError::Denied`] for denied sources.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn check_compressed_source(source: &Path) -> Result<()> {
     if peek_is_zip(source)? {
         return ZipBackend
@@ -301,12 +334,11 @@ fn check_compressed_source(source: &Path) -> Result<()> {
     }
 }
 
-/// Builds one non-archive error naming the source.
-fn not_archive(source: &Path) -> Error {
-    Error::Plan(format!(
-        "cannot archive '{}': not a compressed archive",
-        source.display()
-    ))
+/// Builds one non-archive error holding the source path.
+fn not_archive(source: &Path) -> ArchiveError {
+    ArchiveError::NotArchive {
+        path: source.to_path_buf(),
+    }
 }
 
 /// Builds born member handles from streamed hashes.
@@ -315,15 +347,15 @@ fn not_archive(source: &Path) -> Error {
 ///
 /// # Errors
 ///
-/// Containment failures surface as plan errors.
+/// - [`ArchiveError::Escape`] for containment failures.
 fn streamed_handles(dest: &Path, members: &[BornMember]) -> Result<Vec<ResourceHandle>> {
     let mut handles = Vec::with_capacity(members.len());
     for member in members {
-        handles.push(ResourceHandle::new(
-            dest,
-            dest.join(&member.name),
-            member.sha.clone(),
-        )?);
+        let path = dest.join(&member.name);
+        handles.push(
+            ResourceHandle::new(dest, path.clone(), member.sha.clone())
+                .map_err(|_| ArchiveError::Escape { path })?,
+        );
     }
     handles.sort_by(|left, right| left.canonical().cmp(right.canonical()));
     Ok(handles)
@@ -335,7 +367,9 @@ fn streamed_handles(dest: &Path, members: &[BornMember]) -> Result<Vec<ResourceH
 ///
 /// # Errors
 ///
-/// Rename failures surface as plan errors naming the source.
+/// - [`ArchiveError::Missing`] for missing paths.
+/// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Unknown`] for other rename failures.
 fn finish_unpack(
     source: &Path,
     dest: &Path,
@@ -350,7 +384,7 @@ fn finish_unpack(
         }
         Err(error) => {
             let _ = driver::remove_dir_all(staging);
-            Err(unpack_failure(source, error))
+            Err(ArchiveError::from_io(source, error))
         }
     }
 }
@@ -359,19 +393,17 @@ fn finish_unpack(
 ///
 /// # Errors
 ///
-/// Missing and unreadable files fail as plan errors naming
-/// the archive.
+/// - [`ArchiveError::Missing`] for missing sources.
+/// - [`ArchiveError::Denied`] for denied sources.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn peek_is_gzip(source: &Path) -> Result<bool> {
-    let mut file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    let mut file =
+        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
     let mut magic = [0u8; 2];
     match file.read_exact(&mut magic) {
         Ok(()) => Ok(magic == [0x1f, 0x8b]),
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(Error::Plan(format!(
-            "cannot read '{}': {error}",
-            source.display()
-        ))),
+        Err(error) => Err(ArchiveError::from_io(source, error)),
     }
 }
 
@@ -379,19 +411,29 @@ fn peek_is_gzip(source: &Path) -> Result<bool> {
 ///
 /// # Errors
 ///
-/// Missing and unreadable files fail as plan errors naming
-/// the archive.
+/// - [`ArchiveError::Missing`] for missing sources.
+/// - [`ArchiveError::Denied`] for denied sources.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn peek_is_zip(source: &Path) -> Result<bool> {
-    let mut file = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+    let mut file =
+        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
     let mut magic = [0u8; 4];
     match file.read_exact(&mut magic) {
         Ok(()) => Ok(magic == ZIP_LOCAL_MAGIC || magic == ZIP_EMPTY_MAGIC),
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(Error::Plan(format!(
-            "cannot read '{}': {error}",
-            source.display()
-        ))),
+        Err(error) => Err(ArchiveError::from_io(source, error)),
+    }
+}
+
+/// Maps one stream failure into its archive error.
+pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
+    match error.kind() {
+        std::io::ErrorKind::Other
+        | std::io::ErrorKind::InvalidInput
+        | std::io::ErrorKind::UnexpectedEof => ArchiveError::CorruptedArchive {
+            path: source.to_path_buf(),
+        },
+        _ => ArchiveError::from_io(source, error),
     }
 }
 
@@ -402,7 +444,9 @@ fn peek_is_zip(source: &Path) -> Result<bool> {
 ///
 /// # Errors
 ///
-/// Spill failures surface as plan errors naming the source.
+/// - [`ArchiveError::Missing`] for missing paths.
+/// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Unknown`] for other spill failures.
 pub(crate) fn spill_entry(
     source: &Path,
     staging: &Path,
@@ -417,13 +461,13 @@ pub(crate) fn spill_entry(
         && let Err(error) = driver::create_dir_all(parent)
     {
         let _ = driver::remove_dir_all(staging);
-        return Err(unpack_failure(source, error));
+        return Err(ArchiveError::from_io(source, error));
     }
     let mut out = match driver::create(&path) {
         Ok(out) => out,
         Err(error) => {
             let _ = driver::remove_dir_all(staging);
-            return Err(unpack_failure(source, error));
+            return Err(ArchiveError::from_io(source, error));
         }
     };
     let mut reader = reader;
@@ -434,7 +478,7 @@ pub(crate) fn spill_entry(
             Ok(read) => read,
             Err(error) => {
                 let _ = driver::remove_dir_all(staging);
-                return Err(unpack_failure(source, error));
+                return Err(ArchiveError::from_io(source, error));
             }
         };
         if read == 0 {
@@ -443,7 +487,7 @@ pub(crate) fn spill_entry(
         hasher.update(&chunk[..read]);
         if let Err(error) = out.write_all(&chunk[..read]) {
             let _ = driver::remove_dir_all(staging);
-            return Err(unpack_failure(source, error));
+            return Err(ArchiveError::from_io(source, error));
         }
     }
     Ok(BornMember {
@@ -458,7 +502,10 @@ pub(crate) fn spill_entry(
 ///
 /// # Errors
 ///
-/// Unreadable spills and missing members fail as plan errors.
+/// - [`ArchiveError::Missing`] for missing paths.
+/// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Unknown`] for other spill failures.
+/// - [`ArchiveError::UnknownMember`] for missing members.
 fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
     let mut names = Vec::new();
     collect_spill_names(dest, dest, &mut names, source)?;
@@ -467,7 +514,10 @@ fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
     for name in &names {
         let path = dest.join(name);
         let sha = spill_file_sha(&path, source, name)?;
-        handles.push(ResourceHandle::new(dest, path, sha)?);
+        handles.push(
+            ResourceHandle::new(dest, path.clone(), sha)
+                .map_err(|_| ArchiveError::Escape { path })?,
+        );
     }
     Ok(handles)
 }
@@ -476,16 +526,27 @@ fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
 ///
 /// # Errors
 ///
-/// Unreadable members fail as plan errors naming archive
-/// and member.
+/// - [`ArchiveError::UnknownMember`] for missing members.
+/// - [`ArchiveError::Denied`] for denied members.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
-    let mut file = driver::open_read(path).map_err(|_| missing_spilled_member(source, name))?;
+    let mut file = driver::open_read(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => missing_spilled_member(source, name),
+        std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+            path: source.to_path_buf(),
+        },
+        _ => ArchiveError::from_io(source, error),
+    })?;
     let mut hasher = sha2::Sha256::new();
     let mut chunk = [0u8; ENTRY_CHUNK];
     loop {
-        let read = file
-            .read(&mut chunk)
-            .map_err(|_| missing_spilled_member(source, name))?;
+        let read = file.read(&mut chunk).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => missing_spilled_member(source, name),
+            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+                path: source.to_path_buf(),
+            },
+            _ => ArchiveError::from_io(source, error),
+        })?;
         if read == 0 {
             break;
         }
@@ -500,14 +561,16 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
 ///
 /// # Errors
 ///
-/// Listing failures surface as plan errors naming the source.
+/// - [`ArchiveError::Missing`] for missing paths.
+/// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Unknown`] for other listing failures.
 fn collect_spill_names(
     dir: &Path,
     root: &Path,
     names: &mut Vec<String>,
     source: &Path,
 ) -> Result<()> {
-    let entries = driver::read_dir(dir).map_err(|error| unpack_failure(source, error))?;
+    let entries = driver::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
     for path in entries {
         if driver::metadata(&path)
             .map(|facts| facts.is_dir())
@@ -522,51 +585,51 @@ fn collect_spill_names(
         {
             let relative = path
                 .strip_prefix(root)
-                .map_err(|error| unpack_failure(source, error))?;
+                .map_err(|error| ArchiveError::Unknown {
+                    path: source.to_path_buf(),
+                    message: error.to_string(),
+                })?;
             names.push(relative.to_string_lossy().replace('\\', "/"));
         }
     }
     Ok(())
 }
 
-/// Builds one missing spilled member error naming archive and member.
-fn missing_spilled_member(source: &Path, name: &str) -> Error {
-    Error::Plan(format!(
-        "cannot unpack '{}': missing member '{name}'",
-        source.display()
-    ))
+/// Builds one unknown spilled member error holding archive and name.
+fn missing_spilled_member(source: &Path, name: &str) -> ArchiveError {
+    ArchiveError::UnknownMember {
+        path: source.to_path_buf(),
+        name: name.to_owned(),
+    }
 }
 
-/// Builds one missing member error naming the member path.
-fn missing_member(member: &Path) -> Error {
-    Error::Plan(format!(
-        "cannot unpack '{}': missing member",
-        member.display()
-    ))
+/// Builds one unknown member error holding the member path.
+fn missing_member(member: &Path) -> ArchiveError {
+    ArchiveError::UnknownMember {
+        path: member.to_path_buf(),
+        name: member
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| member.to_string_lossy().into_owned()),
+    }
 }
 
 /// Rejects member paths escaping the unpack folder.
 ///
 /// # Errors
 ///
-/// Dot-dot members fail as plan errors naming the member.
+/// - [`ArchiveError::Escape`] for dot-dot members.
 fn check_member_handle(member: &ResourceHandle) -> Result<()> {
     let escapes = member
         .canonical()
         .components()
         .any(|segment| matches!(segment, std::path::Component::ParentDir));
     if escapes {
-        return Err(Error::Plan(format!(
-            "cannot unpack '{}': member escapes",
-            member.canonical().display()
-        )));
+        return Err(ArchiveError::Escape {
+            path: member.canonical().to_path_buf(),
+        });
     }
     Ok(())
-}
-
-/// Builds one unpack plan error naming the archive.
-fn unpack_failure(archive: &Path, error: impl std::fmt::Display) -> Error {
-    Error::Plan(format!("cannot unpack '{}': {error}", archive.display()))
 }
 
 /// Rejects escaping member names before one unpack.
@@ -577,7 +640,10 @@ fn unpack_failure(archive: &Path, error: impl std::fmt::Display) -> Error {
 ///
 /// # Errors
 ///
-/// Escaping members fail as plan errors naming the member.
+/// - [`ArchiveError::Escape`] for escaping members.
+/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+/// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
 fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -> Result<()> {
     for name in &backend.names(source)? {
         check_member_path(name, source)?;
@@ -598,26 +664,23 @@ fn staging_path(dest: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Empty, absolute, and dot-dot members fail as plan errors.
+/// - [`ArchiveError::Escape`] for empty, absolute, and dot-dot members.
 fn check_member_path(name: &str, archive: &Path) -> Result<()> {
     if name.is_empty() {
-        return Err(Error::Plan(format!(
-            "cannot unpack '{}': empty member path",
-            archive.display()
-        )));
+        return Err(ArchiveError::Escape {
+            path: archive.to_path_buf(),
+        });
     }
     if Path::new(name).is_absolute() {
-        return Err(Error::Plan(format!(
-            "cannot unpack '{}': member '{name}' escapes",
-            archive.display()
-        )));
+        return Err(ArchiveError::Escape {
+            path: PathBuf::from(name),
+        });
     }
     for segment in name.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
-            return Err(Error::Plan(format!(
-                "cannot unpack '{}': member '{name}' escapes",
-                archive.display()
-            )));
+            return Err(ArchiveError::Escape {
+                path: archive.join(name),
+            });
         }
     }
     Ok(())
@@ -941,16 +1004,10 @@ mod tests {
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = born_archive(&store, dir.path(), "evil.tar.gz", &evil_tar_gz_bytes());
-        let expected = format!(
-            "cannot unpack '{}': member '../evil.txt' escapes",
-            archive.canonical().display()
-        );
         match store.extract(&archive) {
             Ok(_) => panic!("escaping member passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&expected),
-                "error names source plus member: {error}"
-            ),
+            Err(ArchiveError::Escape { .. }) => {}
+            Err(error) => panic!("wrong escape variant: {error}"),
         }
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
         if driver::exists(&spill_base) {
@@ -1224,20 +1281,10 @@ mod tests {
             Err(error) => panic!("repeat unpack skips: {error}"),
         }
         let evil = born_archive(&store, dir.path(), "evil.zip", &evil_zip_bytes());
-        let expected = format!(
-            "cannot unpack '{}': member '../evil.txt' escapes",
-            evil.canonical().display()
-        );
         match store.extract(&evil) {
             Ok(_) => panic!("escaping member passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains(&expected),
-                    "error names source plus member: {text}"
-                );
-                assert!(text.contains("escapes"), "error reports escape: {text}");
-            }
+            Err(ArchiveError::Escape { .. }) => {}
+            Err(error) => panic!("wrong escape variant: {error}"),
         }
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
         let evil_spill = spill_base.join(evil.sha().hex());

@@ -7,11 +7,13 @@ use std::io::Read as _;
 use std::path::Path;
 
 use confit_model::document::BlobRef;
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_model::sha::Sha;
 
+use super::error::{BundleError, Result};
 use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, BUNDLE_VERSION, Bundle, BundleStore};
+use crate::archive::error::ArchiveError;
+use crate::blob::error::BlobError;
 use crate::handles::ArchiveHandle;
 
 /// Blob hash length in lowercase hex chars.
@@ -22,29 +24,30 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// Unreadable files and bad payloads fail as plan errors.
+    /// - [`BundleError::Unreachable`] for missing files.
+    /// - [`BundleError::Denied`] for denied files.
+    /// - [`BundleError::Unknown`] for other failures.
+    /// - [`BundleError::Version`] for unsupported versions.
+    /// - [`BundleError::Missing`] for missing blobs.
     pub fn read(&self, path: &Path) -> Result<Bundle> {
         let handle = self
             .archives
             .seal(path)
-            .map_err(|error| read_failure(path, error))?;
+            .map_err(|error| from_archive(path, error))?;
         let names = self
             .archives
             .members(&handle)
-            .map_err(|error| read_failure(path, error))?;
+            .map_err(|error| from_archive(path, error))?;
         let (has_manifest, wanted) = check_names(&names, path)?;
         if !has_manifest {
-            return Err(Error::Plan(format!(
-                "read bundle '{}': missing manifest",
-                path.display()
-            )));
+            return Err(unknown(path, "missing manifest".to_owned()));
         }
         let manifest = self.read_manifest(&handle, path)?;
         if manifest.version != BUNDLE_VERSION {
-            return Err(Error::Plan(format!(
-                "bundle version {} reads unsupported, want {BUNDLE_VERSION}",
-                manifest.version
-            )));
+            return Err(BundleError::Version {
+                path: path.to_path_buf(),
+                got: u64::from(manifest.version),
+            });
         }
         let refs = manifest_refs(&manifest);
         for blob in &refs {
@@ -52,11 +55,9 @@ impl BundleStore {
                 .iter()
                 .any(|name| name == blob.stored().hex().as_str())
             {
-                return Err(Error::Plan(format!(
-                    "read bundle '{}': missing blob '{}'",
-                    path.display(),
-                    blob.sha()
-                )));
+                return Err(BundleError::Missing {
+                    sha: blob.sha().clone(),
+                });
             }
         }
         for stored in &wanted {
@@ -75,44 +76,42 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// Unreadable members and bad payloads fail as plan errors
-    /// naming the bundle.
+    /// - [`BundleError::Unreachable`] for missing members.
+    /// - [`BundleError::Denied`] for denied members.
+    /// - [`BundleError::Unknown`] for other failures.
     fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
         let member = self
             .archives
             .extract_member(handle, BUNDLE_MANIFEST)
-            .map_err(|error| read_failure(bundle, error))?;
+            .map_err(|error| from_archive(bundle, error))?;
         let mut reader = self
             .archives
             .open_decompressed(&member)
-            .map_err(|error| read_failure(bundle, error))?;
+            .map_err(|error| from_archive(bundle, error))?;
         let mut raw = Vec::new();
         reader
             .read_to_end(&mut raw)
-            .map_err(|error| read_failure(bundle, error))?;
-        serde_json::from_slice(&raw).map_err(|error| read_failure(bundle, error))
+            .map_err(|error| BundleError::from_io(bundle, error))?;
+        serde_json::from_slice(&raw).map_err(|error| unknown(bundle, error.to_string()))
     }
 
     /// Receives one blob member into the cache blind.
     ///
     /// # Errors
     ///
-    /// Unreadable members and bad ids fail as plan errors naming
-    /// the bundle. Cache write failures surface as plan errors
-    /// naming the destination.
+    /// - [`BundleError::Unreachable`] for missing members.
+    /// - [`BundleError::Denied`] for denied members.
+    /// - [`BundleError::Unknown`] for other failures.
     fn receive_blob(&self, handle: &ArchiveHandle, stored: &str, bundle: &Path) -> Result<()> {
-        let name = format!("{BUNDLE_BLOBS_PREFIX}{stored}");
+        let name = [BUNDLE_BLOBS_PREFIX, stored].concat();
         let member = self
             .archives
             .extract_member(handle, &name)
-            .map_err(|error| read_failure(bundle, error))?;
-        let stored_sha = Sha::new(stored).map_err(|_| {
-            Error::Plan(format!(
-                "read bundle '{}': bad blob entry '{stored}'",
-                bundle.display()
-            ))
-        })?;
-        self.blobs.receive(&stored_sha, &member)?;
+            .map_err(|error| from_archive(bundle, error))?;
+        let stored_sha = Sha::new(stored).map_err(|error| unknown(bundle, error.to_string()))?;
+        self.blobs
+            .receive(&stored_sha, &member)
+            .map_err(|error| from_blob(bundle, error))?;
         Ok(())
     }
 }
@@ -121,8 +120,7 @@ impl BundleStore {
 ///
 /// # Errors
 ///
-/// Duplicate, unexpected, and malformed entries fail as plan
-/// errors naming the bundle.
+/// - [`BundleError::Unknown`] for duplicate, unexpected, and malformed entries.
 fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     let mut has_manifest = false;
     let mut wanted: Vec<String> = Vec::new();
@@ -130,26 +128,17 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     for name in names {
         if name == BUNDLE_MANIFEST {
             if has_manifest {
-                return Err(Error::Plan(format!(
-                    "read bundle '{}': duplicate manifest",
-                    bundle.display()
-                )));
+                return Err(unknown(bundle, "duplicate manifest".to_owned()));
             }
             has_manifest = true;
         } else if let Some(stored) = name.strip_prefix(BUNDLE_BLOBS_PREFIX) {
-            check_blob_id(stored)?;
+            check_blob_id(bundle, stored)?;
             if !seen.insert(stored.to_string()) {
-                return Err(Error::Plan(format!(
-                    "read bundle '{}': duplicate blob '{stored}'",
-                    bundle.display()
-                )));
+                return Err(unknown(bundle, "duplicate blob".to_owned()));
             }
             wanted.push(stored.to_string());
         } else {
-            return Err(Error::Plan(format!(
-                "read bundle '{}': unexpected entry '{name}'",
-                bundle.display()
-            )));
+            return Err(unknown(bundle, "unexpected entry".to_owned()));
         }
     }
     Ok((has_manifest, wanted))
@@ -164,23 +153,63 @@ fn manifest_refs(manifest: &Manifest) -> Vec<BlobRef> {
     refs
 }
 
-/// Builds one bundle read error naming the bundle.
-fn read_failure(bundle: &Path, error: impl std::fmt::Display) -> Error {
-    Error::Plan(format!("read bundle '{}': {error}", bundle.display()))
+/// Builds one bundle unknown error naming the bundle.
+fn unknown(bundle: &Path, message: String) -> BundleError {
+    BundleError::Unknown {
+        path: bundle.to_path_buf(),
+        message,
+    }
+}
+
+/// Maps one archive failure at the bundle path into bundle language.
+fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
+    match error {
+        ArchiveError::Missing { .. } => BundleError::Unreachable {
+            path: bundle.to_path_buf(),
+        },
+        ArchiveError::Denied { .. } => BundleError::Denied {
+            path: bundle.to_path_buf(),
+        },
+        ArchiveError::Unknown { message, .. } => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message,
+        },
+        other => unknown(bundle, other.to_string()),
+    }
+}
+
+/// Maps one blob failure at the bundle path into bundle language.
+fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
+    match error {
+        BlobError::Missing { sha } => BundleError::Missing { sha },
+        BlobError::WriteMissing { .. } => BundleError::Unreachable {
+            path: bundle.to_path_buf(),
+        },
+        BlobError::Denied { .. } | BlobError::WriteDenied { .. } => BundleError::Denied {
+            path: bundle.to_path_buf(),
+        },
+        BlobError::Unknown { message, .. } => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message,
+        },
+        BlobError::WriteUnknown { message, .. } => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message,
+        },
+        other => unknown(bundle, other.to_string()),
+    }
 }
 
 /// Checks one blob reference holds 64 hex chars.
 ///
 /// # Errors
 ///
-/// Malformed references fail as plan errors naming the value.
-fn check_blob_id(sha: &str) -> Result<()> {
+/// - [`BundleError::Unknown`] for malformed references.
+fn check_blob_id(bundle: &Path, sha: &str) -> Result<()> {
     if sha.len() == BLOB_ID_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(())
     } else {
-        Err(Error::Plan(format!(
-            "bad blob ref '{sha}': want {BLOB_ID_LEN} hex chars"
-        )))
+        Err(unknown(bundle, "bad blob ref".to_owned()))
     }
 }
 
@@ -304,14 +333,11 @@ mod tests {
         driver::write(&path, &archive).unwrap();
         match store.read(&path) {
             Ok(_) => panic!("stale bundle passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("unsupported"), "stale reports itself: {text}");
-                assert!(
-                    text.contains(&BUNDLE_VERSION.to_string()),
-                    "stale names the want: {text}"
-                );
+            Err(BundleError::Version { path: found, got }) => {
+                assert_eq!(found, path, "stale keeps its path");
+                assert_eq!(got, 0, "stale keeps its version");
             }
+            Err(error) => panic!("wrong stale variant: {error}"),
         }
     }
 

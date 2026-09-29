@@ -63,9 +63,7 @@ impl Route {
     ///
     /// # Errors
     ///
-    /// Empty paths fail as parse errors. Validity beyond non-empty
-    /// stays apply-time business.
-    ///
+    /// - [`Error::Parse`] for empty paths.
     pub fn new(base: RouteBase, relative: impl Into<PathBuf>) -> Result<Self> {
         let relative = relative.into();
         if relative.as_os_str().is_empty() {
@@ -114,8 +112,7 @@ impl Route {
     ///
     /// # Errors
     ///
-    /// Unknown bases, missing separators, and empty paths
-    /// fail as parse errors.
+    /// - [`Error::Parse`] for unknown bases, missing separators, and empty paths.
     ///
     pub fn parse(text: &str) -> Result<Self> {
         let Some((base_name, relative)) = text.split_once(':') else {

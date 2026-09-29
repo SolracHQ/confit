@@ -108,6 +108,7 @@ impl<'a> ExportRunner<'a> {
             stores
                 .bundles()
                 .write(&bundle, &dest, sinks.progress.as_ref())
+                .map_err(|error| Error::Plan(error.to_string()))
         })?;
         Ok(ExportReport {
             dest: Some(dest),
@@ -147,10 +148,9 @@ impl<'a> ExportRunner<'a> {
 /// assert_eq!(dest.extension().and_then(|ext| ext.to_str()), Some("cb"));
 /// ```
 pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Bundle, PathBuf)> {
-    let (bundle, kind) = slots.resolve(picker).map_err(|error| match error {
-        Error::Plan(detail) => Error::Plan(format!("export: {detail}")),
-        other => other,
-    })?;
+    let (bundle, kind) = slots
+        .resolve(picker)
+        .map_err(|error| Error::Plan(error.to_string()))?;
     let stem = match kind {
         SlotKind::Applied => APPLIED_STEM.to_string(),
         SlotKind::Named(name) => name,

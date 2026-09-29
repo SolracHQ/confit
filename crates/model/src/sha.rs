@@ -31,7 +31,7 @@ impl Sha {
     ///
     /// # Errors
     ///
-    /// Malformed hashes fail as parse errors.
+    /// - [`Error::Parse`] for malformed hashes.
     ///
     pub fn new(sha: impl Into<String>) -> Result<Self> {
         let sha = sha.into();
@@ -69,7 +69,7 @@ impl Sha {
     ///
     /// Stream read failures surface as io errors.
     ///
-    pub fn read(stream: &mut impl std::io::Read) -> Result<Self> {
+    pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
         let mut hasher = sha2::Sha256::new();
         let mut chunk = [0u8; READ_CHUNK_BYTES];
         loop {

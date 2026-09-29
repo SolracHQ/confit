@@ -5,9 +5,8 @@
 
 use std::path::Path;
 
-use confit_model::error::{Error, Result};
-
-use super::{ArchiveBackend, BornMember, spill_entry, unpack_failure};
+use super::error::{ArchiveError, Result};
+use super::{ArchiveBackend, BornMember, from_stream, spill_entry};
 use confit_driver as driver;
 
 /// Streaming plain-tar member listing and extraction.
@@ -46,11 +45,11 @@ impl ArchiveBackend for GzippedTarBackend {
 ///
 /// # Errors
 ///
-/// Missing and unreadable sources fail as plan errors
-/// naming the source.
+/// - [`ArchiveError::Missing`] for missing sources.
+/// - [`ArchiveError::Denied`] for denied sources.
+/// - [`ArchiveError::Unknown`] for other failures.
 fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
-    driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))
+    driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))
 }
 
 /// Lists file member names from a tar stream without keeping content.
@@ -59,20 +58,25 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
 ///
 /// # Errors
 ///
-/// Malformed archives fail as plan errors naming the archive.
+/// - [`ArchiveError::Missing`] for missing archives.
+/// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Unknown`] for other stream failures.
+/// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn stream_names<R: std::io::Read>(reader: R, archive: &Path) -> Result<Vec<String>> {
     let mut reader = tar::Archive::new(reader);
     let entries = reader
         .entries()
-        .map_err(|error| unpack_failure(archive, error))?;
+        .map_err(|_| ArchiveError::CorruptedArchive {
+            path: archive.to_path_buf(),
+        })?;
     let mut names = Vec::new();
     for entry in entries {
-        let mut entry = entry.map_err(|error| unpack_failure(archive, error))?;
+        let mut entry = entry.map_err(|error| from_stream(archive, error))?;
         if let Some(name) = entry_name(&entry, archive)? {
             names.push(name);
         }
         std::io::copy(&mut entry, &mut std::io::sink())
-            .map_err(|error| unpack_failure(archive, error))?;
+            .map_err(|error| from_stream(archive, error))?;
     }
     Ok(names)
 }
@@ -84,8 +88,10 @@ fn stream_names<R: std::io::Read>(reader: R, archive: &Path) -> Result<Vec<Strin
 ///
 /// # Errors
 ///
-/// Decoder and spill failures surface as plan errors naming
-/// the source.
+/// - [`ArchiveError::Missing`] for missing archives.
+/// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Unknown`] for other stream failures.
+/// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn unpack_tar_entries<R: std::io::Read>(
     reader: R,
     source: &Path,
@@ -94,13 +100,15 @@ fn unpack_tar_entries<R: std::io::Read>(
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
-        .map_err(|error| unpack_failure(source, error))?;
+        .map_err(|_| ArchiveError::CorruptedArchive {
+            path: source.to_path_buf(),
+        })?;
     let mut born = Vec::new();
     for entry in entries {
-        let mut entry = entry.map_err(|error| unpack_failure(source, error))?;
+        let mut entry = entry.map_err(|error| from_stream(source, error))?;
         let Some(name) = entry_name(&entry, source)? else {
             std::io::copy(&mut entry, &mut std::io::sink())
-                .map_err(|error| unpack_failure(source, error))?;
+                .map_err(|error| from_stream(source, error))?;
             continue;
         };
         born.push(spill_entry(source, staging, &name, entry)?);
@@ -114,8 +122,7 @@ fn unpack_tar_entries<R: std::io::Read>(
 ///
 /// # Errors
 ///
-/// Undecodable entry paths fail as plan errors naming the
-/// archive.
+/// - [`ArchiveError::CorruptedArchive`] for undecodable entry paths.
 fn entry_name<R: std::io::Read>(
     entry: &tar::Entry<'_, R>,
     archive: &Path,
@@ -126,7 +133,9 @@ fn entry_name<R: std::io::Read>(
     }
     let name = entry
         .path()
-        .map_err(|error| unpack_failure(archive, error))?
+        .map_err(|_| ArchiveError::CorruptedArchive {
+            path: archive.to_path_buf(),
+        })?
         .to_string_lossy()
         .into_owned();
     if name.is_empty() {

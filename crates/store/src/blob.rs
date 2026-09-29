@@ -2,13 +2,14 @@
 //!
 //! Content-addressed blob pool behind stored hashes.
 
+pub mod error;
+
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use confit_model::document::BlobRef;
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_model::sha::Sha;
 use sha2::Digest;
@@ -17,6 +18,7 @@ use crate::StoreRoots;
 use crate::bundle::BUNDLE_VERSION;
 use crate::handles::{BlobHandle, TrustedHandle};
 use confit_driver as driver;
+use error::{BlobError, Result};
 
 /// Pool folder name under the config base.
 const BLOBS_DIR: &str = "blobs";
@@ -99,12 +101,18 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Missing blobs fail as plan errors naming the hash.
+    /// - [`BlobError::Missing`] for missing blobs.
     pub fn resolve(&self, blob: &BlobRef) -> Result<BlobHandle> {
         if self.present(blob.stored()) {
-            BlobHandle::new(blob.sha().clone(), blob.stored().clone())
+            BlobHandle::new(blob.sha().clone(), blob.stored().clone()).map_err(|_| {
+                BlobError::Corrupt {
+                    sha: blob.sha().clone(),
+                }
+            })
         } else {
-            Err(Error::Plan(format!("missing blob '{}'", blob.sha())))
+            Err(BlobError::Missing {
+                sha: blob.sha().clone(),
+            })
         }
     }
 
@@ -116,18 +124,14 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Missing blobs and verification failures fail as plan errors
-    /// naming the hash.
+    /// - [`BlobError::Missing`] for missing blobs.
+    /// - [`BlobError::Denied`] for denied blobs.
+    /// - [`BlobError::Unknown`] for other failures.
     pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
         let sha = handle.sha().clone();
         let path = self.live_path(handle);
-        let file = driver::open_read(&path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::Plan(format!("missing blob '{sha}'"))
-            } else {
-                Error::Plan(format!("read blob '{sha}': {error}"))
-            }
-        })?;
+        let file =
+            driver::open_read(&path).map_err(|error| BlobError::from_read_io(&sha, error))?;
         Ok(Box::new(VerifiedBlobReader {
             decoder: flate2::read::GzDecoder::new(file),
             sha,
@@ -144,60 +148,59 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Missing sources fail as plan errors naming the path.
-    /// Cache write failures surface as plan or io errors.
+    /// - [`BlobError::Missing`] for missing sources.
+    /// - [`BlobError::Denied`] for denied sources.
+    /// - [`BlobError::Unknown`] for other read failures.
+    /// - [`BlobError::WriteMissing`] for missing cache paths.
+    /// - [`BlobError::WriteDenied`] for denied cache paths.
+    /// - [`BlobError::WriteUnknown`] for other cache write failures.
+    /// - [`BlobError::Compress`] for compression failures.
     pub fn put(&self, source: BlobSource<'_>) -> Result<BlobHandle> {
-        let (mut reader, sha, origin): (Box<dyn Read>, Sha, Option<PathBuf>) = match source {
+        let (mut reader, sha): (Box<dyn Read>, Sha) = match source {
             BlobSource::Bytes(bytes) => (
                 Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>,
                 Sha::hash(bytes),
-                None,
             ),
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
-                let file = driver::open_read(path).map_err(|error| {
-                    Error::Plan(format!("read source '{}': {error}", path.display()))
-                })?;
-                (file, handle.sha().clone(), Some(path.to_path_buf()))
+                let sha = handle.sha().clone();
+                let file = driver::open_read(path)
+                    .map_err(|error| BlobError::from_read_io(&sha, error))?;
+                (file, sha)
             }
         };
-        driver::create_dir_all(&self.cache).map_err(|error| {
-            Error::Plan(format!("cannot write '{}': {error}", self.cache.display()))
-        })?;
+        driver::create_dir_all(&self.cache)
+            .map_err(|error| BlobError::from_write_io(&self.cache, error))?;
         let staging = staging_path(&self.cache);
-        let staged = driver::create(&staging).map_err(|error| {
-            Error::Plan(format!("cannot write '{}': {error}", staging.display()))
-        })?;
+        let staged =
+            driver::create(&staging).map_err(|error| BlobError::from_write_io(&staging, error))?;
         let mut encoder = flate2::write::GzEncoder::new(
             StoredWriter::new(staged),
             flate2::Compression::new(BLOB_GZIP_LEVEL),
         );
         let mut chunk = [0u8; SOURCE_CHUNK];
         loop {
-            let read = reader.read(&mut chunk).map_err(|error| match &origin {
-                Some(path) => Error::Plan(format!("read source '{}': {error}", path.display())),
-                None => Error::Plan(format!("read blob stream: {error}")),
-            })?;
+            let read = reader
+                .read(&mut chunk)
+                .map_err(|error| BlobError::from_read_io(&sha, error))?;
             if read == 0 {
                 break;
             }
             encoder
                 .write_all(&chunk[..read])
-                .map_err(|error| Error::Plan(format!("compress blob: {error}")))?;
+                .map_err(|_| BlobError::Compress)?;
         }
-        let writer = encoder
-            .finish()
-            .map_err(|error| Error::Plan(format!("compress blob: {error}")))?;
-        let handle = BlobHandle::new(sha, writer.digest())?;
+        let writer = encoder.finish().map_err(|_| BlobError::Compress)?;
+        let stored = writer.digest();
+        let handle = BlobHandle::new(sha.clone(), stored)
+            .map_err(|_| BlobError::Corrupt { sha: sha.clone() })?;
         let dest = self.cache.join(handle.stored().hex());
         if driver::exists(&dest) {
-            driver::remove_file(&staging).map_err(|error| {
-                Error::Plan(format!("cannot write '{}': {error}", dest.display()))
-            })?;
+            driver::remove_file(&staging)
+                .map_err(|error| BlobError::from_write_io(&dest, error))?;
         } else {
-            driver::rename(&staging, &dest).map_err(|error| {
-                Error::Plan(format!("cannot write '{}': {error}", dest.display()))
-            })?;
+            driver::rename(&staging, &dest)
+                .map_err(|error| BlobError::from_write_io(&dest, error))?;
         }
         Ok(handle)
     }
@@ -221,20 +224,20 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Cache write failures surface as plan errors naming
-    /// the destination.
+    /// - [`BlobError::WriteMissing`] for missing cache paths.
+    /// - [`BlobError::WriteDenied`] for denied cache paths.
+    /// - [`BlobError::WriteUnknown`] for other cache write failures.
     pub(crate) fn receive(&self, stored: &Sha, source: &dyn TrustedHandle) -> Result<()> {
         let dest = self.cache.join(stored.hex());
         if driver::exists(&dest) {
             return Ok(());
         }
         driver::create_dir_all(&self.cache)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let staging = staging_path(&self.cache);
         driver::copy(source.canonical(), &staging)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
-        driver::rename(&staging, &dest)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
+        driver::rename(&staging, &dest).map_err(|error| BlobError::from_write_io(&dest, error))?;
         Ok(())
     }
 
@@ -246,20 +249,16 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Missing blobs fail as plan errors naming the hash.
+    /// - [`BlobError::Missing`] for missing blobs.
+    /// - [`BlobError::Denied`] for denied blobs.
+    /// - [`BlobError::Unknown`] for other failures.
     pub(crate) fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
         let path = self.live_path(handle);
         let len = driver::metadata(&path)
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    Error::Plan(format!("missing blob '{}'", handle.sha()))
-                } else {
-                    Error::Plan(format!("read blob '{}': {error}", handle.sha()))
-                }
-            })?
+            .map_err(|error| BlobError::from_read_io(handle.sha(), error))?
             .len();
         let file = driver::open_read(&path)
-            .map_err(|error| Error::Plan(format!("read blob '{}': {error}", handle.sha())))?;
+            .map_err(|error| BlobError::from_read_io(handle.sha(), error))?;
         Ok((len, file))
     }
 
@@ -270,17 +269,35 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Missing blobs fail as plan errors naming the hash.
+    /// - [`BlobError::Missing`] for missing blobs.
+    /// - [`BlobError::Denied`] for denied blobs.
+    /// - [`BlobError::Unknown`] for other failures.
+    /// - [`BlobError::Corrupt`] for corrupt pool files.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
-        pooled_len(&self.live_path(handle), handle.sha())
+        let sha = handle.sha().clone();
+        let footer = driver::read_tail(&self.live_path(handle), GZIP_ISIZE_LEN).map_err(
+            |error| match error.kind() {
+                std::io::ErrorKind::NotFound => BlobError::Missing { sha: sha.clone() },
+                std::io::ErrorKind::PermissionDenied => BlobError::Denied { sha: sha.clone() },
+                std::io::ErrorKind::UnexpectedEof => BlobError::Corrupt { sha: sha.clone() },
+                _ => BlobError::from_read_io(&sha, error),
+            },
+        )?;
+        let mut raw = [0u8; GZIP_ISIZE_LEN as usize];
+        raw.copy_from_slice(&footer);
+        Ok(u32::from_le_bytes(raw) as u64)
     }
 
     /// Persists cache blobs into the shared pool.
     ///
     /// # Errors
     ///
-    /// Cache reads and pool write failures surface as plan
-    /// or io errors.
+    /// - [`BlobError::Missing`] for missing blobs.
+    /// - [`BlobError::Denied`] for denied blobs.
+    /// - [`BlobError::Unknown`] for other cache read failures.
+    /// - [`BlobError::WriteMissing`] for missing pool paths.
+    /// - [`BlobError::WriteDenied`] for denied pool paths.
+    /// - [`BlobError::WriteUnknown`] for other pool write failures.
     pub fn persist(&self, blobs: &[BlobHandle]) -> Result<()> {
         for blob in blobs {
             let dest = self.pool.join(blob.stored().hex());
@@ -294,9 +311,8 @@ impl BlobStore {
                 continue;
             }
             if let Some(parent) = dest.parent() {
-                driver::create_dir_all(parent).map_err(|error| {
-                    Error::Plan(format!("cannot write '{}': {error}", dest.display()))
-                })?;
+                driver::create_dir_all(parent)
+                    .map_err(|error| BlobError::from_write_io(&dest, error))?;
             }
             match driver::rename(&source, &dest) {
                 Ok(()) => {}
@@ -329,7 +345,9 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// Listing and removal failures surface as plan or io errors.
+    /// - [`BlobError::WriteMissing`] for missing paths.
+    /// - [`BlobError::WriteDenied`] for denied paths.
+    /// - [`BlobError::WriteUnknown`] for other listing and removal failures.
     pub fn prune(&self) -> Result<usize> {
         let mut keep: BTreeSet<String> = BTreeSet::new();
         collect_manifest_refs(&self.config_base.join("state.json"), &mut keep);
@@ -345,15 +363,18 @@ impl BlobStore {
 ///
 /// # Errors
 ///
-/// Cache reads and pool write failures surface as plan errors
-/// naming the content hash or the destination.
+/// - [`BlobError::Missing`] for missing cache files.
+/// - [`BlobError::Denied`] for denied cache files.
+/// - [`BlobError::Unknown`] for other cache read failures.
+/// - [`BlobError::WriteMissing`] for missing pool paths.
+/// - [`BlobError::WriteDenied`] for denied pool paths.
+/// - [`BlobError::WriteUnknown`] for other pool write failures.
 fn stream_copy(source: &Path, dest: &Path, sha: &Sha) -> Result<()> {
-    let mut reader = driver::open_read(source)
-        .map_err(|error| Error::Plan(format!("read blob '{sha}': {error}")))?;
-    let mut writer = driver::create(dest)
-        .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+    let mut reader =
+        driver::open_read(source).map_err(|error| BlobError::from_read_io(sha, error))?;
+    let mut writer = driver::create(dest).map_err(|error| BlobError::from_write_io(dest, error))?;
     std::io::copy(&mut reader, &mut writer)
-        .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+        .map_err(|error| BlobError::from_write_io(dest, error))?;
     Ok(())
 }
 
@@ -406,9 +427,13 @@ impl std::io::Read for VerifiedBlobReader {
                 self.done = true;
                 let actual = Sha::finish(std::mem::replace(&mut self.hasher, sha2::Sha256::new()));
                 if actual != self.sha {
+                    let message = BlobError::Corrupt {
+                        sha: self.sha.clone(),
+                    }
+                    .to_string();
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("blob '{}' fails verification", self.sha),
+                        message,
                     ));
                 }
                 Ok(0)
@@ -417,37 +442,17 @@ impl std::io::Read for VerifiedBlobReader {
                 self.hasher.update(&buf[..read]);
                 Ok(read)
             }
-            Err(error) => Err(std::io::Error::other(format!(
-                "read blob '{}': {error}",
-                self.sha
-            ))),
+            Err(error) => {
+                let kind = error.kind();
+                let message = error.to_string();
+                Err(std::io::Error::new(kind, message))
+            }
         }
     }
 }
 
 /// Raw byte count for one pool file.
 ///
-/// Reads the count from the gzip footer.
-///
-/// # Errors
-///
-/// Missing, short, and unreadable pool files fail as
-/// plan errors naming the hash.
-fn pooled_len(path: &Path, sha: &Sha) -> Result<u64> {
-    let footer = driver::read_tail(path, GZIP_ISIZE_LEN).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Error::Plan(format!("missing blob '{sha}'"))
-        } else if error.kind() == std::io::ErrorKind::UnexpectedEof {
-            Error::Plan(format!("read blob '{sha}': short pool file"))
-        } else {
-            Error::Plan(format!("read blob '{sha}': {error}"))
-        }
-    })?;
-    let mut raw = [0u8; GZIP_ISIZE_LEN as usize];
-    raw.copy_from_slice(&footer);
-    Ok(u32::from_le_bytes(raw) as u64)
-}
-
 /// Drops files in one blob home unreferenced by the keep set.
 ///
 /// Missing folders read as zero removals.
@@ -463,12 +468,16 @@ fn pooled_len(path: &Path, sha: &Sha) -> Result<u64> {
 ///
 /// # Errors
 ///
-/// Listing and removal failures surface as plan or io errors.
+/// - [`BlobError::WriteMissing`] for missing paths.
+/// - [`BlobError::WriteDenied`] for denied paths.
+/// - [`BlobError::WriteUnknown`] for other listing and removal failures.
 fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
     let entries = match driver::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(Error::from(error)),
+        Err(error) => {
+            return Err(BlobError::from_write_io(dir, error));
+        }
     };
     let mut removed = 0;
     for path in entries {
@@ -479,7 +488,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
         if keep.contains(&name) {
             continue;
         }
-        driver::remove_file(&path).map_err(Error::from)?;
+        driver::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
         removed += 1;
     }
     Ok(removed)
@@ -491,12 +500,16 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
 ///
 /// # Errors
 ///
-/// Listing failures surface as plan or io errors.
+/// - [`BlobError::WriteMissing`] for missing paths.
+/// - [`BlobError::WriteDenied`] for denied paths.
+/// - [`BlobError::WriteUnknown`] for other listing failures.
 fn collect_dir_refs(dir: &Path, keep: &mut BTreeSet<String>) -> Result<()> {
     let files = match driver::read_dir(dir) {
         Ok(files) => files,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(Error::from(error)),
+        Err(error) => {
+            return Err(BlobError::from_write_io(dir, error));
+        }
     };
     for file in files {
         collect_manifest_refs(&file, keep);
@@ -765,12 +778,10 @@ mod tests {
         .unwrap();
         match store.put(BlobSource::Handle(&missing)) {
             Ok(_) => panic!("absent source passes"),
-            Err(error) => assert!(
-                error
-                    .to_string()
-                    .contains(&missing_path.display().to_string()),
-                "absent source names the path: {error}"
-            ),
+            Err(BlobError::Missing { sha }) => {
+                assert_eq!(sha, Sha::hash(b"x"), "absent source keeps the content hash")
+            }
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 

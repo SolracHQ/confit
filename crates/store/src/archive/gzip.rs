@@ -6,9 +6,8 @@
 use std::io::Read as _;
 use std::path::Path;
 
-use confit_model::error::{Error, Result};
-
-use super::{ArchiveBackend, BornMember, ENTRY_CHUNK, spill_entry, unpack_failure};
+use super::error::{ArchiveError, Result};
+use super::{ArchiveBackend, BornMember, ENTRY_CHUNK, from_stream, spill_entry};
 use confit_driver as driver;
 
 /// Streaming gzip member listing and extraction.
@@ -20,14 +19,14 @@ pub(crate) struct GzipBackend;
 
 impl ArchiveBackend for GzipBackend {
     fn names(&self, source: &Path) -> Result<Vec<String>> {
-        let file = driver::open_read(source)
-            .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+        let file =
+            driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
         let mut decoder = flate2::read::GzDecoder::new(file);
         let mut chunk = [0u8; ENTRY_CHUNK];
         loop {
             let read = decoder
                 .read(&mut chunk)
-                .map_err(|error| unpack_failure(source, error))?;
+                .map_err(|error| from_stream(source, error))?;
             if read == 0 {
                 break;
             }
@@ -36,8 +35,8 @@ impl ArchiveBackend for GzipBackend {
     }
 
     fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-        let file = driver::open_read(source)
-            .map_err(|error| Error::Plan(format!("cannot read '{}': {error}", source.display())))?;
+        let file =
+            driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
         let name = member_name(source);
         Ok(vec![spill_entry(
             source,

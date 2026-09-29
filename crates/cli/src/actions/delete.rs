@@ -52,11 +52,11 @@ pub fn run(args: &DeleteArgs, stores: Stores) -> Result<DeleteReport> {
     stores
         .slots()
         .delete_named(name)
-        .map_err(|error| match error {
-            Error::Plan(detail) => Error::Plan(format!("delete: {detail}")),
-            other => other,
-        })?;
-    let pruned = stores.blobs().prune()?;
+        .map_err(|error| Error::Plan(error.to_string()))?;
+    let pruned = stores
+        .blobs()
+        .prune()
+        .map_err(|error| Error::Plan(error.to_string()))?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,

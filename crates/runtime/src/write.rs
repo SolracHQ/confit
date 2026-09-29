@@ -72,7 +72,7 @@ impl Applier {
                 ManifestData::Link { target } => self
                     .disk
                     .write_link(&expanded, Path::new(target))
-                    .map_err(Error::from),
+                    .map_err(|error| Error::Plan(error.to_string())),
                 ManifestData::Text { .. }
                 | ManifestData::Structured { .. }
                 | ManifestData::Rc(_) => {
@@ -85,7 +85,7 @@ impl Applier {
                     let bytes = self.render_document(document)?;
                     self.disk
                         .write_bytes(&expanded, &bytes)
-                        .map_err(Error::from)
+                        .map_err(|error| Error::Plan(error.to_string()))
                 }
                 ManifestData::Tree { .. } | ManifestData::Opaque { .. } => {
                     continue;

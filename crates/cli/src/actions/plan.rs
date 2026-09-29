@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::error::Result;
+use confit_model::error::{Error, Result};
 use confit_runtime::Applier;
 use confit_store::Stores;
 use confit_store::bundle::Bundle;
@@ -87,10 +87,15 @@ impl PlanRunner<'_> {
         let documents = evaluation.documents;
         let slots = self.stores.slots();
         let first_run = slots.is_first_run();
-        let previous = slots.load()?;
+        let previous = slots
+            .load()
+            .map_err(|error| Error::Plan(error.to_string()))?;
 
         self.sinks.emit_hashing();
-        let mut built = timed("hash", || Bundle::build(documents, evaluation.hooks))?;
+        let mut built = timed("hash", || {
+            Bundle::build(documents, evaluation.hooks)
+                .map_err(|error| Error::Plan(error.to_string()))
+        })?;
         built.blobs = evaluation.blobs;
         log_processed(&built, &previous);
 
@@ -111,13 +116,16 @@ impl PlanRunner<'_> {
                     .to_str()
                     .and_then(|text| text.strip_prefix('@'))
                     .unwrap_or("");
-                slots.store_named(name, &built)
+                slots
+                    .store_named(name, &built)
+                    .map_err(|error| Error::Plan(error.to_string()))
             }
             Some(dest) => self
                 .stores
                 .bundles()
                 .write(&built, dest, self.sinks.progress.as_ref())
-                .map(|_| ()),
+                .map(|_| ())
+                .map_err(|error| Error::Plan(error.to_string())),
             None => Ok(()),
         })?;
         Ok(PlanOutcome {

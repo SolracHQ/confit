@@ -164,7 +164,7 @@ impl<'a> ApplyRunner<'a> {
             let (slot_manifest, _) = stores
                 .slots()
                 .resolve(Some(raw))
-                .map_err(prefix_command("apply"))?;
+                .map_err(|error| Error::Plan(error.to_string()))?;
             return Self::from_slot(
                 slot_manifest,
                 args.force,
@@ -180,8 +180,16 @@ impl<'a> ApplyRunner<'a> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
             sinks.emit_reading_plan(positional);
-            let file_manifest = timed("apply plan load", || stores.bundles().read(positional))?;
-            let previous = stores.slots().load()?;
+            let file_manifest = timed("apply plan load", || {
+                stores
+                    .bundles()
+                    .read(positional)
+                    .map_err(|error| Error::Plan(error.to_string()))
+            })?;
+            let previous = stores
+                .slots()
+                .load()
+                .map_err(|error| Error::Plan(error.to_string()))?;
             return Ok(Self {
                 manifest: file_manifest,
                 previous,
@@ -203,8 +211,12 @@ impl<'a> ApplyRunner<'a> {
         }
         let evaluation =
             evaluate_shared(&args.shared, positional, sinks.progress.clone(), &stores)?;
-        let previous = stores.slots().load()?;
-        let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)?;
+        let previous = stores
+            .slots()
+            .load()
+            .map_err(|error| Error::Plan(error.to_string()))?;
+        let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)
+            .map_err(|error| Error::Plan(error.to_string()))?;
         manifest.blobs = evaluation.blobs;
         Ok(Self {
             manifest,
@@ -230,7 +242,10 @@ impl<'a> ApplyRunner<'a> {
         sinks: Sinks,
         log_file: Option<PathBuf>,
     ) -> Result<Self> {
-        let previous = stores.slots().load()?;
+        let previous = stores
+            .slots()
+            .load()
+            .map_err(|error| Error::Plan(error.to_string()))?;
         Ok(Self {
             manifest: slot_manifest,
             previous,
@@ -379,15 +394,27 @@ impl<'a> ApplyRunner<'a> {
         let _ = self
             .stores
             .slots()
-            .store(&built, self.sinks.progress.as_ref())?;
+            .store(&built, self.sinks.progress.as_ref())
+            .map_err(|error| Error::Plan(error.to_string()))?;
         let mut handles = Vec::new();
         for document in &built.manifest.documents {
             for blob in document.data.blob_refs() {
-                handles.push(self.stores.blobs().resolve(blob)?);
+                handles.push(
+                    self.stores
+                        .blobs()
+                        .resolve(blob)
+                        .map_err(|error| Error::Plan(error.to_string()))?,
+                );
             }
         }
-        self.stores.blobs().persist(&handles)?;
-        self.stores.blobs().prune()?;
+        self.stores
+            .blobs()
+            .persist(&handles)
+            .map_err(|error| Error::Plan(error.to_string()))?;
+        self.stores
+            .blobs()
+            .prune()
+            .map_err(|error| Error::Plan(error.to_string()))?;
         self.run_hooks(&built)?;
         Ok(ApplyReport { written, removed })
     }
@@ -525,17 +552,6 @@ impl<'a> ApplyRunner<'a> {
             "hook '{argv_text}' failed checks after run: {}",
             failed.join(", ")
         )))
-    }
-}
-
-/// Prefixes slot errors with the calling command name.
-///
-/// Core slot resolution reads command-neutral. Each action
-/// names itself once here instead of repeating dispatch.
-fn prefix_command(command: &'static str) -> impl FnOnce(Error) -> Error {
-    move |error| match error {
-        Error::Plan(detail) => Error::Plan(format!("{command}: {detail}")),
-        other => other,
     }
 }
 

@@ -97,7 +97,7 @@ impl ManifestDocument {
     ///
     /// # Errors
     ///
-    /// Serializer failures fail as parse errors.
+    /// - [`Error::Render`] for serializer failures.
     ///
     /// # Examples
     ///

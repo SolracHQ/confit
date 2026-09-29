@@ -2,17 +2,19 @@
 //!
 //! Applied state slot, named slots, and manifest history.
 
+pub mod error;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{BUNDLE_VERSION, Bundle};
 use confit_model::document::BlobRef;
-use confit_model::error::{Error, Result};
 use confit_model::manifest::{Manifest, manifest_json};
 use confit_model::progress::ProgressSender;
 
 use crate::StoreRoots;
 use confit_driver as driver;
+use error::{Result, SlotError};
 
 /// Stored plans kept before rotation drops the oldest.
 const HISTORY_KEPT: usize = 5;
@@ -76,8 +78,7 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Empty names, separator carriers, and dot segments
-    /// fail as plan errors.
+    /// - [`SlotError::BadPick`] for empty names, separator carriers, and dot segments.
     fn named_slot(&self, name: &str) -> Result<PathBuf> {
         check_slot_name(name)?;
         Ok(self.plans.join(format!("{name}.json")))
@@ -87,7 +88,10 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Unreadable present slots fail as plan or io errors.
+    /// - [`SlotError::Missing`] for present slots failing reads.
+    /// - [`SlotError::Denied`] for denied slots.
+    /// - [`SlotError::Unknown`] for other read failures.
+    /// - [`SlotError::Version`] for unsupported versions.
     pub fn load(&self) -> Result<Bundle> {
         load_bundle(&self.state)
     }
@@ -96,12 +100,20 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Clock and write failures surface as plan or io errors.
+    /// - [`SlotError::Unknown`] for render, clock, and write failures.
+    /// - [`SlotError::Missing`] for missing paths.
+    /// - [`SlotError::Denied`] for denied paths.
     pub fn store(&self, bundle: &Bundle, progress: Option<&ProgressSender>) -> Result<PathBuf> {
         let _ = progress;
-        let text = manifest_json(&bundle.manifest)?;
+        let text = manifest_json(&bundle.manifest).map_err(|error| SlotError::Unknown {
+            path: self.state.clone(),
+            message: error.to_string(),
+        })?;
         write_text(&self.state, &text)?;
-        let mut stamp = system_nanos()?;
+        let mut stamp = system_nanos().map_err(|error| SlotError::Unknown {
+            path: self.previous.clone(),
+            message: error.to_string(),
+        })?;
         let mut dest = self.previous.join(format!("{stamp}.json"));
         while driver::exists(&dest) {
             stamp += 1;
@@ -119,54 +131,57 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Absent slots, malformed and out-of-range picks fail as
-    /// plan errors.
+    /// - [`SlotError::BadPick`] for absent slots, malformed and out-of-range picks.
     pub fn resolve(&self, picker: Option<&str>) -> Result<(Bundle, SlotKind)> {
         let Some(raw) = picker else {
             if !driver::exists(&self.state) {
-                return Err(Error::Plan(
-                    "the applied slot reads absent, apply first".to_string(),
-                ));
+                return Err(SlotError::BadPick {
+                    input: "".to_owned(),
+                });
             }
             return Ok((load_bundle(&self.state)?, SlotKind::Applied));
         };
         if let Some(name) = raw.strip_prefix('@') {
             let path = self.named_slot(name)?;
             if !driver::exists(&path) {
-                return Err(Error::Plan(format!("'@{name}' reads absent")));
+                return Err(SlotError::BadPick {
+                    input: raw.to_owned(),
+                });
             }
             return Ok((load_bundle(&path)?, SlotKind::Named(name.to_string())));
         }
         if let Some(rest) = raw.strip_prefix('%') {
-            let pick: usize = rest.parse().map_err(|_| {
-                Error::Plan(format!(
-                    "'{raw}' reads unsupported, want '%N' holding a number from 1"
-                ))
+            let pick: usize = rest.parse().map_err(|_| SlotError::BadPick {
+                input: raw.to_owned(),
             })?;
             let entries = stored_bundles(&self.previous)?;
             let total = entries.len();
             if pick < 1 || pick > total {
-                return Err(Error::Plan(format!(
-                    "'{raw}' reads out of range, holding {total} stored manifests"
-                )));
+                return Err(SlotError::BadPick {
+                    input: raw.to_owned(),
+                });
             }
-            let (_, bundle) = entries.into_iter().nth(pick - 1).ok_or_else(|| {
-                Error::Plan(format!(
-                    "'{raw}' reads out of range, holding {total} stored manifests"
-                ))
-            })?;
+            let (_, bundle) =
+                entries
+                    .into_iter()
+                    .nth(pick - 1)
+                    .ok_or_else(|| SlotError::BadPick {
+                        input: raw.to_owned(),
+                    })?;
             return Ok((bundle, SlotKind::History(pick)));
         }
-        Err(Error::Plan(format!(
-            "'{raw}' reads unsupported, want '%N', '@name', or nothing"
-        )))
+        Err(SlotError::BadPick {
+            input: raw.to_owned(),
+        })
     }
 
     /// Lists stored manifests newest first with apply picks.
     ///
     /// # Errors
     ///
-    /// Folder resolution failures surface as plan errors.
+    /// - [`SlotError::Missing`] for missing folders.
+    /// - [`SlotError::Denied`] for denied folders.
+    /// - [`SlotError::Unknown`] for other folder failures.
     pub fn list_history(&self) -> Result<Vec<HistoryEntry>> {
         Ok(stored_bundles(&self.previous)?
             .into_iter()
@@ -181,10 +196,16 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Bad names and write failures surface as plan or io errors.
+    /// - [`SlotError::BadPick`] for bad names.
+    /// - [`SlotError::Unknown`] for render and write failures.
+    /// - [`SlotError::Missing`] for missing paths.
+    /// - [`SlotError::Denied`] for denied paths.
     pub fn store_named(&self, name: &str, bundle: &Bundle) -> Result<()> {
         let path = self.named_slot(name)?;
-        let text = manifest_json(&bundle.manifest)?;
+        let text = manifest_json(&bundle.manifest).map_err(|error| SlotError::Unknown {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
         write_text(&path, &text)?;
         Ok(())
     }
@@ -193,13 +214,18 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// Absent names fail as plan errors.
+    /// - [`SlotError::BadPick`] for absent names.
+    /// - [`SlotError::Missing`] for missing paths.
+    /// - [`SlotError::Denied`] for denied paths.
+    /// - [`SlotError::Unknown`] for other removal failures.
     pub fn delete_named(&self, name: &str) -> Result<()> {
         let path = self.named_slot(name)?;
         if !driver::exists(&path) {
-            return Err(Error::Plan(format!("'@{name}' reads absent")));
+            return Err(SlotError::BadPick {
+                input: ["@", name].concat(),
+            });
         }
-        driver::remove_file(&path).map_err(Error::from)?;
+        driver::remove_file(&path).map_err(|error| SlotError::from_io(&path, error))?;
         Ok(())
     }
 
@@ -216,34 +242,42 @@ impl SlotStore {
 ///
 /// # Errors
 ///
-/// Unreadable present files, bad JSON, version
-/// mismatch and malformed blob hashes fail as plan errors.
+/// - [`SlotError::Missing`] for present files failing reads.
+/// - [`SlotError::Denied`] for denied files.
+/// - [`SlotError::Unknown`] for other read failures.
+/// - [`SlotError::Corrupt`] for bad payloads.
+/// - [`SlotError::Version`] for version mismatch.
 fn load_bundle(path: &Path) -> Result<Bundle> {
     let bytes = match driver::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Bundle::empty());
         }
-        Err(error) => return Err(Error::from(error)),
+        Err(error) => {
+            return Err(SlotError::from_io(path, error));
+        }
     };
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| Error::Plan(format!("read state '{}': {error}", path.display())))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| SlotError::Corrupt {
+            path: path.to_path_buf(),
+        })?;
     match value.get("version").and_then(serde_json::Value::as_u64) {
         Some(version) if version == u64::from(BUNDLE_VERSION) => {}
         Some(version) => {
-            return Err(Error::Plan(format!(
-                "state version {version} reads unsupported, want {BUNDLE_VERSION}"
-            )));
+            return Err(SlotError::Version {
+                path: path.to_path_buf(),
+                got: version,
+            });
         }
         None => {
-            return Err(Error::Plan(format!(
-                "read state '{}': missing manifest version",
-                path.display()
-            )));
+            return Err(SlotError::Corrupt {
+                path: path.to_path_buf(),
+            });
         }
     }
-    let stored: Manifest = serde_json::from_value(value)
-        .map_err(|error| Error::Plan(format!("read state '{}': {error}", path.display())))?;
+    let stored: Manifest = serde_json::from_value(value).map_err(|_| SlotError::Corrupt {
+        path: path.to_path_buf(),
+    })?;
     Ok(hydrate_bundle(&stored))
 }
 
@@ -275,13 +309,15 @@ fn hydrate_bundle(stored: &Manifest) -> Bundle {
 ///
 /// # Errors
 ///
-/// Folder listing failures beyond missing folders surface
-/// as io errors.
+/// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
+/// - [`SlotError::Unknown`] for other listing failures.
 fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Bundle)>> {
     let mut files = match driver::read_dir(dir) {
         Ok(files) => files,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(Error::from(error)),
+        Err(error) => {
+            return Err(SlotError::from_io(dir, error));
+        }
     };
     files.reverse();
     let mut out = Vec::new();
@@ -309,13 +345,13 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Bundle)>> {
 ///
 /// # Errors
 ///
-/// Folder listing failures beyond missing folders surface
-/// as io errors.
+/// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
+/// - [`SlotError::Unknown`] for other listing failures.
 fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
     match driver::read_dir(dir) {
         Ok(files) => Ok(files),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(Error::from(error)),
+        Err(error) => Err(SlotError::from_io(dir, error)),
     }
 }
 
@@ -323,12 +359,14 @@ fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// # Errors
 ///
-/// Listing and removal failures surface as plan or io errors.
+/// - [`SlotError::Missing`] for missing paths.
+/// - [`SlotError::Denied`] for denied paths.
+/// - [`SlotError::Unknown`] for other listing and removal failures.
 fn rotate_history(dir: &Path) -> Result<()> {
     let files = history_files(dir)?;
     if files.len() > HISTORY_KEPT {
         for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-            driver::remove_file(stale).map_err(Error::from)?;
+            driver::remove_file(stale).map_err(|error| SlotError::from_io(stale, error))?;
         }
     }
     Ok(())
@@ -338,33 +376,27 @@ fn rotate_history(dir: &Path) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Parent and write failures surface as plan errors naming
-/// the destination.
+/// - [`SlotError::Missing`] for missing parents and paths.
+/// - [`SlotError::Denied`] for denied parents and paths.
+/// - [`SlotError::Unknown`] for other write failures.
 fn write_text(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        driver::create_dir_all(parent)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", path.display())))?;
+        driver::create_dir_all(parent).map_err(|error| SlotError::from_io(path, error))?;
     }
-    driver::write(path, text.as_bytes())
-        .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", path.display())))
+    driver::write(path, text.as_bytes()).map_err(|error| SlotError::from_io(path, error))
 }
 
 /// Reads wall-clock nanos for sortable archive file names.
 ///
 /// # Errors
 ///
-/// Clock readings before the epoch fail as plan errors.
-fn system_nanos() -> Result<u128> {
+/// - system time errors for clock readings before the epoch.
+fn system_nanos() -> std::result::Result<u128, std::time::SystemTimeError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|span| span.as_nanos())
-        .map_err(|error| {
-            Error::Plan(format!(
-                "previous states: clock reads before epoch: {error}"
-            ))
-        })
 }
 
 /// Checks one slot name holds one file stem with no separators.
@@ -373,23 +405,30 @@ fn system_nanos() -> Result<u128> {
 ///
 /// # Errors
 ///
-/// Empty names, separator carriers, and dot segments
-/// fail as plan errors.
+/// - [`SlotError::BadPick`] for empty names, separator carriers, and dot segments.
 fn check_slot_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(Error::Plan("slot name reads empty".to_string()));
+        return Err(SlotError::BadPick {
+            input: name.to_owned(),
+        });
     }
     if name.contains('/') || name.contains('\\') {
-        return Err(Error::Plan(format!("slot name '{name}' holds separators")));
+        return Err(SlotError::BadPick {
+            input: name.to_owned(),
+        });
     }
     if name == "." || name == ".." || name.contains('\0') {
-        return Err(Error::Plan(format!("slot name '{name}' reads unsupported")));
+        return Err(SlotError::BadPick {
+            input: name.to_owned(),
+        });
     }
     if Path::new(name)
         .components()
         .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
-        return Err(Error::Plan(format!("slot name '{name}' reads unsupported")));
+        return Err(SlotError::BadPick {
+            input: name.to_owned(),
+        });
     }
     Ok(())
 }
@@ -447,10 +486,8 @@ mod tests {
         assert!(slots.is_first_run(), "absent slot reads first run");
         match slots.resolve(None) {
             Ok(_) => panic!("absent applied slot passes"),
-            Err(error) => assert!(
-                error.to_string().contains("apply first"),
-                "absent slot names recovery: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
         match slots.store(&text_bundle("v1"), None) {
             Ok(_) => assert!(!slots.is_first_run(), "stored slot ends first run"),
@@ -532,45 +569,37 @@ mod tests {
         let slots = test_store(dir.path());
         match slots.resolve(Some("@missing")) {
             Ok(_) => panic!("absent named slot passes"),
-            Err(error) => assert!(
-                error.to_string().contains("'@missing' reads absent"),
-                "absent name reports itself: {error}"
-            ),
+            Err(SlotError::BadPick { input }) => {
+                assert_eq!(input, "@missing", "absent name keeps its picker")
+            }
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
         match slots.resolve(Some("%1")) {
             Ok(_) => panic!("empty history passes"),
-            Err(error) => assert!(
-                error.to_string().contains("out of range"),
-                "empty history reports range: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong range variant: {error}"),
         }
         match slots.resolve(Some("%0")) {
             Ok(_) => panic!("zero pick passes"),
-            Err(error) => assert!(
-                error.to_string().contains("out of range"),
-                "zero pick reports range: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong zero variant: {error}"),
         }
         match slots.resolve(Some("%many")) {
             Ok(_) => panic!("word pick passes"),
-            Err(error) => assert!(
-                error.to_string().contains("unsupported"),
-                "word pick reports shape: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong word variant: {error}"),
         }
         match slots.resolve(Some("bogus")) {
             Ok(_) => panic!("bare picker passes"),
-            Err(error) => assert!(
-                error.to_string().contains("unsupported"),
-                "bare picker reports shape: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong bare variant: {error}"),
         }
         match slots.store_named("a/b", &text_bundle("v1")) {
             Ok(()) => panic!("separator name passes"),
-            Err(error) => assert!(
-                error.to_string().contains("separators"),
-                "separator name reports itself: {error}"
-            ),
+            Err(SlotError::BadPick { input }) => {
+                assert_eq!(input, "a/b", "separator name keeps its input")
+            }
+            Err(error) => panic!("wrong separator variant: {error}"),
         }
     }
 
@@ -593,17 +622,13 @@ mod tests {
         }
         match slots.resolve(Some("@keep")) {
             Ok(_) => panic!("deleted named slot passes"),
-            Err(error) => assert!(
-                error.to_string().contains("'@keep' reads absent"),
-                "deleted name reports absence: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong deleted variant: {error}"),
         }
         match slots.delete_named("keep") {
             Ok(()) => panic!("repeat delete passes"),
-            Err(error) => assert!(
-                error.to_string().contains("'@keep' reads absent"),
-                "repeat delete reports absence: {error}"
-            ),
+            Err(SlotError::BadPick { .. }) => {}
+            Err(error) => panic!("wrong repeat variant: {error}"),
         }
     }
 

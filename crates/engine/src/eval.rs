@@ -90,8 +90,12 @@ impl Session {
         crate::surface::install(&session)?;
         let resources = session.stores.resources();
         let absolute = absolutize(profile)?;
-        let handle = resources.resource(&session.root, &absolute)?;
-        let source = resources.read_text(&handle)?;
+        let handle = resources
+            .resource(&session.root, &absolute)
+            .map_err(|error| plan(error.to_string()))?;
+        let source = resources
+            .read_text(&handle)
+            .map_err(|error| plan(error.to_string()))?;
         let profile_ctx = format!("profile '{}'", profile.display());
         let returned: Value = session
             .lua
@@ -156,7 +160,7 @@ fn absolutize(profile: &Path) -> Result<PathBuf> {
     if profile.is_absolute() {
         return Ok(profile.to_path_buf());
     }
-    let cwd = std::env::current_dir()?;
+    let cwd = std::env::current_dir().map_err(|error| Error::Plan(error.to_string()))?;
     Ok(cwd.join(profile))
 }
 

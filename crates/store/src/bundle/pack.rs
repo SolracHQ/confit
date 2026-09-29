@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
 use confit_model::document::BlobRef;
-use confit_model::error::{Error, Result};
 use confit_model::progress::ProgressSender;
 
+use super::error::{BundleError, Result};
 use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_GZIP_LEVEL, BUNDLE_MANIFEST, BundleStore};
 use super::{Bundle, ensure_bundle_extension};
 use crate::blob::BlobStore;
+use crate::blob::error::BlobError;
 
 /// Staging suffix for atomic bundle writes.
 const STAGING_SUFFIX: &str = ".part";
@@ -27,7 +28,10 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// Compression and write failures surface as plan errors.
+    /// - [`BundleError::Unknown`] for manifest render and other write failures.
+    /// - [`BundleError::Missing`] for missing blobs.
+    /// - [`BundleError::Unreachable`] for unreachable archives.
+    /// - [`BundleError::Denied`] for denied archives.
     pub fn write(
         &self,
         bundle: &Bundle,
@@ -36,18 +40,18 @@ impl BundleStore {
     ) -> Result<PathBuf> {
         let _ = progress;
         let dest = ensure_bundle_extension(dest);
-        let manifest = serde_json::to_vec_pretty(&bundle.manifest)
-            .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
-        if let Some(parent) = dest.parent() {
-            driver::create_dir_all(parent).map_err(|error| {
-                Error::Plan(format!("cannot write '{}': {error}", dest.display()))
+        let manifest =
+            serde_json::to_vec_pretty(&bundle.manifest).map_err(|error| BundleError::Unknown {
+                path: dest.clone(),
+                message: error.to_string(),
             })?;
+        if let Some(parent) = dest.parent() {
+            driver::create_dir_all(parent).map_err(|error| BundleError::from_io(&dest, error))?;
         }
         let mut staging = dest.as_os_str().to_owned();
         staging.push(STAGING_SUFFIX);
         let staging = PathBuf::from(staging);
-        let out = driver::create(&staging)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+        let out = driver::create(&staging).map_err(|error| BundleError::from_io(&dest, error))?;
         let encoder =
             flate2::write::GzEncoder::new(out, flate2::Compression::new(BUNDLE_GZIP_LEVEL));
         let mut builder = tar::Builder::new(encoder);
@@ -59,12 +63,11 @@ impl BundleStore {
         }
         let encoder = builder
             .into_inner()
-            .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
+            .map_err(|error| BundleError::from_io(&dest, error))?;
         encoder
             .finish()
-            .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
-        driver::rename(&staging, &dest)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))?;
+            .map_err(|error| BundleError::from_io(&dest, error))?;
+        driver::rename(&staging, &dest).map_err(|error| BundleError::from_io(&dest, error))?;
         Ok(dest)
     }
 }
@@ -73,7 +76,9 @@ impl BundleStore {
 ///
 /// # Errors
 ///
-/// Archive failures surface as plan errors naming the bundle.
+/// - [`BundleError::Unreachable`] for unreachable archives.
+/// - [`BundleError::Denied`] for denied archives.
+/// - [`BundleError::Unknown`] for other archive failures.
 fn append_manifest(
     builder: &mut tar::Builder<flate2::write::GzEncoder<Box<dyn std::io::Write>>>,
     bytes: &[u8],
@@ -85,7 +90,7 @@ fn append_manifest(
     header.set_cksum();
     builder
         .append_data(&mut header, BUNDLE_MANIFEST, bytes)
-        .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
+        .map_err(|error| BundleError::from_io(dest, error))
 }
 
 /// Appends one blob entry with verbatim stored bytes.
@@ -95,24 +100,30 @@ fn append_manifest(
 ///
 /// # Errors
 ///
-/// Missing and unreadable blobs fail as plan errors naming
-/// the bundle.
+/// - [`BundleError::Missing`] for missing blobs.
+/// - [`BundleError::Unknown`] for other blob and archive failures.
+/// - [`BundleError::Unreachable`] for unreachable archives.
+/// - [`BundleError::Denied`] for denied archives.
 fn append_blob(
     builder: &mut tar::Builder<flate2::write::GzEncoder<Box<dyn std::io::Write>>>,
     blob: &BlobRef,
     blobs: &BlobStore,
     dest: &Path,
 ) -> Result<()> {
-    let handle = blobs.resolve(blob).map_err(|_| {
-        Error::Plan(format!(
-            "render bundle '{}': missing blob '{}'",
-            dest.display(),
-            blob.stored()
-        ))
+    let handle = blobs.resolve(blob).map_err(|error| match error {
+        BlobError::Missing { sha } => BundleError::Missing { sha },
+        other => BundleError::Unknown {
+            path: dest.to_path_buf(),
+            message: other.to_string(),
+        },
     })?;
-    let (len, source) = blobs
-        .open_stored(&handle)
-        .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))?;
+    let (len, source) = blobs.open_stored(&handle).map_err(|error| match error {
+        BlobError::Missing { sha } => BundleError::Missing { sha },
+        other => BundleError::Unknown {
+            path: dest.to_path_buf(),
+            message: other.to_string(),
+        },
+    })?;
     let mut header = tar::Header::new_gnu();
     header.set_size(len);
     header.set_mode(BUNDLE_ENTRY_MODE);
@@ -120,10 +131,10 @@ fn append_blob(
     builder
         .append_data(
             &mut header,
-            format!("{BUNDLE_BLOBS_PREFIX}{}", blob.stored()),
+            [BUNDLE_BLOBS_PREFIX, &blob.stored().to_string()].concat(),
             source,
         )
-        .map_err(|error| Error::Plan(format!("render bundle '{}': {error}", dest.display())))
+        .map_err(|error| BundleError::from_io(dest, error))
 }
 
 #[cfg(test)]
