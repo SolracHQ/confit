@@ -127,12 +127,14 @@ impl HostDisk {
         for member in members {
             let path = dest.join(&member.relative);
             copy_blob(&path, &member.blob, blobs).map_err(|error| match error {
+                parsed @ Error::Parse { .. } => Error::Plan(parsed.to_string()),
                 Error::Plan(_) => Error::Plan(format!(
                     "cannot write '{}': missing blob '{}' for '{}'",
                     dest.display(),
                     member.blob.sha(),
                     path.display()
                 )),
+                rendered @ Error::Render { .. } => Error::Plan(rendered.to_string()),
                 Error::Io(error) => Error::Plan(format!(
                     "cannot write '{}': cannot write '{}': {error}",
                     dest.display(),

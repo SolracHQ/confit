@@ -20,8 +20,6 @@ pub type Table = BTreeMap<String, serde_json::Value>;
 
 /// Serialization format for structured documents.
 ///
-/// Serializes lowercase, like `toml`.
-///
 /// # Examples
 ///
 /// ```rust
@@ -290,7 +288,7 @@ impl RcData {
     ///
     /// # Errors
     ///
-    /// Unknown names fail as plan errors naming the name.
+    /// Unknown names fail as parse errors holding the name.
     ///
     /// # Examples
     ///
@@ -304,10 +302,10 @@ impl RcData {
         if RC_SECTION_NAMES.contains(&name) {
             Ok(())
         } else {
-            Err(Error::Plan(format!(
-                "unknown rc section '{name}': expected {}",
-                RC_SECTION_NAMES.join(", ")
-            )))
+            Err(Error::Parse {
+                input: name.to_owned(),
+                want: "one of 'profile', 'config', 'final'".to_owned(),
+            })
         }
     }
 }
@@ -738,7 +736,7 @@ pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
 /// # Errors
 ///
 /// Leading `d`, wrong lengths, and bad characters fail
-/// as plan errors.
+/// as parse errors.
 ///
 /// # Examples
 ///
@@ -753,16 +751,18 @@ pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
 /// ```
 pub fn parse_mode(text: &str) -> Result<u32> {
     if text.starts_with('d') {
-        return Err(Error::Plan(format!(
-            "invalid mode '{text}': leading 'd' marks a directory listing, want octal like 755 or symbolic like rwxr-xr-x"
-        )));
+        return Err(Error::Parse {
+            input: text.to_owned(),
+            want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
+        });
     }
     match text.len() {
         3 | 4 => parse_octal_mode(text),
         9 => parse_symbolic_mode(text),
-        _ => Err(Error::Plan(format!(
-            "invalid mode '{text}': want octal like 755 or symbolic like rwxr-xr-x"
-        ))),
+        _ => Err(Error::Parse {
+            input: text.to_owned(),
+            want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
+        }),
     }
 }
 
@@ -773,33 +773,39 @@ fn parse_octal_mode(text: &str) -> Result<u32> {
         4 => match text.strip_prefix('0') {
             Some(rest) => rest,
             None => {
-                return Err(Error::Plan(format!(
-                    "invalid mode '{text}': four digit octal starts with 0 like 0755"
-                )));
+                return Err(Error::Parse {
+                    input: text.to_owned(),
+                    want: "four digit octal starting with 0 like 0755".to_owned(),
+                });
             }
         },
         _ => {
-            return Err(Error::Plan(format!(
-                "invalid mode '{text}': want octal like 755 or symbolic like rwxr-xr-x"
-            )));
+            return Err(Error::Parse {
+                input: text.to_owned(),
+                want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
+            });
         }
     };
     if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
-        return Err(Error::Plan(format!(
-            "invalid mode '{text}': octal holds digits 0-7"
-        )));
+        return Err(Error::Parse {
+            input: text.to_owned(),
+            want: "octal digits 0-7".to_owned(),
+        });
     }
-    u32::from_str_radix(body, 8)
-        .map_err(|error| Error::Plan(format!("invalid mode '{text}': {error}")))
+    u32::from_str_radix(body, 8).map_err(|_| Error::Parse {
+        input: text.to_owned(),
+        want: "octal digits 0-7".to_owned(),
+    })
 }
 
 /// Parses nine symbolic characters into mode bits.
 fn parse_symbolic_mode(text: &str) -> Result<u32> {
     let bytes = text.as_bytes();
     if bytes.len() != 9 {
-        return Err(Error::Plan(format!(
-            "invalid mode '{text}': symbolic holds nine rwx characters like rwxr-xr-x"
-        )));
+        return Err(Error::Parse {
+            input: text.to_owned(),
+            want: "nine rwx characters like rwxr-xr-x".to_owned(),
+        });
     }
     let mut mode: u32 = 0;
     for (index, byte) in bytes.iter().enumerate() {
@@ -809,9 +815,10 @@ fn parse_symbolic_mode(text: &str) -> Result<u32> {
             (2, b'x') => 1,
             (_, b'-') => 0,
             _ => {
-                return Err(Error::Plan(format!(
-                    "invalid mode '{text}': symbolic holds nine rwx characters like rwxr-xr-x"
-                )));
+                return Err(Error::Parse {
+                    input: text.to_owned(),
+                    want: "nine rwx characters like rwxr-xr-x".to_owned(),
+                });
             }
         };
         let shift = (2 - index / 3) * 3;
@@ -855,10 +862,6 @@ mod tests {
             Ok(()) => panic!("misspelled section passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
-        assert_eq!(
-            error.to_string(),
-            "unknown rc section 'confg': expected profile, config, final"
-        );
+        assert!(matches!(error, Error::Parse { .. }));
     }
 }

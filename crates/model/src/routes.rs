@@ -63,12 +63,17 @@ impl Route {
     ///
     /// # Errors
     ///
-    /// Empty paths fail as plan errors. Validity beyond non-empty
+    /// Empty paths fail as parse errors. Validity beyond non-empty
     /// stays apply-time business.
     ///
     pub fn new(base: RouteBase, relative: impl Into<PathBuf>) -> Result<Self> {
         let relative = relative.into();
-        check_present(&relative, "route path")?;
+        if relative.as_os_str().is_empty() {
+            return Err(Error::Parse {
+                input: relative.display().to_string(),
+                want: "non-empty route path".to_owned(),
+            });
+        }
         Ok(Self { base, relative })
     }
 
@@ -110,13 +115,14 @@ impl Route {
     /// # Errors
     ///
     /// Unknown bases, missing separators, and empty paths
-    /// fail as plan errors.
+    /// fail as parse errors.
     ///
     pub fn parse(text: &str) -> Result<Self> {
         let Some((base_name, relative)) = text.split_once(':') else {
-            return Err(Error::Plan(format!(
-                "invalid route '{text}': want 'base:relative' like 'home:.bashrc'"
-            )));
+            return Err(Error::Parse {
+                input: text.to_owned(),
+                want: "'base:relative' like 'home:.bashrc'".to_owned(),
+            });
         };
         let base = match base_name {
             "home" => RouteBase::Home,
@@ -125,15 +131,15 @@ impl Route {
             "cache" => RouteBase::Cache,
             "literal" => RouteBase::Literal,
             _ => {
-                return Err(Error::Plan(format!(
-                    "invalid route '{text}': unknown base '{base_name}'"
-                )));
+                return Err(Error::Parse {
+                    input: text.to_owned(),
+                    want: "known base 'home', 'config', 'data', 'cache', or 'literal'".to_owned(),
+                });
             }
         };
-        Self::new(base, relative).map_err(|_| {
-            Error::Plan(format!(
-                "invalid route '{text}': want 'base:relative' like 'home:.bashrc'"
-            ))
+        Self::new(base, relative).map_err(|_| Error::Parse {
+            input: text.to_owned(),
+            want: "'base:relative' like 'home:.bashrc'".to_owned(),
         })
     }
 
@@ -148,14 +154,6 @@ impl Route {
     pub fn relative(&self) -> &Path {
         &self.relative
     }
-}
-
-/// Rejects empty paths.
-fn check_present(path: &Path, label: &str) -> Result<()> {
-    if path.as_os_str().is_empty() {
-        return Err(Error::Plan(format!("{label} is empty")));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -184,6 +182,6 @@ mod tests {
             Ok(_) => panic!("empty route passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
+        assert!(matches!(error, Error::Parse { .. }));
     }
 }

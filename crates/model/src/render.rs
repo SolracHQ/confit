@@ -17,7 +17,7 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// # Errors
 ///
-/// Opaque, tree, and serializer failures fail as plan errors.
+/// Opaque, tree, and serializer failures fail as parse and render errors.
 pub fn inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
     match data {
         ManifestData::Structured { format, data } => match format {
@@ -28,30 +28,39 @@ pub fn inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
         ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
         ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
         ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
-        ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
-            "render opaque '{}': blob bytes ride the blob store",
-            blob.sha()
-        ))),
-        ManifestData::Tree { .. } => Err(Error::Plan(
-            "render tree: tree documents hold member bytes".to_string(),
-        )),
+        ManifestData::Opaque { blob, .. } => Err(Error::Parse {
+            input: blob.sha().hex(),
+            want: "blob bytes through the blob store".to_owned(),
+        }),
+        ManifestData::Tree { .. } => Err(Error::Parse {
+            input: "tree".to_owned(),
+            want: "member bytes for tree documents".to_owned(),
+        }),
     }
 }
 
 /// Renders a table to TOML text.
 fn render_toml(table: &Table) -> Result<String> {
-    toml::to_string(table).map_err(|error| Error::Plan(format!("render toml: {error}")))
+    toml::to_string(table).map_err(|source| Error::Render {
+        format: StructuredFormat::Toml,
+        reason: source.to_string(),
+    })
 }
 
 /// Renders a table to pretty JSON text.
 fn render_json(table: &Table) -> Result<String> {
-    serde_json::to_string_pretty(table)
-        .map_err(|error| Error::Plan(format!("render json: {error}")))
+    serde_json::to_string_pretty(table).map_err(|source| Error::Render {
+        format: StructuredFormat::Json,
+        reason: source.to_string(),
+    })
 }
 
 /// Renders a table to YAML text.
 fn render_yaml(table: &Table) -> Result<String> {
-    noyalib::to_string(table).map_err(|error| Error::Plan(format!("render yaml: {error}")))
+    noyalib::to_string(table).map_err(|source| Error::Render {
+        format: StructuredFormat::Yaml,
+        reason: source.to_string(),
+    })
 }
 
 /// Renders rc data to shell text with trailing newline.

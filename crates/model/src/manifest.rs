@@ -2,7 +2,7 @@
 //!
 //! Persisted plan model and manifest JSON.
 
-use crate::document::ManifestDocument;
+use crate::document::{ManifestDocument, StructuredFormat};
 use crate::error::{Error, Result};
 use crate::hook::Hook;
 
@@ -41,7 +41,7 @@ pub struct Manifest {
 ///
 /// # Errors
 ///
-/// Document serialization failures surface as plan errors.
+/// Document serialization failures surface as parse errors.
 ///
 /// # Examples
 ///
@@ -53,6 +53,8 @@ pub struct Manifest {
 /// assert!(text.contains("documents"));
 /// ```
 pub fn manifest_json(manifest: &Manifest) -> Result<String> {
-    serde_json::to_string_pretty(manifest)
-        .map_err(|error| Error::Plan(format!("render plan: {error}")))
+    serde_json::to_string_pretty(manifest).map_err(|source| Error::Render {
+        format: StructuredFormat::Json,
+        reason: source.to_string(),
+    })
 }

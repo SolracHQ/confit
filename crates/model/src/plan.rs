@@ -97,7 +97,7 @@ impl ManifestDocument {
     ///
     /// # Errors
     ///
-    /// Serializer failures fail as plan errors.
+    /// Serializer failures fail as parse errors.
     ///
     /// # Examples
     ///

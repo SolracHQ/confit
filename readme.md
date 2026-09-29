@@ -16,31 +16,31 @@ with a preview before anything gets touched.
 - Configs shaped per user from Lua.
 - Profiles sharing one config pool across runs.
 - Editor-checked key names, configs landing where loaders read them.
-- A preview loop comparing desired plus previous plus actual
+- A preview loop comparing desired, previous and actual
   files, with hand edits reported before they get overwritten.
 
 ## State
 
 One Rust binary, Lua 5.4 vendored inside, plan before apply.
 Five commands work today. `plan` previews the change and
-writes a portable `.cb` bundle holding `manifest.json` plus blobs.
+writes a portable `.cb` bundle holding `manifest.json` and blobs.
 `apply` previews, prompts, and writes the files. `export` packs
 a slot into a portable bundle. `delete` drops a named slot.
 `init` scaffolds a project.
 
 Slots hold manifests, one shared pool holds blobs under content hashes.
 First runs compare desired documents against disk bytes and report
-creates plus overwrites. One spinner carries progress counters through
-hash plus compression plus fetch phases. Serde derives serve as the schema.
+creates and overwrites. One spinner carries progress counters through
+hash, compression and fetch phases. Serde derives serve as the schema.
 
-Profiles declare documents plus configs. Configs hold documents plus
-patches plus hooks. Documents cover shell entries plus structured configs plus
-literal files plus binaries plus symlinks plus managed file sets. Patches tweak documents through callbacks
+Profiles declare documents and configs. Configs hold documents,
+patches and hooks. Documents cover shell entries, structured configs,
+literal files, binaries, symlinks and managed file sets. Patches tweak documents through callbacks
 in pipeline order. Hooks hand tools their post-config steps after
-the files land. The mise plugin ships package configs plus shell
-activation entries plus a generic `options` table folding tool
+the files land. The mise plugin ships package configs, shell
+activation entries and a generic `options` table folding tool
 options into the shared TOML. The nerd fonts plugin ships one
-`fonts/{name}` folder per font plus one `fc-cache -f` hook scoped
+`fonts/{name}` folder per font and one `fc-cache -f` hook scoped
 to that folder.
 
 ## Scope
@@ -102,28 +102,28 @@ Hooks: 2 to add, 0 to change, 0 to destroy.
 
 | Fixture | Proves |
 |---|---|
-| `0-basic_tool` | mise package plus alias plus init |
-| `1-structured_resource` | starship config declared plus patched |
+| `0-basic_tool` | mise package, alias and init |
+| `1-structured_resource` | starship config declared and patched |
 | `2-templated_resource` | starship config rendered from a template with profile vars |
-| `3-dotfiles-tools` | multi-config profile plus fetch plus unpack plus rc patch plus hooks plus tree |
+| `3-dotfiles-tools` | multi-config profile, fetch, unpack, rc patch, hooks and tree |
 
 | Command | Does |
 |---|---|
 | `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
 | `apply SOURCE` | previews, prompts on literal `yes`, writes files |
 | `export [PICKER]` | packs one slot into a portable bundle, prints the path |
-| `delete @name` | drops one named slot plus its orphaned blobs |
-| `init [DIR]` | scaffolds a profile plus stubs, default `.` |
+| `delete @name` | drops one named slot and its orphaned blobs |
+| `init [DIR]` | scaffolds a profile and stubs, default `.` |
 
 `--root` defaults to the profile file parent directory.
-`apply` reads SOURCE by shape. `.lua` plus extensionless paths run
+`apply` reads SOURCE by shape. `.lua` and extensionless paths run
 a profile, `.cb` runs a bundle file, `@name` runs a named slot,
 `%N` runs history newest-first from 1.
 `-o @name` stores a slot manifest, `apply @name` replays it.
 Slots hold manifests, one pool holds blobs, history reads newest-first.
-`export` packs `%N` plus `@name` plus the applied slot into `.cb`,
+`export` packs `%N`, `@name` and the applied slot into `.cb`,
 `-m` prints the manifest. First runs diff desired state against disk
-and close with create plus overwrite counts.
+and close with create and overwrite counts.
 `just plan-example` smokes the basic fixture and writes only to
 `./target`.
 
@@ -134,7 +134,7 @@ cargo run -- --help
 just check   # fmt + clippy (-D warnings) + test
 ```
 
-The manual plus the spec live as one book at `docs/book/`, published at
+The manual and the spec live as one book at `docs/book/`, published at
 [solrachq.github.io/confit](https://solrachq.github.io/confit/). Intent per version
 lives under `docs/design/`. Changes live in `docs/changelog.md`.
 

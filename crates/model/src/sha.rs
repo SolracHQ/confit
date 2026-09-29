@@ -31,7 +31,7 @@ impl Sha {
     ///
     /// # Errors
     ///
-    /// Malformed hashes fail as plan errors.
+    /// Malformed hashes fail as parse errors.
     ///
     pub fn new(sha: impl Into<String>) -> Result<Self> {
         let sha = sha.into();
@@ -126,9 +126,10 @@ fn hex_value(byte: u8, sha: &str) -> Result<u8> {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::Plan(format!(
-            "invalid sha256 '{sha}': want 64 hex characters"
-        ))),
+        _ => Err(Error::Parse {
+            input: sha.to_owned(),
+            want: "64 hex characters".to_owned(),
+        }),
     }
 }
 
@@ -137,7 +138,8 @@ fn check_sha_hex(sha: &str) -> Result<()> {
     if sha.len() == SHA_HEX_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Ok(());
     }
-    Err(Error::Plan(format!(
-        "invalid sha256 '{sha}': want 64 hex characters"
-    )))
+    Err(Error::Parse {
+        input: sha.to_owned(),
+        want: "64 hex characters".to_owned(),
+    })
 }

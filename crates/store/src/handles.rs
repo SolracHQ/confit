@@ -250,7 +250,7 @@ mod tests {
                 Ok(_) => panic!("malformed sha passes"),
                 Err(error) => error,
             };
-            assert!(matches!(error, Error::Plan(_)));
+            assert!(matches!(error, Error::Parse { .. }));
         }
     }
 
@@ -286,7 +286,7 @@ mod tests {
             Ok(_) => panic!("malformed sha passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
+        assert!(matches!(error, Error::Parse { .. }));
     }
 
     #[test]
@@ -302,7 +302,7 @@ mod tests {
                 Ok(_) => panic!("malformed sha passes"),
                 Err(error) => error,
             };
-            assert!(matches!(error, Error::Plan(_)));
+            assert!(matches!(error, Error::Parse { .. }));
         }
     }
 
@@ -328,6 +328,6 @@ mod tests {
             Ok(_) => panic!("malformed sha passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
+        assert!(matches!(error, Error::Parse { .. }));
     }
 }

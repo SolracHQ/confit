@@ -377,8 +377,14 @@ impl RcDocs {
             };
             if let Err(error) = RcData::check_section_name(&name) {
                 match error {
+                    parsed @ confit_model::error::Error::Parse { .. } => {
+                        return Err(plan_error(format!("{ctor}: {parsed}")));
+                    }
                     confit_model::error::Error::Plan(message) => {
                         return Err(plan_error(format!("{ctor}: {message}")));
+                    }
+                    rendered @ confit_model::error::Error::Render { .. } => {
+                        return Err(plan_error(format!("{ctor}: {rendered}")));
                     }
                     confit_model::error::Error::Io(error) => {
                         return Err(plan_error(format!("{ctor}: {error}")));
