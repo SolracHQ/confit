@@ -68,7 +68,7 @@ impl From<Route> for Arg {
 
 /// Shell quoting for one word.
 ///
-/// Safe text holds alphanumerics plus `@%_+=:,./-` only.
+/// Safe text holds alphanumerics and `@%_+=:,./-` only.
 pub fn quote(text: &str) -> Cow<'_, str> {
     if !text.is_empty() && text.bytes().all(|byte| SAFE_CHARS.contains(&byte)) {
         Cow::Borrowed(text)

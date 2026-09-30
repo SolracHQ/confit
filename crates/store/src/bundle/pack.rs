@@ -2,15 +2,17 @@
 //!
 //! Bundle writes over blob reads.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
 use confit_model::document::BlobRef;
+use confit_model::manifest::Manifest;
 use confit_model::progress::ProgressSender;
 
+use super::ensure_bundle_extension;
 use super::error::{BundleError, Result};
 use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_GZIP_LEVEL, BUNDLE_MANIFEST, BundleStore};
-use super::{Bundle, ensure_bundle_extension};
 use crate::blob::BlobStore;
 use crate::blob::error::BlobError;
 
@@ -34,17 +36,16 @@ impl BundleStore {
     /// - [`BundleError::Denied`] for denied archives.
     pub fn write(
         &self,
-        bundle: &Bundle,
+        manifest: &Manifest,
         dest: &Path,
         progress: Option<&ProgressSender>,
     ) -> Result<PathBuf> {
         let _ = progress;
         let dest = ensure_bundle_extension(dest);
-        let manifest =
-            serde_json::to_vec_pretty(&bundle.manifest).map_err(|error| BundleError::Unknown {
-                path: dest.clone(),
-                message: error.to_string(),
-            })?;
+        let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| BundleError::Unknown {
+            path: dest.clone(),
+            message: error.to_string(),
+        })?;
         if let Some(parent) = dest.parent() {
             driver::create_dir_all(parent).map_err(|error| BundleError::from_io(&dest, error))?;
         }
@@ -55,10 +56,12 @@ impl BundleStore {
         let encoder =
             flate2::write::GzEncoder::new(out, flate2::Compression::new(BUNDLE_GZIP_LEVEL));
         let mut builder = tar::Builder::new(encoder);
-        append_manifest(&mut builder, &manifest, &dest)?;
-        let mut refs: Vec<&BlobRef> = bundle.blobs.values().collect();
-        refs.sort_by_key(|left| left.stored().hex());
-        for blob in refs {
+        append_manifest(&mut builder, &bytes, &dest)?;
+        let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
+        for blob in manifest.refs() {
+            unique.entry(blob.stored().hex()).or_insert(blob);
+        }
+        for blob in unique.values() {
             append_blob(&mut builder, blob, &self.blobs, &dest)?;
         }
         let encoder = builder
@@ -140,7 +143,7 @@ fn append_blob(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{ManifestData, ManifestDocument};
+    use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
     use crate::StoreRoots;
@@ -156,36 +159,31 @@ mod tests {
         }
     }
 
-    fn opaque_bundle(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Bundle) {
+    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
         use std::sync::Arc;
 
         let roots = test_roots(dir);
         let archives = Arc::new(ArchiveStore::new(&roots));
         let blobs = Arc::new(BlobStore::new(&roots));
         let mut documents = Vec::new();
-        let mut bundle = Bundle::empty();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match blobs.put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.push(ManifestDocument::new(
+            documents.push(Document::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
-                ManifestData::Opaque {
+                Data::Opaque {
                     blob: handle.to_ref(),
                     size: body.len() as u64,
                     mode: None,
                     unmanaged: false,
                 },
             ));
-            bundle.blobs.insert(handle.sha().hex(), handle.to_ref());
         }
-        match Bundle::build(documents, Vec::new()) {
-            Ok(built) => {
-                bundle.manifest = built.manifest;
-                (BundleStore::new(archives, blobs), bundle)
-            }
-            Err(error) => panic!("bundle builds: {error}"),
+        match Manifest::build(documents, Vec::new()) {
+            Ok(manifest) => (BundleStore::new(archives, blobs), manifest),
+            Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
@@ -204,7 +202,7 @@ mod tests {
     fn write_sources_cache_with_empty_pool() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let (store, bundle) = opaque_bundle(dir.path(), &[b"cache-only bytes"]);
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"cache-only bytes"]);
         let roots = test_roots(dir.path());
         assert!(
             driver::read_dir(&roots.config_base.join("blobs"))
@@ -212,9 +210,9 @@ mod tests {
                 .is_empty(),
             "plan output sources the cache with zero pool bytes"
         );
-        let dest = match store.write(&bundle, &dir.path().join("plan"), None) {
+        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
             Ok(dest) => dest,
-            Err(error) => panic!("bundle writes: {error}"),
+            Err(error) => panic!("manifest writes: {error}"),
         };
         let names = entry_names(&dest);
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
@@ -225,12 +223,12 @@ mod tests {
     fn write_falls_back_to_pool() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let (store, bundle) = opaque_bundle(dir.path(), &[b"pool bytes"]);
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"pool bytes"]);
         let roots = test_roots(dir.path());
         let pools = BlobStore::new(&roots);
         let mut handles = Vec::new();
-        for blob in bundle.blobs.values() {
-            match pools.resolve(blob) {
+        for blob in manifest.refs() {
+            match pools.resolve(&blob) {
                 Ok(handle) => handles.push(handle),
                 Err(error) => panic!("persist proves: {error}"),
             }
@@ -246,9 +244,9 @@ mod tests {
         for path in cached {
             driver::remove_file(&path).unwrap();
         }
-        let dest = match store.write(&bundle, &dir.path().join("plan"), None) {
+        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
             Ok(dest) => dest,
-            Err(error) => panic!("bundle writes: {error}"),
+            Err(error) => panic!("manifest writes: {error}"),
         };
         let names = entry_names(&dest);
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");

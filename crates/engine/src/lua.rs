@@ -499,7 +499,7 @@ fn holds_cycle_inner(value: &Value, stack: &mut Vec<usize>) -> bool {
     false
 }
 
-/// Stamps a `__kind` marker plus one extra marker on a table.
+/// Stamps a `__kind` marker and one extra marker on a table.
 pub(crate) fn set_marker(
     lua: &Lua,
     table: &Table,

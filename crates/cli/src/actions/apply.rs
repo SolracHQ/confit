@@ -10,11 +10,11 @@ use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_model::drift::{Drift, DriftOrder};
 use confit_model::error::{Error, Result};
+use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_runtime::Applier;
 use confit_runtime::Checks;
 use confit_store::Stores;
-use confit_store::bundle::Bundle;
 
 use crate::cli::ApplyArgs;
 use crate::hooks::{self, append_hook_log};
@@ -42,20 +42,20 @@ pub struct ApplyReport {
 ///
 /// ```rust,no_run
 /// use confit_cli::actions::apply::ApplyRunner;
-/// use confit_model::document::{ManifestData, ManifestDocument};
+/// use confit_model::document::{Data, Document};
 /// use confit_model::routes::{Route, RouteBase};
+/// use confit_model::manifest::Manifest;
 /// use confit_runtime::Applier;
-/// use confit_store::bundle::Bundle;
 /// use confit_store::{StoreRoots, Stores};
 /// use std::io::Cursor;
 ///
 /// let mut input = Cursor::new("yes\n");
 /// let stores = Stores::new(StoreRoots::standard());
 /// let applier = Applier::with_stores(stores.clone());
-/// let manifest = match Bundle::build(
-///     vec![ManifestDocument::new(
+/// let manifest = match Manifest::build(
+///     vec![Document::new(
 ///         Route::new(RouteBase::Home, "note").unwrap(),
-///         ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
+///         Data::Text { content: "hi".into(), mode: None, unmanaged: false},
 ///     )],
 ///     Vec::new(),
 /// ) {
@@ -64,7 +64,7 @@ pub struct ApplyReport {
 /// };
 /// let runner = ApplyRunner {
 ///     manifest,
-///     previous: Bundle::empty(),
+///     previous: Manifest::empty(),
 ///     force: false,
 ///     input: &mut input,
 ///     stores,
@@ -78,9 +78,9 @@ pub struct ApplyReport {
 /// ```
 pub struct ApplyRunner<'a> {
     /// Holds the desired manifest under writing and running.
-    pub manifest: Bundle,
+    pub manifest: Manifest,
     /// Holds the previous manifest backing drift and counts.
-    pub previous: Bundle,
+    pub previous: Manifest,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
     /// Gains the confirmation answer, stdin on the host.
@@ -215,9 +215,8 @@ impl<'a> ApplyRunner<'a> {
             .slots()
             .load()
             .map_err(|error| Error::Plan(error.to_string()))?;
-        let mut manifest = Bundle::build(evaluation.documents, evaluation.hooks)
+        let manifest = Manifest::build(evaluation.documents, evaluation.hooks)
             .map_err(|error| Error::Plan(error.to_string()))?;
-        manifest.blobs = evaluation.blobs;
         Ok(Self {
             manifest,
             previous,
@@ -234,7 +233,7 @@ impl<'a> ApplyRunner<'a> {
 
     /// Builds a slot-backed runner with preview and prompts.
     fn from_slot(
-        slot_manifest: Bundle,
+        slot_manifest: Manifest,
         force: bool,
         input: &'a mut dyn BufRead,
         stores: Stores,
@@ -333,7 +332,7 @@ impl<'a> ApplyRunner<'a> {
     /// io errors. A non-`yes` answer aborts as a plan error.
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.sinks.emit_hashing();
-        let built = std::mem::replace(&mut self.manifest, Bundle::empty());
+        let built = std::mem::replace(&mut self.manifest, Manifest::empty());
         log_processed(&built, &self.previous);
         let first_run = self.stores.slots().is_first_run();
         let reference = if first_run { &built } else { &self.previous };
@@ -346,10 +345,7 @@ impl<'a> ApplyRunner<'a> {
         self.checks = Checks::current();
         self.changed = changed_paths(&built, &self.previous, &baseline, first_run);
         let evaluated = evaluate_hooks(&built, &self.checks, &self.changed, &self.applier)?;
-        let lifecycle = confit_model::hook::diff_lifecycle(
-            &built.manifest.hooks,
-            &self.previous.manifest.hooks,
-        );
+        let lifecycle = confit_model::hook::diff_lifecycle(&built.hooks, &self.previous.hooks);
         let report = Summary {
             built: &built,
             previous: &self.previous,
@@ -380,24 +376,22 @@ impl<'a> ApplyRunner<'a> {
         }
         let written = self
             .applier
-            .write_documents(&built.manifest.documents, &self.changed)?;
+            .write_documents(&built.documents, &self.changed)?;
         let removed = self
             .applier
-            .remove_orphans(&self.previous.manifest.documents, &built.manifest.documents)?;
+            .remove_orphans(&self.previous.documents, &built.documents)?;
         let removed = removed
-            + self.applier.remove_tree_members(
-                &self.previous.manifest.documents,
-                &built.manifest.documents,
-            )?;
-        self.sinks
-            .emit_writing_manifest(built.manifest.documents.len());
+            + self
+                .applier
+                .remove_tree_members(&self.previous.documents, &built.documents)?;
+        self.sinks.emit_writing_manifest(built.documents.len());
         let _ = self
             .stores
             .slots()
             .store(&built, self.sinks.progress.as_ref())
             .map_err(|error| Error::Plan(error.to_string()))?;
         let mut handles = Vec::new();
-        for document in &built.manifest.documents {
+        for document in &built.documents {
             for blob in document.data.blob_refs() {
                 handles.push(
                     self.stores
@@ -423,9 +417,9 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// Closed gates skip with a line, passing checks skip silently.
     /// Failures abort the rest.
-    fn run_hooks(&mut self, built: &Bundle) -> Result<()> {
-        let total = built.manifest.hooks.len();
-        for (index, hook) in built.manifest.hooks.iter().enumerate() {
+    fn run_hooks(&mut self, built: &Manifest) -> Result<()> {
+        let total = built.hooks.len();
+        for (index, hook) in built.hooks.iter().enumerate() {
             let position = index + 1;
             if let Some(line) = self.gate_line(hook) {
                 self.sinks.print_line(line);
@@ -558,33 +552,29 @@ impl<'a> ApplyRunner<'a> {
 /// Computes the changed destination routes for one apply run.
 ///
 /// First runs hold every desired route. Steady runs hold plan
-/// changes plus drifted destinations.
+/// changes and drifted destinations.
 fn changed_paths(
-    built: &Bundle,
-    previous: &Bundle,
+    built: &Manifest,
+    previous: &Manifest,
     drifts: &[Drift],
     first_run: bool,
 ) -> BTreeSet<Route> {
-    use confit_model::plan::DocumentStatus;
+    use confit_model::document::DocumentStatus;
 
     if first_run {
         return built
-            .manifest
             .documents
             .iter()
             .map(|document| document.destination.clone())
             .collect();
     }
     let mut out = BTreeSet::new();
-    for document in &built.manifest.documents {
-        if !matches!(
-            document.status(&previous.manifest),
-            DocumentStatus::Unchanged
-        ) {
+    for document in &built.documents {
+        if !matches!(document.status(previous), DocumentStatus::Unchanged) {
             out.insert(document.destination.clone());
         }
     }
-    for document in &built.manifest.documents {
+    for document in &built.documents {
         let prefix = format!("{}/", document.destination.display());
         for drift in drifts {
             let path = drift.path().display();

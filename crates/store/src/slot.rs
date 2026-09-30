@@ -4,12 +4,10 @@
 
 pub mod error;
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::bundle::{BUNDLE_VERSION, Bundle};
-use confit_model::document::BlobRef;
-use confit_model::manifest::{Manifest, manifest_json};
+use crate::bundle::codec::{CodecError, decode};
+use confit_model::manifest::Manifest;
 use confit_model::progress::ProgressSender;
 
 use crate::StoreRoots;
@@ -92,7 +90,7 @@ impl SlotStore {
     /// - [`SlotError::Denied`] for denied slots.
     /// - [`SlotError::Unknown`] for other read failures.
     /// - [`SlotError::Version`] for unsupported versions.
-    pub fn load(&self) -> Result<Bundle> {
+    pub fn load(&self) -> Result<Manifest> {
         load_bundle(&self.state)
     }
 
@@ -103,9 +101,9 @@ impl SlotStore {
     /// - [`SlotError::Unknown`] for render, clock, and write failures.
     /// - [`SlotError::Missing`] for missing paths.
     /// - [`SlotError::Denied`] for denied paths.
-    pub fn store(&self, bundle: &Bundle, progress: Option<&ProgressSender>) -> Result<PathBuf> {
+    pub fn store(&self, manifest: &Manifest, progress: Option<&ProgressSender>) -> Result<PathBuf> {
         let _ = progress;
-        let text = manifest_json(&bundle.manifest).map_err(|error| SlotError::Unknown {
+        let text = manifest.json().map_err(|error| SlotError::Unknown {
             path: self.state.clone(),
             message: error.to_string(),
         })?;
@@ -132,7 +130,7 @@ impl SlotStore {
     /// # Errors
     ///
     /// - [`SlotError::BadPick`] for absent slots, malformed and out-of-range picks.
-    pub fn resolve(&self, picker: Option<&str>) -> Result<(Bundle, SlotKind)> {
+    pub fn resolve(&self, picker: Option<&str>) -> Result<(Manifest, SlotKind)> {
         let Some(raw) = picker else {
             if !driver::exists(&self.state) {
                 return Err(SlotError::BadPick {
@@ -161,14 +159,14 @@ impl SlotStore {
                     input: raw.to_owned(),
                 });
             }
-            let (_, bundle) =
+            let (_, manifest) =
                 entries
                     .into_iter()
                     .nth(pick - 1)
                     .ok_or_else(|| SlotError::BadPick {
                         input: raw.to_owned(),
                     })?;
-            return Ok((bundle, SlotKind::History(pick)));
+            return Ok((manifest, SlotKind::History(pick)));
         }
         Err(SlotError::BadPick {
             input: raw.to_owned(),
@@ -200,9 +198,9 @@ impl SlotStore {
     /// - [`SlotError::Unknown`] for render and write failures.
     /// - [`SlotError::Missing`] for missing paths.
     /// - [`SlotError::Denied`] for denied paths.
-    pub fn store_named(&self, name: &str, bundle: &Bundle) -> Result<()> {
+    pub fn store_named(&self, name: &str, manifest: &Manifest) -> Result<()> {
         let path = self.named_slot(name)?;
-        let text = manifest_json(&bundle.manifest).map_err(|error| SlotError::Unknown {
+        let text = manifest.json().map_err(|error| SlotError::Unknown {
             path: path.clone(),
             message: error.to_string(),
         })?;
@@ -247,56 +245,29 @@ impl SlotStore {
 /// - [`SlotError::Unknown`] for other read failures.
 /// - [`SlotError::Corrupt`] for bad payloads.
 /// - [`SlotError::Version`] for version mismatch.
-fn load_bundle(path: &Path) -> Result<Bundle> {
+fn load_bundle(path: &Path) -> Result<Manifest> {
     let bytes = match driver::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Bundle::empty());
+            return Ok(Manifest::empty());
         }
         Err(error) => {
             return Err(SlotError::from_io(path, error));
         }
     };
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| SlotError::Corrupt {
-            path: path.to_path_buf(),
-        })?;
-    match value.get("version").and_then(serde_json::Value::as_u64) {
-        Some(version) if version == u64::from(BUNDLE_VERSION) => {}
-        Some(version) => {
-            return Err(SlotError::Version {
-                path: path.to_path_buf(),
-                got: version,
-            });
-        }
-        None => {
-            return Err(SlotError::Corrupt {
-                path: path.to_path_buf(),
-            });
-        }
-    }
-    let stored: Manifest = serde_json::from_value(value).map_err(|_| SlotError::Corrupt {
-        path: path.to_path_buf(),
-    })?;
-    Ok(hydrate_bundle(&stored))
+    decode(&bytes).map_err(|error| from_codec(path, error))
 }
 
-/// Rebuilds one bundle with ref-only blob resolution.
-///
-/// Blob refs carry content plus stored identity, so resolution
-/// clones manifest refs without touching disk.
-fn hydrate_bundle(stored: &Manifest) -> Bundle {
-    let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
-    for document in &stored.documents {
-        for blob in document.data.blob_refs() {
-            blobs
-                .entry(blob.sha().hex())
-                .or_insert_with(|| blob.clone());
-        }
-    }
-    Bundle {
-        manifest: stored.clone(),
-        blobs,
+/// Maps one codec failure at the slot path into slot language.
+fn from_codec(path: &Path, error: CodecError) -> SlotError {
+    match error {
+        CodecError::Version { got } => SlotError::Version {
+            path: path.to_path_buf(),
+            got,
+        },
+        CodecError::Corrupt { .. } => SlotError::Corrupt {
+            path: path.to_path_buf(),
+        },
     }
 }
 
@@ -311,7 +282,7 @@ fn hydrate_bundle(stored: &Manifest) -> Bundle {
 ///
 /// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
 /// - [`SlotError::Unknown`] for other listing failures.
-fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Bundle)>> {
+fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
     let mut files = match driver::read_dir(dir) {
         Ok(files) => files,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -326,15 +297,11 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Bundle)>> {
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
-        let stored: Manifest = match serde_json::from_slice(&bytes) {
+        let stored = match decode(&bytes) {
             Ok(stored) => stored,
             Err(_) => continue,
         };
-        if stored.version != BUNDLE_VERSION {
-            continue;
-        }
-        let bundle = hydrate_bundle(&stored);
-        out.push((file, bundle));
+        out.push((file, stored));
     }
     Ok(out)
 }
@@ -436,7 +403,7 @@ fn check_slot_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{ManifestData, ManifestDocument};
+    use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
     use confit_driver::TestGuard;
@@ -452,11 +419,11 @@ mod tests {
         SlotStore::new(&test_roots(dir))
     }
 
-    fn text_bundle(content: &str) -> Bundle {
-        match Bundle::build(
-            vec![ManifestDocument::new(
+    fn text_manifest(content: &str) -> Manifest {
+        match Manifest::build(
+            vec![Document::new(
                 Route::new(RouteBase::Home, "note").unwrap(),
-                ManifestData::Text {
+                Data::Text {
                     content: content.to_string(),
                     mode: None,
                     unmanaged: false,
@@ -464,8 +431,8 @@ mod tests {
             )],
             Vec::new(),
         ) {
-            Ok(bundle) => bundle,
-            Err(error) => panic!("bundle builds: {error}"),
+            Ok(manifest) => manifest,
+            Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
@@ -489,7 +456,7 @@ mod tests {
             Err(SlotError::BadPick { .. }) => {}
             Err(error) => panic!("wrong absent variant: {error}"),
         }
-        match slots.store(&text_bundle("v1"), None) {
+        match slots.store(&text_manifest("v1"), None) {
             Ok(_) => assert!(!slots.is_first_run(), "stored slot ends first run"),
             Err(error) => panic!("applied slot stores: {error}"),
         }
@@ -501,7 +468,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         for index in 1..=7 {
-            match slots.store(&text_bundle(&format!("v{index}")), None) {
+            match slots.store(&text_manifest(&format!("v{index}")), None) {
                 Ok(_) => {}
                 Err(error) => panic!("history stores v{index}: {error}"),
             }
@@ -517,9 +484,9 @@ mod tests {
             Err(error) => panic!("history lists: {error}"),
         }
         match slots.resolve(Some("%1")) {
-            Ok((bundle, kind)) => {
+            Ok((manifest, kind)) => {
                 assert_eq!(kind, SlotKind::History(1), "newest reads pick one");
-                assert_eq!(bundle, text_bundle("v7"), "newest keeps last write");
+                assert_eq!(manifest, text_manifest("v7"), "newest keeps last write");
             }
             Err(error) => panic!("newest resolves: {error}"),
         }
@@ -530,33 +497,33 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
-        let applied = text_bundle("applied");
+        let applied = text_manifest("applied");
         match slots.store(&applied, None) {
             Ok(_) => {}
             Err(error) => panic!("applied slot stores: {error}"),
         }
-        match slots.store_named("keep", &text_bundle("named")) {
+        match slots.store_named("keep", &text_manifest("named")) {
             Ok(()) => {}
             Err(error) => panic!("named slot stores: {error}"),
         }
         match slots.resolve(None) {
-            Ok((bundle, kind)) => {
+            Ok((manifest, kind)) => {
                 assert_eq!(kind, SlotKind::Applied, "absent picker reads applied");
-                assert_eq!(bundle, applied, "applied picker keeps stored bundle");
+                assert_eq!(manifest, applied, "applied picker keeps stored manifest");
             }
             Err(error) => panic!("applied picker resolves: {error}"),
         }
         match slots.resolve(Some("@keep")) {
-            Ok((bundle, kind)) => {
+            Ok((manifest, kind)) => {
                 assert_eq!(kind, SlotKind::Named("keep".to_string()));
-                assert_eq!(bundle, text_bundle("named"));
+                assert_eq!(manifest, text_manifest("named"));
             }
             Err(error) => panic!("named picker resolves: {error}"),
         }
         match slots.resolve(Some("%1")) {
-            Ok((bundle, kind)) => {
+            Ok((manifest, kind)) => {
                 assert_eq!(kind, SlotKind::History(1), "history picker keeps its pick");
-                assert_eq!(bundle, applied, "history picker keeps stored bundle");
+                assert_eq!(manifest, applied, "history picker keeps stored manifest");
             }
             Err(error) => panic!("history picker resolves: {error}"),
         }
@@ -594,7 +561,7 @@ mod tests {
             Err(SlotError::BadPick { .. }) => {}
             Err(error) => panic!("wrong bare variant: {error}"),
         }
-        match slots.store_named("a/b", &text_bundle("v1")) {
+        match slots.store_named("a/b", &text_manifest("v1")) {
             Ok(()) => panic!("separator name passes"),
             Err(SlotError::BadPick { input }) => {
                 assert_eq!(input, "a/b", "separator name keeps its input")
@@ -608,12 +575,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
-        match slots.store_named("keep", &text_bundle("named")) {
+        match slots.store_named("keep", &text_manifest("named")) {
             Ok(()) => {}
             Err(error) => panic!("named slot stores: {error}"),
         }
         match slots.resolve(Some("@keep")) {
-            Ok((bundle, _)) => assert_eq!(bundle, text_bundle("named")),
+            Ok((manifest, _)) => assert_eq!(manifest, text_manifest("named")),
             Err(error) => panic!("named slot resolves: {error}"),
         }
         match slots.delete_named("keep") {
@@ -638,7 +605,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         for content in ["v1", "v2", "v3"] {
-            match slots.store(&text_bundle(content), None) {
+            match slots.store(&text_manifest(content), None) {
                 Ok(_) => {}
                 Err(error) => panic!("history stores {content}: {error}"),
             }
@@ -650,9 +617,9 @@ mod tests {
         for (pick, want) in [(1, "v3"), (2, "v2"), (3, "v1")] {
             let picker = format!("%{pick}");
             match slots.resolve(Some(picker.as_str())) {
-                Ok((bundle, kind)) => {
+                Ok((manifest, kind)) => {
                     assert_eq!(kind, SlotKind::History(pick));
-                    assert_eq!(bundle, text_bundle(want), "pick {pick} keeps order");
+                    assert_eq!(manifest, text_manifest(want), "pick {pick} keeps order");
                 }
                 Err(error) => panic!("pick {pick} resolves: {error}"),
             }

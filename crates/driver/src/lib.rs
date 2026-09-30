@@ -4,6 +4,8 @@
 
 #![deny(missing_docs)]
 
+mod atomic;
+
 /// Filesystem facts for one path.
 ///
 /// Length holds content bytes, zero for folders.
@@ -14,7 +16,7 @@ pub struct FileMeta {
 }
 
 impl FileMeta {
-    /// Builds facts from a byte length plus the folder flag.
+    /// Builds facts from a byte length and the folder flag.
     pub fn new(len: u64, is_dir: bool) -> Self {
         Self { len, is_dir }
     }
@@ -45,6 +47,7 @@ pub trait SeekRead: std::io::Read + std::io::Seek {}
 
 impl<T: std::io::Read + std::io::Seek> SeekRead for T {}
 
+pub use atomic::{atomic_write, copy_stream, stage_path};
 pub use imp::*;
 
 #[cfg(test)]
@@ -411,7 +414,7 @@ mod imp {
         std::fs::remove_file(path)
     }
 
-    /// Reads length plus file-type facts for one path.
+    /// Reads length and file-type facts for one path.
     ///
     /// # Errors
     ///
@@ -678,7 +681,7 @@ mod imp {
         to_vfs(&root, path)?.remove_file().map_err(io_error)
     }
 
-    /// Reads length plus file-type facts for one path.
+    /// Reads length and file-type facts for one path.
     ///
     /// # Errors
     ///
@@ -955,7 +958,7 @@ mod imp {
         source.remove_dir().map_err(io_error)
     }
 
-    /// Reads backend length plus file-type facts for one path.
+    /// Reads backend length and file-type facts for one path.
     fn mem_metadata(root: &VfsPath, path: &Path) -> io::Result<super::FileMeta> {
         let facts = to_vfs(root, path)?.metadata().map_err(io_error)?;
         Ok(super::FileMeta::new(

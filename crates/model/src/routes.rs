@@ -31,7 +31,7 @@ pub enum RouteBase {
 
 /// Late-bound destination route.
 ///
-/// Base plus relative path.
+/// Base and relative path.
 /// The path holds a non-empty shape only.
 /// Parents, permissions, and platform validity resolve at apply time.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

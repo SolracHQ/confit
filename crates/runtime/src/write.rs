@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use confit_model::document::{ManifestData, ManifestDocument};
+use confit_model::document::{Data, Document};
 use confit_model::error::{Error, Result};
 use confit_model::progress::Event;
 use confit_model::routes::Route;
@@ -21,7 +21,7 @@ impl Applier {
     /// Render, command, and io failures surface as plan or io errors.
     pub fn write_documents(
         &self,
-        documents: &[ManifestDocument],
+        documents: &[Document],
         changed: &BTreeSet<Route>,
     ) -> Result<usize> {
         let blobs = self.stores.blobs();
@@ -34,7 +34,7 @@ impl Applier {
             {
                 continue;
             }
-            if let ManifestData::Tree { members } = &document.data {
+            if let Data::Tree { members } = &document.data {
                 let count = self.disk.write_tree(&expanded, members, blobs.as_ref())?;
                 if let Some(mode) = document.mode()
                     && let Err(error) = self.disk.set_mode(&expanded, mode)
@@ -48,7 +48,7 @@ impl Applier {
                 written += count;
                 continue;
             }
-            if let ManifestData::Opaque { blob, .. } = &document.data {
+            if let Data::Opaque { blob, .. } = &document.data {
                 if let Err(error) = self.disk.clear_link(&expanded) {
                     return Err(Error::Plan(format!(
                         "cannot remove link '{}': {error}",
@@ -69,13 +69,11 @@ impl Applier {
                 continue;
             }
             let outcome = match &document.data {
-                ManifestData::Link { target } => self
+                Data::Link { target } => self
                     .disk
                     .write_link(&expanded, Path::new(target))
                     .map_err(|error| Error::Plan(error.to_string())),
-                ManifestData::Text { .. }
-                | ManifestData::Structured { .. }
-                | ManifestData::Rc(_) => {
+                Data::Text { .. } | Data::Structured { .. } | Data::Rc(_) => {
                     if let Err(error) = self.disk.clear_link(&expanded) {
                         return Err(Error::Plan(format!(
                             "cannot remove link '{}': {error}",
@@ -87,7 +85,7 @@ impl Applier {
                         .write_bytes(&expanded, &bytes)
                         .map_err(|error| Error::Plan(error.to_string()))
                 }
-                ManifestData::Tree { .. } | ManifestData::Opaque { .. } => {
+                Data::Tree { .. } | Data::Opaque { .. } => {
                     continue;
                 }
             };

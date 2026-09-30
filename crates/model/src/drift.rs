@@ -7,9 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::document::{ManifestDocument, StructuredFormat, Table};
-use crate::plan::opaque_label;
+use crate::document::{Document, StructuredFormat, Table};
 use crate::routes::Route;
+use crate::sha::Sha;
 
 /// Manual edit behind one recorded destination.
 ///
@@ -77,7 +77,7 @@ pub enum DriftOrder {
     DiskFirst,
 }
 
-impl ManifestDocument {
+impl Document {
     /// Collects drift entries for one present disk path.
     ///
     /// Unmanaged documents stay quiet. Present text with
@@ -89,14 +89,14 @@ impl ManifestDocument {
         disk_mode: Option<u32>,
         order: DriftOrder,
     ) -> Vec<Drift> {
-        use crate::document::{ManifestData, render_mode};
+        use crate::document::{Data, render_mode};
 
         let (first, second) = match order {
             DriftOrder::RecordedFirst => (recorded, disk),
             DriftOrder::DiskFirst => (disk, recorded),
         };
         let mut out = match &self.data {
-            ManifestData::Structured { format, data } => {
+            Data::Structured { format, data } => {
                 if let Some(disk_table) = parse_disk_table(*format, disk) {
                     match order {
                         DriftOrder::RecordedFirst => {
@@ -110,21 +110,21 @@ impl ManifestDocument {
                     push_hunk(&self.destination, first, second)
                 }
             }
-            ManifestData::Text { unmanaged, .. } => {
+            Data::Text { unmanaged, .. } => {
                 if *unmanaged || recorded == disk {
                     Vec::new()
                 } else {
                     push_hunk(&self.destination, first, second)
                 }
             }
-            ManifestData::Rc(_) => {
+            Data::Rc(_) => {
                 if recorded != disk {
                     push_hunk(&self.destination, first, second)
                 } else {
                     Vec::new()
                 }
             }
-            ManifestData::Link { target } => {
+            Data::Link { target } => {
                 let disk_target = String::from_utf8_lossy(disk);
                 if disk_target.as_ref() != target {
                     let (old, new) = match order {
@@ -147,18 +147,22 @@ impl ManifestDocument {
                     Vec::new()
                 }
             }
-            ManifestData::Opaque { unmanaged, .. } => {
+            Data::Opaque { unmanaged, .. } => {
                 if *unmanaged || recorded == disk {
                     Vec::new()
                 } else {
                     let (old, new) = match order {
                         DriftOrder::RecordedFirst => (
-                            serde_json::Value::String(opaque_label(recorded)),
-                            serde_json::Value::String(opaque_label(disk)),
+                            serde_json::Value::String(
+                                Sha::hash(recorded).label(recorded.len() as u64),
+                            ),
+                            serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
                         ),
                         DriftOrder::DiskFirst => (
-                            serde_json::Value::String(opaque_label(disk)),
-                            serde_json::Value::String(opaque_label(recorded)),
+                            serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
+                            serde_json::Value::String(
+                                Sha::hash(recorded).label(recorded.len() as u64),
+                            ),
                         ),
                     };
                     vec![Drift::Key {
@@ -169,7 +173,7 @@ impl ManifestDocument {
                     }]
                 }
             }
-            ManifestData::Tree { .. } => Vec::new(),
+            Data::Tree { .. } => Vec::new(),
         };
         if let Some(wanted) = self.mode()
             && let Some(seen) = disk_mode

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use confit_model::document::ManifestDocument;
+use confit_model::document::Document;
 use confit_model::error::{Error, Result};
 
 use crate::Applier;
@@ -13,11 +13,7 @@ impl Applier {
     /// # Errors
     ///
     /// Removal failures surface as io errors.
-    pub fn remove_orphans(
-        &self,
-        recorded: &[ManifestDocument],
-        desired: &[ManifestDocument],
-    ) -> Result<usize> {
+    pub fn remove_orphans(&self, recorded: &[Document], desired: &[Document]) -> Result<usize> {
         let mut removed = 0;
         for old in recorded {
             if old.data.tree_members().is_some() {
@@ -48,8 +44,8 @@ impl Applier {
     /// Removal failures surface as io errors.
     pub fn remove_tree_members(
         &self,
-        recorded: &[ManifestDocument],
-        desired: &[ManifestDocument],
+        recorded: &[Document],
+        desired: &[Document],
     ) -> Result<usize> {
         let mut removed = 0;
         for old in recorded {

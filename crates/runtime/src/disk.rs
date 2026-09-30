@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
-use confit_model::document::{BlobRef, ManifestData, ManifestDocument, ManifestMember};
+use confit_model::document::{BlobRef, Data, Document, ManifestMember};
 use confit_model::error::{Error, Result};
 use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
@@ -31,7 +31,7 @@ pub enum Live {
         /// Holds the raw failure detail from the read.
         reason: String,
     },
-    /// Content reader plus permission bits for the destination.
+    /// Content reader and permission bits for the destination.
     Present {
         /// Streams destination bytes.
         reader: Box<dyn std::io::Read>,
@@ -51,7 +51,7 @@ pub enum LiveMember {
         /// Holds the raw failure detail from the read.
         reason: String,
     },
-    /// Content reader plus permission bits for the member.
+    /// Content reader and permission bits for the member.
     Present {
         /// Streams member bytes.
         reader: Box<dyn std::io::Read>,
@@ -67,14 +67,14 @@ impl HostDisk {
     }
 
     /// Reads one document destination through its kind-aware reader.
-    pub fn live_doc(&self, document: &ManifestDocument) -> Live {
+    pub fn live_doc(&self, document: &Document) -> Live {
         let expanded = self.resolve(&document.destination);
-        let is_link = matches!(document.data, ManifestData::Link { .. });
+        let is_link = matches!(document.data, Data::Link { .. });
         live_doc_host(&expanded, is_link)
     }
 
     /// Reads one tree destination into relative member readers.
-    pub fn live_tree(&self, document: &ManifestDocument) -> BTreeMap<String, LiveMember> {
+    pub fn live_tree(&self, document: &Document) -> BTreeMap<String, LiveMember> {
         let dir = self.resolve(&document.destination);
         live_tree_host(&dir)
     }
@@ -127,14 +127,13 @@ impl HostDisk {
         for member in members {
             let path = dest.join(&member.relative);
             copy_blob(&path, &member.blob, blobs).map_err(|error| match error {
-                parsed @ Error::Parse { .. } => Error::Plan(parsed.to_string()),
                 Error::Plan(_) => Error::Plan(format!(
                     "cannot write '{}': missing blob '{}' for '{}'",
                     dest.display(),
                     member.blob.sha(),
                     path.display()
                 )),
-                rendered @ Error::Render { .. } => Error::Plan(rendered.to_string()),
+                transient => Error::Plan(transient.to_string()),
             })?;
             driver::set_mode(&path, member.mode).map_err(|error| {
                 Error::Plan(format!(
@@ -383,10 +382,10 @@ mod live_tests {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
-    fn text_doc(path: &Path) -> ManifestDocument {
-        ManifestDocument::new(
+    fn text_doc(path: &Path) -> Document {
+        Document::new(
             literal(path),
-            ManifestData::Text {
+            Data::Text {
                 content: "live bytes".into(),
                 mode: None,
                 unmanaged: false,
@@ -449,9 +448,9 @@ mod live_tests {
         let disk = HostDisk;
         disk.write_bytes(&root.join("present.txt"), b"member bytes")
             .unwrap();
-        let document = ManifestDocument::new(
+        let document = Document::new(
             literal(&root),
-            ManifestData::Tree {
+            Data::Tree {
                 members: Vec::new(),
             },
         );

@@ -1,6 +1,6 @@
 //! Handles
 //!
-//! Typed Lua handles over core identity plus the fetch constructor.
+//! Typed Lua handles over core identity and the fetch constructor.
 
 use std::io::Read as _;
 
@@ -83,7 +83,7 @@ pub(crate) struct LuaRoute {
 /// Blob userdata for sealed content-addressed bytes.
 ///
 /// Lua mapping over the core blob identity. The content hash
-/// plus the stored hash travel together from the blob pool.
+/// and the stored hash travel together from the blob pool.
 #[derive(Clone, TypedUserData)]
 pub(crate) struct LuaBlobHandle {
     /// Core blob identity under wrapping.
@@ -310,7 +310,7 @@ pub(crate) fn blob_for_opaque(
 /// Builds one tree document table from a sealed archive.
 ///
 /// Members pass the callback one by one. Nil skips, true
-/// keeps at the same path, a table overrides path plus
+/// keeps at the same path, a table overrides path and
 /// mode. Kept members pool their bytes once and land in
 /// relative path order.
 ///
@@ -384,7 +384,7 @@ struct TreePick {
 /// Parses one tree callback return into a pick.
 ///
 /// Nil skips. True keeps at the same path. A table
-/// overrides path plus mode. Anything else fails.
+/// overrides path and mode. Anything else fails.
 ///
 /// # Errors
 ///
@@ -441,16 +441,64 @@ fn parse_tree_pick(returned: &Value, name: &str, caller: &str) -> mlua::Result<O
         }
         Some(bits as u32)
     } else if let Some(raw) = mode_value.opt_str() {
-        Some(
-            confit_model::document::parse_mode(&raw)
-                .map_err(|error| plan_error(format!("{caller}: {error}")))?,
-        )
+        Some(mode_bits(&raw, caller)?)
     } else {
         return Err(plan_error(format!(
             "{caller}: callback table field 'mode' must be a string or integer"
         )));
     };
     Ok(Some(TreePick { rel, mode }))
+}
+
+/// Parses octal or symbolic permission text under a method path.
+///
+/// Octal text holds three digits like `755` or four digits with
+/// a leading zero like `0755`. Symbolic text holds nine
+/// characters like `rwxr-xr-x`, one `rwx` triple per class.
+///
+/// # Errors
+///
+/// Leading `d`, wrong lengths, and bad characters fail as plan
+/// errors naming the method path.
+fn mode_bits(text: &str, path: &str) -> mlua::Result<u32> {
+    const SHAPE: &str = "octal like 755 or symbolic like rwxr-xr-x";
+    const SYMBOLIC: &str = "nine rwx characters like rwxr-xr-x";
+    const FOUR_DIGIT: &str = "four digit octal starting with 0 like 0755";
+    const DIGITS: &str = "octal digits 0-7";
+    let invalid = |want: &str| {
+        let detail = format!("invalid '{text}': want {want}");
+        plan_error(format!("{path}: {detail}"))
+    };
+    if text.starts_with('d') {
+        return Err(invalid(SHAPE));
+    }
+    match text.len() {
+        9 => {
+            let mut bits: u32 = 0;
+            for (index, byte) in text.as_bytes().iter().enumerate() {
+                let bit: u32 = match (index % 3, byte) {
+                    (0, b'r') => 4,
+                    (1, b'w') => 2,
+                    (2, b'x') => 1,
+                    (_, b'-') => 0,
+                    _ => return Err(invalid(SYMBOLIC)),
+                };
+                bits |= bit << ((2 - index / 3) * 3);
+            }
+            Ok(bits)
+        }
+        3 | 4 => {
+            let body = match text.len() {
+                3 => text,
+                _ => text.strip_prefix('0').ok_or_else(|| invalid(FOUR_DIGIT))?,
+            };
+            if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+                return Err(invalid(DIGITS));
+            }
+            u32::from_str_radix(body, 8).map_err(|_| invalid(DIGITS))
+        }
+        _ => Err(invalid(SHAPE)),
+    }
 }
 
 #[typeduserdata_impl]
@@ -826,7 +874,7 @@ impl LuaRoute {
     }
 }
 
-/// Parses tree destination plus callback args.
+/// Parses tree destination and callback args.
 ///
 /// # Errors
 ///
@@ -958,7 +1006,7 @@ fn fetch_impl(
     }
 }
 
-/// Parses URL plus optional sha table for fetch calls.
+/// Parses URL and optional sha table for fetch calls.
 ///
 /// # Arguments
 ///

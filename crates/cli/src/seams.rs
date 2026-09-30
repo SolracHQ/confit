@@ -1,14 +1,14 @@
 //! Sinks
 //!
-//! Output senders plus shared helpers behind command runners.
+//! Output senders and shared helpers behind command runners.
 
 use std::io::BufRead;
 use std::path::Path;
 
+use confit_model::document::DocumentStatus;
 use confit_model::error::{Error, Result};
-use confit_model::plan::DocumentStatus;
+use confit_model::manifest::Manifest;
 use confit_store::Stores;
-use confit_store::bundle::Bundle;
 
 use confit_model::progress::{Event, ProgressSender};
 
@@ -150,9 +150,9 @@ pub fn evaluate_shared(
 }
 
 /// Logs finished documents with lifecycle status.
-pub fn log_processed(built: &Bundle, previous: &Bundle) {
-    for document in &built.manifest.documents {
-        let status = match document.status(&previous.manifest) {
+pub fn log_processed(built: &Manifest, previous: &Manifest) {
+    for document in &built.documents {
+        let status = match document.status(previous) {
             DocumentStatus::Create => "create",
             DocumentStatus::Update => "update",
             DocumentStatus::Unchanged => "unchanged",

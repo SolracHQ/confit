@@ -2,22 +2,16 @@
 //!
 //! Portable bundle archives holding manifests and blobs.
 
+pub mod codec;
 pub mod error;
 mod pack;
 mod unpack;
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_model::document::{BlobRef, ManifestDocument};
-use confit_model::hook::Hook;
-use confit_model::manifest::Manifest;
-use confit_model::plan::{DocumentStatus, Summary};
-
 use crate::archive::ArchiveStore;
 use crate::blob::BlobStore;
-use error::{BundleError, Result};
 
 /// Bundle file extension imposed on explicit outputs.
 const BUNDLE_EXTENSION: &str = "cb";
@@ -31,24 +25,6 @@ pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 /// Bundle blob folder prefix inside the archive.
 pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
-/// Bundle format version written by every bundle build.
-///
-pub const BUNDLE_VERSION: u32 = 7;
-
-/// Versioned desired state written by bundle builds.
-///
-/// The manifest holds version, documents, and
-/// hooks as the only document language. The blob map holds
-/// blob refs under content hashes beside it.
-///
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Bundle {
-    /// Holds the portable manifest as the only document language.
-    pub manifest: Manifest,
-    /// Holds blob refs under SHA-256 hex hashes.
-    pub blobs: BTreeMap<String, BlobRef>,
-}
-
 /// Portable bundle archive reads and writes.
 ///
 /// Archives hold the manifest first with blob entries after.
@@ -59,137 +35,6 @@ pub struct Bundle {
 pub struct BundleStore {
     pub(crate) archives: Arc<ArchiveStore>,
     pub(crate) blobs: Arc<BlobStore>,
-}
-
-impl Bundle {
-    /// Builds an empty manifest with the current version.
-    ///
-    /// # Returns
-    ///
-    /// The bundle holding version and empty documents.
-    ///
-    pub fn empty() -> Self {
-        Self {
-            manifest: Manifest {
-                version: BUNDLE_VERSION,
-                documents: Vec::new(),
-                hooks: Vec::new(),
-            },
-            blobs: BTreeMap::new(),
-        }
-    }
-
-    /// Builds the desired state bundle from documents.
-    ///
-    /// Fills data hashes, then sorts documents by destination.
-    /// The caller holds one document per destination.
-    /// Counts generate through `summary` against a previous manifest.
-    ///
-    /// # Arguments
-    ///
-    /// * `documents` - desired documents in pipeline order, unique per destination.
-    /// * `hooks` - desired hooks in declaration order, merged downstream.
-    ///
-    /// # Returns
-    ///
-    /// The built bundle.
-    ///
-    /// # Errors
-    ///
-    /// - [`BundleError::Unhashable`] for hash failures.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::routes::{Route, RouteBase};
-    /// use confit_store::bundle::Bundle;
-    ///
-    /// let document = ManifestDocument::new(
-    ///     Route::new(RouteBase::Home, "note").unwrap(),
-    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// );
-    /// let outcome = Bundle::build(vec![document], Vec::new());
-    /// let previous = Bundle::empty();
-    /// assert!(matches!(outcome, Ok(bundle) if bundle.summary(&previous).create == 1));
-    /// ```
-    pub fn build(mut documents: Vec<ManifestDocument>, hooks: Vec<Hook>) -> Result<Self> {
-        for document in &mut documents {
-            document
-                .fill_hash()
-                .map_err(|error| BundleError::Unhashable {
-                    document: document.destination.display(),
-                    reason: error.to_string(),
-                })?;
-        }
-        documents.sort_by_key(|document| document.destination.display());
-        Ok(Self {
-            manifest: Manifest {
-                version: BUNDLE_VERSION,
-                documents,
-                hooks,
-            },
-            blobs: BTreeMap::new(),
-        })
-    }
-
-    /// Counts lifecycle states against a previous manifest.
-    ///
-    /// Opaque kind changes count as updates, other kind changes
-    /// count as create and delete.
-    ///
-    /// # Arguments
-    ///
-    /// * `previous` - the previous manifest with filled hashes.
-    ///
-    /// # Returns
-    ///
-    /// Create, update, and delete counts.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{ManifestData, ManifestDocument};
-    /// use confit_model::routes::{Route, RouteBase};
-    /// use confit_store::bundle::Bundle;
-    ///
-    /// let mut previous = Bundle::empty();
-    /// previous.manifest.documents = vec![ManifestDocument::new(
-    ///     Route::new(RouteBase::Home, "note").unwrap(),
-    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// )];
-    /// let bundle = Bundle::build(
-    ///     vec![ManifestDocument::new(
-    ///         Route::new(RouteBase::Home, "note").unwrap(),
-    ///         ManifestData::Text { content: "changed".into(), mode: None, unmanaged: false},
-    ///     )],
-    ///     Vec::new(),
-    /// );
-    /// assert!(matches!(bundle, Ok(bundle) if bundle.summary(&previous).update == 1));
-    /// ```
-    pub fn summary(&self, previous: &Bundle) -> Summary {
-        let mut summary = Summary {
-            create: 0,
-            update: 0,
-            delete: 0,
-        };
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        for document in &self.manifest.documents {
-            seen.insert(document.key());
-            match document.status(&previous.manifest) {
-                DocumentStatus::Create => summary.create += 1,
-                DocumentStatus::Update => summary.update += 1,
-                DocumentStatus::Unchanged => {}
-            }
-        }
-        for recorded in &previous.manifest.documents {
-            if !seen.contains(&recorded.key()) && !recorded.superseded_by(&self.manifest.documents)
-            {
-                summary.delete += 1;
-            }
-        }
-        summary
-    }
 }
 
 impl BundleStore {

@@ -14,7 +14,7 @@ use crate::model::{
 use crate::surface::handles::{LuaBlobHandle, LuaRoute};
 use crate::surface::runtime::condition_from_json;
 use confit_model::arg::Arg;
-use confit_model::document::{PathOp, RcEntry, RcOp, StructuredFormat};
+use confit_model::document::{RcEntry, RcOp, StructuredFormat};
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::BlobHandle;
 
@@ -313,19 +313,13 @@ fn translate_op(key: &str, inner: &Table, ctx: &str) -> mlua::Result<Json> {
             );
         }
         "path" => {
-            check_inner(inner, &["name", "dir", "op"], ctx)?;
+            check_inner(inner, &["name", "dir"], ctx)?;
             map.insert(
                 "name".to_string(),
                 Json::String(inner_string(inner, "name", ctx)?),
             );
             let dir_value: Value = inner.get("dir")?;
             map.insert("dir".to_string(), translate_slot(dir_value, "dir", ctx)?);
-            let op_value: Value = inner.get("op")?;
-            let is_prepend = op_value.opt_str().is_some_and(|text| text == "prepend");
-            if !is_prepend {
-                return Err(plan_error(format!("{ctx}: field 'op' must be 'prepend'")));
-            }
-            map.insert("op".to_string(), Json::String("prepend".to_string()));
         }
         "alias" => {
             check_inner(inner, &["name", "expansion"], ctx)?;
@@ -550,18 +544,10 @@ pub(crate) fn push_live_entry(
         }
         "path" => {
             let inner = entry_object(object, key, section, ctx)?;
-            check_fields(inner, &["name", "dir", "op"], section, ctx)?;
+            check_fields(inner, &["name", "dir"], section, ctx)?;
             RcOp::Path {
                 name: entry_string(inner, "name", section, ctx)?,
                 dir: entry_route(inner, "dir", section, ctx)?,
-                op: match inner.get("op").and_then(Json::as_str) {
-                    Some("prepend") => PathOp::Prepend,
-                    _ => {
-                        return Err(plan_error(format!(
-                            "{ctx}: invalid rc entry for section '{section}'"
-                        )));
-                    }
-                },
             }
         }
         "alias" => {

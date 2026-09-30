@@ -202,7 +202,7 @@ impl CondTables {
 
     /// Wraps one route into a one-shape condition table.
     ///
-    /// The route lands as a base plus relative object, so the
+    /// The route lands as a base and relative object, so the
     /// JSON shape matches serde and old string artifacts fail.
     ///
     /// # Errors
@@ -448,7 +448,7 @@ pub(crate) fn check_condition_json(json: &Json, ctx: &str) -> Result<(), String>
 
 /// Validates one route condition inner object.
 ///
-/// The inner object holds one `route` object with base plus relative.
+/// The inner object holds one `route` object with base and relative.
 ///
 /// # Errors
 ///

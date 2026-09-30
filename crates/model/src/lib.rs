@@ -11,7 +11,6 @@ pub mod drift;
 pub mod error;
 pub mod hook;
 pub mod manifest;
-pub mod plan;
 pub mod progress;
 pub mod render;
 pub mod routes;

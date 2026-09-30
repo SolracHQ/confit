@@ -5,9 +5,8 @@
 use std::path::PathBuf;
 
 use confit_model::error::{Error, Result};
-use confit_model::manifest::manifest_json;
+use confit_model::manifest::Manifest;
 use confit_store::Stores;
-use confit_store::bundle::Bundle;
 use confit_store::slot::SlotKind;
 use confit_store::slot::SlotStore;
 
@@ -89,11 +88,15 @@ impl<'a> ExportRunner<'a> {
             ));
         }
         let slots = stores.slots();
-        let (bundle, auto) = timed("export load", || {
+        let (manifest, auto) = timed("export load", || {
             resolve_slot_bundle(args.picker.as_deref(), &slots)
         })?;
         if args.manifest {
-            let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
+            let text = timed("export manifest", || {
+                manifest
+                    .json()
+                    .map_err(|error| Error::Plan(error.to_string()))
+            })?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -103,11 +106,11 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        sinks.emit_writing_manifest(bundle.manifest.documents.len());
+        sinks.emit_writing_manifest(manifest.documents.len());
         let dest = timed("export write", || {
             stores
                 .bundles()
-                .write(&bundle, &dest, sinks.progress.as_ref())
+                .write(&manifest, &dest, sinks.progress.as_ref())
                 .map_err(|error| Error::Plan(error.to_string()))
         })?;
         Ok(ExportReport {
@@ -117,7 +120,7 @@ impl<'a> ExportRunner<'a> {
     }
 }
 
-/// Resolves one picker to its live bundle and auto bundle name.
+/// Resolves one picker to its live manifest and auto bundle name.
 ///
 /// Slot errors carry the export command name.
 ///
@@ -128,7 +131,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Returns
 ///
-/// The live bundle holding blob refs, plus the slot-derived
+/// The live manifest holding blob refs and the slot-derived
 /// bundle destination carrying `.cb`.
 ///
 /// # Errors
@@ -144,11 +147,11 @@ impl<'a> ExportRunner<'a> {
 /// use confit_store::StoreRoots;
 ///
 /// let slots = SlotStore::new(&StoreRoots::standard());
-/// let (bundle, dest) = resolve_slot_bundle(None, &slots).unwrap();
+/// let (manifest, dest) = resolve_slot_bundle(None, &slots).unwrap();
 /// assert_eq!(dest.extension().and_then(|ext| ext.to_str()), Some("cb"));
 /// ```
-pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Bundle, PathBuf)> {
-    let (bundle, kind) = slots
+pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Manifest, PathBuf)> {
+    let (manifest, kind) = slots
         .resolve(picker)
         .map_err(|error| Error::Plan(error.to_string()))?;
     let stem = match kind {
@@ -156,7 +159,7 @@ pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(B
         SlotKind::Named(name) => name,
         SlotKind::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
     };
-    Ok((bundle, auto_dest(&stem)))
+    Ok((manifest, auto_dest(&stem)))
 }
 
 /// Builds one slot-derived bundle destination stem.

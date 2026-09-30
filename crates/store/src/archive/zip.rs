@@ -57,7 +57,7 @@ impl ArchiveBackend for ZipBackend {
 
 /// Opens one seekable zip archive without loading bytes.
 ///
-/// Folders plus links skip as absent downstream.
+/// Folders and links skip as absent downstream.
 ///
 /// # Errors
 ///

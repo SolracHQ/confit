@@ -48,7 +48,7 @@ local AliasEntry = {}
 local EnvEntry = {}
 
 ---@class PathEntry
----@field path table # Path op with name plus dir plus op ("prepend").
+---@field path table # Path op with name plus dir.
 ---@field when? table # Guard condition table.
 -- Plain path entry table. Carries an rc-entry marker.
 local PathEntry = {}

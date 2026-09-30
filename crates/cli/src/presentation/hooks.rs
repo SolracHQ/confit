@@ -6,10 +6,10 @@ use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::error::Result;
 use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
+use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_runtime::Applier;
 use confit_runtime::Checks;
-use confit_store::bundle::Bundle;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -34,7 +34,7 @@ pub enum PreviewOutcome {
 /// One evaluated hook pairing its hook with its preview outcome.
 ///
 /// The hook borrows core data, the outcome carries presentation
-/// facts. Rendering reads argv plus the outcome alone.
+/// facts. Rendering reads argv and the outcome alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluatedHook<'a> {
     /// Holds the hook under preview.
@@ -239,13 +239,12 @@ pub fn resolve_hook(hook: &Hook, checks: &Checks, applier: &Applier) -> Option<P
 ///
 /// Unresolvable binaries fail as plan errors naming the hook.
 pub fn evaluate_hooks<'a>(
-    bundle: &'a Bundle,
+    manifest: &'a Manifest,
     checks: &Checks,
     changed: &BTreeSet<Route>,
     applier: &Applier,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
-    bundle
-        .manifest
+    manifest
         .hooks
         .iter()
         .map(|hook| decide(hook, checks, changed, applier))
@@ -415,13 +414,13 @@ mod tests {
     }
 
     fn hook_preview(
-        bundle: &Bundle,
+        manifest: &Manifest,
         checks: &Checks,
         changed: &BTreeSet<Route>,
         applier: &Applier,
     ) -> Result<Vec<String>> {
         Ok(render_evaluated(&evaluate_hooks(
-            bundle, checks, changed, applier,
+            manifest, checks, changed, applier,
         )?))
     }
 
@@ -822,29 +821,26 @@ mod tests {
         let (_guard, _test, checks) = preview_runtime();
         let probe_path = checks.path_dirs[0].join("probe");
         let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
-        let bundle = Bundle {
-            manifest: confit_model::manifest::Manifest {
-                version: confit_store::bundle::BUNDLE_VERSION,
-                documents: Vec::new(),
-                hooks: vec![
-                    hook_fixture(&["tool", "--flag"]),
-                    confit_model::hook::Hook {
-                        checks: vec![confit_model::condition::Condition::Exists {
-                            route: literal(&probe_path),
-                        }],
-                        ..hook_fixture(&["tool"])
-                    },
-                    confit_model::hook::Hook {
-                        when: Some(Condition::InPath {
-                            name: "absent".into(),
-                        }),
-                        ..hook_fixture(&["tool"])
-                    },
-                ],
-            },
-            blobs: std::collections::BTreeMap::new(),
+        let manifest = confit_model::manifest::Manifest {
+            version: confit_model::manifest::MANIFEST_VERSION,
+            documents: Vec::new(),
+            hooks: vec![
+                hook_fixture(&["tool", "--flag"]),
+                confit_model::hook::Hook {
+                    checks: vec![confit_model::condition::Condition::Exists {
+                        route: literal(&probe_path),
+                    }],
+                    ..hook_fixture(&["tool"])
+                },
+                confit_model::hook::Hook {
+                    when: Some(Condition::InPath {
+                        name: "absent".into(),
+                    }),
+                    ..hook_fixture(&["tool"])
+                },
+            ],
         };
-        let lines = match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -869,20 +865,17 @@ mod tests {
         let (_guard, _test, checks) = preview_runtime();
         let absent = checks.path_dirs[0].join("absent");
         let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
-        let bundle = Bundle {
-            manifest: confit_model::manifest::Manifest {
-                version: confit_store::bundle::BUNDLE_VERSION,
-                documents: Vec::new(),
-                hooks: vec![confit_model::hook::Hook {
-                    checks: vec![confit_model::condition::Condition::Exists {
-                        route: literal(&absent),
-                    }],
-                    ..hook_fixture(&["tool"])
+        let manifest = confit_model::manifest::Manifest {
+            version: confit_model::manifest::MANIFEST_VERSION,
+            documents: Vec::new(),
+            hooks: vec![confit_model::hook::Hook {
+                checks: vec![confit_model::condition::Condition::Exists {
+                    route: literal(&absent),
                 }],
-            },
-            blobs: std::collections::BTreeMap::new(),
+                ..hook_fixture(&["tool"])
+            }],
         };
-        let lines = match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -893,15 +886,12 @@ mod tests {
     fn hook_preview_miss_fails_naming_hook() {
         let (_guard, _test, checks) = preview_runtime();
         let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
-        let bundle = Bundle {
-            manifest: confit_model::manifest::Manifest {
-                version: confit_store::bundle::BUNDLE_VERSION,
-                documents: Vec::new(),
-                hooks: vec![hook_fixture(&["absent", "install"])],
-            },
-            blobs: std::collections::BTreeMap::new(),
+        let manifest = confit_model::manifest::Manifest {
+            version: confit_model::manifest::MANIFEST_VERSION,
+            documents: Vec::new(),
+            hooks: vec![hook_fixture(&["absent", "install"])],
         };
-        match hook_preview(&bundle, &checks, &BTreeSet::new(), &applier) {
+        match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

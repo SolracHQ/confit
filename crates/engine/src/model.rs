@@ -108,7 +108,7 @@ pub(crate) struct StoredPatch {
     pub(crate) owner: String,
 }
 
-/// Declared require edge with its target plus optional hint.
+/// Declared require edge with its target and optional hint.
 #[derive(Debug, Clone)]
 pub(crate) struct RequireDecl {
     /// Required sibling config name.

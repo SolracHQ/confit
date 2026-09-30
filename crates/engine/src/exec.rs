@@ -240,7 +240,7 @@ impl<'a> LiveTable<'a> {
     /// # Arguments
     ///
     /// * `current` - table value holding the segment.
-    /// * `segment` - key plus optional list index.
+    /// * `segment` - key and optional list index.
     /// * `full` - dotted path naming the write.
     ///
     /// # Returns
@@ -426,7 +426,7 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Arguments
     ///
-    /// * `patch` - structured handle holding owner, format, plus shared winners.
+    /// * `patch` - structured handle holding owner, format, and shared winners.
     /// * `segments` - parsed path with the leaf last.
     /// * `full` - dotted path naming the write.
     /// * `lua_value` - converted value under writing.
@@ -521,7 +521,7 @@ impl<'a> LiveTable<'a> {
     ///
     /// # Arguments
     ///
-    /// * `live` - document state holding owners plus the patch owner.
+    /// * `live` - document state holding owners and the patch owner.
     /// * `segments` - parsed path with the list last.
     /// * `full` - dotted path naming the write.
     /// * `lua_value` - converted value under appending.

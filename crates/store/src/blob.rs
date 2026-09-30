@@ -15,9 +15,9 @@ use confit_model::sha::Sha;
 use sha2::Digest;
 
 use crate::StoreRoots;
-use crate::bundle::BUNDLE_VERSION;
 use crate::handles::{BlobHandle, TrustedHandle};
 use confit_driver as driver;
+use confit_model::manifest::MANIFEST_VERSION;
 use error::{BlobError, Result};
 
 /// Pool folder name under the config base.
@@ -407,7 +407,7 @@ impl Write for StoredWriter {
 
 /// Scratch staging path for one pooled source write.
 ///
-/// Names carry process plus sequence, so concurrent writes
+/// Names carry process and sequence, so concurrent writes
 /// never share a file.
 fn staging_path(pool: &Path) -> PathBuf {
     let seq = STAGING_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -529,7 +529,7 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
         Ok(stored) => stored,
         Err(_) => return,
     };
-    if stored.version != BUNDLE_VERSION {
+    if stored.version != MANIFEST_VERSION {
         return;
     }
     for document in &stored.documents {
@@ -546,10 +546,9 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{ManifestData, ManifestDocument};
+    use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
-    use crate::bundle::Bundle;
     use crate::handles::FetchHandle;
 
     use crate::slot::SlotStore;
@@ -800,10 +799,10 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("dropped blob stores: {error}"),
         };
-        let mut bundle = match Bundle::build(
-            vec![ManifestDocument::new(
+        let manifest = match Manifest::build(
+            vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
-                ManifestData::Opaque {
+                Data::Opaque {
                     blob: kept.to_ref(),
                     size: 10,
                     mode: None,
@@ -812,17 +811,16 @@ mod tests {
             )],
             Vec::new(),
         ) {
-            Ok(bundle) => bundle,
-            Err(error) => panic!("bundle builds: {error}"),
+            Ok(manifest) => manifest,
+            Err(error) => panic!("manifest builds: {error}"),
         };
-        bundle.blobs.insert(kept.sha().hex(), kept.to_ref());
         match store.persist(std::slice::from_ref(&kept)) {
             Ok(_) => {}
             Err(error) => panic!("persist lands: {error}"),
         }
-        match slots.store(&bundle, None) {
+        match slots.store(&manifest, None) {
             Ok(_) => {}
-            Err(error) => panic!("referencing bundle stores: {error}"),
+            Err(error) => panic!("referencing manifest stores: {error}"),
         }
         match store.prune() {
             Ok(removed) => assert_eq!(removed, 1, "prune drops one entry"),
@@ -838,9 +836,9 @@ mod tests {
         );
         assert_eq!(read_open(&store, &kept), b"kept bytes");
         for _ in 1..=6 {
-            match slots.store(&Bundle::empty(), None) {
+            match slots.store(&Manifest::empty(), None) {
                 Ok(_) => {}
-                Err(error) => panic!("empty bundle stores: {error}"),
+                Err(error) => panic!("empty manifest stores: {error}"),
             }
         }
         match store.prune() {

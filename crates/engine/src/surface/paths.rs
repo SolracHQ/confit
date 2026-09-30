@@ -1,6 +1,6 @@
 //! Paths
 //!
-//! Destination handles over XDG bases plus literals.
+//! Destination handles over XDG bases and literals.
 
 use mlua::{Lua, MultiValue, Table};
 
@@ -42,7 +42,7 @@ fn register(lua: &Lua, namespace: &Table, name: &'static str, base: RouteBase) -
 ///
 /// # Returns
 ///
-/// Route userdata carrying the base plus the joined path.
+/// Route userdata carrying the base and the joined path.
 ///
 /// # Errors
 ///

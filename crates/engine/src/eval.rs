@@ -21,8 +21,8 @@ use crate::surface::document::Declared;
 use crate::surface::document::convert::translate_entry;
 use crate::surface::utils;
 use confit_model::arg::Arg;
-use confit_model::document::ManifestDocument;
-use confit_model::document::{BlobRef, ManifestData, RcData, RcEntry, RcOp, StructuredFormat};
+use confit_model::document::Document;
+use confit_model::document::{BlobRef, Data, RcData, RcEntry, RcOp, StructuredFormat};
 use confit_model::error::{Error, Result};
 use confit_model::hook::{Hook, merge_hooks};
 use confit_model::progress::{Event, ProgressSender};
@@ -173,7 +173,7 @@ fn wrap(error: mlua::Error) -> Error {
 }
 
 /// Rejects changed gates naming documents outside the built set.
-fn validate_changed(hooks: &[Hook], documents: &[ManifestDocument]) -> mlua::Result<()> {
+fn validate_changed(hooks: &[Hook], documents: &[Document]) -> mlua::Result<()> {
     const CTOR: &str = "confit.runtime.changed";
     let built: std::collections::BTreeSet<Route> = documents
         .iter()
@@ -528,7 +528,7 @@ impl Profile {
     }
 
     /// Assembles text, link, opaque, and tree documents in route order.
-    fn text_link(&self, ctx: &str) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobRef>)> {
+    fn text_link(&self, ctx: &str) -> Result<(Vec<Document>, BTreeMap<String, BlobRef>)> {
         assemble_text_link(&self.declared, &self.configs, ctx)
     }
 }
@@ -540,7 +540,7 @@ impl Session {
         profile: &Profile,
         patches: &[StoredPatch],
         ctx: &str,
-    ) -> mlua::Result<Vec<ManifestDocument>> {
+    ) -> mlua::Result<Vec<Document>> {
         let mut bases: BTreeMap<String, StructuredBase> = BTreeMap::new();
         for item in &profile.declared.structured {
             bases.insert(
@@ -578,7 +578,7 @@ impl Session {
             patch_total: patches.len(),
             patch_done: &self.patch_done,
         };
-        let mut out: BTreeMap<String, ManifestDocument> = BTreeMap::new();
+        let mut out: BTreeMap<String, Document> = BTreeMap::new();
         for (display, base) in &bases {
             let mut refs: Vec<&StoredPatch> = grouped.get(display).cloned().unwrap_or_default();
             Executor::sort_patches(&mut refs);
@@ -639,7 +639,7 @@ fn run_structured_doc(
     base: Option<(&BTreeMap<String, Json>, &str)>,
     refs: &[&StoredPatch],
     ctx: &str,
-) -> mlua::Result<ManifestDocument> {
+) -> mlua::Result<Document> {
     let doc = lua.create_table()?;
     let mut seeds: OwnerMap = BTreeMap::new();
     if let Some((data, owner)) = base {
@@ -666,10 +666,10 @@ fn finish_structured(
     destination: &Route,
     format: StructuredFormat,
     table: BTreeMap<String, Json>,
-) -> ManifestDocument {
-    ManifestDocument::new(
+) -> Document {
+    Document::new(
         destination.clone(),
-        ManifestData::Structured {
+        Data::Structured {
             format,
             data: table,
         },
@@ -739,15 +739,15 @@ fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
     ctx: &str,
-) -> Result<(Vec<ManifestDocument>, BTreeMap<String, BlobRef>)> {
-    let mut grouped: BTreeMap<String, Vec<(ManifestData, String)>> = BTreeMap::new();
+) -> Result<(Vec<Document>, BTreeMap<String, BlobRef>)> {
+    let mut grouped: BTreeMap<String, Vec<(Data, String)>> = BTreeMap::new();
     let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
     for item in &declared.texts {
         grouped
             .entry(item.destination.display())
             .or_default()
             .push((
-                ManifestData::Text {
+                Data::Text {
                     content: item.content.clone(),
                     mode: item.mode,
                     unmanaged: item.unmanaged,
@@ -760,7 +760,7 @@ fn assemble_text_link(
             .entry(item.destination.display())
             .or_default()
             .push((
-                ManifestData::Link {
+                Data::Link {
                     target: item.target.clone(),
                 },
                 "profile".to_string(),
@@ -772,7 +772,7 @@ fn assemble_text_link(
             .entry(item.destination.display())
             .or_default()
             .push((
-                ManifestData::Opaque {
+                Data::Opaque {
                     blob: item.blob.to_ref(),
                     size: item.size,
                     mode: item.mode,
@@ -786,7 +786,7 @@ fn assemble_text_link(
         grouped
             .entry(item.destination.display())
             .or_default()
-            .push((ManifestData::Tree { members }, "profile".to_string()));
+            .push((Data::Tree { members }, "profile".to_string()));
     }
     for config in configs {
         for item in &config.texts {
@@ -794,7 +794,7 @@ fn assemble_text_link(
                 .entry(item.destination.display())
                 .or_default()
                 .push((
-                    ManifestData::Text {
+                    Data::Text {
                         content: item.content.clone(),
                         mode: item.mode,
                         unmanaged: item.unmanaged,
@@ -807,7 +807,7 @@ fn assemble_text_link(
                 .entry(item.destination.display())
                 .or_default()
                 .push((
-                    ManifestData::Link {
+                    Data::Link {
                         target: item.target.clone(),
                     },
                     config.name.clone(),
@@ -819,7 +819,7 @@ fn assemble_text_link(
                 .entry(item.destination.display())
                 .or_default()
                 .push((
-                    ManifestData::Opaque {
+                    Data::Opaque {
                         blob: item.blob.to_ref(),
                         size: item.size,
                         mode: item.mode,
@@ -833,7 +833,7 @@ fn assemble_text_link(
             grouped
                 .entry(item.destination.display())
                 .or_default()
-                .push((ManifestData::Tree { members }, config.name.clone()));
+                .push((Data::Tree { members }, config.name.clone()));
         }
     }
     let mut out = Vec::with_capacity(grouped.len());
@@ -847,7 +847,7 @@ fn assemble_text_link(
             )));
         }
         let destination = Route::parse(display).map_err(|error| plan(error.to_string()))?;
-        out.push(ManifestDocument::new(destination, data.clone()));
+        out.push(Document::new(destination, data.clone()));
     }
     Ok((out, blobs))
 }
@@ -883,7 +883,7 @@ impl Session {
         profile: &Profile,
         patches: &[StoredPatch],
         ctx: &str,
-    ) -> mlua::Result<Vec<ManifestDocument>> {
+    ) -> mlua::Result<Vec<Document>> {
         let mut handles: Vec<&StoredPatch> =
             patches.iter().filter(|item| item.target == "rc").collect();
         let mut base: Option<(&str, &Vec<crate::model::RcEntryDecl>)> = None;
@@ -939,9 +939,9 @@ impl Session {
                 .map_err(|error| plan_error(error.to_string()))?;
             materialize_shell(&mut per_shell.final_entries, shell)
                 .map_err(|error| plan_error(error.to_string()))?;
-            out.push(ManifestDocument::new(
+            out.push(Document::new(
                 shell_route(shell).map_err(|error| plan_error(error.to_string()))?,
-                ManifestData::Rc(per_shell),
+                Data::Rc(per_shell),
             ));
         }
         Ok(out)

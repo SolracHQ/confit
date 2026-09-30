@@ -2,25 +2,22 @@
 //!
 //! Bundle reads over archive extraction and blob receives.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Read as _;
 use std::path::Path;
 
-use confit_model::document::BlobRef;
 use confit_model::manifest::Manifest;
 use confit_model::sha::Sha;
 
+use super::codec::{CodecError, check_blob_id, decode};
 use super::error::{BundleError, Result};
-use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, BUNDLE_VERSION, Bundle, BundleStore};
+use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, BundleStore};
 use crate::archive::error::ArchiveError;
 use crate::blob::error::BlobError;
 use crate::handles::ArchiveHandle;
 
-/// Blob hash length in lowercase hex chars.
-const BLOB_ID_LEN: usize = 64;
-
 impl BundleStore {
-    /// Reads one portable bundle into a live bundle.
+    /// Reads one portable bundle into a live manifest.
     ///
     /// # Errors
     ///
@@ -29,7 +26,7 @@ impl BundleStore {
     /// - [`BundleError::Unknown`] for other failures.
     /// - [`BundleError::Version`] for unsupported versions.
     /// - [`BundleError::Missing`] for missing blobs.
-    pub fn read(&self, path: &Path) -> Result<Bundle> {
+    pub fn read(&self, path: &Path) -> Result<Manifest> {
         let handle = self
             .archives
             .seal(path)
@@ -43,13 +40,7 @@ impl BundleStore {
             return Err(unknown(path, "missing manifest".to_owned()));
         }
         let manifest = self.read_manifest(&handle, path)?;
-        if manifest.version != BUNDLE_VERSION {
-            return Err(BundleError::Version {
-                path: path.to_path_buf(),
-                got: u64::from(manifest.version),
-            });
-        }
-        let refs = manifest_refs(&manifest);
+        let refs = manifest.refs();
         for blob in &refs {
             if !wanted
                 .iter()
@@ -63,13 +54,7 @@ impl BundleStore {
         for stored in &wanted {
             self.receive_blob(&handle, stored, path)?;
         }
-        let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
-        for blob in &refs {
-            blobs
-                .entry(blob.sha().hex())
-                .or_insert_with(|| blob.clone());
-        }
-        Ok(Bundle { manifest, blobs })
+        Ok(manifest)
     }
 
     /// Reads and parses the bundle manifest member.
@@ -79,6 +64,7 @@ impl BundleStore {
     /// - [`BundleError::Unreachable`] for missing members.
     /// - [`BundleError::Denied`] for denied members.
     /// - [`BundleError::Unknown`] for other failures.
+    /// - [`BundleError::Version`] for stale versions.
     fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
         let member = self
             .archives
@@ -92,7 +78,7 @@ impl BundleStore {
         reader
             .read_to_end(&mut raw)
             .map_err(|error| BundleError::from_io(bundle, error))?;
-        serde_json::from_slice(&raw).map_err(|error| unknown(bundle, error.to_string()))
+        decode(&raw).map_err(|error| from_codec(bundle, error))
     }
 
     /// Receives one blob member into the cache blind.
@@ -121,6 +107,7 @@ impl BundleStore {
 /// # Errors
 ///
 /// - [`BundleError::Unknown`] for duplicate, unexpected, and malformed entries.
+/// - [`BundleError::Version`] for stale codec versions.
 fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     let mut has_manifest = false;
     let mut wanted: Vec<String> = Vec::new();
@@ -132,7 +119,7 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
             }
             has_manifest = true;
         } else if let Some(stored) = name.strip_prefix(BUNDLE_BLOBS_PREFIX) {
-            check_blob_id(bundle, stored)?;
+            check_blob_id(stored).map_err(|error| from_codec(bundle, error))?;
             if !seen.insert(stored.to_string()) {
                 return Err(unknown(bundle, "duplicate blob".to_owned()));
             }
@@ -144,20 +131,22 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     Ok((has_manifest, wanted))
 }
 
-/// Cloned blob refs for one manifest in document order.
-fn manifest_refs(manifest: &Manifest) -> Vec<BlobRef> {
-    let mut refs = Vec::new();
-    for document in &manifest.documents {
-        refs.extend(document.data.blob_refs().into_iter().cloned());
-    }
-    refs
-}
-
 /// Builds one bundle unknown error naming the bundle.
 fn unknown(bundle: &Path, message: String) -> BundleError {
     BundleError::Unknown {
         path: bundle.to_path_buf(),
         message,
+    }
+}
+
+/// Maps one codec failure at the bundle path into bundle language.
+fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
+    match error {
+        CodecError::Version { got } => BundleError::Version {
+            path: bundle.to_path_buf(),
+            got,
+        },
+        CodecError::Corrupt { message } => unknown(bundle, message),
     }
 }
 
@@ -200,23 +189,10 @@ fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
     }
 }
 
-/// Checks one blob reference holds 64 hex chars.
-///
-/// # Errors
-///
-/// - [`BundleError::Unknown`] for malformed references.
-fn check_blob_id(bundle: &Path, sha: &str) -> Result<()> {
-    if sha.len() == BLOB_ID_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(())
-    } else {
-        Err(unknown(bundle, "bad blob ref".to_owned()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{ManifestData, ManifestDocument};
+    use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
     use crate::StoreRoots;
@@ -233,36 +209,31 @@ mod tests {
         }
     }
 
-    fn opaque_bundle(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Bundle) {
+    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
         use std::sync::Arc;
 
         let roots = test_roots(dir);
         let archives = Arc::new(ArchiveStore::new(&roots));
         let blobs = Arc::new(BlobStore::new(&roots));
         let mut documents = Vec::new();
-        let mut bundle = Bundle::empty();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match blobs.put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.push(ManifestDocument::new(
+            documents.push(Document::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
-                ManifestData::Opaque {
+                Data::Opaque {
                     blob: handle.to_ref(),
                     size: body.len() as u64,
                     mode: None,
                     unmanaged: false,
                 },
             ));
-            bundle.blobs.insert(handle.sha().hex(), handle.to_ref());
         }
-        match Bundle::build(documents, Vec::new()) {
-            Ok(built) => {
-                bundle.manifest = built.manifest;
-                (BundleStore::new(archives, blobs), bundle)
-            }
-            Err(error) => panic!("bundle builds: {error}"),
+        match Manifest::build(documents, Vec::new()) {
+            Ok(manifest) => (BundleStore::new(archives, blobs), manifest),
+            Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
@@ -281,10 +252,10 @@ mod tests {
     fn round_trip_writes_manifest_first_with_sorted_blobs() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let (store, bundle) = opaque_bundle(dir.path(), &[b"alpha", b"beta"]);
-        let dest = match store.write(&bundle, &dir.path().join("plan"), None) {
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
+        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
             Ok(dest) => dest,
-            Err(error) => panic!("bundle writes: {error}"),
+            Err(error) => panic!("manifest writes: {error}"),
         };
         assert_eq!(dest, dir.path().join("plan.cb"), "bare output gains suffix");
         let names = entry_names(&dest);
@@ -302,10 +273,9 @@ mod tests {
         }
         match store.read(&dest) {
             Ok(found) => {
-                assert_eq!(found.manifest, bundle.manifest, "manifest round-trips");
-                assert_eq!(found.blobs, bundle.blobs, "handles round-trip");
+                assert_eq!(found, manifest, "manifest round-trips");
             }
-            Err(error) => panic!("bundle reads: {error}"),
+            Err(error) => panic!("manifest reads: {error}"),
         }
     }
 
@@ -315,7 +285,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let (store, _) = opaque_bundle(dir.path(), &[]);
+        let (store, _) = opaque_manifest(dir.path(), &[]);
         let stale = serde_json::json!({"version": 0u32, "documents": []});
         let raw = serde_json::to_vec(&stale).unwrap();
         let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
@@ -332,7 +302,7 @@ mod tests {
         driver::create_dir_all(path.parent().unwrap()).unwrap();
         driver::write(&path, &archive).unwrap();
         match store.read(&path) {
-            Ok(_) => panic!("stale bundle passes"),
+            Ok(_) => panic!("stale manifest passes"),
             Err(BundleError::Version { path: found, got }) => {
                 assert_eq!(found, path, "stale keeps its path");
                 assert_eq!(got, 0, "stale keeps its version");
@@ -356,10 +326,10 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
         };
-        let mut bundle = match Bundle::build(
-            vec![ManifestDocument::new(
+        let manifest = match Manifest::build(
+            vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
-                ManifestData::Opaque {
+                Data::Opaque {
                     blob: handle.to_ref(),
                     size: 12,
                     mode: None,
@@ -368,11 +338,10 @@ mod tests {
             )],
             Vec::new(),
         ) {
-            Ok(bundle) => bundle,
-            Err(error) => panic!("bundle builds: {error}"),
+            Ok(manifest) => manifest,
+            Err(error) => panic!("manifest builds: {error}"),
         };
-        bundle.blobs.insert(handle.sha().hex(), handle.to_ref());
-        let raw = serde_json::to_vec(&bundle.manifest).unwrap();
+        let raw = serde_json::to_vec(&manifest).unwrap();
         let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
         let mut builder = tar::Builder::new(encoder);
         let mut header = tar::Header::new_gnu();
@@ -387,7 +356,7 @@ mod tests {
         driver::create_dir_all(path.parent().unwrap()).unwrap();
         driver::write(&path, &archive).unwrap();
         match store.read(&path) {
-            Ok(_) => panic!("thin bundle passes"),
+            Ok(_) => panic!("thin manifest passes"),
             Err(error) => assert!(
                 error.to_string().contains(&handle.sha().hex()),
                 "missing blob names the hash: {error}"
@@ -401,9 +370,9 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let (store, _) = opaque_bundle(dir.path(), &[]);
+        let (store, _) = opaque_manifest(dir.path(), &[]);
 
-        let build_bundle = |entries: Vec<(&str, Vec<u8>)>| {
+        let build_archive = |entries: Vec<(&str, Vec<u8>)>| {
             let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
             let mut builder = tar::Builder::new(encoder);
             for (name, bytes) in entries {
@@ -418,8 +387,8 @@ mod tests {
             builder.into_inner().unwrap().finish().unwrap()
         };
 
-        let manifest = serde_json::to_vec(&Bundle::empty().manifest).unwrap();
-        let dup_manifest = build_bundle(vec![
+        let manifest = serde_json::to_vec(&Manifest::empty()).unwrap();
+        let dup_manifest = build_archive(vec![
             (BUNDLE_MANIFEST, manifest.clone()),
             (BUNDLE_MANIFEST, manifest.clone()),
         ]);
@@ -434,7 +403,7 @@ mod tests {
             ),
         }
 
-        let bad_id = build_bundle(vec![
+        let bad_id = build_archive(vec![
             (BUNDLE_MANIFEST, manifest.clone()),
             ("blobs/short", b"x".to_vec()),
         ]);
@@ -449,7 +418,7 @@ mod tests {
             ),
         }
 
-        let unexpected = build_bundle(vec![
+        let unexpected = build_archive(vec![
             (BUNDLE_MANIFEST, manifest.clone()),
             ("other.txt", b"x".to_vec()),
         ]);

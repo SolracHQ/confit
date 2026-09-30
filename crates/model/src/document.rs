@@ -2,15 +2,21 @@
 //!
 //! Desired state payloads reaching disk.
 
+pub mod rc;
+pub mod tree;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arg::Arg;
-use crate::condition::Condition;
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::manifest::Manifest;
 use crate::routes::Route;
 use crate::sha::Sha;
+
+pub use rc::{RcData, RcEntry, RcOp, RcSection};
+pub(crate) use tree::tree_manifest_bytes;
+pub use tree::{ManifestMember, Summary, summary, tree_changed};
 
 /// JSON shaped data table for structured documents.
 ///
@@ -85,235 +91,6 @@ impl StructuredFormat {
 impl std::fmt::Display for StructuredFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
-    }
-}
-
-/// Path list placement for setup entries.
-///
-/// Prepend leads with the directory.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PathOp {
-    /// Places the directory before existing entries.
-    Prepend,
-}
-
-/// One rc operation shaping a shell line.
-///
-/// Env exports a plain value. Path shapes a PATH like variable
-/// around its current value. Alias defines an alias.
-/// Eval, Cmd, and Source carry execution payloads.
-///
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RcOp {
-    /// Exports a plain value.
-    Env {
-        /// Holds the variable name, like `EDITOR`.
-        name: String,
-        /// Holds the value under export.
-        value: String,
-    },
-    /// Shapes a PATH like variable around its current value.
-    Path {
-        /// Holds the variable name, like `PATH`.
-        name: String,
-        /// Holds the directory route under placement.
-        dir: Route,
-        /// Holds the path placement.
-        op: PathOp,
-    },
-    /// Defines an interactive alias.
-    Alias {
-        /// Holds the alias name, like `ll`.
-        name: String,
-        /// Holds the alias expansion.
-        expansion: String,
-    },
-    /// Evaluates command output through eval.
-    Eval {
-        /// Holds the command and arguments in order.
-        argv: Vec<Arg>,
-    },
-    /// Runs a plain command line.
-    Cmd {
-        /// Holds the command and arguments in order.
-        argv: Vec<Arg>,
-    },
-    /// Sources a file into the shell.
-    Source {
-        /// Holds the file route under sourcing.
-        path: Route,
-    },
-}
-
-/// One rc entry in any section.
-///
-/// The op shapes the shell line. The guard skips the entry in
-/// shell sessions lacking its binary or state.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::{RcEntry, RcOp};
-///
-/// let entry = RcEntry {
-///     op: RcOp::Env { name: "EDITOR".into(), value: "hx".into() },
-///     when: None,
-/// };
-/// assert!(matches!(entry.slot_name(), Some("EDITOR")));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RcEntry {
-    /// Holds the operation shaping the shell line.
-    #[serde(flatten)]
-    pub op: RcOp,
-    /// Holds the shell session guard. None applies unconditionally.
-    pub when: Option<Condition>,
-}
-
-impl RcEntry {
-    /// Reads the collision slot name for the entry.
-    ///
-    /// # Returns
-    ///
-    /// The name for env, path, and alias entries. None for exec entries.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{RcEntry, RcOp};
-    ///
-    /// let entry = RcEntry {
-    ///     op: RcOp::Alias { name: "ll".into(), expansion: "ls -l".into() },
-    ///     when: None,
-    /// };
-    /// assert!(matches!(entry.slot_name(), Some("ll")));
-    /// ```
-    pub fn slot_name(&self) -> Option<&str> {
-        match &self.op {
-            RcOp::Env { name, .. } | RcOp::Path { name, .. } | RcOp::Alias { name, .. } => {
-                Some(name.as_str())
-            }
-            RcOp::Eval { .. } | RcOp::Cmd { .. } | RcOp::Source { .. } => None,
-        }
-    }
-
-    /// Reads the collision log label for the entry.
-    ///
-    /// # Returns
-    ///
-    /// The lowercase op name.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{RcEntry, RcOp};
-    ///
-    /// let entry = RcEntry {
-    ///     op: RcOp::Eval { argv: vec!["mise".into()] },
-    ///     when: None,
-    /// };
-    /// assert!(matches!(entry.log_label(), "eval"));
-    /// ```
-    pub fn log_label(&self) -> &'static str {
-        match &self.op {
-            RcOp::Env { .. } => "env",
-            RcOp::Path { .. } => "path",
-            RcOp::Alias { .. } => "alias",
-            RcOp::Eval { .. } => "eval",
-            RcOp::Cmd { .. } => "cmd",
-            RcOp::Source { .. } => "source",
-        }
-    }
-}
-
-/// Accepted rc section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RcSection {
-    /// Entries rendering before the guard.
-    Profile,
-    /// Entries rendering after the guard.
-    Config,
-    /// Entries rendering last.
-    Final,
-}
-
-impl RcSection {
-    /// Parses one raw section name.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - the raw section name.
-    ///
-    /// # Returns
-    ///
-    /// The section for profile, config, or final.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Parse`] when the name matches no known section.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::RcSection;
-    ///
-    /// assert!(matches!(RcSection::parse("config"), Ok(RcSection::Config)));
-    /// assert!(matches!(RcSection::parse("confg"), Err(_)));
-    /// ```
-    pub fn parse(name: &str) -> Result<Self> {
-        match name {
-            "profile" => Ok(Self::Profile),
-            "config" => Ok(Self::Config),
-            "final" => Ok(Self::Final),
-            _ => Err(Error::Parse {
-                input: name.to_owned(),
-                want: "one of 'profile', 'config', 'final'".to_owned(),
-            }),
-        }
-    }
-}
-
-/// Rc data holding three entry groups.
-///
-/// Sections mark position and guard. Any entry kind renders
-/// in any section. Profile opens the file. Config holds the
-/// interactive block. Final closes the file.
-///
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RcData {
-    /// Holds entries rendering before the guard.
-    pub profile: Vec<RcEntry>,
-    /// Holds entries rendering after the guard.
-    pub config: Vec<RcEntry>,
-    /// Holds entries rendering last.
-    #[serde(rename = "final")]
-    pub final_entries: Vec<RcEntry>,
-}
-
-impl RcData {
-    /// Builds rc data from three entry lists.
-    ///
-    /// # Arguments
-    ///
-    /// * `profile` - entries rendering before the guard.
-    /// * `config` - entries rendering after the guard.
-    /// * `final_entries` - entries rendering last.
-    ///
-    /// # Returns
-    ///
-    /// The rc data object.
-    ///
-    pub fn new(profile: Vec<RcEntry>, config: Vec<RcEntry>, final_entries: Vec<RcEntry>) -> Self {
-        Self {
-            profile,
-            config,
-            final_entries,
-        }
     }
 }
 
@@ -414,18 +191,6 @@ impl BlobRef {
     }
 }
 
-/// One persisted tree member holding a blob ref.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ManifestMember {
-    /// Holds the destination-relative member path.
-    pub relative: String,
-    /// Holds the content-addressed member bytes identity.
-    pub blob: BlobRef,
-    /// Holds unix permission bits for the member file.
-    pub mode: u32,
-}
-
 /// Persisted document payload with binary bytes as refs.
 ///
 /// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
@@ -434,7 +199,7 @@ pub struct ManifestMember {
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ManifestData {
+pub enum Data {
     /// Holds structured data and its serialization format.
     Structured {
         /// Holds the serialization format.
@@ -484,7 +249,7 @@ pub enum ManifestData {
     },
 }
 
-impl ManifestData {
+impl Data {
     /// Reads the kind label for this payload.
     ///
     /// # Returns
@@ -515,9 +280,9 @@ impl ManifestData {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_model::document::ManifestData;
+    /// use confit_model::document::Data;
     ///
-    /// let data = ManifestData::Text { content: "hi".into(), mode: Some(0o755), unmanaged: false};
+    /// let data = Data::Text { content: "hi".into(), mode: Some(0o755), unmanaged: false};
     /// assert!(matches!(data.mode(), Some(0o755)));
     /// ```
     pub fn mode(&self) -> Option<u32> {
@@ -577,16 +342,27 @@ impl ManifestData {
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ManifestDocument {
+pub struct Document {
     /// Holds the late-bound destination route.
     pub destination: Route,
     /// Holds the persisted payload.
-    pub data: ManifestData,
+    pub data: Data,
     /// Holds the hex SHA-256 over rendered bytes.
     pub data_hash: String,
 }
 
-impl ManifestDocument {
+/// Per-document lifecycle status against previous manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentStatus {
+    /// Document absent from previous manifest.
+    Create,
+    /// Document present with a differing data hash.
+    Update,
+    /// Document present with an equal data hash.
+    Unchanged,
+}
+
+impl Document {
     /// Builds a document with an empty data hash.
     ///
     /// # Arguments
@@ -598,7 +374,7 @@ impl ManifestDocument {
     ///
     /// The document with an empty data hash.
     ///
-    pub fn new(destination: Route, data: ManifestData) -> Self {
+    pub fn new(destination: Route, data: Data) -> Self {
         Self {
             destination,
             data,
@@ -637,12 +413,12 @@ impl ManifestDocument {
     /// # Examples
     ///
     /// ```rust
-    /// use confit_model::document::{ManifestData, ManifestDocument};
+    /// use confit_model::document::{Data, Document};
     /// use confit_model::routes::{Route, RouteBase};
     ///
-    /// let stored = ManifestDocument::new(
+    /// let stored = Document::new(
     ///     Route::new(RouteBase::Home, "x").unwrap(),
-    ///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
+    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
     /// );
     /// assert_eq!(stored.key(), "text:home:x");
     /// ```
@@ -661,188 +437,130 @@ impl ManifestDocument {
     }
 }
 
-/// Counts changed members between two tree manifests.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::{BlobRef, ManifestMember, tree_changed};
-/// use confit_model::sha::Sha;
-///
-/// fn sealed(content: String, stored: String) -> BlobRef {
-///     BlobRef::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap())
-/// }
-///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: sealed("aa".repeat(32), "aa".repeat(32)), mode: 0o644 }];
-/// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: sealed("bb".repeat(32), "bb".repeat(32)), mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: sealed("cc".repeat(32), "cc".repeat(32)), mode: 0o644 },
-/// ];
-/// assert_eq!(tree_changed(&old, &new), 2);
-/// ```
-pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
-    use std::collections::BTreeMap;
-    let old_map: BTreeMap<&str, &ManifestMember> = old
-        .iter()
-        .map(|member| (member.relative.as_str(), member))
-        .collect();
-    let new_map: BTreeMap<&str, &ManifestMember> = new
-        .iter()
-        .map(|member| (member.relative.as_str(), member))
-        .collect();
-    let mut changed = 0;
-    for (relative, member) in &new_map {
-        match old_map.get(relative) {
-            Some(previous) if previous.blob == member.blob && previous.mode == member.mode => {
-                continue;
-            }
-            _ => changed += 1,
-        }
-    }
-    for rel in old_map.keys() {
-        if !new_map.contains_key(rel) {
-            changed += 1;
-        }
-    }
-    changed
-}
-
-/// Renders the canonical manifest bytes for tree hashing.
-pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
-    let mut sorted: Vec<&ManifestMember> = members.iter().collect();
-    sorted.sort_by(|left, right| left.relative.cmp(&right.relative));
-    let mut out = Vec::new();
-    for member in sorted {
-        out.extend_from_slice(
-            format!(
-                "{:o} {} {}\n",
-                member.mode,
-                member.relative,
-                member.blob.sha()
-            )
-            .as_bytes(),
-        );
-    }
-    out
-}
-
-/// Parses unix permission bits from octal or symbolic text.
-///
-/// Octal text holds three digits like `755` or four digits
-/// with a leading zero like `0755`. Symbolic text holds nine
-/// characters like `rwxr-xr-x`, one `rwx` triple per class.
-///
-/// # Arguments
-///
-/// * `text` - the raw mode text.
-///
-/// # Returns
-///
-/// The mode bits.
-///
-/// # Errors
-///
-/// Leading `d`, wrong lengths, and bad characters fail
-/// as parse errors.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::parse_mode;
-///
-/// assert!(matches!(parse_mode("755"), Ok(mode) if mode == 0o755));
-/// assert!(matches!(parse_mode("0755"), Ok(mode) if mode == 0o755));
-/// assert!(matches!(parse_mode("rwxr-xr-x"), Ok(mode) if mode == 0o755));
-/// assert!(matches!(parse_mode("rw-r--r--"), Ok(mode) if mode == 0o644));
-/// assert!(matches!(parse_mode("drwxr-xr-x"), Err(_)));
-/// ```
-pub fn parse_mode(text: &str) -> Result<u32> {
-    if text.starts_with('d') {
-        return Err(Error::Parse {
-            input: text.to_owned(),
-            want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
-        });
-    }
-    match text.len() {
-        3 | 4 => parse_octal_mode(text),
-        9 => parse_symbolic_mode(text),
-        _ => Err(Error::Parse {
-            input: text.to_owned(),
-            want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
-        }),
-    }
-}
-
-/// Parses three octal digits with an optional leading zero.
-fn parse_octal_mode(text: &str) -> Result<u32> {
-    let body = match text.len() {
-        3 => text,
-        4 => match text.strip_prefix('0') {
-            Some(rest) => rest,
+impl Document {
+    /// Reports the lifecycle status against a previous manifest.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous` - the previous manifest with filled hashes.
+    ///
+    /// # Returns
+    ///
+    /// Create for absent keys, update for differing hashes,
+    /// differing modes, or opaque kind changes, else unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_model::document::{Data, Document};
+    /// use confit_model::routes::{Route, RouteBase};
+    /// use confit_model::document::DocumentStatus;
+    /// use confit_model::manifest::Manifest;
+    ///
+    /// let mut document = Document::new(
+    ///     Route::new(RouteBase::Home, "x").unwrap(),
+    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
+    /// );
+    /// assert!(matches!(document.fill_hash(), Ok(())));
+    /// let previous = Manifest { version: 7, documents: Vec::new(), hooks: Vec::new() };
+    /// assert!(matches!(document.status(&previous), DocumentStatus::Create));
+    /// ```
+    pub fn status(&self, previous: &Manifest) -> DocumentStatus {
+        let recorded = previous
+            .documents
+            .iter()
+            .find(|document| document.key() == self.key());
+        match recorded {
             None => {
-                return Err(Error::Parse {
-                    input: text.to_owned(),
-                    want: "four digit octal starting with 0 like 0755".to_owned(),
+                let opaque = previous.documents.iter().find(|recorded| {
+                    recorded.destination == self.destination
+                        && recorded.key() != self.key()
+                        && (recorded.is_opaque() || self.is_opaque())
                 });
+                match opaque {
+                    Some(_) => DocumentStatus::Update,
+                    None => DocumentStatus::Create,
+                }
             }
-        },
-        _ => {
-            return Err(Error::Parse {
-                input: text.to_owned(),
-                want: "octal like 755 or symbolic like rwxr-xr-x".to_owned(),
-            });
+            Some(recorded)
+                if recorded.data_hash == self.data_hash && recorded.mode() == self.mode() =>
+            {
+                DocumentStatus::Unchanged
+            }
+            Some(_) => DocumentStatus::Update,
         }
-    };
-    if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
-        return Err(Error::Parse {
-            input: text.to_owned(),
-            want: "octal digits 0-7".to_owned(),
-        });
     }
-    u32::from_str_radix(body, 8).map_err(|_| Error::Parse {
-        input: text.to_owned(),
-        want: "octal digits 0-7".to_owned(),
-    })
-}
 
-/// Parses nine symbolic characters into mode bits.
-fn parse_symbolic_mode(text: &str) -> Result<u32> {
-    let bytes = text.as_bytes();
-    if bytes.len() != 9 {
-        return Err(Error::Parse {
-            input: text.to_owned(),
-            want: "nine rwx characters like rwxr-xr-x".to_owned(),
-        });
-    }
-    let mut mode: u32 = 0;
-    for (index, byte) in bytes.iter().enumerate() {
-        let bit: u32 = match (index % 3, byte) {
-            (0, b'r') => 4,
-            (1, b'w') => 2,
-            (2, b'x') => 1,
-            (_, b'-') => 0,
-            _ => {
-                return Err(Error::Parse {
-                    input: text.to_owned(),
-                    want: "nine rwx characters like rwxr-xr-x".to_owned(),
-                });
+    /// Fills the data hash by rendering the document.
+    ///
+    /// The hash covers rendered bytes only. Modes compare
+    /// separately through status and drift. Opaque hashes
+    /// copy the blob ref, since the ref carries the
+    /// SHA-256 over raw bytes. Tree hashes cover canonical
+    /// manifest bytes over blob refs.
+    ///
+    /// # Returns
+    ///
+    /// Unit once the hash fills.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Render`] for serializer failures.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use confit_model::document::{Data, Document};
+    /// use confit_model::routes::{Route, RouteBase};
+    ///
+    /// let mut document = Document::new(
+    ///     Route::new(RouteBase::Home, "x").unwrap(),
+    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
+    /// );
+    /// assert!(matches!(document.fill_hash(), Ok(())));
+    /// assert!(matches!(document.data_hash.is_empty(), false));
+    /// ```
+    pub fn fill_hash(&mut self) -> Result<()> {
+        match &self.data {
+            Data::Opaque { blob, .. } => {
+                self.data_hash = blob.sha().hex();
+                Ok(())
             }
-        };
-        let shift = (2 - index / 3) * 3;
-        mode |= bit << shift;
+            Data::Tree { members } => {
+                self.data_hash = Sha::hash(&crate::document::tree_manifest_bytes(members)).hex();
+                Ok(())
+            }
+            inline => {
+                let bytes = crate::render::inline_bytes(inline)?;
+                self.data_hash = Sha::hash(&bytes).hex();
+                Ok(())
+            }
+        }
     }
-    Ok(mode)
+
+    /// Reports whether a recorded document yields to desired documents.
+    ///
+    /// A recorded key yields while some desired document shares
+    /// its destination under another key with either side opaque.
+    ///
+    /// # Arguments
+    ///
+    /// * `desired` - the desired documents under comparing.
+    ///
+    /// # Returns
+    ///
+    /// True while an opaque same-destination sibling exists in desired.
+    ///
+    pub fn superseded_by(&self, desired: &[Document]) -> bool {
+        desired.iter().any(|document| {
+            document.destination == self.destination
+                && document.key() != self.key()
+                && (document.is_opaque() || self.is_opaque())
+        })
+    }
 }
 
 /// Renders mode bits as octal digits for drift lines.
-///
-/// # Arguments
-///
-/// * `mode` - the unix mode bits.
-///
-/// # Returns
-///
-/// The octal text like `755`.
 ///
 /// # Examples
 ///
@@ -859,19 +577,147 @@ pub fn render_mode(mode: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::{Route, RouteBase};
+
+    fn literal(relative: &str) -> Route {
+        Route::new(RouteBase::Literal, relative).unwrap()
+    }
+
+    fn fill(data: Data) -> String {
+        let mut document = Document::new(literal("pinned/subject"), data);
+        document.fill_hash().unwrap();
+        document.data_hash
+    }
 
     #[test]
-    fn unknown_rc_section_fails_as_plan_error() {
-        assert!(matches!(
-            RcSection::parse("profile"),
-            Ok(RcSection::Profile)
+    fn fill_hash_pins_text_bytes() {
+        let hash = fill(Data::Text {
+            content: "pinned text\n".into(),
+            mode: None,
+            unmanaged: false,
+        });
+        assert_eq!(
+            hash, "f007767c80150f15e9cacf96dc8d24ac3b6b3094c9b727d1534b175910968f2a",
+            "text hash drifts only when rendered bytes change"
+        );
+    }
+
+    #[test]
+    fn fill_hash_pins_structured_bytes() {
+        let mut table: Table = Table::new();
+        table.insert("key".to_string(), serde_json::Value::String("value".into()));
+        let hash = fill(Data::Structured {
+            format: StructuredFormat::Json,
+            data: table,
+        });
+        assert_eq!(
+            hash, "796a0bdfc73f373f33ec3098a246b3d27a10d75e9f4f3dd4e4630efc0f2d3184",
+            "structured hash drifts only when rendered bytes change"
+        );
+    }
+
+    #[test]
+    fn fill_hash_pins_rc_display_alias_bytes() {
+        let data = Data::Rc(RcData::new(
+            vec![RcEntry {
+                op: RcOp::Env {
+                    name: "EDITOR".into(),
+                    value: "hx".into(),
+                },
+                when: None,
+            }],
+            vec![RcEntry {
+                op: RcOp::Source {
+                    path: Route::new(RouteBase::Literal, "/pinned/sourced.sh").unwrap(),
+                },
+                when: None,
+            }],
+            vec![RcEntry {
+                op: RcOp::Alias {
+                    name: "ll".into(),
+                    expansion: "ls -l".into(),
+                },
+                when: None,
+            }],
         ));
-        assert!(matches!(RcSection::parse("config"), Ok(RcSection::Config)));
-        assert!(matches!(RcSection::parse("final"), Ok(RcSection::Final)));
-        let error = match RcSection::parse("confg") {
-            Ok(_) => panic!("misspelled section passes"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, Error::Parse { .. }));
+        let bytes = crate::render::inline_bytes(&data).unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(
+            text.contains("literal:/pinned/sourced.sh"),
+            "rc inline bytes carry the display alias: {text}"
+        );
+        assert_eq!(
+            fill(data),
+            "cebb8dd1bf3d0ada60a47b7c2dc670760f11053893ec7f0b324e453f42e5ddaf",
+            "rc hash drifts only when rendered bytes change"
+        );
+    }
+
+    #[test]
+    fn fill_hash_copies_opaque_blob_sha() {
+        let blob = BlobRef::new(
+            crate::sha::Sha::new("aa".repeat(32)).unwrap(),
+            crate::sha::Sha::new("bb".repeat(32)).unwrap(),
+        );
+        let expected = blob.sha().hex();
+        let hash = fill(Data::Opaque {
+            blob,
+            size: 2,
+            mode: None,
+            unmanaged: false,
+        });
+        assert_eq!(
+            hash, expected,
+            "opaque hash copies content sha without pool bytes"
+        );
+    }
+
+    #[test]
+    fn fill_hash_sorts_tree_members_for_stable_hash() {
+        let first = BlobRef::new(
+            crate::sha::Sha::new("aa".repeat(32)).unwrap(),
+            crate::sha::Sha::new("bb".repeat(32)).unwrap(),
+        );
+        let second = BlobRef::new(
+            crate::sha::Sha::new("cc".repeat(32)).unwrap(),
+            crate::sha::Sha::new("dd".repeat(32)).unwrap(),
+        );
+        let ordered = vec![
+            ManifestMember {
+                relative: "a".into(),
+                blob: first.clone(),
+                mode: 0o644,
+            },
+            ManifestMember {
+                relative: "b".into(),
+                blob: second.clone(),
+                mode: 0o755,
+            },
+        ];
+        let shuffled = vec![
+            ManifestMember {
+                relative: "b".into(),
+                blob: second,
+                mode: 0o755,
+            },
+            ManifestMember {
+                relative: "a".into(),
+                blob: first,
+                mode: 0o644,
+            },
+        ];
+        let expected = crate::sha::Sha::hash(&crate::document::tree_manifest_bytes(&ordered)).hex();
+        assert_eq!(
+            fill(Data::Tree {
+                members: shuffled.clone()
+            }),
+            expected,
+            "tree hash covers sorted manifest bytes"
+        );
+        assert_eq!(
+            fill(Data::Tree { members: ordered }),
+            fill(Data::Tree { members: shuffled }),
+            "member order leaves tree hash unchanged"
+        );
     }
 }

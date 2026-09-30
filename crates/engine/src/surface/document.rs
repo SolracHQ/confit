@@ -265,10 +265,7 @@ impl DocOpts {
             None
         } else {
             let raw = mode_value.req_str(ctor, "mode")?;
-            Some(
-                confit_model::document::parse_mode(&raw)
-                    .map_err(|error| plan_error(format!("{ctor}: {error}")))?,
-            )
+            Some(mode_bits(&raw, ctor)?)
         };
         let unmanaged_value: Value = table.get("unmanaged")?;
         let unmanaged = match unmanaged_value {
@@ -281,6 +278,57 @@ impl DocOpts {
             }
         };
         Ok(Self { mode, unmanaged })
+    }
+}
+
+/// Parses octal or symbolic permission text under a method path.
+///
+/// Octal text holds three digits like `755` or four digits with
+/// a leading zero like `0755`. Symbolic text holds nine
+/// characters like `rwxr-xr-x`, one `rwx` triple per class.
+///
+/// # Errors
+///
+/// Leading `d`, wrong lengths, and bad characters fail as plan
+/// errors naming the method path.
+fn mode_bits(text: &str, path: &str) -> mlua::Result<u32> {
+    const SHAPE: &str = "octal like 755 or symbolic like rwxr-xr-x";
+    const SYMBOLIC: &str = "nine rwx characters like rwxr-xr-x";
+    const FOUR_DIGIT: &str = "four digit octal starting with 0 like 0755";
+    const DIGITS: &str = "octal digits 0-7";
+    let invalid = |want: &str| {
+        let detail = format!("invalid '{text}': want {want}");
+        plan_error(format!("{path}: {detail}"))
+    };
+    if text.starts_with('d') {
+        return Err(invalid(SHAPE));
+    }
+    match text.len() {
+        9 => {
+            let mut bits: u32 = 0;
+            for (index, byte) in text.as_bytes().iter().enumerate() {
+                let bit: u32 = match (index % 3, byte) {
+                    (0, b'r') => 4,
+                    (1, b'w') => 2,
+                    (2, b'x') => 1,
+                    (_, b'-') => 0,
+                    _ => return Err(invalid(SYMBOLIC)),
+                };
+                bits |= bit << ((2 - index / 3) * 3);
+            }
+            Ok(bits)
+        }
+        3 | 4 => {
+            let body = match text.len() {
+                3 => text,
+                _ => text.strip_prefix('0').ok_or_else(|| invalid(FOUR_DIGIT))?,
+            };
+            if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+                return Err(invalid(DIGITS));
+            }
+            u32::from_str_radix(body, 8).map_err(|_| invalid(DIGITS))
+        }
+        _ => Err(invalid(SHAPE)),
     }
 }
 
@@ -537,7 +585,6 @@ impl RcEntries {
         let inner = lua.create_table()?;
         inner.set("name", name)?;
         inner.set("dir", dir)?;
-        inner.set("op", "prepend")?;
         Self::tagged(lua, "path", inner, when)
     }
 

@@ -4,7 +4,7 @@
 
 use crate::arg::{Arg, quote};
 use crate::condition::Condition;
-use crate::document::{ManifestData, RcData, RcEntry, RcOp, StructuredFormat, Table};
+use crate::document::{Data, RcData, RcEntry, RcOp, StructuredFormat, Table};
 use crate::error::{Error, Result};
 
 /// Interactivity guard shared by every shell file.
@@ -19,21 +19,21 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// - [`Error::Parse`] for opaque and tree documents.
 /// - [`Error::Render`] for serializer failures.
-pub fn inline_bytes(data: &ManifestData) -> Result<Vec<u8>> {
+pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
     match data {
-        ManifestData::Structured { format, data } => match format {
+        Data::Structured { format, data } => match format {
             StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
             StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
             StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
         },
-        ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-        ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
-        ManifestData::Rc(data) => Ok(render_rc(data).into_bytes()),
-        ManifestData::Opaque { blob, .. } => Err(Error::Parse {
+        Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+        Data::Link { target } => Ok(target.as_bytes().to_vec()),
+        Data::Rc(data) => Ok(render_rc(data).into_bytes()),
+        Data::Opaque { blob, .. } => Err(Error::Parse {
             input: blob.sha().hex(),
             want: "blob bytes through the blob store".to_owned(),
         }),
-        ManifestData::Tree { .. } => Err(Error::Parse {
+        Data::Tree { .. } => Err(Error::Parse {
             input: "tree".to_owned(),
             want: "member bytes for tree documents".to_owned(),
         }),
@@ -102,7 +102,7 @@ fn render_entry(entry: &RcEntry) -> Vec<String> {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
-        RcOp::Path { name, dir, .. } => {
+        RcOp::Path { name, dir } => {
             let expanded = dir.display();
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")

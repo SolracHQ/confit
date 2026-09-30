@@ -2,12 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use confit_model::document::{ManifestData, ManifestDocument, render_mode};
+use confit_model::document::{Data, Document, render_mode};
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::plan::opaque_id;
+use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
-use confit_store::bundle::Bundle;
 
 use crate::Applier;
 use crate::disk::{Live, LiveMember, drain};
@@ -20,9 +19,9 @@ impl Applier {
     ///
     /// Link documents compare target text. Entries follow
     /// recorded destination order. Content compares streaming.
-    pub fn drift(&self, bundle: &Bundle, order: DriftOrder) -> Vec<Drift> {
+    pub fn drift(&self, manifest: &Manifest, order: DriftOrder) -> Vec<Drift> {
         let mut out = Vec::new();
-        for document in &bundle.manifest.documents {
+        for document in &manifest.documents {
             if let Some(members) = document.data.tree_members() {
                 out.extend(self.tree_drift(
                     &document.destination,
@@ -41,7 +40,7 @@ impl Applier {
                     reason,
                 }),
                 Live::Present { mut reader, mode } => {
-                    if !matches!(&document.data, ManifestData::Opaque { .. }) {
+                    if !matches!(&document.data, Data::Opaque { .. }) {
                         let Some(recorded_bytes) = self.render_document(document).ok() else {
                             continue;
                         };
@@ -51,13 +50,13 @@ impl Applier {
                         out.extend(document.disk_drift(&recorded_bytes, &disk_bytes, mode, order));
                         continue;
                     }
-                    if let ManifestData::Opaque { blob, .. } = &document.data {
+                    if let Data::Opaque { blob, .. } = &document.data {
                         let store = self.stores.blobs();
                         let Ok(handle) = store.resolve(blob) else {
                             continue;
                         };
                         let recorded_label = match store.len(&handle) {
-                            Ok(len) => opaque_id(blob.sha(), len),
+                            Ok(len) => blob.sha().label(len),
                             Err(_) => continue,
                         };
                         let disk_label = match self.disk_label(document) {
@@ -130,7 +129,7 @@ impl Applier {
                         continue;
                     };
                     let recorded_label = match store.len(&handle) {
-                        Ok(len) => opaque_id(member.blob.sha(), len),
+                        Ok(len) => member.blob.sha().label(len),
                         Err(_) => continue,
                     };
                     let Some(disk_label) = self.tree_member_label(destination, &member.relative)
@@ -173,11 +172,11 @@ impl Applier {
     }
 
     /// Labels one disk document with its content hash and byte count.
-    fn disk_label(&self, document: &ManifestDocument) -> Option<String> {
+    fn disk_label(&self, document: &Document) -> Option<String> {
         match self.disk.live_doc(document) {
             Live::Present { mut reader, .. } => {
                 let (sha, len) = hash_count(&mut reader).ok()?;
-                Some(opaque_id(&sha, len))
+                Some(sha.label(len))
             }
             Live::Absent | Live::Unreadable { .. } => None,
         }
@@ -187,7 +186,7 @@ impl Applier {
     fn tree_member_label(&self, destination: &Route, relative: &str) -> Option<String> {
         let mut reader = self.disk.open_member(destination, relative)?;
         let (sha, len) = hash_count(&mut reader).ok()?;
-        Some(opaque_id(&sha, len))
+        Some(sha.label(len))
     }
 }
 
@@ -237,9 +236,9 @@ mod tests {
     use super::*;
     use confit_driver as driver;
     use confit_driver::TestGuard;
-    use confit_model::document::{ManifestData, ManifestDocument, RcData, RcEntry, RcOp};
+    use confit_model::document::{Data, Document, RcData, RcEntry, RcOp};
+    use confit_model::manifest::MANIFEST_VERSION;
     use confit_model::routes::{Route, RouteBase};
-    use confit_store::bundle::BUNDLE_VERSION;
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
@@ -260,9 +259,9 @@ mod tests {
         let dir = scratch("rc");
         let dest = dir.join("shellrc");
         let sourced = dir.join("sourced.sh");
-        let document = ManifestDocument::new(
+        let document = Document::new(
             literal(&dest),
-            ManifestData::Rc(RcData::new(
+            Data::Rc(RcData::new(
                 vec![RcEntry {
                     op: RcOp::Source {
                         path: literal(&sourced),
@@ -285,15 +284,12 @@ mod tests {
             "rendered bytes carry no display alias"
         );
         driver::write(&dest, &recorded).unwrap();
-        let bundle = Bundle {
-            manifest: confit_model::manifest::Manifest {
-                version: BUNDLE_VERSION,
-                documents: vec![document.clone()],
-                hooks: Vec::new(),
-            },
-            blobs: std::collections::BTreeMap::new(),
+        let manifest = confit_model::manifest::Manifest {
+            version: MANIFEST_VERSION,
+            documents: vec![document.clone()],
+            hooks: Vec::new(),
         };
-        let found = applier.drift(&bundle, DriftOrder::RecordedFirst);
+        let found = applier.drift(&manifest, DriftOrder::RecordedFirst);
         assert!(
             found.is_empty(),
             "matching expanded bytes read as zero drift"

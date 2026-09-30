@@ -25,7 +25,7 @@ pub trait TrustedHandle {
 
 /// Fetched artifact identity.
 ///
-/// Cache file path plus content hash plus origin url.
+/// Cache file path, content hash, and origin url.
 /// The path holds a non-empty shape; the fetcher proves bytes.
 /// The hash holds 64 hex characters.
 ///
@@ -38,7 +38,7 @@ pub struct FetchHandle {
 
 /// Exec-rooted project file identity.
 ///
-/// Rooted path plus content hash.
+/// Rooted path and content hash.
 /// The path holds containment under the exec root.
 /// The hash holds 64 hex characters.
 ///
@@ -63,7 +63,7 @@ pub struct BlobHandle {
 
 /// Verified compressed archive identity.
 ///
-/// Trusted source path plus source hash plus compression proof.
+/// Trusted source path, source hash, and compression proof.
 /// The proof exists only for sources verified as compressed archives.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -152,7 +152,7 @@ impl ResourceHandle {
 }
 
 impl BlobHandle {
-    /// Builds a blob handle from sealed content plus stored hashes.
+    /// Builds a blob handle from sealed content and stored hashes.
     ///
     pub(crate) fn new(sha256: Sha, stored: Sha) -> Result<Self> {
         Ok(Self { sha256, stored })

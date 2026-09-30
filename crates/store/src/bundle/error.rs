@@ -28,14 +28,6 @@ pub enum BundleError {
         /// Holds the failure message under reading.
         message: String,
     },
-    /// Unhashable document holding the destination with the render reason.
-    #[error("cannot hash '{document}': {reason}")]
-    Unhashable {
-        /// Holds the destination display under hashing.
-        document: String,
-        /// Holds the render reason.
-        reason: String,
-    },
     /// Unsupported version holding the bundle path with the seen version.
     #[error("bundle version {got} reads unsupported")]
     Version {

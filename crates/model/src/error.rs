@@ -25,6 +25,14 @@ pub enum Error {
         /// Holds the serializer reason.
         reason: String,
     },
+    /// Unhashable document holding the destination with the render reason.
+    #[error("cannot hash '{document}': {reason}")]
+    Unhashable {
+        /// Holds the destination display under hashing.
+        document: String,
+        /// Holds the render reason.
+        reason: String,
+    },
     /// Plan failure with a human readable reason.
     #[error("{0}")]
     Plan(String),

@@ -93,6 +93,11 @@ impl Sha {
         }
         out
     }
+
+    /// Reads the hash and size label.
+    pub fn label(&self, len: u64) -> String {
+        format!("sha256:{self} ({len} bytes)")
+    }
 }
 
 impl Serialize for Sha {

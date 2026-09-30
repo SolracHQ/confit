@@ -75,10 +75,8 @@ fn run_plan(
     }
     .execute()?;
     live.finish();
-    let lifecycle = confit_model::hook::diff_lifecycle(
-        &outcome.built.manifest.hooks,
-        &outcome.previous.manifest.hooks,
-    );
+    let lifecycle =
+        confit_model::hook::diff_lifecycle(&outcome.built.hooks, &outcome.previous.hooks);
     let summary = confit_cli::presentation::summary::Summary {
         built: &outcome.built,
         previous: &outcome.previous,

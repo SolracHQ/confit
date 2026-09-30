@@ -6,14 +6,13 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use confit_model::arg::Arg;
-use confit_model::document::{DocumentKind, ManifestData, ManifestDocument, RcOp, Table};
+use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, Table, summary};
 use confit_model::drift::Drift;
 use confit_model::hook::HookLifecycle;
-use confit_model::plan::DocumentStatus;
+use confit_model::manifest::Manifest;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
-use confit_store::bundle::Bundle;
 
 use crate::presentation::drift::drift_lines;
 use crate::presentation::hooks::{EvaluatedHook, lifecycle_lines, render_evaluated};
@@ -184,7 +183,7 @@ impl HookCounts {
     }
 }
 
-/// One stderr summary over a built bundle and its previous manifest.
+/// One stderr summary over a built manifest and its previous manifest.
 ///
 /// Titled sections carry sigiled headers, empty sections stay
 /// out. First runs frame drift as desired versus disk.
@@ -194,30 +193,27 @@ impl HookCounts {
 /// ```rust
 /// use confit_cli::presentation::summary::{Hooks, Summary};
 /// use confit_model::routes::{Route, RouteBase};
-/// use confit_model::document::{ManifestData, ManifestDocument};
-/// use confit_store::bundle::Bundle;
+/// use confit_model::document::{Data, Document};
+/// use confit_model::manifest::Manifest;
 ///
-/// let document = ManifestDocument::new(
+/// let document = Document::new(
 ///     Route::new(RouteBase::Home, "note").unwrap(),
-///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
+///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
 /// );
-/// let built = Bundle::build(vec![document], Vec::new());
-/// let previous = Bundle::empty();
-/// let summary = match built {
-///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } },
-///     Err(error) => panic!("bundle builds: {error}"),
-/// };
-/// let text = summary.render();
+/// let built = Manifest::build(vec![document], Vec::new()).unwrap();
+/// let previous = Manifest::empty();
+/// let report = Summary { built: &built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } };
+/// let text = report.render();
 /// assert!(text.contains("+ home:note: text"));
 /// assert!(text.contains("Documents: 1 to add, 0 to change, 0 to destroy."));
 /// assert!(!text.contains("Hooks: "));
 /// ```
 #[derive(Debug)]
 pub struct Summary<'a> {
-    /// Holds the built bundle under display.
-    pub built: &'a Bundle,
+    /// Holds the built manifest under display.
+    pub built: &'a Manifest,
     /// Holds the previous manifest for lifecycle marks.
-    pub previous: &'a Bundle,
+    pub previous: &'a Manifest,
     /// Holds the manifest versus disk edits leading the text.
     pub drift: &'a [Drift],
     /// Holds true while the state slot reads absent.
@@ -269,8 +265,8 @@ impl Summary<'_> {
     /// The resource block lines without the section title.
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
-        for document in &self.built.manifest.documents {
-            let status = document.status(&self.previous.manifest);
+        for document in &self.built.documents {
+            let status = document.status(self.previous);
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
             }
@@ -313,20 +309,17 @@ impl Summary<'_> {
     ///
     /// ```rust
     /// use confit_cli::presentation::summary::{Hooks, Summary};
-    /// use confit_model::document::{ManifestData, ManifestDocument};
+    /// use confit_model::document::{Data, Document};
     /// use confit_model::routes::{Route, RouteBase};
-    /// use confit_store::bundle::Bundle;
+    /// use confit_model::manifest::Manifest;
     ///
-    /// let first = ManifestDocument::new(Route::new(RouteBase::Home, "a").unwrap(), ManifestData::Text { content: "a".into(), mode: None, unmanaged: false});
-    /// let second = ManifestDocument::new(Route::new(RouteBase::Home, "b").unwrap(), ManifestData::Text { content: "b".into(), mode: None, unmanaged: false});
-    /// let built = Bundle::build(vec![first, second], Vec::new());
-    /// let previous = Bundle::empty();
-    /// let summary = match built {
-    ///     Ok(ref built) => Summary { built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } },
-    ///     Err(error) => panic!("bundle builds: {error}"),
-    /// };
+    /// let first = Document::new(Route::new(RouteBase::Home, "a").unwrap(), Data::Text { content: "a".into(), mode: None, unmanaged: false});
+    /// let second = Document::new(Route::new(RouteBase::Home, "b").unwrap(), Data::Text { content: "b".into(), mode: None, unmanaged: false});
+    /// let built = Manifest::build(vec![first, second], Vec::new()).unwrap();
+    /// let previous = Manifest::empty();
+    /// let report = Summary { built: &built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } };
     /// assert_eq!(
-    ///     summary.summary_lines(),
+    ///     report.summary_lines(),
     ///     vec!["Documents: 2 to add, 0 to change, 0 to destroy.".to_string()]
     /// );
     /// ```
@@ -338,10 +331,10 @@ impl Summary<'_> {
                 "Documents: {adds} to add, {changes} to change, 0 to destroy."
             ));
         } else {
-            let summary = self.built.summary(self.previous);
+            let counts = summary(self.built, self.previous);
             out.push(format!(
                 "Documents: {} to add, {} to change, {} to destroy.",
-                summary.create, summary.update, summary.delete
+                counts.create, counts.update, counts.delete
             ));
         }
         let counts = hook_counts(self.hooks.lifecycle);
@@ -365,7 +358,7 @@ impl Summary<'_> {
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
-        for document in &self.built.manifest.documents {
+        for document in &self.built.documents {
             let entries = first_run_entries(self.drift, document);
             if entries.is_empty() {
                 continue;
@@ -388,7 +381,7 @@ impl Summary<'_> {
         let painter = Painter::new();
         let mut lines = Vec::new();
         let mut resources = Vec::new();
-        for document in &self.built.manifest.documents {
+        for document in &self.built.documents {
             let entries = first_run_entries(self.drift, document);
             if entries.is_empty() {
                 continue;
@@ -421,8 +414,8 @@ impl Summary<'_> {
     }
 
     /// Renders entry lines for one document under its own status.
-    fn document_lines(&self, painter: &Painter, document: &ManifestDocument) -> Vec<String> {
-        match document.status(&self.previous.manifest) {
+    fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
+        match document.status(self.previous) {
             DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  {} {body}", Sigil::Add.mark())))
@@ -454,13 +447,11 @@ impl Summary<'_> {
     fn drift_hunk_header(&self, path: &Route) -> String {
         let found = self
             .previous
-            .manifest
             .documents
             .iter()
             .find(|item| item.destination == *path)
             .or_else(|| {
                 self.built
-                    .manifest
                     .documents
                     .iter()
                     .find(|item| item.destination == *path)
@@ -477,24 +468,21 @@ impl Summary<'_> {
     fn delete_headers(&self) -> Vec<String> {
         let seen: BTreeSet<String> = self
             .built
-            .manifest
             .documents
             .iter()
             .map(|document| document.key())
             .collect();
         self.previous
-            .manifest
             .documents
             .iter()
             .filter(|recorded| {
-                !seen.contains(&recorded.key())
-                    && !recorded.superseded_by(&self.built.manifest.documents)
+                !seen.contains(&recorded.key()) && !recorded.superseded_by(&self.built.documents)
             })
             .map(|recorded| {
                 let key = recorded.key();
                 let (kind, path) = split_key(&key);
                 match &recorded.data {
-                    ManifestData::Tree { members } => format!(
+                    Data::Tree { members } => format!(
                         "{} {path}: {kind} ({} files)",
                         Sigil::Remove.mark(),
                         members.len()
@@ -506,17 +494,16 @@ impl Summary<'_> {
     }
 
     /// Finds one recorded document by key with opaque fallback.
-    fn find_recorded<'a>(&'a self, document: &ManifestDocument) -> Option<&'a ManifestDocument> {
+    fn find_recorded<'a>(&'a self, document: &Document) -> Option<&'a Document> {
         if let Some(found) = self
             .previous
-            .manifest
             .documents
             .iter()
             .find(|item| item.key() == document.key())
         {
             return Some(found);
         }
-        self.previous.manifest.documents.iter().find(|recorded| {
+        self.previous.documents.iter().find(|recorded| {
             recorded.destination == document.destination
                 && recorded.key() != document.key()
                 && (recorded.is_opaque() || document.is_opaque())
@@ -525,15 +512,15 @@ impl Summary<'_> {
 }
 
 /// Reads the display label for one document.
-fn doc_label(document: &ManifestDocument) -> Cow<'_, str> {
+fn doc_label(document: &Document) -> Cow<'_, str> {
     match &document.data {
-        ManifestData::Structured { format, .. } => Cow::Borrowed(format.name()),
+        Data::Structured { format, .. } => Cow::Borrowed(format.name()),
         _ => Cow::Borrowed(document.data.kind().name()),
     }
 }
 
 /// Reads the header line for one document.
-fn header_line(document: &ManifestDocument) -> String {
+fn header_line(document: &Document) -> String {
     format!(
         "{}: {}",
         document.destination.display(),
@@ -542,7 +529,7 @@ fn header_line(document: &ManifestDocument) -> String {
 }
 
 /// Formats one document header with its lifecycle sigil.
-fn status_header(document: &ManifestDocument, status: DocumentStatus) -> String {
+fn status_header(document: &Document, status: DocumentStatus) -> String {
     let sigil = match status {
         DocumentStatus::Create => Sigil::Add.mark(),
         DocumentStatus::Update => Sigil::Update.mark(),
@@ -588,7 +575,7 @@ fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
 ///
 /// Tree member entries group under their destination path.
 /// Every other entry groups under its own path.
-fn first_run_entries<'a>(drift: &'a [Drift], document: &ManifestDocument) -> Vec<&'a Drift> {
+fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Drift> {
     let dest = document.destination.display();
     let is_tree = document.data.tree_members().is_some();
     drift
@@ -615,7 +602,7 @@ fn first_run_entries<'a>(drift: &'a [Drift], document: &ManifestDocument) -> Vec
 ///
 /// Whole-file missing entries always land whole. Whole trees
 /// holding missing entries alone land whole.
-fn first_run_creates(document: &ManifestDocument, entries: &[&Drift]) -> bool {
+fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
     if entries
         .iter()
         .any(|entry| matches!(entry, Drift::Missing { path } if path == &document.destination))
@@ -636,11 +623,7 @@ fn first_run_creates(document: &ManifestDocument, entries: &[&Drift]) -> bool {
 /// Text and rc hunks render verbatim with per-line paint.
 /// Trees collapse to one changed member count.
 /// Unreadable paths name the replacement.
-fn first_run_updates(
-    painter: &Painter,
-    document: &ManifestDocument,
-    entries: &[&Drift],
-) -> Vec<String> {
+fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift]) -> Vec<String> {
     if let Some(members) = document.data.tree_members() {
         let mut rels = BTreeSet::new();
         for entry in entries {
@@ -722,7 +705,7 @@ fn paint_hunk_line(painter: &Painter, line: &str) -> String {
 }
 
 /// Reads one entry's tree member rel under its destination.
-fn member_rel(document: &ManifestDocument, entry: &Drift) -> String {
+fn member_rel(document: &Document, entry: &Drift) -> String {
     let dest = document.destination.display();
     match entry {
         Drift::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
@@ -791,7 +774,9 @@ fn init_text(op: &RcOp) -> String {
         RcOp::Cmd { argv, .. } => Arg::join(argv),
         RcOp::Source { path, .. } => format!("source {}", path.display()),
         RcOp::Env { name, value } => format!("profile {name} = {value}"),
-        RcOp::Path { name, dir, .. } => format!("profile {name} = {}", dir.display()),
+        RcOp::Path { name, dir } => {
+            format!("profile {name} = {}", dir.display())
+        }
         RcOp::Alias { name, expansion } => format!("alias {name} = {expansion}"),
     }
 }
@@ -800,32 +785,34 @@ fn init_text(op: &RcOp) -> String {
 fn named_text(op: &RcOp) -> String {
     match op {
         RcOp::Env { name, value } => format!("profile {name} = {value}"),
-        RcOp::Path { name, dir, .. } => format!("profile {name} = {}", dir.display()),
+        RcOp::Path { name, dir } => {
+            format!("profile {name} = {}", dir.display())
+        }
         RcOp::Alias { name, expansion } => format!("alias {name} = {expansion}"),
         _ => init_text(op),
     }
 }
 
 /// Collects plain entry bodies for one document.
-fn entry_bodies(document: &ManifestDocument) -> Vec<String> {
+fn entry_bodies(document: &Document) -> Vec<String> {
     match &document.data {
-        ManifestData::Structured { data, .. } => table_leaves(data, "")
+        Data::Structured { data, .. } => table_leaves(data, "")
             .into_iter()
             .map(|(key, value)| format!("{key} = {value}"))
             .collect(),
-        ManifestData::Text { content, .. } => {
+        Data::Text { content, .. } => {
             if content.is_empty() {
                 Vec::new()
             } else {
                 content.split('\n').map(str::to_string).collect()
             }
         }
-        ManifestData::Link { target } => vec![target.clone()],
-        ManifestData::Opaque { size, .. } => {
+        Data::Link { target } => vec![target.clone()],
+        Data::Opaque { size, .. } => {
             vec![format!("opaque ({size} bytes)")]
         }
-        ManifestData::Tree { members } => vec![format!("tree ({} files)", members.len())],
-        ManifestData::Rc(rc) => {
+        Data::Tree { members } => vec![format!("tree ({} files)", members.len())],
+        Data::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {
                 match &entry.op {
@@ -849,7 +836,7 @@ fn entry_bodies(document: &ManifestDocument) -> Vec<String> {
 }
 
 /// Reports whether either side carries the opaque kind.
-fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
+fn touches_opaque(first: &Document, second: &Document) -> bool {
     matches!(first.data.kind(), DocumentKind::Opaque)
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
@@ -857,7 +844,7 @@ fn touches_opaque(first: &ManifestDocument, second: &ManifestDocument) -> bool {
 /// Reads the hash and size label for one opaque ref.
 ///
 /// Refs carry the content hash and byte count, so the label
-/// matches `opaque_label` without reading blob bytes.
+/// reads from the ref without reading blob bytes.
 fn opaque_ref_label(sha: &Sha, size: u64) -> String {
     format!("sha256:{sha} ({size} bytes)")
 }
@@ -889,17 +876,12 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
 /// under the update sigil. Opaque labels read the recorded hash
 /// and size, never blob bytes. Rc updates read as a recorded to
 /// desired text hunk with per-symbol paint.
-fn update_lines(
-    painter: &Painter,
-    document: &ManifestDocument,
-    recorded: &ManifestDocument,
-) -> Vec<String> {
+fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     match (&document.data, &recorded.data) {
-        (
-            ManifestData::Structured { data: new, .. },
-            ManifestData::Structured { data: old, .. },
-        ) => structured_update_lines(painter, new, old),
-        (ManifestData::Link { target: new }, ManifestData::Link { target: old }) => {
+        (Data::Structured { data: new, .. }, Data::Structured { data: old, .. }) => {
+            structured_update_lines(painter, new, old)
+        }
+        (Data::Link { target: new }, Data::Link { target: old }) => {
             if old == new {
                 Vec::new()
             } else {
@@ -910,12 +892,12 @@ fn update_lines(
             }
         }
         (
-            ManifestData::Opaque {
+            Data::Opaque {
                 blob: new_blob,
                 size: new_size,
                 ..
             },
-            ManifestData::Opaque {
+            Data::Opaque {
                 blob: old_blob,
                 size: old_size,
                 ..
@@ -935,7 +917,7 @@ fn update_lines(
                 )]
             }
         }
-        (ManifestData::Tree { members: new }, ManifestData::Tree { members: old }) => {
+        (Data::Tree { members: new }, Data::Tree { members: old }) => {
             let changed = confit_model::document::tree_changed(old, new);
             vec![painter.paint(
                 Sigil::Update,
@@ -946,7 +928,7 @@ fn update_lines(
                 ),
             )]
         }
-        (ManifestData::Rc(_), ManifestData::Rc(_)) => rc_update_lines(painter, document, recorded),
+        (Data::Rc(_), Data::Rc(_)) => rc_update_lines(painter, document, recorded),
         _ if touches_opaque(document, recorded) => {
             let mut out = vec![painter.paint(
                 Sigil::Update,
@@ -965,7 +947,7 @@ fn update_lines(
 }
 
 /// Renders desired entry bodies under the update sigil.
-fn update_fallback(painter: &Painter, document: &ManifestDocument) -> Vec<String> {
+fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
     entry_bodies(document)
         .into_iter()
         .map(|body| painter.paint(Sigil::Update, &format!("  {} {body}", Sigil::Update.mark())))
@@ -992,11 +974,7 @@ fn recorded_hunk(old: &str, new: &str) -> String {
 /// carry per-symbol paint through the shared hunk path. Render
 /// failures fall back to desired entry bodies under the update
 /// sigil.
-fn rc_update_lines(
-    painter: &Painter,
-    document: &ManifestDocument,
-    recorded: &ManifestDocument,
-) -> Vec<String> {
+fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match inline_bytes(&recorded.data) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),

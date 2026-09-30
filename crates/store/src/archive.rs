@@ -305,7 +305,7 @@ fn file_sha(source: &Path) -> Result<Sha> {
 
 /// Proves one source holds a compressed archive.
 ///
-/// Gzip magic plus tar readability and zip magic plus zip
+/// Gzip magic, tar readability, zip magic, and zip
 /// readability under current fallback rules.
 ///
 /// # Errors

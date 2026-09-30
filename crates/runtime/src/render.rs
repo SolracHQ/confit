@@ -4,9 +4,7 @@
 
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
-use confit_model::document::{
-    ManifestData, ManifestDocument, RcData, RcEntry, RcOp, StructuredFormat, Table,
-};
+use confit_model::document::{Data, Document, RcData, RcEntry, RcOp, StructuredFormat, Table};
 use confit_model::error::{Error, Result};
 
 use crate::Applier;
@@ -28,14 +26,14 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 /// # Examples
 ///
 /// ```rust
-/// use confit_model::document::{ManifestData, ManifestDocument};
+/// use confit_model::document::{Data, Document};
 /// use confit_model::routes::{Route, RouteBase};
 /// use confit_store::StoreRoots;
 /// use confit_runtime::Applier;
 ///
-/// let document = ManifestDocument::new(
+/// let document = Document::new(
 ///     Route::new(RouteBase::Home, "note").unwrap(),
-///     ManifestData::Text { content: "hi".into(), mode: None, unmanaged: false},
+///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
 /// );
 /// let applier = Applier::host(StoreRoots::default());
 /// assert!(matches!(applier.render_document(&document), Ok(bytes) if bytes == b"hi".to_vec()));
@@ -51,21 +49,21 @@ impl crate::Applier {
     /// Opaque and tree payloads fail as plan errors; their
     /// bytes ride the blob store.
     /// Serializer failures fail as plan errors.
-    pub fn render_document(&self, document: &ManifestDocument) -> Result<Vec<u8>> {
+    pub fn render_document(&self, document: &Document) -> Result<Vec<u8>> {
         match &document.data {
-            ManifestData::Structured { format, data } => match format {
+            Data::Structured { format, data } => match format {
                 StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
                 StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
                 StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
             },
-            ManifestData::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-            ManifestData::Link { target } => Ok(target.as_bytes().to_vec()),
-            ManifestData::Rc(data) => Ok(render_rc(data, self).into_bytes()),
-            ManifestData::Opaque { blob, .. } => Err(Error::Plan(format!(
+            Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+            Data::Link { target } => Ok(target.as_bytes().to_vec()),
+            Data::Rc(data) => Ok(render_rc(data, self).into_bytes()),
+            Data::Opaque { blob, .. } => Err(Error::Plan(format!(
                 "render opaque '{}': blob bytes ride the blob store",
                 blob.sha()
             ))),
-            ManifestData::Tree { .. } => Err(Error::Plan(
+            Data::Tree { .. } => Err(Error::Plan(
                 "render tree: tree documents hold member bytes".to_string(),
             )),
         }
@@ -129,7 +127,7 @@ fn render_entry(entry: &RcEntry, applier: &Applier) -> Vec<String> {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
-        RcOp::Path { name, dir, .. } => {
+        RcOp::Path { name, dir } => {
             let expanded = applier.resolve(dir).to_string_lossy().into_owned();
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")

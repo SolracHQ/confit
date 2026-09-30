@@ -6,9 +6,9 @@ use std::path::Path;
 
 use confit_model::drift::{Drift, DriftOrder};
 use confit_model::error::{Error, Result};
+use confit_model::manifest::Manifest;
 use confit_runtime::Applier;
 use confit_store::Stores;
-use confit_store::bundle::Bundle;
 
 use crate::cli::PlanArgs;
 
@@ -17,10 +17,10 @@ use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
 /// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
 pub struct PlanOutcome {
-    /// Holds the built bundle with counts.
-    pub built: Bundle,
+    /// Holds the built manifest with counts.
+    pub built: Manifest,
     /// Holds the previous manifest backing lifecycle marks.
-    pub previous: Bundle,
+    pub previous: Manifest,
     /// Holds disk edits leading the summary, desired versus
     /// disk on first runs.
     pub drift: Vec<Drift>,
@@ -92,11 +92,10 @@ impl PlanRunner<'_> {
             .map_err(|error| Error::Plan(error.to_string()))?;
 
         self.sinks.emit_hashing();
-        let mut built = timed("hash", || {
-            Bundle::build(documents, evaluation.hooks)
+        let built = timed("hash", || {
+            Manifest::build(documents, evaluation.hooks)
                 .map_err(|error| Error::Plan(error.to_string()))
         })?;
-        built.blobs = evaluation.blobs;
         log_processed(&built, &previous);
 
         let drifts = timed("drift", || {
@@ -107,8 +106,7 @@ impl PlanRunner<'_> {
             }
         });
         if self.args.output.is_some() {
-            self.sinks
-                .emit_writing_manifest(built.manifest.documents.len());
+            self.sinks.emit_writing_manifest(built.documents.len());
         }
         timed("write", || match self.args.output.as_deref() {
             Some(dest) if is_named_output(dest) => {
@@ -168,14 +166,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn named_output_stays_exempt_from_bundle_suffix() {
+    fn named_output_stays_exempt_from_cb_suffix() {
         assert!(
             is_named_output(Path::new("@work")),
             "@name reads as slot output"
         );
         assert!(
             !is_named_output(Path::new("plan.cb")),
-            "explicit bundle reads as file output"
+            "explicit path reads as file output"
         );
         assert!(
             !is_named_output(Path::new("plan")),
@@ -183,7 +181,7 @@ mod tests {
         );
         assert!(
             !is_named_output(Path::new("plan.CB")),
-            "uppercase bundle reads as file output"
+            "uppercase suffix reads as file output"
         );
     }
 }
