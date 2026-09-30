@@ -4,11 +4,13 @@
 
 pub mod error;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::codec::{CodecError, decode};
-use confit_model::manifest::Manifest;
+use confit_model::manifest::{MANIFEST_VERSION, Manifest};
 use confit_model::progress::ProgressSender;
+use confit_model::sha::Sha;
 
 use crate::StoreRoots;
 use confit_driver as driver;
@@ -231,6 +233,24 @@ impl SlotStore {
     pub fn is_first_run(&self) -> bool {
         !driver::exists(&self.state)
     }
+
+    /// Gathers stored refs for a sweep.
+    ///
+    /// Every stored manifest under the config base lends its
+    /// blob hashes, and missing, unparsable, and stale files
+    /// lend none.
+    ///
+    /// # Errors
+    ///
+    /// - [`SlotError::Denied`] for denied folders.
+    /// - [`SlotError::Unknown`] for other folder failures.
+    pub fn keep_set(&self) -> Result<BTreeSet<Sha>> {
+        let mut keep = BTreeSet::new();
+        collect_manifest_refs(&self.state, &mut keep);
+        collect_dir_refs(&self.previous, &mut keep)?;
+        collect_dir_refs(&self.plans, &mut keep)?;
+        Ok(keep)
+    }
 }
 
 /// Loads one manifest file with blob ref resolution.
@@ -400,10 +420,44 @@ fn check_slot_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Collects blob refs from one stored manifest.
+///
+/// Missing, unparsable, and stale files add no refs.
+fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
+    let bytes = match driver::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return,
+    };
+    let stored: Manifest = match serde_json::from_slice(&bytes) {
+        Ok(stored) => stored,
+        Err(_) => return,
+    };
+    if stored.version != MANIFEST_VERSION {
+        return;
+    }
+    keep.extend(stored.refs().iter().map(|blob| blob.stored().clone()));
+}
+
+/// Collects blob refs from every manifest file in one folder.
+///
+/// Unreadable and unparsable files skip quietly. Missing
+/// folders add no refs.
+///
+/// # Errors
+///
+/// - [`SlotError::Denied`] for denied folders.
+/// - [`SlotError::Unknown`] for other folder failures.
+fn collect_dir_refs(dir: &Path, keep: &mut BTreeSet<Sha>) -> Result<()> {
+    for file in history_files(dir)? {
+        collect_manifest_refs(&file, keep);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{Data, Document};
+    use confit_model::document::{BlobRef, Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
     use confit_driver::TestGuard;
@@ -442,6 +496,24 @@ mod tests {
             Ok(files) => files.len(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
             Err(error) => panic!("history lists: {error}"),
+        }
+    }
+
+    fn blob_manifest(blob: BlobRef) -> Manifest {
+        match Manifest::build(
+            vec![Document::new(
+                Route::new(RouteBase::Home, "bin").unwrap(),
+                Data::Opaque {
+                    blob,
+                    size: 10,
+                    mode: None,
+                    unmanaged: false,
+                },
+            )],
+            Vec::new(),
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
@@ -623,6 +695,38 @@ mod tests {
                 }
                 Err(error) => panic!("pick {pick} resolves: {error}"),
             }
+        }
+    }
+
+    #[test]
+    fn keep_set_skips_unparsable_and_stale_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let slots = test_store(dir.path());
+        let blob = BlobRef::new(Sha::hash(b"slot payload"), Sha::hash(b"slot pool bytes"));
+        match slots.store(&blob_manifest(blob.clone()), None) {
+            Ok(_) => {}
+            Err(error) => panic!("referencing manifest stores: {error}"),
+        }
+        let config = dir.path().join("config");
+        driver::write(&config.join(PREVIOUS_DIR).join("junk.json"), b"{ not json").unwrap();
+        let plans = config.join(PLANS_DIR);
+        driver::create_dir_all(&plans).unwrap();
+        let ghost = BlobRef::new(Sha::hash(b"stale payload"), Sha::hash(b"stale pool bytes"));
+        let mut stale = serde_json::to_value(blob_manifest(ghost)).unwrap();
+        stale["version"] = serde_json::json!(0u32);
+        driver::write(
+            &plans.join("stale.json"),
+            serde_json::to_vec(&stale).unwrap().as_slice(),
+        )
+        .unwrap();
+        match slots.keep_set() {
+            Ok(keep) => assert_eq!(
+                keep,
+                BTreeSet::from([blob.stored().clone()]),
+                "unparsable and stale files lend no refs"
+            ),
+            Err(error) => panic!("keep set gathers: {error}"),
         }
     }
 }

@@ -10,14 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use confit_model::document::BlobRef;
-use confit_model::manifest::Manifest;
 use confit_model::sha::Sha;
 use sha2::Digest;
 
 use crate::StoreRoots;
 use crate::handles::{BlobHandle, TrustedHandle};
+use crate::slot::SlotStore;
 use confit_driver as driver;
-use confit_model::manifest::MANIFEST_VERSION;
 use error::{BlobError, Result};
 
 /// Pool folder name under the config base.
@@ -46,7 +45,7 @@ const GZIP_ISIZE_LEN: u64 = 4;
 /// through persist alone at apply end.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
-    config_base: PathBuf,
+    roots: StoreRoots,
     pool: PathBuf,
     cache: PathBuf,
 }
@@ -83,7 +82,7 @@ impl BlobStore {
     /// Roots arrive explicit from store construction.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
-            config_base: roots.config_base.clone(),
+            roots: roots.clone(),
             pool: roots.config_base.join(BLOBS_DIR),
             cache: roots.cache_base.join(BLOBS_DIR),
         }
@@ -339,20 +338,24 @@ impl BlobStore {
         }
     }
 
-    /// Drops cache files and pool blobs unreferenced by slots and history.
+    /// Drops cache and pool files outside what slot records.
     ///
-    /// The returned count covers both homes.
+    /// The sweep protects what slot records, read through one
+    /// slot view built from the same roots, and the removal
+    /// count covers both homes.
     ///
     /// # Errors
     ///
     /// - [`BlobError::WriteMissing`] for missing paths.
     /// - [`BlobError::WriteDenied`] for denied paths.
-    /// - [`BlobError::WriteUnknown`] for other listing and removal failures.
+    /// - [`BlobError::WriteUnknown`] for keep set reads, listing,
+    ///   and removal failures.
     pub fn prune(&self) -> Result<usize> {
-        let mut keep: BTreeSet<String> = BTreeSet::new();
-        collect_manifest_refs(&self.config_base.join("state.json"), &mut keep);
-        collect_dir_refs(&self.config_base.join("previous"), &mut keep)?;
-        collect_dir_refs(&self.config_base.join("plans"), &mut keep)?;
+        let slots = SlotStore::new(&self.roots);
+        let keep = slots.keep_set().map_err(|error| BlobError::WriteUnknown {
+            path: self.roots.config_base.clone(),
+            message: error.to_string(),
+        })?;
         let mut removed = prune_dir(&self.cache, &keep)?;
         removed += prune_dir(&self.pool, &keep)?;
         Ok(removed)
@@ -451,27 +454,16 @@ impl std::io::Read for VerifiedBlobReader {
     }
 }
 
-/// Raw byte count for one pool file.
-///
-/// Drops files in one blob home unreferenced by the keep set.
+/// Drops files in one blob home outside the keep set.
 ///
 /// Missing folders read as zero removals.
-///
-/// # Arguments
-///
-/// * `dir` - the blob home under sweeping.
-/// * `keep` - the stored hashes under keeping.
-///
-/// # Returns
-///
-/// The count of dropped files.
 ///
 /// # Errors
 ///
 /// - [`BlobError::WriteMissing`] for missing paths.
 /// - [`BlobError::WriteDenied`] for denied paths.
 /// - [`BlobError::WriteUnknown`] for other listing and removal failures.
-fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
+fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
     let entries = match driver::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -481,11 +473,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
     };
     let mut removed = 0;
     for path in entries {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if keep.contains(&name) {
+        if held(&path, keep) {
             continue;
         }
         driver::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
@@ -494,64 +482,25 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<String>) -> Result<usize> {
     Ok(removed)
 }
 
-/// Collects blob refs from every manifest file in one folder.
+/// Reports whether one blob home file names a hash inside the keep set.
 ///
-/// Unreadable and unparsable files skip quietly.
-///
-/// # Errors
-///
-/// - [`BlobError::WriteMissing`] for missing paths.
-/// - [`BlobError::WriteDenied`] for denied paths.
-/// - [`BlobError::WriteUnknown`] for other listing failures.
-fn collect_dir_refs(dir: &Path, keep: &mut BTreeSet<String>) -> Result<()> {
-    let files = match driver::read_dir(dir) {
-        Ok(files) => files,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(BlobError::from_write_io(dir, error));
-        }
-    };
-    for file in files {
-        collect_manifest_refs(&file, keep);
-    }
-    Ok(())
-}
-
-/// Collects blob refs from one manifest file without hydrating.
-///
-/// Missing, unparsable, and stale files add no refs.
-fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<String>) {
-    let bytes = match driver::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return,
-    };
-    let stored: Manifest = match serde_json::from_slice(&bytes) {
-        Ok(stored) => stored,
-        Err(_) => return,
-    };
-    if stored.version != MANIFEST_VERSION {
-        return;
-    }
-    for document in &stored.documents {
-        keep.extend(
-            document
-                .data
-                .blob_refs()
-                .into_iter()
-                .map(|blob| blob.stored().hex()),
-        );
-    }
+/// Names failing hash parsing read outside the set.
+fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .and_then(|name| Sha::new(name).ok())
+        .is_some_and(|stored| keep.contains(&stored))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use confit_model::document::{Data, Document};
+    use confit_model::manifest::Manifest;
     use confit_model::routes::{Route, RouteBase};
 
     use crate::handles::FetchHandle;
 
-    use crate::slot::SlotStore;
     use confit_driver::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
@@ -823,17 +772,14 @@ mod tests {
             Err(error) => panic!("referencing manifest stores: {error}"),
         }
         match store.prune() {
-            Ok(removed) => assert_eq!(removed, 1, "prune drops one entry"),
+            Ok(removed) => assert_eq!(removed, 1, "prune drops the orphan"),
             Err(error) => panic!("pool prunes: {error}"),
         }
         assert!(
             store.resolve(&kept.to_ref()).is_ok(),
-            "resolve proves the referenced blob"
+            "the referenced blob survives"
         );
-        assert!(
-            store.resolve(&dropped.to_ref()).is_err(),
-            "resolve refuses the dropped blob"
-        );
+        assert!(store.resolve(&dropped.to_ref()).is_err(), "the orphan dies");
         assert_eq!(read_open(&store, &kept), b"kept bytes");
         for _ in 1..=6 {
             match slots.store(&Manifest::empty(), None) {
@@ -842,7 +788,7 @@ mod tests {
             }
         }
         match store.prune() {
-            Ok(removed) => assert_eq!(removed, 1, "flushed state drops the rest"),
+            Ok(removed) => assert_eq!(removed, 1, "rotation drains the rest"),
             Err(error) => panic!("pool prunes again: {error}"),
         }
         assert!(
