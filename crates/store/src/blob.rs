@@ -132,8 +132,7 @@ impl BlobStore {
     /// - [`BlobError::Missing`] for missing sources.
     /// - [`BlobError::Denied`] for denied sources.
     /// - [`BlobError::Unknown`] for other read failures.
-    /// - [`BlobError::WriteMissing`] for missing cache paths.
-    /// - [`BlobError::WriteDenied`] for denied cache paths.
+    /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
     pub fn put(&self, source: BlobSource<'_>) -> Result<BlobHandle> {
@@ -186,8 +185,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::WriteMissing`] for missing cache paths.
-    /// - [`BlobError::WriteDenied`] for denied cache paths.
+    /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     pub(crate) fn receive(&self, stored: &Sha, source: &dyn TrustedHandle) -> Result<()> {
         let dest = self.cache.join(stored.hex());
@@ -256,8 +254,7 @@ impl BlobStore {
     /// - [`BlobError::Missing`] for missing blobs.
     /// - [`BlobError::Denied`] for denied blobs.
     /// - [`BlobError::Unknown`] for other cache read failures.
-    /// - [`BlobError::WriteMissing`] for missing pool paths.
-    /// - [`BlobError::WriteDenied`] for denied pool paths.
+    /// - [`BlobError::Write`] for pool write faults.
     /// - [`BlobError::WriteUnknown`] for other pool write failures.
     pub fn persist(&self, blobs: &[BlobHandle]) -> Result<()> {
         for blob in blobs {
@@ -303,8 +300,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::WriteMissing`] for missing paths.
-    /// - [`BlobError::WriteDenied`] for denied paths.
+    /// - [`BlobError::Write`] for write faults.
     /// - [`BlobError::WriteUnknown`] for keep set reads, listing,
     ///   and removal failures.
     pub fn prune(&self) -> Result<usize> {
@@ -383,8 +379,7 @@ impl std::io::Read for VerifiedBlobReader {
 ///
 /// # Errors
 ///
-/// - [`BlobError::WriteMissing`] for missing paths.
-/// - [`BlobError::WriteDenied`] for denied paths.
+/// - [`BlobError::Write`] for write faults.
 /// - [`BlobError::WriteUnknown`] for other listing and removal failures.
 fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
     let entries = match driver::fs::read_dir(dir) {

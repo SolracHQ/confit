@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use confit_model::sha::Sha;
 use thiserror::Error;
 
+use crate::faults::AccessFault;
+
 /// Blob failure shapes.
 #[derive(Debug, Error)]
 pub enum BlobError {
@@ -28,17 +30,13 @@ pub enum BlobError {
         /// Holds the failure message under reading.
         message: String,
     },
-    /// Missing destination holding the path.
-    #[error("cannot write '{path}': missing file", path = path.display())]
-    WriteMissing {
+    /// Failed write holding the destination path with the fault.
+    #[error("cannot write '{path}': {fault}", path = path.display())]
+    Write {
         /// Holds the destination path under writing.
         path: PathBuf,
-    },
-    /// Denied destination holding the path.
-    #[error("cannot write '{path}': permission denied", path = path.display())]
-    WriteDenied {
-        /// Holds the destination path under writing.
-        path: PathBuf,
+        /// Holds the write fault cause.
+        fault: AccessFault,
     },
     /// Unknown write failure holding the path with message.
     #[error("cannot write '{path}': {message}", path = path.display())]
@@ -76,14 +74,16 @@ impl BlobError {
 
     /// Maps one write io failure at the destination path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
-        let kind = error.kind();
         let message = error.to_string();
-        match kind {
-            std::io::ErrorKind::NotFound => Self::WriteMissing {
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Write {
                 path: path.to_path_buf(),
-            },
-            std::io::ErrorKind::PermissionDenied => Self::WriteDenied {
-                path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
             },
             _ => Self::WriteUnknown {
                 path: path.to_path_buf(),
@@ -95,3 +95,28 @@ impl BlobError {
 
 /// Blob result alias.
 pub type Result<T> = std::result::Result<T, BlobError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_io(path: &Path, kind: std::io::ErrorKind) -> BlobError {
+        BlobError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
+    }
+
+    #[test]
+    fn write_carries_destination_with_fault() {
+        let path = Path::new("cache/blobs/stored");
+        let error = write_io(path, std::io::ErrorKind::StorageFull);
+        match &error {
+            BlobError::Write { path: found, fault } => {
+                assert_eq!(found, path, "write keeps the path");
+                assert!(
+                    matches!(*fault, AccessFault::StorageFull),
+                    "write keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong write variant: {other}"),
+        }
+    }
+}

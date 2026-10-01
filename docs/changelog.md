@@ -143,7 +143,7 @@ Design spec: `docs/design/v0.7.md`.
   version, so a rust toolchain declares its components
   beside its version. Omitted `options` keeps the bare
   version string.
-- Bundle nouns land. `Plan` reads `Bundle`, manifests, 
+- Bundle nouns land. `Plan` reads `Bundle`, manifests,
   members and history entries carry their names, summaries
   report `Bundle:`, tree members hold `relative`. One runtime
   language. `Manifest` serves runtime, disk, `Bundle`
@@ -268,7 +268,7 @@ Design spec: `docs/design/v0.6.md`.
   convention.
 - `mise.init(version?)` returns the installer config: the
   mise binary composed from fetch, unpack, an opaque
-  document, and the activation patch. Explicit version wins, 
+  document, and the activation patch. Explicit version wins,
   omitted resolves the
   latest tag. No `activate` call lives on the public contract;
   profiles list the installer once and gain activation with
@@ -386,7 +386,7 @@ built, then superseded without sealing.
   `solrachq` defaults (mise, merge, template) in external shape,
   lazy loading, note-and-skip collisions, reads jailed to the
   project root.
-- Rc sections as position and guard: any entry in any section, 
+- Rc sections as position and guard: any entry in any section,
   profile always runs, guard splits the rest, declaration order
   inside sections. One `RcOp`/`RcEntry` model replaces the four
   entry structs.
@@ -437,7 +437,7 @@ built, then superseded without sealing.
   the `SnapshotStore` trait; absent paths read as absence, unreadable paths
   warn on stderr naming path and reason, exit stays 0.
 - Three-way diff (desired vs previous vs disk): create, update,
-  unchanged, delete counts, and `OverwriteUntracked`, 
+  unchanged, delete counts, and `OverwriteUntracked`,
   `ManualModification`, `Unreadable` warnings.
 - Disk diffs: key-value lines for structured kinds, unified diffs for
   scripts and raw bytes, wrapped in the drift note with

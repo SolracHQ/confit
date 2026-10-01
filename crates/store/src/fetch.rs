@@ -116,6 +116,7 @@ impl FetchCache {
     /// - [`FetchError::Timeout`] for timeouts.
     /// - [`FetchError::Missing`] for missing cache paths.
     /// - [`FetchError::Denied`] for denied cache paths.
+    /// - [`FetchError::Write`] for cache write faults.
     /// - [`FetchError::Unknown`] for other cache failures.
     /// - [`FetchError::DigestMismatch`] for sha mismatches.
     fn fetch_download(
@@ -148,6 +149,7 @@ impl FetchCache {
     /// - [`FetchError::Unscripted`] for unscripted test urls.
     /// - [`FetchError::Missing`] for missing cache paths.
     /// - [`FetchError::Denied`] for denied cache paths.
+    /// - [`FetchError::Write`] for cache write faults.
     fn download(&self, url: &str) -> Result<(PathBuf, Sha, usize)> {
         let reader = transport::download(url)?;
         self.store_stream(url, reader)
@@ -159,11 +161,13 @@ impl FetchCache {
     ///
     /// - [`FetchError::Missing`] for missing folders.
     /// - [`FetchError::Denied`] for denied folders.
+    /// - [`FetchError::Write`] for cache write faults.
     /// - [`FetchError::Unknown`] for other failures.
     fn store_stream(&self, url: &str, reader: impl std::io::Read) -> Result<(PathBuf, Sha, usize)> {
         let staging = self.staging_path(url);
         if let Some(parent) = staging.parent() {
-            driver::fs::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
+            driver::fs::create_dir_all(parent)
+                .map_err(|error| FetchError::from_write_io(url, error))?;
         }
         let outcome = self.stream_to_staging(url, reader, &staging);
         let (digest, bytes) = match outcome {
@@ -177,7 +181,7 @@ impl FetchCache {
         driver::atomic_write(&content, |final_staging| {
             driver::fs::rename(&staging, final_staging)
         })
-        .map_err(|error| FetchError::from_io(url, error))?;
+        .map_err(|error| FetchError::from_write_io(url, error))?;
         self.write_index(url, &digest)?;
         Ok((content, digest, bytes))
     }
@@ -188,14 +192,16 @@ impl FetchCache {
     ///
     /// - [`FetchError::Missing`] for missing folders.
     /// - [`FetchError::Denied`] for denied folders.
+    /// - [`FetchError::Write`] for cache write faults.
     /// - [`FetchError::Unknown`] for other failures.
     fn write_index(&self, url: &str, digest: &Sha) -> Result<()> {
         let index = self.index_path(url);
         if let Some(parent) = index.parent() {
-            driver::fs::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
+            driver::fs::create_dir_all(parent)
+                .map_err(|error| FetchError::from_write_io(url, error))?;
         }
         driver::fs::write(&index, digest.hex().as_bytes())
-            .map_err(|error| FetchError::from_io(url, error))
+            .map_err(|error| FetchError::from_write_io(url, error))
     }
 
     /// Streams one body into staging while hashing.
@@ -204,6 +210,7 @@ impl FetchCache {
     ///
     /// - [`FetchError::Missing`] for missing staging files.
     /// - [`FetchError::Denied`] for denied staging files.
+    /// - [`FetchError::Write`] for cache write faults.
     /// - [`FetchError::Unknown`] for other failures.
     fn stream_to_staging(
         &self,
@@ -211,7 +218,8 @@ impl FetchCache {
         reader: impl std::io::Read,
         staging: &Path,
     ) -> Result<(Sha, usize)> {
-        let file = driver::fs::create(staging).map_err(|error| FetchError::from_io(url, error))?;
+        let file =
+            driver::fs::create(staging).map_err(|error| FetchError::from_write_io(url, error))?;
         let mut writer = std::io::BufWriter::new(file);
         let mut limited = reader.take(BODY_LIMIT_BYTES);
         let mut hasher = sha2::Sha256::new();
@@ -228,11 +236,11 @@ impl FetchCache {
             hasher.update(&buf[..read]);
             writer
                 .write_all(&buf[..read])
-                .map_err(|error| FetchError::from_io(url, error))?;
+                .map_err(|error| FetchError::from_write_io(url, error))?;
         }
         writer
             .flush()
-            .map_err(|error| FetchError::from_io(url, error))?;
+            .map_err(|error| FetchError::from_write_io(url, error))?;
         let digest = Sha::finish(hasher);
         Ok((digest, usize::try_from(bytes).unwrap_or(0)))
     }
@@ -250,6 +258,7 @@ impl FetchCache {
     /// - [`FetchError::DigestMismatch`] for sha mismatches.
     /// - [`FetchError::Missing`] for missing cache paths.
     /// - [`FetchError::Denied`] for denied cache paths.
+    /// - [`FetchError::Write`] for cache write faults.
     pub fn fetch(
         &self,
         url: &str,

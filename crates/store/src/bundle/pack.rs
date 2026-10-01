@@ -34,6 +34,7 @@ impl BundleStore {
     /// - [`BundleError::Missing`] for missing blobs.
     /// - [`BundleError::Unreachable`] for unreachable archives.
     /// - [`BundleError::Denied`] for denied archives.
+    /// - [`BundleError::Write`] for seal write faults.
     pub fn write(
         &self,
         manifest: &Manifest,
@@ -122,13 +123,14 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
 ///
 /// - [`BundleError::Unreachable`] for missing destinations.
 /// - [`BundleError::Denied`] for denied destinations.
+/// - [`BundleError::Write`] for seal write faults.
 /// - [`BundleError::Unknown`] for other build and hash failures.
 fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Result<ArchiveHandle> {
     driver::atomic_write(dest, |path| {
         let sink = driver::fs::create(path)?;
         driver::tar::build_plain(sink, members)
     })
-    .map_err(|error| BundleError::from_io(dest, error))?;
+    .map_err(|error| BundleError::from_write_io(dest, error))?;
     let sha = bundle_sha(dest)?;
     let sealed = ArchiveHandle::new(dest.to_path_buf(), sha);
     sealed.map_err(|error| BundleError::Unknown {

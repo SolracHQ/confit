@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::faults::AccessFault;
+
 /// Slot failure shapes.
 #[derive(Debug, Error)]
 pub enum SlotError {
@@ -47,6 +49,14 @@ pub enum SlotError {
         /// Holds the picker input under resolving.
         input: String,
     },
+    /// Failed write holding the slot path with the fault.
+    #[error("cannot write '{path}': {fault}", path = path.display())]
+    Write {
+        /// Holds the slot path under writing.
+        path: PathBuf,
+        /// Holds the write fault cause.
+        fault: AccessFault,
+    },
 }
 
 impl SlotError {
@@ -67,7 +77,52 @@ impl SlotError {
             },
         }
     }
+
+    /// Maps one write io failure at the slot path into domain language.
+    pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+                path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
+            },
+            _ => Self::Unknown {
+                path: path.to_path_buf(),
+                message,
+            },
+        }
+    }
 }
 
 /// Slot result alias.
 pub type Result<T> = std::result::Result<T, SlotError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_io(path: &Path, kind: std::io::ErrorKind) -> SlotError {
+        SlotError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
+    }
+
+    #[test]
+    fn write_carries_slot_with_fault() {
+        let path = Path::new("state.json");
+        let error = write_io(path, std::io::ErrorKind::ReadOnlyFilesystem);
+        match &error {
+            SlotError::Write { path: found, fault } => {
+                assert_eq!(found, path, "write keeps the path");
+                assert!(
+                    matches!(*fault, AccessFault::ReadOnlyFilesystem),
+                    "write keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong write variant: {other}"),
+        }
+    }
+}

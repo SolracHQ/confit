@@ -143,6 +143,7 @@ impl ArchiveStore {
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+    /// - [`ArchiveError::Write`] for spill write faults.
     /// - [`ArchiveError::Unknown`] for other failures.
     /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
@@ -190,6 +191,7 @@ impl ArchiveStore {
     ///
     /// - [`ArchiveError::Missing`] for missing archives.
     /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::Write`] for spill write faults.
     /// - [`ArchiveError::Unknown`] for other failures.
     fn run_backend(
         &self,
@@ -218,7 +220,7 @@ impl ArchiveStore {
                 if let Some(path) = &staged {
                     let _ = driver::fs::remove_dir_all(path);
                 }
-                Err(failure.unwrap_or_else(|| ArchiveError::from_io(source, error)))
+                Err(failure.unwrap_or_else(|| ArchiveError::from_write_io(source, error)))
             }
         }
     }
@@ -250,6 +252,7 @@ impl ArchiveStore {
 ///
 /// - [`ArchiveError::Missing`] for missing archives.
 /// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Write`] for spill write faults.
 /// - [`ArchiveError::Unknown`] for other failures.
 /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
 /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
@@ -259,7 +262,8 @@ fn spill_members(
     staging: &Path,
     backend: &dyn ArchiveBackend,
 ) -> Result<Vec<BornMember>> {
-    driver::fs::create_dir_all(staging).map_err(|error| ArchiveError::from_io(source, error))?;
+    driver::fs::create_dir_all(staging)
+        .map_err(|error| ArchiveError::from_write_io(source, error))?;
     backend.unpack(source, staging)
 }
 

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::faults::AccessFault;
+
 /// Archive failure shapes.
 #[derive(Debug, Error)]
 pub enum ArchiveError {
@@ -65,6 +67,14 @@ pub enum ArchiveError {
         /// Holds the source path under unpacking.
         path: PathBuf,
     },
+    /// Failed write holding the archive path with the fault.
+    #[error("cannot write '{path}': {fault}", path = path.display())]
+    Write {
+        /// Holds the archive path under spilling.
+        path: PathBuf,
+        /// Holds the write fault cause.
+        fault: AccessFault,
+    },
 }
 
 impl ArchiveError {
@@ -85,7 +95,52 @@ impl ArchiveError {
             },
         }
     }
+
+    /// Maps one spill io failure at the archive path into domain language.
+    pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+                path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
+            },
+            _ => Self::Unknown {
+                path: path.to_path_buf(),
+                message,
+            },
+        }
+    }
 }
 
 /// Archive result alias.
 pub type Result<T> = std::result::Result<T, ArchiveError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_io(path: &Path, kind: std::io::ErrorKind) -> ArchiveError {
+        ArchiveError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
+    }
+
+    #[test]
+    fn write_carries_archive_with_fault() {
+        let path = Path::new("fonts.tar.gz");
+        let error = write_io(path, std::io::ErrorKind::QuotaExceeded);
+        match &error {
+            ArchiveError::Write { path: found, fault } => {
+                assert_eq!(found, path, "write keeps the path");
+                assert!(
+                    matches!(*fault, AccessFault::QuotaExceeded),
+                    "write keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong write variant: {other}"),
+        }
+    }
+}

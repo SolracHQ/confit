@@ -86,6 +86,7 @@ impl BundleStore {
     ///
     /// - [`BundleError::Unreachable`] for missing members.
     /// - [`BundleError::Denied`] for denied members.
+    /// - [`BundleError::Write`] for receive write faults.
     /// - [`BundleError::Unknown`] for other failures.
     fn receive_blob(&self, handle: &ArchiveHandle, stored: &str, bundle: &Path) -> Result<()> {
         let name = [BUNDLE_BLOBS_PREFIX, stored].concat();
@@ -153,10 +154,11 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
 fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
     match error {
         BlobError::Missing { sha } => BundleError::Missing { sha },
-        BlobError::WriteMissing { .. } => BundleError::Unreachable {
+        BlobError::Write { fault, .. } => BundleError::Write {
             path: bundle.to_path_buf(),
+            fault,
         },
-        BlobError::Denied { .. } | BlobError::WriteDenied { .. } => BundleError::Denied {
+        BlobError::Denied { .. } => BundleError::Denied {
             path: bundle.to_path_buf(),
         },
         BlobError::Unknown { message, .. } => BundleError::Unknown {

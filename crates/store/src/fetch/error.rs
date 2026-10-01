@@ -3,6 +3,8 @@
 use confit_model::sha::Sha;
 use thiserror::Error;
 
+use crate::faults::AccessFault;
+
 /// Fetch failure shapes.
 #[derive(Debug, Error)]
 pub enum FetchError {
@@ -64,6 +66,14 @@ pub enum FetchError {
         /// Holds the url under fetching.
         url: String,
     },
+    /// Failed cache write holding the url with the fault.
+    #[error("cannot fetch '{url}': {fault}")]
+    Write {
+        /// Holds the url under caching.
+        url: String,
+        /// Holds the write fault cause.
+        fault: AccessFault,
+    },
 }
 
 impl FetchError {
@@ -87,7 +97,52 @@ impl FetchError {
             },
         }
     }
+
+    /// Maps one cache write io failure at the url into domain language.
+    pub fn from_write_io(url: &str, error: std::io::Error) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+                url: url.to_owned(),
+                fault: AccessFault::from_kind(kind),
+            },
+            _ => Self::Unknown {
+                url: url.to_owned(),
+                message,
+            },
+        }
+    }
 }
 
 /// Fetch result alias.
 pub type Result<T> = std::result::Result<T, FetchError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_io(url: &str, kind: std::io::ErrorKind) -> FetchError {
+        FetchError::from_write_io(url, std::io::Error::new(kind, "disk failed"))
+    }
+
+    #[test]
+    fn write_carries_url_with_fault() {
+        let url = "https://example.com/tool.bin";
+        let error = write_io(url, std::io::ErrorKind::FileTooLarge);
+        match &error {
+            FetchError::Write { url: found, fault } => {
+                assert_eq!(found, url, "write keeps the url");
+                assert!(
+                    matches!(*fault, AccessFault::FileTooLarge),
+                    "write keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong write variant: {other}"),
+        }
+    }
+}

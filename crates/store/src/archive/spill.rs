@@ -20,6 +20,10 @@ pub(crate) struct BornMember {
 /// Maps one stream failure into its archive error.
 pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
     match error.kind() {
+        std::io::ErrorKind::StorageFull
+        | std::io::ErrorKind::ReadOnlyFilesystem
+        | std::io::ErrorKind::QuotaExceeded
+        | std::io::ErrorKind::FileTooLarge => ArchiveError::from_write_io(source, error),
         std::io::ErrorKind::Other
         | std::io::ErrorKind::InvalidInput
         | std::io::ErrorKind::InvalidData
@@ -40,6 +44,7 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 /// - [`ArchiveError::Escape`] for escaping member names.
 /// - [`ArchiveError::Missing`] for missing paths.
 /// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Write`] for spill write faults.
 /// - [`ArchiveError::Unknown`] for other spill failures.
 pub(crate) fn spill_entry(
     source: &Path,
@@ -53,13 +58,13 @@ pub(crate) fn spill_entry(
         && let Err(error) = driver::fs::create_dir_all(parent)
     {
         let _ = driver::fs::remove_dir_all(staging);
-        return Err(ArchiveError::from_io(source, error));
+        return Err(ArchiveError::from_write_io(source, error));
     }
     let file = match driver::fs::create(&path) {
         Ok(file) => file,
         Err(error) => {
             let _ = driver::fs::remove_dir_all(staging);
-            return Err(ArchiveError::from_io(source, error));
+            return Err(ArchiveError::from_write_io(source, error));
         }
     };
     let mut writer = ShaWriter::new(file);
@@ -116,4 +121,37 @@ pub(crate) fn check_member_path(name: &str, archive: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::faults::AccessFault;
+
+    #[test]
+    fn stream_names_disk_kinds_before_corrupt() {
+        let source = Path::new("fonts.tar.gz");
+        let error = from_stream(
+            source,
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "disk failed"),
+        );
+        match &error {
+            ArchiveError::Write { path: found, fault } => {
+                assert_eq!(found, source, "spill keeps the source");
+                assert!(
+                    matches!(*fault, AccessFault::StorageFull),
+                    "spill keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong spill variant: {other}"),
+        }
+        let error = from_stream(
+            source,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "torn bytes"),
+        );
+        assert!(
+            matches!(error, ArchiveError::CorruptedArchive { .. }),
+            "torn bytes stay corrupt: {error}"
+        );
+    }
 }

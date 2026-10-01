@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub mod archive;
 pub mod blob;
 pub mod bundle;
+pub mod faults;
 pub mod fetch;
 pub mod handles;
 pub mod resources;

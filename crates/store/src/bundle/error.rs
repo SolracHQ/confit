@@ -6,6 +6,7 @@ use confit_model::sha::Sha;
 use thiserror::Error;
 
 use crate::archive::error::ArchiveError;
+use crate::faults::AccessFault;
 use crate::resources::error::ResourceError;
 
 /// Bundle failure shapes.
@@ -45,6 +46,14 @@ pub enum BundleError {
         /// Holds the content hash under reading.
         sha: Sha,
     },
+    /// Failed write holding the bundle path with the fault.
+    #[error("bundle '{path}': {fault}", path = path.display())]
+    Write {
+        /// Holds the bundle path under writing.
+        path: PathBuf,
+        /// Holds the write fault cause.
+        fault: AccessFault,
+    },
 }
 
 impl BundleError {
@@ -65,6 +74,26 @@ impl BundleError {
             },
         }
     }
+
+    /// Maps one seal io failure at the bundle path into domain language.
+    pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+                path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
+            },
+            _ => Self::Unknown {
+                path: path.to_path_buf(),
+                message,
+            },
+        }
+    }
 }
 
 /// Bundle result alias.
@@ -78,6 +107,10 @@ pub(super) fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
         },
         ArchiveError::Denied { .. } => BundleError::Denied {
             path: bundle.to_path_buf(),
+        },
+        ArchiveError::Write { fault, .. } => BundleError::Write {
+            path: bundle.to_path_buf(),
+            fault,
         },
         ArchiveError::Unknown { message, .. } => BundleError::Unknown {
             path: bundle.to_path_buf(),
@@ -107,5 +140,69 @@ pub(super) fn from_resource(bundle: &Path, error: ResourceError) -> BundleError 
             path: bundle.to_path_buf(),
             message: other.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_io(path: &Path, kind: std::io::ErrorKind) -> BundleError {
+        BundleError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
+    }
+
+    #[test]
+    fn write_carries_bundle_with_fault() {
+        let path = Path::new("plan.cb");
+        let error = write_io(path, std::io::ErrorKind::StorageFull);
+        match &error {
+            BundleError::Write { path: found, fault } => {
+                assert_eq!(found, path, "write keeps the path");
+                assert!(
+                    matches!(*fault, AccessFault::StorageFull),
+                    "write keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong write variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn archive_write_kinds_forward_with_bundle() {
+        let bundle = Path::new("plan.cb");
+        let error = from_archive(
+            bundle,
+            ArchiveError::Write {
+                path: bundle.to_path_buf(),
+                fault: AccessFault::StorageFull,
+            },
+        );
+        match &error {
+            BundleError::Write { path: found, fault } => {
+                assert_eq!(found, bundle, "forward keeps the path");
+                assert!(
+                    matches!(*fault, AccessFault::StorageFull),
+                    "forward keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong forward variant: {other}"),
+        }
+        let error = from_archive(
+            bundle,
+            ArchiveError::Write {
+                path: bundle.to_path_buf(),
+                fault: AccessFault::QuotaExceeded,
+            },
+        );
+        assert!(
+            matches!(
+                error,
+                BundleError::Write {
+                    fault: AccessFault::QuotaExceeded,
+                    ..
+                }
+            ),
+            "capped spill forwards: {error}"
+        );
     }
 }

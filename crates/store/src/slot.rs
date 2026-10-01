@@ -103,6 +103,7 @@ impl SlotStore {
     /// - [`SlotError::Unknown`] for render, clock, and write failures.
     /// - [`SlotError::Missing`] for missing paths.
     /// - [`SlotError::Denied`] for denied paths.
+    /// - [`SlotError::Write`] for slot write faults.
     pub fn store(&self, manifest: &Manifest, progress: Option<&ProgressSender>) -> Result<PathBuf> {
         let _ = progress;
         let text = manifest.json().map_err(|error| SlotError::Unknown {
@@ -200,6 +201,7 @@ impl SlotStore {
     /// - [`SlotError::Unknown`] for render and write failures.
     /// - [`SlotError::Missing`] for missing paths.
     /// - [`SlotError::Denied`] for denied paths.
+    /// - [`SlotError::Write`] for slot write faults.
     pub fn store_named(&self, name: &str, manifest: &Manifest) -> Result<()> {
         let path = self.named_slot(name)?;
         let text = manifest.json().map_err(|error| SlotError::Unknown {
@@ -217,6 +219,7 @@ impl SlotStore {
     /// - [`SlotError::BadPick`] for absent names.
     /// - [`SlotError::Missing`] for missing paths.
     /// - [`SlotError::Denied`] for denied paths.
+    /// - [`SlotError::Write`] for slot write faults.
     /// - [`SlotError::Unknown`] for other removal failures.
     pub fn delete_named(&self, name: &str) -> Result<()> {
         let path = self.named_slot(name)?;
@@ -225,7 +228,7 @@ impl SlotStore {
                 input: ["@", name].concat(),
             });
         }
-        driver::fs::remove_file(&path).map_err(|error| SlotError::from_io(&path, error))?;
+        driver::fs::remove_file(&path).map_err(|error| SlotError::from_write_io(&path, error))?;
         Ok(())
     }
 
@@ -348,12 +351,14 @@ fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// - [`SlotError::Missing`] for missing paths.
 /// - [`SlotError::Denied`] for denied paths.
+/// - [`SlotError::Write`] for slot write faults.
 /// - [`SlotError::Unknown`] for other listing and removal failures.
 fn rotate_history(dir: &Path) -> Result<()> {
     let files = history_files(dir)?;
     if files.len() > HISTORY_KEPT {
         for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-            driver::fs::remove_file(stale).map_err(|error| SlotError::from_io(stale, error))?;
+            driver::fs::remove_file(stale)
+                .map_err(|error| SlotError::from_write_io(stale, error))?;
         }
     }
     Ok(())
@@ -365,10 +370,11 @@ fn rotate_history(dir: &Path) -> Result<()> {
 ///
 /// - [`SlotError::Missing`] for missing parents and paths.
 /// - [`SlotError::Denied`] for denied parents and paths.
+/// - [`SlotError::Write`] for slot write faults.
 /// - [`SlotError::Unknown`] for other write failures.
 fn write_text(path: &Path, text: &str) -> Result<()> {
     driver::atomic_write(path, |staging| driver::fs::write(staging, text.as_bytes()))
-        .map_err(|error| SlotError::from_io(path, error))
+        .map_err(|error| SlotError::from_write_io(path, error))
 }
 
 /// Reads wall-clock nanos for sortable archive file names.
