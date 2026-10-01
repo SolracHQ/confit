@@ -4,7 +4,7 @@
 
 pub mod error;
 
-use std::path::Path;
+use std::path::{Component, Path};
 
 use confit_model::sha::Sha;
 
@@ -12,6 +12,9 @@ use crate::StoreRoots;
 use crate::handles::{ResourceHandle, TrustedHandle};
 use confit_driver as driver;
 use error::{ResourceError, Result};
+
+/// Fallback mode for spill entries without distinct bits.
+const DEFAULT_SPILL_MODE: u32 = 0o644;
 
 /// Trusted project files behind exec-rooted handles.
 ///
@@ -47,7 +50,7 @@ impl Resources {
                 path: path.to_path_buf(),
             });
         }
-        let mut file = match driver::open_read(path) {
+        let mut file = match driver::fs::open(path) {
             Ok(file) => file,
             Err(error) => {
                 return Err(ResourceError::from_io(path, error));
@@ -69,6 +72,67 @@ impl Resources {
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         read_text(handle.canonical())
     }
+
+    /// Births a spill handle for one staged file.
+    ///
+    /// Birth checks containment under the temp base once,
+    /// downstream code trusts the handle type without rechecking.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceError::Escape`] for escaping files.
+    pub fn cache(&self, dir: &Path, name: &str, sha: Sha) -> Result<ResourceHandle> {
+        if name.is_empty() {
+            return Err(ResourceError::Escape {
+                path: dir.join(name),
+            });
+        }
+        for part in Path::new(name).components() {
+            match part {
+                Component::RootDir | Component::Prefix(_) | Component::ParentDir => {
+                    return Err(ResourceError::Escape {
+                        path: dir.join(name),
+                    });
+                }
+                Component::CurDir | Component::Normal(_) => {}
+            }
+        }
+        let joined = dir.join(name);
+        if !joined.starts_with(&self.roots.temp_base) {
+            return Err(ResourceError::Escape { path: joined });
+        }
+        ResourceHandle::new(dir, joined.clone(), sha)
+            .map_err(|_| ResourceError::Escape { path: joined })
+    }
+
+    /// Streams one handle for reading.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceError::Missing`] for missing files.
+    /// - [`ResourceError::Denied`] for denied files.
+    /// - [`ResourceError::Unknown`] for other failures.
+    pub fn open(&self, handle: &ResourceHandle) -> Result<Box<dyn std::io::Read>> {
+        let path = handle.canonical();
+        driver::fs::open(path)
+            .map(|file| file as Box<dyn std::io::Read>)
+            .map_err(|error| ResourceError::from_io(path, error))
+    }
+
+    /// Reads permission bits for one handle.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceError::Missing`] for missing files.
+    /// - [`ResourceError::Denied`] for denied files.
+    /// - [`ResourceError::Unknown`] for other failures.
+    pub fn mode(&self, handle: &ResourceHandle) -> Result<u32> {
+        let path = handle.canonical();
+        if driver::fs::read_link(path).is_ok() {
+            return Ok(DEFAULT_SPILL_MODE);
+        }
+        driver::fs::mode(path).map_err(|error| ResourceError::from_io(path, error))
+    }
 }
 
 /// Reads one file as text.
@@ -79,7 +143,7 @@ impl Resources {
 /// - [`ResourceError::Missing`] for missing files.
 /// - [`ResourceError::Denied`] for denied files.
 fn read_text(path: &Path) -> Result<String> {
-    match driver::read(path) {
+    match driver::fs::read(path) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|error| ResourceError::Unknown {
             path: path.to_path_buf(),
             message: error.to_string(),
@@ -91,7 +155,7 @@ fn read_text(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
 
     fn test_store() -> Resources {
         Resources::new(&StoreRoots::default())
@@ -104,8 +168,8 @@ mod tests {
         let store = test_store();
         let root = dir.path().join("project");
         let path = root.join("profile.lua");
-        driver::create_dir_all(&root).unwrap();
-        driver::write(&path, b"return {}").unwrap();
+        driver::fs::create_dir_all(&root).unwrap();
+        driver::fs::write(&path, b"return {}").unwrap();
         match store.resource(&root, &path) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
@@ -126,8 +190,8 @@ mod tests {
         let store = test_store();
         let root = dir.path().join("project");
         let outside = dir.path().join("outside.lua");
-        driver::create_dir_all(&root).unwrap();
-        driver::write(&outside, b"return {}").unwrap();
+        driver::fs::create_dir_all(&root).unwrap();
+        driver::fs::write(&outside, b"return {}").unwrap();
         match store.resource(&root, &outside) {
             Ok(_) => panic!("escaping resource passes"),
             Err(ResourceError::Escape { path }) => {
@@ -136,8 +200,8 @@ mod tests {
             Err(error) => panic!("wrong escape variant: {error}"),
         }
         let nested = root.join("sub").join("note.lua");
-        driver::create_dir_all(nested.parent().unwrap()).unwrap();
-        driver::write(&nested, b"hi").unwrap();
+        driver::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        driver::fs::write(&nested, b"hi").unwrap();
         let other_root = dir.path().join("other");
         match store.resource(&other_root, &nested) {
             Ok(_) => panic!("foreign root passes"),
@@ -153,7 +217,7 @@ mod tests {
         let store = test_store();
         let root = dir.path().join("project");
         let missing = root.join("absent.lua");
-        driver::create_dir_all(&root).unwrap();
+        driver::fs::create_dir_all(&root).unwrap();
         match store.resource(&root, &missing) {
             Ok(_) => panic!("absent resource passes"),
             Err(error) => {
@@ -174,8 +238,8 @@ mod tests {
         let store = test_store();
         let root = dir.path().join("project");
         let path = root.join("binary.lua");
-        driver::create_dir_all(&root).unwrap();
-        driver::write(&path, &[0xFF, 0xFE, b'x']).unwrap();
+        driver::fs::create_dir_all(&root).unwrap();
+        driver::fs::write(&path, &[0xFF, 0xFE, b'x']).unwrap();
         match store.resource(&root, &path) {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
@@ -185,6 +249,78 @@ mod tests {
                 Err(error) => panic!("wrong text variant: {error}"),
             },
             Err(error) => panic!("binary resource births: {error}"),
+        }
+    }
+
+    #[test]
+    fn cache_refuses_outside_temp() {
+        use std::io::Read as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let roots = StoreRoots {
+            temp_base: dir.path().join("temp"),
+            ..Default::default()
+        };
+        let store = Resources::new(&roots);
+        let spill = roots.temp_base.join("extract").join("abc");
+        driver::fs::create_dir_all(&spill).unwrap();
+        let path = spill.join("a.txt");
+        driver::fs::write(&path, b"alpha").unwrap();
+        let handle = match store.cache(&spill, "a.txt", Sha::hash(b"alpha")) {
+            Ok(handle) => handle,
+            Err(error) => panic!("spill births: {error}"),
+        };
+        assert_eq!(handle.canonical(), path.as_path());
+        let mut found = Vec::new();
+        match store.open(&handle) {
+            Ok(mut reader) => {
+                reader.read_to_end(&mut found).unwrap();
+            }
+            Err(error) => panic!("spill opens: {error}"),
+        }
+        assert_eq!(found, b"alpha");
+        match store.mode(&handle) {
+            Ok(_) => {}
+            Err(error) => panic!("spill modes: {error}"),
+        }
+        for evil in ["../evil.txt", "/evil.txt", ""] {
+            match store.cache(&spill, evil, Sha::hash(b"x")) {
+                Ok(_) => panic!("escaping spill passes"),
+                Err(ResourceError::Escape { .. }) => {}
+                Err(error) => panic!("wrong spill variant: {error}"),
+            }
+        }
+        let outside = dir.path().join("elsewhere");
+        driver::fs::create_dir_all(&outside).unwrap();
+        match store.cache(&outside, "a.txt", Sha::hash(b"x")) {
+            Ok(_) => panic!("outside spill passes"),
+            Err(ResourceError::Escape { .. }) => {}
+            Err(error) => panic!("wrong outside variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn open_names_missing_spill() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let roots = StoreRoots {
+            temp_base: dir.path().join("temp"),
+            ..Default::default()
+        };
+        let store = Resources::new(&roots);
+        let spill = roots.temp_base.join("extract").join("abc");
+        driver::fs::create_dir_all(&spill).unwrap();
+        let handle = match store.cache(&spill, "absent.txt", Sha::hash(b"x")) {
+            Ok(handle) => handle,
+            Err(error) => panic!("absent births: {error}"),
+        };
+        match store.open(&handle) {
+            Ok(_) => panic!("absent spill passes"),
+            Err(ResourceError::Missing { path }) => {
+                assert!(path.ends_with("absent.txt"), "absent names file")
+            }
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 }

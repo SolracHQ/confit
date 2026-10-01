@@ -11,7 +11,10 @@ tempfile.workspace = true
 vfs = "0.13"
 
 [dependencies]
+flate2.workspace = true
+tar.workspace = true
 vfs = { version = "0.13", optional = true }
+zip.workspace = true
 
 [features]
 test-support = ["dep:vfs"]

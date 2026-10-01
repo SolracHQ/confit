@@ -78,6 +78,9 @@ impl FetchError {
             std::io::ErrorKind::PermissionDenied => Self::Denied {
                 url: url.to_owned(),
             },
+            std::io::ErrorKind::TimedOut => Self::Timeout {
+                url: url.to_owned(),
+            },
             _ => Self::Unknown {
                 url: url.to_owned(),
                 message,

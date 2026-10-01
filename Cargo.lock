@@ -243,8 +243,11 @@ dependencies = [
 name = "confit-driver"
 version = "0.8.0"
 dependencies = [
+ "flate2",
+ "tar",
  "tempfile",
  "vfs",
+ "zip",
 ]
 
 [[package]]

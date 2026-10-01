@@ -95,14 +95,15 @@ impl Stores {
     /// the script registry under test; tests script bodies
     /// through the transport registry functions.
     pub fn new(roots: StoreRoots) -> Self {
+        let resources = Arc::new(Resources::new(&roots));
         let blobs = Arc::new(BlobStore::new(&roots));
-        let archives = Arc::new(ArchiveStore::new(&roots));
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
         Self {
-            resources: Arc::new(Resources::new(&roots)),
+            resources: resources.clone(),
             blobs: blobs.clone(),
             fetch: Arc::new(FetchCache::new(&roots)),
             archives: archives.clone(),
-            bundles: Arc::new(BundleStore::new(archives, blobs)),
+            bundles: Arc::new(BundleStore::new(archives, blobs, resources)),
             slots: Arc::new(SlotStore::new(&roots)),
             roots,
         }

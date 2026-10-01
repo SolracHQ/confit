@@ -3,47 +3,31 @@
 //! Member listing and extraction for compressed archives.
 
 pub mod error;
-mod gzip;
+mod spill;
 mod tar;
 mod zip;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use confit_model::sha::Sha;
-use sha2::Digest as _;
 
 use crate::StoreRoots;
 use crate::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
-use confit_driver as driver;
+use crate::resources::Resources;
+use crate::resources::error::ResourceError;
+use confit_driver::{self as driver};
 use error::{ArchiveError, Result};
-use gzip::GzipBackend;
-use tar::{GzippedTarBackend, TarBackend};
+use spill::{BornMember, check_backend_names, check_member_path};
+use tar::TarBackend;
 use zip::ZipBackend;
-
-/// Staging suffix for atomic archive unpacks.
-const STAGING_SUFFIX: &str = ".part";
 
 /// Unpack folder name under the temp base.
 const EXTRACT_DIR: &str = "extract";
 
-/// Copy chunk size for member streaming.
-pub(crate) const ENTRY_CHUNK: usize = 8192;
-
-/// Fallback mode for members without distinct bits.
-const DEFAULT_MEMBER_MODE: u32 = 0o644;
-
-/// Zip local file header magic.
-const ZIP_LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
-
-/// Zip empty archive magic.
-const ZIP_EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
-
-/// Archive member with a streamed content hash.
-pub(crate) struct BornMember {
-    pub(crate) name: String,
-    pub(crate) sha: Sha,
-}
+/// Head window feeding every probe, wide enough for tar magic.
+const HEAD_LEN: u64 = 512;
 
 /// Streaming backend behind one sniffed archive shape.
 ///
@@ -82,15 +66,17 @@ trait ArchiveBackend {
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     temp_base: PathBuf,
+    resources: Arc<Resources>,
 }
 
 impl ArchiveStore {
     /// Builds a file-backed archive store under the temp base.
     ///
     /// Roots arrive explicit from store construction.
-    pub fn new(roots: &StoreRoots) -> Self {
+    pub fn new(roots: &StoreRoots, resources: Arc<Resources>) -> Self {
         Self {
             temp_base: roots.temp_base.clone(),
+            resources,
         }
     }
 
@@ -135,16 +121,13 @@ impl ArchiveStore {
     /// - [`ArchiveError::Unknown`] for other failures.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         let source = archive.canonical();
-        if peek_is_zip(source)? {
-            return ZipBackend.names(source);
-        }
-        if !peek_is_gzip(source)? {
-            return TarBackend.names(source);
-        }
-        match GzippedTarBackend.names(source) {
-            Ok(names) => Ok(names),
-            Err(_) if wants_tar(source) => Err(not_archive(source)),
-            Err(_) => GzipBackend.names(source),
+        match sniff(source)? {
+            Shape::Zip => ZipBackend.names(source),
+            Shape::Plain => TarBackend.names(source),
+            Shape::Tar => match TarBackend.names(source) {
+                Err(_) if wants_tar(source) => Err(not_archive(source)),
+                outcome => outcome,
+            },
         }
     }
 
@@ -165,40 +148,43 @@ impl ArchiveStore {
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
         let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
-        if driver::metadata(&dest).is_ok_and(|facts| facts.is_dir()) {
-            return spilled_handles(&dest, source);
+        if driver::fs::metadata(&dest).is_ok_and(|facts| facts.is_dir()) {
+            return spilled_handles(&dest, source, &self.resources);
         }
-        if peek_is_zip(source)? {
-            check_backend_names(source, &ZipBackend)?;
-            return self.run_backend(source, &dest, &ZipBackend);
-        }
-        if !peek_is_gzip(source)? {
-            check_backend_names(source, &TarBackend)?;
-            return self.run_backend(source, &dest, &TarBackend);
-        }
-        match GzippedTarBackend.names(source) {
-            Ok(names) => {
-                for name in &names {
-                    check_member_path(name, source)?;
+        match sniff(source)? {
+            Shape::Zip => {
+                check_backend_names(source, &ZipBackend)?;
+                self.run_backend(source, &dest, &ZipBackend)
+            }
+            Shape::Plain => {
+                check_backend_names(source, &TarBackend)?;
+                self.run_backend(source, &dest, &TarBackend)
+            }
+            Shape::Tar => {
+                match TarBackend.names(source) {
+                    Ok(names) => {
+                        for name in &names {
+                            check_member_path(name, source)?;
+                        }
+                    }
+                    Err(_) if wants_tar(source) => {
+                        return Err(not_archive(source));
+                    }
+                    Err(_) => {}
+                }
+                match self.run_backend(source, &dest, &TarBackend) {
+                    Err(_) if wants_tar(source) => Err(not_archive(source)),
+                    outcome => outcome,
                 }
             }
-            Err(_) if wants_tar(source) => {
-                return Err(not_archive(source));
-            }
-            Err(_) => {}
-        }
-        match self.run_backend(source, &dest, &GzippedTarBackend) {
-            Ok(handles) => Ok(handles),
-            Err(_) if wants_tar(source) => Err(not_archive(source)),
-            Err(_) => self.run_backend(source, &dest, &GzipBackend),
         }
     }
 
     /// Unpacks one backend spill through staging into place.
     ///
-    /// Members spill one entry at a time under staging
-    /// before the atomic rename. A present destination
-    /// wins the rename race.
+    /// Members spill one entry at a time under staging before
+    /// the atomic rename, and a present destination wins the
+    /// rename race.
     ///
     /// # Errors
     ///
@@ -211,40 +197,30 @@ impl ArchiveStore {
         dest: &Path,
         backend: &dyn ArchiveBackend,
     ) -> Result<Vec<ResourceHandle>> {
-        let staging = staging_path(dest);
-        if driver::exists(&staging) {
-            driver::remove_dir_all(&staging)
-                .map_err(|error| ArchiveError::from_io(source, error))?;
-        }
-        driver::create_dir_all(&staging).map_err(|error| ArchiveError::from_io(source, error))?;
-        let born = match backend.unpack(source, &staging) {
-            Ok(born) => born,
-            Err(error) => {
-                let _ = driver::remove_dir_all(&staging);
-                return Err(error);
+        let mut built: Option<Vec<BornMember>> = None;
+        let mut failure: Option<ArchiveError> = None;
+        let mut staged: Option<PathBuf> = None;
+        let outcome = driver::atomic_write(dest, |path| {
+            staged = Some(path.to_path_buf());
+            match spill_members(source, path, backend) {
+                Ok(born) => built = Some(born),
+                Err(error) => {
+                    let _ = driver::fs::remove_dir_all(path);
+                    failure = Some(error);
+                    return Err(std::io::Error::other("archive spill failed"));
+                }
             }
-        };
-        finish_unpack(source, dest, &staging, &born)
-    }
-
-    /// Opens one member stream from the unpack spill.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::UnknownMember`] for unknown members.
-    /// - [`ArchiveError::Denied`] for denied members.
-    /// - [`ArchiveError::Unknown`] for other failures.
-    pub fn open_decompressed(&self, member: &ResourceHandle) -> Result<Box<dyn std::io::Read>> {
-        check_member_handle(member)?;
-        let path = member.canonical();
-        let file = driver::open_read(path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => missing_member(path),
-            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
-                path: path.to_path_buf(),
-            },
-            _ => ArchiveError::from_io(path, error),
-        })?;
-        Ok(Box::new(file) as Box<dyn std::io::Read>)
+            Ok(())
+        });
+        match outcome {
+            Ok(()) => streamed_handles(dest, built.unwrap_or_default().as_slice(), &self.resources),
+            Err(error) => {
+                if let Some(path) = &staged {
+                    let _ = driver::fs::remove_dir_all(path);
+                }
+                Err(failure.unwrap_or_else(|| ArchiveError::from_io(source, error)))
+            }
+        }
     }
 
     /// Picks one archive member by its archive-relative name.
@@ -266,28 +242,25 @@ impl ArchiveStore {
                 name: name.to_owned(),
             })
     }
+}
 
-    /// Reads unix permission bits for one member handle.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::UnknownMember`] for missing members.
-    /// - [`ArchiveError::Denied`] for denied members.
-    /// - [`ArchiveError::Unknown`] for other failures.
-    pub fn mode(&self, member: &ResourceHandle) -> Result<u32> {
-        check_member_handle(member)?;
-        let path = member.canonical();
-        if driver::read_link(path).is_ok() {
-            return Ok(DEFAULT_MEMBER_MODE);
-        }
-        driver::mode(path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => missing_member(path),
-            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
-                path: path.to_path_buf(),
-            },
-            _ => ArchiveError::from_io(path, error),
-        })
-    }
+/// Spills one backend's members under a fresh staging folder.
+///
+/// # Errors
+///
+/// - [`ArchiveError::Missing`] for missing archives.
+/// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
+/// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+fn spill_members(
+    source: &Path,
+    staging: &Path,
+    backend: &dyn ArchiveBackend,
+) -> Result<Vec<BornMember>> {
+    driver::fs::create_dir_all(staging).map_err(|error| ArchiveError::from_io(source, error))?;
+    backend.unpack(source, staging)
 }
 
 /// Hashes one source file with a stream.
@@ -299,7 +272,7 @@ impl ArchiveStore {
 /// - [`ArchiveError::Unknown`] for other failures.
 fn file_sha(source: &Path) -> Result<Sha> {
     let mut file =
-        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
+        driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
     Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
 }
 
@@ -315,19 +288,13 @@ fn file_sha(source: &Path) -> Result<Sha> {
 /// - [`ArchiveError::Denied`] for denied sources.
 /// - [`ArchiveError::Unknown`] for other failures.
 fn check_compressed_source(source: &Path) -> Result<()> {
-    if peek_is_zip(source)? {
-        return ZipBackend
+    match sniff(source)? {
+        Shape::Zip => ZipBackend
             .names(source)
             .map(|_| ())
-            .map_err(|_| not_archive(source));
-    }
-    if !peek_is_gzip(source)? {
-        return Err(not_archive(source));
-    }
-    match GzippedTarBackend.names(source) {
-        Ok(_) => Ok(()),
-        Err(_) if wants_tar(source) => Err(not_archive(source)),
-        Err(_) => GzipBackend
+            .map_err(|_| not_archive(source)),
+        Shape::Plain => Err(not_archive(source)),
+        Shape::Tar => TarBackend
             .names(source)
             .map(|_| ())
             .map_err(|_| not_archive(source)),
@@ -348,152 +315,69 @@ fn not_archive(source: &Path) -> ArchiveError {
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for containment failures.
-fn streamed_handles(dest: &Path, members: &[BornMember]) -> Result<Vec<ResourceHandle>> {
+fn streamed_handles(
+    dest: &Path,
+    members: &[BornMember],
+    resources: &Resources,
+) -> Result<Vec<ResourceHandle>> {
     let mut handles = Vec::with_capacity(members.len());
     for member in members {
-        let path = dest.join(&member.name);
         handles.push(
-            ResourceHandle::new(dest, path.clone(), member.sha.clone())
-                .map_err(|_| ArchiveError::Escape { path })?,
+            resources
+                .cache(dest, &member.name, member.sha.clone())
+                .map_err(from_resource)?,
         );
     }
     handles.sort_by(|left, right| left.canonical().cmp(right.canonical()));
     Ok(handles)
 }
 
-/// Moves one staging spill into place.
-///
-/// A present destination wins the rename race.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Missing`] for missing paths.
-/// - [`ArchiveError::Denied`] for denied paths.
-/// - [`ArchiveError::Unknown`] for other rename failures.
-fn finish_unpack(
-    source: &Path,
-    dest: &Path,
-    staging: &Path,
-    born: &[BornMember],
-) -> Result<Vec<ResourceHandle>> {
-    match driver::rename(staging, dest) {
-        Ok(()) => streamed_handles(dest, born),
-        Err(_) if driver::metadata(dest).is_ok_and(|facts| facts.is_dir()) => {
-            let _ = driver::remove_dir_all(staging);
-            streamed_handles(dest, born)
-        }
-        Err(error) => {
-            let _ = driver::remove_dir_all(staging);
-            Err(ArchiveError::from_io(source, error))
-        }
-    }
+/// Sniffed archive shape behind one source.
+enum Shape {
+    /// Zip bytes under central-directory framing.
+    Zip,
+    /// Tar or gzip bytes under tar framing.
+    Tar,
+    /// Plain bytes attempting tar and failing loud.
+    Plain,
 }
 
-/// Reports gzip magic for one source path.
+/// Sniffs one source into its backend shape.
+///
+/// Fallback order reads zip, then tar, with name
+/// policy last: zip magic routes zip, tar or gzip
+/// magic routes tar, plain bytes route a plain tar
+/// attempt while tar names refuse bare singles.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Missing`] for missing sources.
 /// - [`ArchiveError::Denied`] for denied sources.
 /// - [`ArchiveError::Unknown`] for other failures.
-fn peek_is_gzip(source: &Path) -> Result<bool> {
-    let mut file =
-        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    let mut magic = [0u8; 2];
-    match file.read_exact(&mut magic) {
-        Ok(()) => Ok(magic == [0x1f, 0x8b]),
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(ArchiveError::from_io(source, error)),
+fn sniff(source: &Path) -> Result<Shape> {
+    let head = read_head(source)?;
+    if driver::zip::valid(&head) {
+        Ok(Shape::Zip)
+    } else if driver::tar::handles(&head) {
+        Ok(Shape::Tar)
+    } else {
+        Ok(Shape::Plain)
     }
 }
 
-/// Reports zip magic for one source path.
+/// Reads the head window feeding every probe.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Missing`] for missing sources.
 /// - [`ArchiveError::Denied`] for denied sources.
 /// - [`ArchiveError::Unknown`] for other failures.
-fn peek_is_zip(source: &Path) -> Result<bool> {
-    let mut file =
-        driver::open_read(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    let mut magic = [0u8; 4];
-    match file.read_exact(&mut magic) {
-        Ok(()) => Ok(magic == ZIP_LOCAL_MAGIC || magic == ZIP_EMPTY_MAGIC),
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(ArchiveError::from_io(source, error)),
-    }
-}
-
-/// Maps one stream failure into its archive error.
-pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
-    match error.kind() {
-        std::io::ErrorKind::Other
-        | std::io::ErrorKind::InvalidInput
-        | std::io::ErrorKind::UnexpectedEof => ArchiveError::CorruptedArchive {
-            path: source.to_path_buf(),
-        },
-        _ => ArchiveError::from_io(source, error),
-    }
-}
-
-/// Spills one decoded member stream under staging with a hash.
-///
-/// Parents arrive created, bytes stream in entry chunks
-/// feeding the member hash.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Missing`] for missing paths.
-/// - [`ArchiveError::Denied`] for denied paths.
-/// - [`ArchiveError::Unknown`] for other spill failures.
-pub(crate) fn spill_entry(
-    source: &Path,
-    staging: &Path,
-    name: &str,
-    reader: impl std::io::Read,
-) -> Result<BornMember> {
-    use std::io::Write as _;
-
-    check_member_path(name, source)?;
-    let path = staging.join(name);
-    if let Some(parent) = path.parent()
-        && let Err(error) = driver::create_dir_all(parent)
-    {
-        let _ = driver::remove_dir_all(staging);
-        return Err(ArchiveError::from_io(source, error));
-    }
-    let mut out = match driver::create(&path) {
-        Ok(out) => out,
-        Err(error) => {
-            let _ = driver::remove_dir_all(staging);
-            return Err(ArchiveError::from_io(source, error));
-        }
-    };
-    let mut reader = reader;
-    let mut hasher = sha2::Sha256::new();
-    let mut chunk = [0u8; ENTRY_CHUNK];
-    loop {
-        let read = match reader.read(&mut chunk) {
-            Ok(read) => read,
-            Err(error) => {
-                let _ = driver::remove_dir_all(staging);
-                return Err(ArchiveError::from_io(source, error));
-            }
-        };
-        if read == 0 {
-            break;
-        }
-        hasher.update(&chunk[..read]);
-        if let Err(error) = out.write_all(&chunk[..read]) {
-            let _ = driver::remove_dir_all(staging);
-            return Err(ArchiveError::from_io(source, error));
-        }
-    }
-    Ok(BornMember {
-        name: name.to_string(),
-        sha: Sha::finish(hasher),
-    })
+fn read_head(source: &Path) -> Result<Vec<u8>> {
+    let file = driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
+    let mut head = Vec::new();
+    std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
+        .map_err(|error| ArchiveError::from_io(source, error))?;
+    Ok(head)
 }
 
 /// Reads born handles back for one present spill.
@@ -506,7 +390,11 @@ pub(crate) fn spill_entry(
 /// - [`ArchiveError::Denied`] for denied paths.
 /// - [`ArchiveError::Unknown`] for other spill failures.
 /// - [`ArchiveError::UnknownMember`] for missing members.
-fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
+fn spilled_handles(
+    dest: &Path,
+    source: &Path,
+    resources: &Resources,
+) -> Result<Vec<ResourceHandle>> {
     let mut names = Vec::new();
     collect_spill_names(dest, dest, &mut names, source)?;
     names.sort();
@@ -514,10 +402,7 @@ fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
     for name in &names {
         let path = dest.join(name);
         let sha = spill_file_sha(&path, source, name)?;
-        handles.push(
-            ResourceHandle::new(dest, path.clone(), sha)
-                .map_err(|_| ArchiveError::Escape { path })?,
-        );
+        handles.push(resources.cache(dest, name, sha).map_err(from_resource)?);
     }
     Ok(handles)
 }
@@ -530,29 +415,8 @@ fn spilled_handles(dest: &Path, source: &Path) -> Result<Vec<ResourceHandle>> {
 /// - [`ArchiveError::Denied`] for denied members.
 /// - [`ArchiveError::Unknown`] for other failures.
 fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
-    let mut file = driver::open_read(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => missing_spilled_member(source, name),
-        std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
-            path: source.to_path_buf(),
-        },
-        _ => ArchiveError::from_io(source, error),
-    })?;
-    let mut hasher = sha2::Sha256::new();
-    let mut chunk = [0u8; ENTRY_CHUNK];
-    loop {
-        let read = file.read(&mut chunk).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => missing_spilled_member(source, name),
-            std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
-                path: source.to_path_buf(),
-            },
-            _ => ArchiveError::from_io(source, error),
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&chunk[..read]);
-    }
-    Ok(Sha::finish(hasher))
+    let mut file = driver::fs::open(path).map_err(|error| spill_read_error(error, source, name))?;
+    Sha::read(&mut file).map_err(|error| spill_read_error(error, source, name))
 }
 
 /// Collects archive-relative member names under one spill folder.
@@ -570,16 +434,17 @@ fn collect_spill_names(
     names: &mut Vec<String>,
     source: &Path,
 ) -> Result<()> {
-    let entries = driver::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
+    let entries =
+        driver::fs::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
     for path in entries {
-        if driver::metadata(&path)
+        if driver::fs::metadata(&path)
             .map(|facts| facts.is_dir())
             .unwrap_or(false)
         {
             collect_spill_names(&path, root, names, source)?;
             continue;
         }
-        if driver::metadata(&path)
+        if driver::fs::metadata(&path)
             .map(|facts| facts.is_file())
             .unwrap_or(false)
         {
@@ -595,95 +460,28 @@ fn collect_spill_names(
     Ok(())
 }
 
-/// Builds one unknown spilled member error holding archive and name.
-fn missing_spilled_member(source: &Path, name: &str) -> ArchiveError {
-    ArchiveError::UnknownMember {
-        path: source.to_path_buf(),
-        name: name.to_owned(),
+/// Maps one spilled member read failure into domain language.
+fn spill_read_error(error: std::io::Error, source: &Path, name: &str) -> ArchiveError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => ArchiveError::UnknownMember {
+            path: source.to_path_buf(),
+            name: name.to_owned(),
+        },
+        std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+            path: source.to_path_buf(),
+        },
+        _ => ArchiveError::from_io(source, error),
     }
 }
 
-/// Builds one unknown member error holding the member path.
-fn missing_member(member: &Path) -> ArchiveError {
-    ArchiveError::UnknownMember {
-        path: member.to_path_buf(),
-        name: member
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| member.to_string_lossy().into_owned()),
+/// Maps one resource birth failure into archive language.
+fn from_resource(error: ResourceError) -> ArchiveError {
+    match error {
+        ResourceError::Escape { path } => ArchiveError::Escape { path },
+        ResourceError::Missing { path } => ArchiveError::Missing { path },
+        ResourceError::Denied { path } => ArchiveError::Denied { path },
+        ResourceError::Unknown { path, message } => ArchiveError::Unknown { path, message },
     }
-}
-
-/// Rejects member paths escaping the unpack folder.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Escape`] for dot-dot members.
-fn check_member_handle(member: &ResourceHandle) -> Result<()> {
-    let escapes = member
-        .canonical()
-        .components()
-        .any(|segment| matches!(segment, std::path::Component::ParentDir));
-    if escapes {
-        return Err(ArchiveError::Escape {
-            path: member.canonical().to_path_buf(),
-        });
-    }
-    Ok(())
-}
-
-/// Rejects escaping member names before one unpack.
-///
-/// Decoder failures pass through untouched, so the unpack
-/// fallback still decides tar-shaped names over non-tar
-/// bytes.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-/// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
-fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -> Result<()> {
-    for name in &backend.names(source)? {
-        check_member_path(name, source)?;
-    }
-    Ok(())
-}
-
-/// Derives the staging folder beside one unpack destination.
-///
-/// Staging rides beside the destination with the staging suffix.
-fn staging_path(dest: &Path) -> PathBuf {
-    let mut staging = dest.as_os_str().to_owned();
-    staging.push(STAGING_SUFFIX);
-    PathBuf::from(staging)
-}
-
-/// Rejects member paths escaping the unpack folder.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Escape`] for empty, absolute, and dot-dot members.
-fn check_member_path(name: &str, archive: &Path) -> Result<()> {
-    if name.is_empty() {
-        return Err(ArchiveError::Escape {
-            path: archive.to_path_buf(),
-        });
-    }
-    if Path::new(name).is_absolute() {
-        return Err(ArchiveError::Escape {
-            path: PathBuf::from(name),
-        });
-    }
-    for segment in name.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." {
-            return Err(ArchiveError::Escape {
-                path: archive.join(name),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// Reports true while a name wants tar members.
@@ -697,7 +495,10 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
+
+    /// Deflate level feeding container fixtures.
+    const LEVEL: u32 = 6;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -707,20 +508,34 @@ mod tests {
     }
 
     fn test_store(dir: &Path) -> ArchiveStore {
-        ArchiveStore::new(&test_roots(dir))
+        let roots = test_roots(dir);
+        let resources = std::sync::Arc::new(Resources::new(&roots));
+        ArchiveStore::new(&roots, resources)
     }
 
-    fn tar_gz_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
-        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
-        let mut builder = ::tar::Builder::new(encoder);
-        for (name, bytes) in members {
-            let mut header = ::tar::Header::new_gnu();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, name, *bytes).unwrap();
+    fn test_resources(dir: &Path) -> Resources {
+        Resources::new(&test_roots(dir))
+    }
+
+    fn tar_gz_bytes(dir: &Path, members: &[(&str, &[u8])]) -> Vec<u8> {
+        let dest = dir.join("scratch.tar.gz");
+        let framed: Vec<driver::tar::BuildMember<'_>> = members
+            .iter()
+            .map(|(name, bytes)| driver::tar::BuildMember {
+                name: (*name).to_owned(),
+                len: bytes.len() as u64,
+                reader: Box::new(std::io::Cursor::new(*bytes)),
+                mode: 0o644,
+            })
+            .collect();
+        let build = |path: &Path| {
+            let sink = driver::fs::create(path)?;
+            driver::tar::build_gzipped(sink, framed, LEVEL)
+        };
+        if let Err(error) = driver::atomic_write(&dest, build) {
+            panic!("fixture builds: {error}");
         }
-        builder.into_inner().unwrap().finish().unwrap()
+        driver::fs::read(&dest).unwrap()
     }
 
     fn evil_tar_gz_bytes() -> Vec<u8> {
@@ -752,9 +567,9 @@ mod tests {
     fn write_archive(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         let path = dir.join(name);
         if let Some(parent) = path.parent() {
-            driver::create_dir_all(parent).unwrap();
+            driver::fs::create_dir_all(parent).unwrap();
         }
-        driver::write(&path, bytes).unwrap();
+        driver::fs::write(&path, bytes).unwrap();
         path
     }
 
@@ -794,7 +609,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
-        let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
+        let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
         match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
             Ok(handle) => {
@@ -838,7 +653,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
@@ -855,11 +670,14 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[
-                ("a.txt", b"same"),
-                ("b.txt", b"same"),
-                ("sub/c.txt", b"other"),
-            ]),
+            &tar_gz_bytes(
+                dir.path(),
+                &[
+                    ("a.txt", b"same"),
+                    ("b.txt", b"same"),
+                    ("sub/c.txt", b"other"),
+                ],
+            ),
         );
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
         let expected_spill = spill_base.join(archive.sha().hex());
@@ -882,13 +700,12 @@ mod tests {
             handle_sha(&handles, "sub/c.txt")
         );
         assert_eq!(
-            driver::read(handles[0].canonical()).unwrap(),
+            driver::fs::read(handles[0].canonical()).unwrap(),
             b"same".as_slice()
         );
-        let spill = handles[0].canonical().parent().unwrap().to_path_buf();
-        let mut staging = spill.as_os_str().to_owned();
-        staging.push(STAGING_SUFFIX);
-        assert!(!driver::exists(&PathBuf::from(staging)));
+        let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
+        let spills = driver::fs::read_dir(&spill_base).unwrap();
+        assert_eq!(spills.len(), 1, "the spill leaves no stray staging");
         match store.extract(&archive) {
             Ok(reused) => assert_eq!(reused, handles),
             Err(error) => panic!("repeat unpack skips: {error}"),
@@ -896,15 +713,18 @@ mod tests {
     }
 
     #[test]
-    fn open_reads_through_member_handle_naming_missing() {
+    fn reads_through_member_handle_naming_missing() {
+        use crate::resources::error::ResourceError;
+
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = born_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
@@ -914,7 +734,7 @@ mod tests {
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
             .unwrap();
-        match store.open_decompressed(picked) {
+        match resources.open(picked) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
@@ -922,10 +742,16 @@ mod tests {
             }
             Err(error) => panic!("member opens: {error}"),
         }
-        let root = handles[0].canonical().parent().unwrap().to_path_buf();
-        let missing =
-            ResourceHandle::new(&root, root.join("absent.txt"), Sha::hash(b"absent")).unwrap();
-        match store.open_decompressed(&missing) {
+        let spill = dir
+            .path()
+            .join("temp")
+            .join(EXTRACT_DIR)
+            .join(archive.sha().hex());
+        let missing = match resources.cache(&spill, "absent.txt", Sha::hash(b"absent")) {
+            Ok(handle) => handle,
+            Err(error) => panic!("absent births: {error}"),
+        };
+        match resources.open(&missing) {
             Ok(_) => panic!("absent member passes"),
             Err(error) => {
                 let text = error.to_string();
@@ -933,33 +759,48 @@ mod tests {
                     text.contains("absent.txt"),
                     "error names the member: {text}"
                 );
+                assert!(
+                    matches!(error, ResourceError::Missing { .. }),
+                    "absent reports loss: {text}"
+                );
             }
         }
     }
 
     #[test]
     fn open_rejects_escaping_member() {
+        use crate::resources::error::ResourceError;
+
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = born_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha")]),
+            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
             Err(error) => panic!("archive extracts: {error}"),
         };
-        let root = handles[0].canonical().parent().unwrap().to_path_buf();
-        let evil = ResourceHandle::new(&root, root.join("../evil.txt"), Sha::hash(b"x")).unwrap();
-        match store.open_decompressed(&evil) {
+        let spill = dir
+            .path()
+            .join("temp")
+            .join(EXTRACT_DIR)
+            .join(archive.sha().hex());
+        assert!(!handles.is_empty(), "spill births handles");
+        match resources.cache(&spill, "../evil.txt", Sha::hash(b"x")) {
             Ok(_) => panic!("escaping member passes"),
             Err(error) => {
                 let text = error.to_string();
                 assert!(text.contains("escapes"), "error reports escape: {text}");
                 assert!(text.contains("evil.txt"), "error names the member: {text}");
+                assert!(
+                    matches!(error, ResourceError::Escape { .. }),
+                    "escape keeps variant: {text}"
+                );
             }
         }
     }
@@ -969,17 +810,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = born_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
             Err(error) => panic!("archive extracts: {error}"),
         };
-        match store.open_decompressed(&handles[0]) {
+        match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
@@ -987,8 +829,8 @@ mod tests {
             }
             Err(error) => panic!("member opens from spill: {error}"),
         }
-        driver::write(handles[0].canonical(), b"patched").unwrap();
-        match store.open_decompressed(&handles[0]) {
+        driver::fs::write(handles[0].canonical(), b"patched").unwrap();
+        match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
@@ -1010,8 +852,8 @@ mod tests {
             Err(error) => panic!("wrong escape variant: {error}"),
         }
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
-        if driver::exists(&spill_base) {
-            let left = driver::read_dir(&spill_base).unwrap().len();
+        if driver::fs::exists(&spill_base) {
+            let left = driver::fs::read_dir(&spill_base).unwrap().len();
             assert_eq!(left, 0);
         }
     }
@@ -1023,6 +865,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
         encoder.write_all(b"plain").unwrap();
         let archive = born_archive(&store, dir.path(), "note.gz", &encoder.finish().unwrap());
@@ -1036,7 +879,7 @@ mod tests {
         };
         assert_eq!(handles.len(), 1);
         assert_eq!(handles[0].sha(), &Sha::hash(b"plain"));
-        match store.open_decompressed(&handles[0]) {
+        match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
@@ -1067,7 +910,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
-        let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
+        let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
         let sha_a = Sha::hash(b"archive-a");
         let sha_b = Sha::hash(b"archive-b");
         assert_ne!(sha_a, sha_b);
@@ -1114,13 +957,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
-        assert!(raw.len() > ENTRY_CHUNK);
+        assert!(raw.len() > 8 * 1024, "payload spans many chunks");
         let archive = born_archive(
             &store,
             dir.path(),
             "big.tar.gz",
-            &tar_gz_bytes(&[("big.bin", &raw)]),
+            &tar_gz_bytes(dir.path(), &[("big.bin", &raw)]),
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["big.bin"]),
@@ -1131,7 +975,7 @@ mod tests {
             Err(error) => panic!("large archive extracts: {error}"),
         };
         assert_eq!(handles.len(), 1);
-        match store.open_decompressed(&handles[0]) {
+        match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
@@ -1271,11 +1115,10 @@ mod tests {
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
             .unwrap();
-        assert_eq!(driver::read(picked.canonical()).unwrap(), b"beta");
-        let spill = handles[0].canonical().parent().unwrap().to_path_buf();
-        let mut staging = spill.as_os_str().to_owned();
-        staging.push(STAGING_SUFFIX);
-        assert!(!driver::exists(&PathBuf::from(staging)));
+        assert_eq!(driver::fs::read(picked.canonical()).unwrap(), b"beta");
+        let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
+        let spills = driver::fs::read_dir(&spill_base).unwrap();
+        assert_eq!(spills.len(), 1, "the spill leaves no stray staging");
         match store.extract(&archive) {
             Ok(reused) => assert_eq!(reused, handles),
             Err(error) => panic!("repeat unpack skips: {error}"),
@@ -1286,12 +1129,10 @@ mod tests {
             Err(ArchiveError::Escape { .. }) => {}
             Err(error) => panic!("wrong escape variant: {error}"),
         }
-        let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
         let evil_spill = spill_base.join(evil.sha().hex());
-        assert!(!driver::exists(&evil_spill));
-        let mut evil_staging = evil_spill.as_os_str().to_owned();
-        evil_staging.push(STAGING_SUFFIX);
-        assert!(!driver::exists(&PathBuf::from(evil_staging)));
+        assert!(!driver::fs::exists(&evil_spill));
+        let spills = driver::fs::read_dir(&spill_base).unwrap();
+        assert_eq!(spills.len(), 1, "the failed unpack leaves no staging");
     }
 
     #[test]
@@ -1311,12 +1152,11 @@ mod tests {
         assert!(handles.is_empty());
         let spill_base = dir.path().join("temp").join(EXTRACT_DIR);
         let spill = spill_base.join(archive.sha().hex());
-        if driver::exists(&spill) {
-            let left = driver::read_dir(&spill).unwrap().len();
+        if driver::fs::exists(&spill) {
+            let left = driver::fs::read_dir(&spill).unwrap().len();
             assert_eq!(left, 0);
         }
-        let mut staging = spill.as_os_str().to_owned();
-        staging.push(STAGING_SUFFIX);
-        assert!(!driver::exists(&PathBuf::from(staging)));
+        let spills = driver::fs::read_dir(&spill_base).unwrap();
+        assert_eq!(spills.len(), 1, "the empty spill leaves no stray staging");
     }
 }

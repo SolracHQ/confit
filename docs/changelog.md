@@ -54,6 +54,12 @@
 - Old bundles and saved slots fail the plan naming the file.
   Manifests carry routes and handle shapes now, unknown fields
   still fail.
+- Rc path entries drop the `op` key, prepend reads always.
+  Tables still carrying `op` fail the unknown field check,
+  profiles delete the key with no other change.
+- The bundle envelope reads plain tar, the outer gzip level
+  compressed nothing since pool blobs already gzip alone.
+  Readers keep both framings, writers emit plain tar.
 - Editor stubs still describe the old string surface. Completion
   for the handle verbs lands with stub generation, hand edits fill
   the gap until then.

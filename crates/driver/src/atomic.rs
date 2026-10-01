@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Staging suffix for sibling scratch files.
 const STAGING_SUFFIX: &str = ".part";
 
-/// Shared streaming chunk for verbatim copies.
+/// Streaming chunk for verbatim copies.
 const COPY_CHUNK: usize = 8192;
 
 /// Sequence feeding unique staging names per process.
@@ -46,21 +46,21 @@ pub fn atomic_write(
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        super::create_dir_all(parent)?;
+        crate::fs::create_dir_all(parent)?;
     }
     let staging = stage_path(dest);
     if let Err(error) = write(&staging) {
-        let _ = super::remove_file(&staging);
+        let _ = crate::fs::remove_file(&staging);
         return Err(error);
     }
-    match super::rename(&staging, dest) {
+    match crate::fs::rename(&staging, dest) {
         Ok(()) => Ok(()),
-        Err(_) if super::metadata(dest).is_ok() => {
-            let _ = super::remove_file(&staging);
+        Err(_) if crate::fs::metadata(dest).is_ok() => {
+            let _ = crate::fs::remove_file(&staging);
             Ok(())
         }
         Err(error) => {
-            let _ = super::remove_file(&staging);
+            let _ = crate::fs::remove_file(&staging);
             Err(error)
         }
     }
@@ -73,8 +73,7 @@ pub fn atomic_write(
 ///
 /// # Errors
 ///
-/// - Read and write and flush failures fail as io
-///   errors.
+/// - Read and write failures fail as io errors.
 pub fn copy_stream(
     mut reader: impl std::io::Read,
     mut writer: impl std::io::Write,
@@ -84,7 +83,6 @@ pub fn copy_stream(
     loop {
         let used = reader.read(&mut chunk)?;
         if used == 0 {
-            writer.flush()?;
             return Ok(wrote);
         }
         writer.write_all(&chunk[..used])?;
@@ -99,19 +97,16 @@ mod tests {
 
     #[test]
     fn atomic_write_round_trip() {
-        let _guard = super::super::TestGuard::install();
+        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        atomic_write(&dest, |staging| {
-            super::super::write(staging, b"atomic bytes")
-        })
-        .unwrap();
-        assert_eq!(super::super::read(&dest).unwrap(), b"atomic bytes");
+        atomic_write(&dest, |staging| crate::fs::write(staging, b"atomic bytes")).unwrap();
+        assert_eq!(crate::fs::read(&dest).unwrap(), b"atomic bytes");
     }
 
     #[test]
     fn atomic_write_failure_cleans_staging() {
-        let _guard = super::super::TestGuard::install();
+        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
         let outcome = atomic_write(&dest, |_| {
@@ -119,23 +114,23 @@ mod tests {
         });
         assert!(outcome.is_err(), "closure failure reports loud");
         assert!(
-            !super::super::exists(&dest),
+            !crate::fs::exists(&dest),
             "failed write leaves no destination"
         );
         let parent = dest.parent().unwrap().to_path_buf();
-        let leftovers = super::super::read_dir(&parent).unwrap_or_default();
+        let leftovers = crate::fs::read_dir(&parent).unwrap_or_default();
         assert!(leftovers.is_empty(), "failed write leaves no staging entry");
     }
 
     #[test]
     fn atomic_write_overwrites_present_destination() {
-        let _guard = super::super::TestGuard::install();
+        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        super::super::create_dir_all(dest.parent().unwrap()).unwrap();
-        super::super::write(&dest, b"winner").unwrap();
-        atomic_write(&dest, |staging| super::super::write(staging, b"newcomer")).unwrap();
-        assert_eq!(super::super::read(&dest).unwrap(), b"newcomer");
+        crate::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        crate::fs::write(&dest, b"winner").unwrap();
+        atomic_write(&dest, |staging| crate::fs::write(staging, b"newcomer")).unwrap();
+        assert_eq!(crate::fs::read(&dest).unwrap(), b"newcomer");
     }
 
     #[test]

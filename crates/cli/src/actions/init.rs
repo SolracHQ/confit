@@ -125,14 +125,14 @@ impl InitRunner<'_> {
         let mut dests = vec![profile.clone()];
         dests.extend(STUB_FILES.iter().map(|entry| self.args.dir.join(entry.0)));
         let stubs_dir = self.args.dir.join("stubs");
-        if driver::exists(&stubs_dir) {
+        if driver::fs::exists(&stubs_dir) {
             return Err(Error::Plan(format!(
                 "init: '{}' already exists, remove it or pick another target",
                 stubs_dir.display()
             )));
         }
         for dest in &dests {
-            if driver::exists(dest) {
+            if driver::fs::exists(dest) {
                 return Err(Error::Plan(format!(
                     "init: '{}' already exists, remove it or pick another target",
                     dest.display()
@@ -162,7 +162,7 @@ fn write_file(dest: &std::path::Path, text: &[u8]) -> Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        driver::create_dir_all(parent).map_err(|error| Error::Plan(error.to_string()))?;
+        driver::fs::create_dir_all(parent).map_err(|error| Error::Plan(error.to_string()))?;
     }
-    driver::write(dest, text).map_err(|error| Error::Plan(error.to_string()))
+    driver::fs::write(dest, text).map_err(|error| Error::Plan(error.to_string()))
 }

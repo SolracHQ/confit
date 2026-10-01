@@ -3,21 +3,20 @@
 //! Bundle writes over blob reads.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use confit_driver as driver;
+use confit_driver::{self as driver};
 use confit_model::document::BlobRef;
 use confit_model::manifest::Manifest;
 use confit_model::progress::ProgressSender;
+use confit_model::sha::Sha;
 
+use super::BundleStore;
 use super::ensure_bundle_extension;
 use super::error::{BundleError, Result};
-use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_GZIP_LEVEL, BUNDLE_MANIFEST, BundleStore};
-use crate::blob::BlobStore;
+use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST};
 use crate::blob::error::BlobError;
-
-/// Staging suffix for atomic bundle writes.
-const STAGING_SUFFIX: &str = ".part";
+use crate::handles::ArchiveHandle;
 
 /// Entry mode for bundle members.
 const BUNDLE_ENTRY_MODE: u32 = 0o644;
@@ -26,7 +25,8 @@ impl BundleStore {
     /// Writes one portable bundle holding manifest and blobs.
     ///
     /// Bare destinations gain the bundle extension and the
-    /// returned path names the written file.
+    /// sealed handle names the written file. The manifest rides
+    /// first with blob members sorted by stored hash.
     ///
     /// # Errors
     ///
@@ -39,117 +39,130 @@ impl BundleStore {
         manifest: &Manifest,
         dest: &Path,
         progress: Option<&ProgressSender>,
-    ) -> Result<PathBuf> {
+    ) -> Result<ArchiveHandle> {
         let _ = progress;
         let dest = ensure_bundle_extension(dest);
-        let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| BundleError::Unknown {
+        let text = manifest.json().map_err(|error| BundleError::Unknown {
             path: dest.clone(),
             message: error.to_string(),
         })?;
-        if let Some(parent) = dest.parent() {
-            driver::create_dir_all(parent).map_err(|error| BundleError::from_io(&dest, error))?;
+        let mut members = Vec::with_capacity(manifest.refs().len() + 1);
+        members.push(driver::tar::BuildMember {
+            name: BUNDLE_MANIFEST.to_owned(),
+            len: text.len() as u64,
+            reader: Box::new(std::io::Cursor::new(text.as_bytes())),
+            mode: BUNDLE_ENTRY_MODE,
+        });
+        for blob in sorted_blobs(manifest) {
+            let (name, len, reader) = self.stored_member(&blob, &dest)?;
+            members.push(driver::tar::BuildMember {
+                name,
+                len,
+                reader,
+                mode: BUNDLE_ENTRY_MODE,
+            });
         }
-        let mut staging = dest.as_os_str().to_owned();
-        staging.push(STAGING_SUFFIX);
-        let staging = PathBuf::from(staging);
-        let out = driver::create(&staging).map_err(|error| BundleError::from_io(&dest, error))?;
-        let encoder =
-            flate2::write::GzEncoder::new(out, flate2::Compression::new(BUNDLE_GZIP_LEVEL));
-        let mut builder = tar::Builder::new(encoder);
-        append_manifest(&mut builder, &bytes, &dest)?;
-        let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
-        for blob in manifest.refs() {
-            unique.entry(blob.stored().hex()).or_insert(blob);
-        }
-        for blob in unique.values() {
-            append_blob(&mut builder, blob, &self.blobs, &dest)?;
-        }
-        let encoder = builder
-            .into_inner()
-            .map_err(|error| BundleError::from_io(&dest, error))?;
-        encoder
-            .finish()
-            .map_err(|error| BundleError::from_io(&dest, error))?;
-        driver::rename(&staging, &dest).map_err(|error| BundleError::from_io(&dest, error))?;
-        Ok(dest)
+        seal_bundle(&dest, members)
+    }
+
+    /// Opens one blob source under its container member name.
+    ///
+    /// Reads ride the stored hash with encoded length, so pool
+    /// bytes land in the tar untouched.
+    ///
+    /// # Errors
+    ///
+    /// - [`BundleError::Missing`] for missing blobs.
+    /// - [`BundleError::Unknown`] for other blob failures.
+    fn stored_member(
+        &self,
+        blob: &BlobRef,
+        dest: &Path,
+    ) -> Result<(String, u64, Box<dyn std::io::Read>)> {
+        let handle = self.blobs.resolve(blob).map_err(|error| match error {
+            BlobError::Missing { sha } => BundleError::Missing { sha },
+            other => BundleError::Unknown {
+                path: dest.to_path_buf(),
+                message: other.to_string(),
+            },
+        })?;
+        let (len, reader) = self
+            .blobs
+            .open_stored(&handle)
+            .map_err(|error| match error {
+                BlobError::Missing { sha } => BundleError::Missing { sha },
+                other => BundleError::Unknown {
+                    path: dest.to_path_buf(),
+                    message: other.to_string(),
+                },
+            })?;
+        let name = [BUNDLE_BLOBS_PREFIX, &blob.stored().to_string()].concat();
+        Ok((name, len, reader))
     }
 }
 
-/// Appends one file entry to a bundle archive.
+/// Lists one manifest's refs sorted by stored hash.
 ///
-/// # Errors
-///
-/// - [`BundleError::Unreachable`] for unreachable archives.
-/// - [`BundleError::Denied`] for denied archives.
-/// - [`BundleError::Unknown`] for other archive failures.
-fn append_manifest(
-    builder: &mut tar::Builder<flate2::write::GzEncoder<Box<dyn std::io::Write>>>,
-    bytes: &[u8],
-    dest: &Path,
-) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(BUNDLE_ENTRY_MODE);
-    header.set_cksum();
-    builder
-        .append_data(&mut header, BUNDLE_MANIFEST, bytes)
-        .map_err(|error| BundleError::from_io(dest, error))
+/// Duplicate stored hashes keep their first ref.
+fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
+    let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
+    for blob in manifest.refs() {
+        unique.entry(blob.stored().hex()).or_insert(blob);
+    }
+    unique.into_values().collect()
 }
 
-/// Appends one blob entry with verbatim stored bytes.
+/// Seals one staged bundle into its destination file.
 ///
-/// Reads ride the stored handle with encoded length, so pool
-/// bytes land in the tar untouched.
+/// Member order reads as given, so callers own entry
+/// order. The sealed handle carries the finished file
+/// path and its content hash.
 ///
 /// # Errors
 ///
-/// - [`BundleError::Missing`] for missing blobs.
-/// - [`BundleError::Unknown`] for other blob and archive failures.
-/// - [`BundleError::Unreachable`] for unreachable archives.
-/// - [`BundleError::Denied`] for denied archives.
-fn append_blob(
-    builder: &mut tar::Builder<flate2::write::GzEncoder<Box<dyn std::io::Write>>>,
-    blob: &BlobRef,
-    blobs: &BlobStore,
-    dest: &Path,
-) -> Result<()> {
-    let handle = blobs.resolve(blob).map_err(|error| match error {
-        BlobError::Missing { sha } => BundleError::Missing { sha },
-        other => BundleError::Unknown {
-            path: dest.to_path_buf(),
-            message: other.to_string(),
-        },
-    })?;
-    let (len, source) = blobs.open_stored(&handle).map_err(|error| match error {
-        BlobError::Missing { sha } => BundleError::Missing { sha },
-        other => BundleError::Unknown {
-            path: dest.to_path_buf(),
-            message: other.to_string(),
-        },
-    })?;
-    let mut header = tar::Header::new_gnu();
-    header.set_size(len);
-    header.set_mode(BUNDLE_ENTRY_MODE);
-    header.set_cksum();
-    builder
-        .append_data(
-            &mut header,
-            [BUNDLE_BLOBS_PREFIX, &blob.stored().to_string()].concat(),
-            source,
-        )
-        .map_err(|error| BundleError::from_io(dest, error))
+/// - [`BundleError::Unreachable`] for missing destinations.
+/// - [`BundleError::Denied`] for denied destinations.
+/// - [`BundleError::Unknown`] for other build and hash failures.
+fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Result<ArchiveHandle> {
+    driver::atomic_write(dest, |path| {
+        let sink = driver::fs::create(path)?;
+        driver::tar::build_plain(sink, members)
+    })
+    .map_err(|error| BundleError::from_io(dest, error))?;
+    let sha = bundle_sha(dest)?;
+    let sealed = ArchiveHandle::new(dest.to_path_buf(), sha);
+    sealed.map_err(|error| BundleError::Unknown {
+        path: dest.to_path_buf(),
+        message: error.to_string(),
+    })
+}
+
+/// Hashes one finished bundle file with a stream.
+///
+/// # Errors
+///
+/// - [`BundleError::Unreachable`] for missing bundles.
+/// - [`BundleError::Denied`] for denied bundles.
+/// - [`BundleError::Unknown`] for other failures.
+fn bundle_sha(source: &Path) -> Result<Sha> {
+    let mut file = driver::fs::open(source).map_err(|error| BundleError::from_io(source, error))?;
+    Sha::read(&mut file).map_err(|error| BundleError::from_io(source, error))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read as _;
+
     use super::*;
     use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
+    use confit_model::sha::Sha;
 
     use crate::StoreRoots;
     use crate::archive::ArchiveStore;
     use crate::blob::{BlobSource, BlobStore};
-    use confit_driver::TestGuard;
+    use crate::handles::TrustedHandle;
+    use confit_driver::{self as driver, fs::TestGuard};
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -162,8 +175,11 @@ mod tests {
     fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
         use std::sync::Arc;
 
+        use crate::resources::Resources;
+
         let roots = test_roots(dir);
-        let archives = Arc::new(ArchiveStore::new(&roots));
+        let resources = Arc::new(Resources::new(&roots));
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
         let blobs = Arc::new(BlobStore::new(&roots));
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
@@ -182,20 +198,37 @@ mod tests {
             ));
         }
         match Manifest::build(documents, Vec::new()) {
-            Ok(manifest) => (BundleStore::new(archives, blobs), manifest),
+            Ok(manifest) => (BundleStore::new(archives, blobs, resources), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
     fn entry_names(path: &Path) -> Vec<String> {
-        let file = driver::open_read(path).unwrap();
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+        let file = driver::fs::open(path).unwrap();
+        let mut archive = tar::Archive::new(file);
         let mut names = Vec::new();
         for entry in archive.entries().unwrap() {
             let entry = entry.unwrap();
             names.push(entry.path().unwrap().to_string_lossy().into_owned());
         }
         names
+    }
+
+    fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {
+        let file = driver::fs::open(path).unwrap();
+        let mut archive = tar::Archive::new(file);
+        let mut bodies = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            if name == BUNDLE_MANIFEST {
+                continue;
+            }
+            let mut body = Vec::new();
+            entry.read_to_end(&mut body).unwrap();
+            bodies.push(body);
+        }
+        bodies
     }
 
     #[test]
@@ -205,18 +238,60 @@ mod tests {
         let (store, manifest) = opaque_manifest(dir.path(), &[b"cache-only bytes"]);
         let roots = test_roots(dir.path());
         assert!(
-            driver::read_dir(&roots.config_base.join("blobs"))
+            driver::fs::read_dir(&roots.config_base.join("blobs"))
                 .unwrap_or_default()
                 .is_empty(),
             "plan output sources the cache with zero pool bytes"
         );
-        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
-            Ok(dest) => dest,
+        let plan = dir.path().join("plan");
+        let written = match store.write(&manifest, &plan, None) {
+            Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        let names = entry_names(&dest);
+        let names = entry_names(written.canonical());
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
         assert_eq!(names.len(), 2, "the cache blob rides along");
+    }
+
+    #[test]
+    fn write_seals_finished_file_with_streamed_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
+        let plan = dir.path().join("plan");
+        let written = match store.write(&manifest, &plan, None) {
+            Ok(written) => written,
+            Err(error) => panic!("manifest writes: {error}"),
+        };
+        assert_eq!(
+            written.canonical(),
+            dir.path().join("plan.cb").as_path(),
+            "seal points at the destination"
+        );
+        let raw = driver::fs::read(written.canonical()).unwrap();
+        assert_eq!(
+            written.sha(),
+            &Sha::hash(&raw),
+            "seal hashes the finished bytes"
+        );
+        let mut bodies = entry_bodies(written.canonical());
+        bodies.sort();
+        let mut expected = Vec::new();
+        for blob in manifest.refs() {
+            let handle = match store.blobs.resolve(&blob) {
+                Ok(handle) => handle,
+                Err(error) => panic!("blob resolves: {error}"),
+            };
+            let (_, mut reader) = match store.blobs.open_stored(&handle) {
+                Ok(opened) => opened,
+                Err(error) => panic!("blob opens: {error}"),
+            };
+            let mut body = Vec::new();
+            reader.read_to_end(&mut body).unwrap();
+            expected.push(body);
+        }
+        expected.sort();
+        assert_eq!(bodies, expected, "streamed blobs ride intact");
     }
 
     #[test]
@@ -237,18 +312,19 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("persist lands: {error}"),
         }
-        let cached = match driver::read_dir(&roots.cache_base.join("blobs")) {
+        let cached = match driver::fs::read_dir(&roots.cache_base.join("blobs")) {
             Ok(cached) => cached,
             Err(error) => panic!("cache lists: {error}"),
         };
         for path in cached {
-            driver::remove_file(&path).unwrap();
+            driver::fs::remove_file(&path).unwrap();
         }
-        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
-            Ok(dest) => dest,
+        let plan = dir.path().join("plan");
+        let written = match store.write(&manifest, &plan, None) {
+            Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        let names = entry_names(&dest);
+        let names = entry_names(written.canonical());
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
         assert_eq!(names.len(), 2, "the pool blob rides along");
     }

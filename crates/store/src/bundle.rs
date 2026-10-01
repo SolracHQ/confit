@@ -12,12 +12,10 @@ use std::sync::Arc;
 
 use crate::archive::ArchiveStore;
 use crate::blob::BlobStore;
+use crate::resources::Resources;
 
 /// Bundle file extension imposed on explicit outputs.
 const BUNDLE_EXTENSION: &str = "cb";
-
-/// Gzip level for the outer bundle tar.
-pub(crate) const BUNDLE_GZIP_LEVEL: u32 = 0;
 
 /// Bundle manifest file name inside the archive.
 pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
@@ -35,14 +33,23 @@ pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 pub struct BundleStore {
     pub(crate) archives: Arc<ArchiveStore>,
     pub(crate) blobs: Arc<BlobStore>,
+    pub(crate) resources: Arc<Resources>,
 }
 
 impl BundleStore {
     /// Builds a bundle store over shared archive and blob stores.
     ///
-    /// Both handles arrive shared from store construction.
-    pub fn new(archives: Arc<ArchiveStore>, blobs: Arc<BlobStore>) -> Self {
-        Self { archives, blobs }
+    /// All three handles arrive shared from store construction.
+    pub fn new(
+        archives: Arc<ArchiveStore>,
+        blobs: Arc<BlobStore>,
+        resources: Arc<Resources>,
+    ) -> Self {
+        Self {
+            archives,
+            blobs,
+            resources,
+        }
     }
 }
 

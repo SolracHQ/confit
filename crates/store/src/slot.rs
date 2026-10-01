@@ -115,7 +115,7 @@ impl SlotStore {
             message: error.to_string(),
         })?;
         let mut dest = self.previous.join(format!("{stamp}.json"));
-        while driver::exists(&dest) {
+        while driver::fs::exists(&dest) {
             stamp += 1;
             dest = self.previous.join(format!("{stamp}.json"));
         }
@@ -134,7 +134,7 @@ impl SlotStore {
     /// - [`SlotError::BadPick`] for absent slots, malformed and out-of-range picks.
     pub fn resolve(&self, picker: Option<&str>) -> Result<(Manifest, SlotKind)> {
         let Some(raw) = picker else {
-            if !driver::exists(&self.state) {
+            if !driver::fs::exists(&self.state) {
                 return Err(SlotError::BadPick {
                     input: "".to_owned(),
                 });
@@ -143,7 +143,7 @@ impl SlotStore {
         };
         if let Some(name) = raw.strip_prefix('@') {
             let path = self.named_slot(name)?;
-            if !driver::exists(&path) {
+            if !driver::fs::exists(&path) {
                 return Err(SlotError::BadPick {
                     input: raw.to_owned(),
                 });
@@ -220,18 +220,18 @@ impl SlotStore {
     /// - [`SlotError::Unknown`] for other removal failures.
     pub fn delete_named(&self, name: &str) -> Result<()> {
         let path = self.named_slot(name)?;
-        if !driver::exists(&path) {
+        if !driver::fs::exists(&path) {
             return Err(SlotError::BadPick {
                 input: ["@", name].concat(),
             });
         }
-        driver::remove_file(&path).map_err(|error| SlotError::from_io(&path, error))?;
+        driver::fs::remove_file(&path).map_err(|error| SlotError::from_io(&path, error))?;
         Ok(())
     }
 
     /// Reports whether no applied slot reads present.
     pub fn is_first_run(&self) -> bool {
-        !driver::exists(&self.state)
+        !driver::fs::exists(&self.state)
     }
 
     /// Gathers stored refs for a sweep.
@@ -266,7 +266,7 @@ impl SlotStore {
 /// - [`SlotError::Corrupt`] for bad payloads.
 /// - [`SlotError::Version`] for version mismatch.
 fn load_bundle(path: &Path) -> Result<Manifest> {
-    let bytes = match driver::read(path) {
+    let bytes = match driver::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Manifest::empty());
@@ -303,7 +303,7 @@ fn from_codec(path: &Path, error: CodecError) -> SlotError {
 /// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
 /// - [`SlotError::Unknown`] for other listing failures.
 fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
-    let mut files = match driver::read_dir(dir) {
+    let mut files = match driver::fs::read_dir(dir) {
         Ok(files) => files,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
@@ -313,7 +313,7 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
     files.reverse();
     let mut out = Vec::new();
     for file in files {
-        let bytes = match driver::read(&file) {
+        let bytes = match driver::fs::read(&file) {
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
@@ -335,7 +335,7 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
 /// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
 /// - [`SlotError::Unknown`] for other listing failures.
 fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    match driver::read_dir(dir) {
+    match driver::fs::read_dir(dir) {
         Ok(files) => Ok(files),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(SlotError::from_io(dir, error)),
@@ -353,7 +353,7 @@ fn rotate_history(dir: &Path) -> Result<()> {
     let files = history_files(dir)?;
     if files.len() > HISTORY_KEPT {
         for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-            driver::remove_file(stale).map_err(|error| SlotError::from_io(stale, error))?;
+            driver::fs::remove_file(stale).map_err(|error| SlotError::from_io(stale, error))?;
         }
     }
     Ok(())
@@ -367,12 +367,8 @@ fn rotate_history(dir: &Path) -> Result<()> {
 /// - [`SlotError::Denied`] for denied parents and paths.
 /// - [`SlotError::Unknown`] for other write failures.
 fn write_text(path: &Path, text: &str) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        driver::create_dir_all(parent).map_err(|error| SlotError::from_io(path, error))?;
-    }
-    driver::write(path, text.as_bytes()).map_err(|error| SlotError::from_io(path, error))
+    driver::atomic_write(path, |staging| driver::fs::write(staging, text.as_bytes()))
+        .map_err(|error| SlotError::from_io(path, error))
 }
 
 /// Reads wall-clock nanos for sortable archive file names.
@@ -424,7 +420,7 @@ fn check_slot_name(name: &str) -> Result<()> {
 ///
 /// Missing, unparsable, and stale files add no refs.
 fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
-    let bytes = match driver::read(path) {
+    let bytes = match driver::fs::read(path) {
         Ok(bytes) => bytes,
         Err(_) => return,
     };
@@ -460,7 +456,7 @@ mod tests {
     use confit_model::document::{BlobRef, Data, Document};
     use confit_model::routes::{Route, RouteBase};
 
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -492,7 +488,7 @@ mod tests {
 
     fn history_count(dir: &Path) -> usize {
         let previous = dir.join("config").join(PREVIOUS_DIR);
-        match driver::read_dir(&previous) {
+        match driver::fs::read_dir(&previous) {
             Ok(files) => files.len(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
             Err(error) => panic!("history lists: {error}"),
@@ -709,13 +705,13 @@ mod tests {
             Err(error) => panic!("referencing manifest stores: {error}"),
         }
         let config = dir.path().join("config");
-        driver::write(&config.join(PREVIOUS_DIR).join("junk.json"), b"{ not json").unwrap();
+        driver::fs::write(&config.join(PREVIOUS_DIR).join("junk.json"), b"{ not json").unwrap();
         let plans = config.join(PLANS_DIR);
-        driver::create_dir_all(&plans).unwrap();
+        driver::fs::create_dir_all(&plans).unwrap();
         let ghost = BlobRef::new(Sha::hash(b"stale payload"), Sha::hash(b"stale pool bytes"));
         let mut stale = serde_json::to_value(blob_manifest(ghost)).unwrap();
         stale["version"] = serde_json::json!(0u32);
-        driver::write(
+        driver::fs::write(
             &plans.join("stale.json"),
             serde_json::to_vec(&stale).unwrap().as_slice(),
         )

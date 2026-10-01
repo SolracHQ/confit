@@ -128,8 +128,8 @@ each carrying path, kind, and lifecycle status.
 
 An explicit output path resolves first. A missing suffix gains
 `.cb`, with present suffixes kept in any letter case. The run
-writes a compressed tar archive there. The archive holds
-`manifest.json` first, then one `blobs/<sha>` gzip entry per
+writes a plain tar archive there. The archive holds
+`manifest.json` first, then one `blobs/<sha>` entry per
 referenced blob in sorted order with duplicates excluded.
 Referenced blobs alone ship inside.
 

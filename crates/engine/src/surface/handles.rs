@@ -163,8 +163,7 @@ fn seal(source: &dyn TrustedHandle, stores: &Stores, _caller: &str) -> mlua::Res
 ///
 /// Unknown members and stream failures fail as plan errors.
 fn member_bytes(member: &ResourceHandle, stores: &Stores, caller: &str) -> mlua::Result<Vec<u8>> {
-    let archives = stores.archives();
-    let mut reader = match archives.open_decompressed(member) {
+    let mut reader = match stores.resources().open(member) {
         Ok(reader) => reader,
         Err(error) => return Err(plan_error(error.to_string())),
     };
@@ -345,7 +344,7 @@ fn tree_from_archive(
         };
         let mode = match pick.mode {
             Some(mode) => mode,
-            None => match archives.mode(&member) {
+            None => match stores.resources().mode(&member) {
                 Ok(mode) => mode,
                 Err(error) => return Err(plan_error(error.to_string())),
             },

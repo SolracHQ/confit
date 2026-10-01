@@ -80,7 +80,7 @@ impl Checks {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => find_executable(name, &self.path_dirs).is_some(),
-            Condition::Exists { route } => driver::exists(&applier.resolve(route)),
+            Condition::Exists { route } => driver::fs::exists(&applier.resolve(route)),
             Condition::Changed { route } => changed.contains(route),
             Condition::All(items) => items.iter().all(|item| self.check(item, changed, applier)),
             Condition::Any(items) => items.iter().any(|item| self.check(item, changed, applier)),
@@ -99,10 +99,10 @@ pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 
     for dir in dirs {
         let candidate = dir.join(name);
-        if !driver::exists(&candidate) {
+        if !driver::fs::exists(&candidate) {
             continue;
         }
-        match driver::mode(&candidate) {
+        match driver::fs::mode(&candidate) {
             Ok(mode) if mode & EXEC_BIT != 0 => return Some(candidate),
             Ok(_) => {}
             Err(_) => return Some(candidate),
@@ -115,7 +115,7 @@ pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use confit_driver as driver;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
     use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &std::path::Path) -> Route {
@@ -134,9 +134,9 @@ mod tests {
     }
 
     fn place(path: &std::path::Path, mode: u32) {
-        driver::create_dir_all(path.parent().unwrap()).unwrap();
-        driver::write(path, b"run").unwrap();
-        driver::set_mode(path, mode).unwrap();
+        driver::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        driver::fs::write(path, b"run").unwrap();
+        driver::fs::set_mode(path, mode).unwrap();
     }
 
     /// Driver oracle replaying the discovery decision branch by branch.
@@ -147,10 +147,10 @@ mod tests {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
             let candidate = dir.join(name);
-            if !driver::exists(&candidate) {
+            if !driver::fs::exists(&candidate) {
                 continue;
             }
-            match driver::mode(&candidate) {
+            match driver::fs::mode(&candidate) {
                 Ok(mode) if mode & EXEC_BIT != 0 => return Some(candidate),
                 Ok(_) => {}
                 Err(_) => return Some(candidate),
@@ -226,9 +226,9 @@ mod tests {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         place(&dir.path().join("tool"), 0o755);
-        driver::write_link(&dir.path().join("link_ok"), std::path::Path::new("tool")).unwrap();
-        driver::set_mode(&dir.path().join("link_ok"), 0o755).unwrap();
-        driver::write_link(
+        driver::fs::write_link(&dir.path().join("link_ok"), std::path::Path::new("tool")).unwrap();
+        driver::fs::set_mode(&dir.path().join("link_ok"), 0o755).unwrap();
+        driver::fs::write_link(
             &dir.path().join("link_dead"),
             &dir.path().join("dangling-target"),
         )
@@ -253,16 +253,16 @@ mod tests {
         let first = dir.path().join("first");
         let second = dir.path().join("second");
         for folder in [&first, &second] {
-            driver::create_dir_all(folder).unwrap();
+            driver::fs::create_dir_all(folder).unwrap();
         }
         place(&first.join("tool"), 0o755);
         place(&first.join("regular"), 0o644);
         place(&second.join("tool"), 0o755);
-        driver::write_link(&first.join("link_ok"), std::path::Path::new("tool")).unwrap();
-        driver::set_mode(&first.join("link_ok"), 0o755).unwrap();
-        driver::write_link(&first.join("link_plain"), std::path::Path::new("regular")).unwrap();
-        driver::set_mode(&first.join("link_plain"), 0o755).unwrap();
-        driver::write_link(&first.join("link_dead"), &first.join("dangling-target")).unwrap();
+        driver::fs::write_link(&first.join("link_ok"), std::path::Path::new("tool")).unwrap();
+        driver::fs::set_mode(&first.join("link_ok"), 0o755).unwrap();
+        driver::fs::write_link(&first.join("link_plain"), std::path::Path::new("regular")).unwrap();
+        driver::fs::set_mode(&first.join("link_plain"), 0o755).unwrap();
+        driver::fs::write_link(&first.join("link_dead"), &first.join("dangling-target")).unwrap();
         let rows: Vec<(&str, Vec<PathBuf>, Option<PathBuf>)> = vec![
             ("tool", vec![first.clone()], Some(first.join("tool"))),
             ("regular", vec![first.clone()], None),
@@ -298,8 +298,8 @@ mod tests {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("needle");
-        driver::create_dir_all(dir.path()).unwrap();
-        driver::write(&path, b"needle").unwrap();
+        driver::fs::create_dir_all(dir.path()).unwrap();
+        driver::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
         let expanded = applier().resolve(&route);
         assert_eq!(expanded, path, "literal routes resolve verbatim");

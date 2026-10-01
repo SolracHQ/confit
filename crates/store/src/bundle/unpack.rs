@@ -10,9 +10,8 @@ use confit_model::manifest::Manifest;
 use confit_model::sha::Sha;
 
 use super::codec::{CodecError, check_blob_id, decode};
-use super::error::{BundleError, Result};
+use super::error::{BundleError, Result, from_archive, from_resource};
 use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, BundleStore};
-use crate::archive::error::ArchiveError;
 use crate::blob::error::BlobError;
 use crate::handles::ArchiveHandle;
 
@@ -71,9 +70,9 @@ impl BundleStore {
             .extract_member(handle, BUNDLE_MANIFEST)
             .map_err(|error| from_archive(bundle, error))?;
         let mut reader = self
-            .archives
-            .open_decompressed(&member)
-            .map_err(|error| from_archive(bundle, error))?;
+            .resources
+            .open(&member)
+            .map_err(|error| from_resource(bundle, error))?;
         let mut raw = Vec::new();
         reader
             .read_to_end(&mut raw)
@@ -150,23 +149,6 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
     }
 }
 
-/// Maps one archive failure at the bundle path into bundle language.
-fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
-    match error {
-        ArchiveError::Missing { .. } => BundleError::Unreachable {
-            path: bundle.to_path_buf(),
-        },
-        ArchiveError::Denied { .. } => BundleError::Denied {
-            path: bundle.to_path_buf(),
-        },
-        ArchiveError::Unknown { message, .. } => BundleError::Unknown {
-            path: bundle.to_path_buf(),
-            message,
-        },
-        other => unknown(bundle, other.to_string()),
-    }
-}
-
 /// Maps one blob failure at the bundle path into bundle language.
 fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
     match error {
@@ -198,8 +180,9 @@ mod tests {
     use crate::StoreRoots;
     use crate::archive::ArchiveStore;
     use crate::blob::{BlobSource, BlobStore};
+    use crate::handles::TrustedHandle;
     use confit_driver as driver;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -212,8 +195,11 @@ mod tests {
     fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
         use std::sync::Arc;
 
+        use crate::resources::Resources;
+
         let roots = test_roots(dir);
-        let archives = Arc::new(ArchiveStore::new(&roots));
+        let resources = Arc::new(Resources::new(&roots));
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
         let blobs = Arc::new(BlobStore::new(&roots));
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
@@ -232,14 +218,33 @@ mod tests {
             ));
         }
         match Manifest::build(documents, Vec::new()) {
-            Ok(manifest) => (BundleStore::new(archives, blobs), manifest),
+            Ok(manifest) => (BundleStore::new(archives, blobs, resources), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }
     }
 
+    fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
+        let build = |path: &Path| {
+            let members: Vec<driver::tar::BuildMember<'_>> = entries
+                .iter()
+                .map(|(name, bytes)| driver::tar::BuildMember {
+                    name: (*name).to_owned(),
+                    len: bytes.len() as u64,
+                    reader: Box::new(std::io::Cursor::new(bytes.as_slice())),
+                    mode: 0o644,
+                })
+                .collect();
+            let sink = driver::fs::create(path)?;
+            driver::tar::build_plain(sink, members)
+        };
+        if let Err(error) = driver::atomic_write(dest, build) {
+            panic!("fixture bundle builds: {error}");
+        }
+    }
+
     fn entry_names(path: &Path) -> Vec<String> {
-        let file = driver::open_read(path).unwrap();
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+        let file = driver::fs::open(path).unwrap();
+        let mut archive = tar::Archive::new(file);
         let mut names = Vec::new();
         for entry in archive.entries().unwrap() {
             let entry = entry.unwrap();
@@ -253,12 +258,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
-        let dest = match store.write(&manifest, &dir.path().join("plan"), None) {
-            Ok(dest) => dest,
+        let plan = dir.path().join("plan");
+        let written = match store.write(&manifest, &plan, None) {
+            Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        assert_eq!(dest, dir.path().join("plan.cb"), "bare output gains suffix");
-        let names = entry_names(&dest);
+        assert_eq!(
+            written.canonical(),
+            dir.path().join("plan.cb"),
+            "bare output gains suffix"
+        );
+        let names = entry_names(written.canonical());
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
         let blobs: Vec<String> = names[1..].to_vec();
         assert_eq!(blobs.len(), 2, "every blob rides along");
@@ -271,7 +281,7 @@ mod tests {
                 "blob entry rides under prefix: {name}"
             );
         }
-        match store.read(&dest) {
+        match store.read(written.canonical()) {
             Ok(found) => {
                 assert_eq!(found, manifest, "manifest round-trips");
             }
@@ -281,26 +291,13 @@ mod tests {
 
     #[test]
     fn read_refuses_stale_version() {
-        use flate2::write::GzEncoder;
-
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, _) = opaque_manifest(dir.path(), &[]);
         let stale = serde_json::json!({"version": 0u32, "documents": []});
         let raw = serde_json::to_vec(&stale).unwrap();
-        let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
-        let mut builder = tar::Builder::new(encoder);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(raw.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, BUNDLE_MANIFEST, raw.as_slice())
-            .unwrap();
-        let archive = builder.into_inner().unwrap().finish().unwrap();
         let path = dir.path().join("stale.cb");
-        driver::create_dir_all(path.parent().unwrap()).unwrap();
-        driver::write(&path, &archive).unwrap();
+        build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
         match store.read(&path) {
             Ok(_) => panic!("stale manifest passes"),
             Err(BundleError::Version { path: found, got }) => {
@@ -313,15 +310,17 @@ mod tests {
 
     #[test]
     fn read_refuses_missing_blob() {
-        use flate2::write::GzEncoder;
         use std::sync::Arc;
+
+        use crate::resources::Resources;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let archives = Arc::new(ArchiveStore::new(&roots));
+        let resources = Arc::new(Resources::new(&roots));
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
         let blobs = Arc::new(BlobStore::new(&roots));
-        let store = BundleStore::new(archives, blobs.clone());
+        let store = BundleStore::new(archives, blobs.clone(), resources);
         let handle = match blobs.put(BlobSource::Bytes(b"wanted bytes")) {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
@@ -342,19 +341,8 @@ mod tests {
             Err(error) => panic!("manifest builds: {error}"),
         };
         let raw = serde_json::to_vec(&manifest).unwrap();
-        let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
-        let mut builder = tar::Builder::new(encoder);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(raw.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, BUNDLE_MANIFEST, raw.as_slice())
-            .unwrap();
-        let archive = builder.into_inner().unwrap().finish().unwrap();
         let path = dir.path().join("thin.cb");
-        driver::create_dir_all(path.parent().unwrap()).unwrap();
-        driver::write(&path, &archive).unwrap();
+        build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
         match store.read(&path) {
             Ok(_) => panic!("thin manifest passes"),
             Err(error) => assert!(
@@ -366,35 +354,19 @@ mod tests {
 
     #[test]
     fn read_rejects_duplicate_and_unexpected_and_bad_ids() {
-        use flate2::write::GzEncoder;
-
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
-        let build_archive = |entries: Vec<(&str, Vec<u8>)>| {
-            let encoder = GzEncoder::new(Vec::new(), flate2::Compression::new(0));
-            let mut builder = tar::Builder::new(encoder);
-            for (name, bytes) in entries {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(bytes.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                builder
-                    .append_data(&mut header, name, bytes.as_slice())
-                    .unwrap();
-            }
-            builder.into_inner().unwrap().finish().unwrap()
-        };
-
         let manifest = serde_json::to_vec(&Manifest::empty()).unwrap();
-        let dup_manifest = build_archive(vec![
-            (BUNDLE_MANIFEST, manifest.clone()),
-            (BUNDLE_MANIFEST, manifest.clone()),
-        ]);
         let dup_path = dir.path().join("dup-manifest.cb");
-        driver::create_dir_all(dup_path.parent().unwrap()).unwrap();
-        driver::write(&dup_path, &dup_manifest).unwrap();
+        build_bundle(
+            &dup_path,
+            &[
+                (BUNDLE_MANIFEST, manifest.clone()),
+                (BUNDLE_MANIFEST, manifest.clone()),
+            ],
+        );
         match store.read(&dup_path) {
             Ok(_) => panic!("duplicate manifest passes"),
             Err(error) => assert!(
@@ -403,13 +375,14 @@ mod tests {
             ),
         }
 
-        let bad_id = build_archive(vec![
-            (BUNDLE_MANIFEST, manifest.clone()),
-            ("blobs/short", b"x".to_vec()),
-        ]);
         let bad_path = dir.path().join("bad-id.cb");
-        driver::create_dir_all(bad_path.parent().unwrap()).unwrap();
-        driver::write(&bad_path, &bad_id).unwrap();
+        build_bundle(
+            &bad_path,
+            &[
+                (BUNDLE_MANIFEST, manifest.clone()),
+                ("blobs/short", b"x".to_vec()),
+            ],
+        );
         match store.read(&bad_path) {
             Ok(_) => panic!("bad id passes"),
             Err(error) => assert!(
@@ -418,13 +391,14 @@ mod tests {
             ),
         }
 
-        let unexpected = build_archive(vec![
-            (BUNDLE_MANIFEST, manifest.clone()),
-            ("other.txt", b"x".to_vec()),
-        ]);
         let odd_path = dir.path().join("odd.cb");
-        driver::create_dir_all(odd_path.parent().unwrap()).unwrap();
-        driver::write(&odd_path, &unexpected).unwrap();
+        build_bundle(
+            &odd_path,
+            &[
+                (BUNDLE_MANIFEST, manifest.clone()),
+                ("other.txt", b"x".to_vec()),
+            ],
+        );
         match store.read(&odd_path) {
             Ok(_) => panic!("unexpected entry passes"),
             Err(error) => assert!(
@@ -432,5 +406,20 @@ mod tests {
                 "unexpected reports itself: {error}"
             ),
         }
+    }
+
+    #[test]
+    fn write_seals_plain_tar_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);
+        let plan = dir.path().join("plan");
+        let written = match store.write(&manifest, &plan, None) {
+            Ok(written) => written,
+            Err(error) => panic!("manifest writes: {error}"),
+        };
+        let raw = driver::fs::read(written.canonical()).unwrap();
+        assert!(raw.len() >= 512, "plain holds one block");
+        assert_eq!(&raw[257..262], b"ustar", "plain envelope carries tar magic");
     }
 }

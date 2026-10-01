@@ -11,9 +11,6 @@ use confit_model::sha::Sha;
 use crate::Applier;
 use crate::disk::{Live, LiveMember, drain};
 
-/// Chunk size for streaming drift comparison.
-const COMPARE_CHUNK: usize = 8192;
-
 impl Applier {
     /// Reports manual edits between recorded documents and disk.
     ///
@@ -175,7 +172,7 @@ impl Applier {
     fn disk_label(&self, document: &Document) -> Option<String> {
         match self.disk.live_doc(document) {
             Live::Present { mut reader, .. } => {
-                let (sha, len) = hash_count(&mut reader).ok()?;
+                let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
                 Some(sha.label(len))
             }
             Live::Absent | Live::Unreadable { .. } => None,
@@ -185,7 +182,7 @@ impl Applier {
     /// Labels one tree member path with its content hash and byte count.
     fn tree_member_label(&self, destination: &Route, relative: &str) -> Option<String> {
         let mut reader = self.disk.open_member(destination, relative)?;
-        let (sha, len) = hash_count(&mut reader).ok()?;
+        let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
         Some(sha.label(len))
     }
 }
@@ -210,32 +207,11 @@ fn opaque_content_drift(
     }
 }
 
-/// Hashes one reader streaming while counting bytes.
-///
-/// # Returns
-///
-/// The content hash with the byte count.
-fn hash_count(reader: &mut dyn std::io::Read) -> std::io::Result<(Sha, u64)> {
-    use sha2::Digest as _;
-
-    let mut hasher = sha2::Sha256::new();
-    let mut chunk = [0u8; COMPARE_CHUNK];
-    let mut len: u64 = 0;
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            return Ok((Sha::finish(hasher), len));
-        }
-        len += read as u64;
-        hasher.update(&chunk[..read]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use confit_driver as driver;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
     use confit_model::document::{Data, Document, RcData, RcEntry, RcOp};
     use confit_model::manifest::MANIFEST_VERSION;
     use confit_model::routes::{Route, RouteBase};
@@ -249,7 +225,7 @@ mod tests {
             "confit-runtime-drift-{}-{name}",
             std::process::id()
         ));
-        driver::create_dir_all(&dir).unwrap();
+        driver::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
@@ -283,7 +259,7 @@ mod tests {
             !text.contains("literal:"),
             "rendered bytes carry no display alias"
         );
-        driver::write(&dest, &recorded).unwrap();
+        driver::fs::write(&dest, &recorded).unwrap();
         let manifest = confit_model::manifest::Manifest {
             version: MANIFEST_VERSION,
             documents: vec![document.clone()],
@@ -295,10 +271,10 @@ mod tests {
             "matching expanded bytes read as zero drift"
         );
         assert!(
-            !driver::exists(std::path::Path::new(&document.destination.display())),
+            !driver::fs::exists(std::path::Path::new(&document.destination.display())),
             "display alias never lands on disk"
         );
-        driver::remove_file(&dest).unwrap();
-        let _ = driver::remove_file(&dir);
+        driver::fs::remove_file(&dest).unwrap();
+        let _ = driver::fs::remove_file(&dir);
     }
 }

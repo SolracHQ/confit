@@ -401,7 +401,7 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
     use confit_model::hook::merge_hooks;
 
     fn preview_hook(
@@ -540,10 +540,10 @@ mod tests {
         let test_guard = TestGuard::install();
         let guard = tempfile::tempdir().unwrap();
         let dir = guard.path();
-        driver::create_dir_all(dir).unwrap();
-        driver::write(&dir.join("tool"), b"run").unwrap();
-        driver::set_mode(&dir.join("tool"), 0o755).unwrap();
-        driver::write(&dir.join("probe"), b"data").unwrap();
+        driver::fs::create_dir_all(dir).unwrap();
+        driver::fs::write(&dir.join("tool"), b"run").unwrap();
+        driver::fs::set_mode(&dir.join("tool"), 0o755).unwrap();
+        driver::fs::write(&dir.join("probe"), b"data").unwrap();
         let checks = Checks {
             vars: Default::default(),
             path_dirs: vec![dir.to_path_buf()],

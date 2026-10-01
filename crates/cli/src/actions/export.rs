@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_store::Stores;
+use confit_store::handles::TrustedHandle;
 use confit_store::slot::SlotKind;
 use confit_store::slot::SlotStore;
 
@@ -107,14 +108,14 @@ impl<'a> ExportRunner<'a> {
             None => auto,
         };
         sinks.emit_writing_manifest(manifest.documents.len());
-        let dest = timed("export write", || {
+        let written = timed("export write", || {
             stores
                 .bundles()
                 .write(&manifest, &dest, sinks.progress.as_ref())
                 .map_err(|error| Error::Plan(error.to_string()))
         })?;
         Ok(ExportReport {
-            dest: Some(dest),
+            dest: Some(written.canonical().to_path_buf()),
             manifest: None,
         })
     }

@@ -7,8 +7,8 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-crossbeam-channel = "0.5.17"
-diffy = "0.5.2"
+crossbeam-channel.workspace = true
+diffy.workspace = true
 noyalib.workspace = true
 serde.workspace = true
 serde_json.workspace = true

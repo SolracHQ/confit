@@ -28,9 +28,6 @@ const STREAM_BUF_BYTES: usize = 8 * 1024;
 /// Index folder holding url-hash to content-hash entries.
 const INDEX_DIR: &str = "urls";
 
-/// Staging suffix for atomic cache writes.
-const STAGING_SUFFIX: &str = ".part";
-
 /// File-backed fetch cache for remote bytes.
 ///
 /// Bodies ride `{cache}/{content-sha}` behind a `urls` index.
@@ -64,24 +61,20 @@ impl FetchCache {
 
     /// Derives the staging path holding one URL download.
     ///
-    /// The staging file carries the `.part` suffix until rename.
+    /// Names ride the driver sequence beside the content path,
+    /// so concurrent downloads share no file.
     fn staging_path(&self, url: &str) -> PathBuf {
-        let mut text = self
-            .cache
-            .join(Sha::hash(url.as_bytes()).hex())
-            .into_os_string();
-        text.push(STAGING_SUFFIX);
-        PathBuf::from(text)
+        driver::stage_path(&self.content_path(&Sha::hash(url.as_bytes()).hex()))
     }
 
     /// Reads a cached handle passing the index digest check.
     ///
     /// Tampered entries read as misses.
     fn lookup(&self, url: &str) -> Option<FetchHandle> {
-        let stored = driver::read_to_string(&self.index_path(url)).ok()?;
+        let stored = driver::fs::read_to_string(&self.index_path(url)).ok()?;
         let wanted = Sha::new(stored.trim().to_lowercase()).ok()?;
         let content = self.content_path(&wanted.hex());
-        let mut file = driver::open_read(&content).ok()?;
+        let mut file = driver::fs::open(&content).ok()?;
         let actual = Sha::read(&mut file).ok()?;
         if actual != wanted {
             return None;
@@ -170,21 +163,21 @@ impl FetchCache {
     fn store_stream(&self, url: &str, reader: impl std::io::Read) -> Result<(PathBuf, Sha, usize)> {
         let staging = self.staging_path(url);
         if let Some(parent) = staging.parent() {
-            driver::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
+            driver::fs::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
         }
         let outcome = self.stream_to_staging(url, reader, &staging);
         let (digest, bytes) = match outcome {
             Ok(done) => done,
             Err(error) => {
-                let _ = driver::remove_file(&staging);
+                let _ = driver::fs::remove_file(&staging);
                 return Err(error);
             }
         };
         let content = self.content_path(&digest.hex());
-        if let Err(error) = driver::rename(&staging, &content) {
-            let _ = driver::remove_file(&staging);
-            return Err(FetchError::from_io(url, error));
-        }
+        driver::atomic_write(&content, |final_staging| {
+            driver::fs::rename(&staging, final_staging)
+        })
+        .map_err(|error| FetchError::from_io(url, error))?;
         self.write_index(url, &digest)?;
         Ok((content, digest, bytes))
     }
@@ -199,9 +192,9 @@ impl FetchCache {
     fn write_index(&self, url: &str, digest: &Sha) -> Result<()> {
         let index = self.index_path(url);
         if let Some(parent) = index.parent() {
-            driver::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
+            driver::fs::create_dir_all(parent).map_err(|error| FetchError::from_io(url, error))?;
         }
-        driver::write(&index, digest.hex().as_bytes())
+        driver::fs::write(&index, digest.hex().as_bytes())
             .map_err(|error| FetchError::from_io(url, error))
     }
 
@@ -218,7 +211,7 @@ impl FetchCache {
         reader: impl std::io::Read,
         staging: &Path,
     ) -> Result<(Sha, usize)> {
-        let file = driver::create(staging).map_err(|error| FetchError::from_io(url, error))?;
+        let file = driver::fs::create(staging).map_err(|error| FetchError::from_io(url, error))?;
         let mut writer = std::io::BufWriter::new(file);
         let mut limited = reader.take(BODY_LIMIT_BYTES);
         let mut hasher = sha2::Sha256::new();
@@ -283,7 +276,7 @@ impl FetchCache {
     /// - [`FetchError::Denied`] for denied cache files.
     /// - [`FetchError::Unknown`] for other failures.
     pub fn read(&self, handle: &FetchHandle) -> Result<Vec<u8>> {
-        driver::read(handle.canonical())
+        driver::fs::read(handle.canonical())
             .map_err(|error| FetchError::from_io(handle.origin(), error))
     }
 
@@ -295,7 +288,8 @@ impl FetchCache {
     /// - [`FetchError::Denied`] for denied cache files.
     /// - [`FetchError::Unknown`] for other failures.
     pub fn open(&self, handle: &FetchHandle) -> Result<Box<dyn std::io::Read>> {
-        driver::open_read(handle.canonical())
+        driver::fs::open(handle.canonical())
+            .map(|file| file as Box<dyn std::io::Read>)
             .map_err(|error| FetchError::from_io(handle.origin(), error))
     }
 }
@@ -304,7 +298,7 @@ impl FetchCache {
 ///
 /// Missing files read zero for event sizes alone.
 fn file_len(path: &Path) -> usize {
-    match driver::metadata(path) {
+    match driver::fs::metadata(path) {
         Ok(facts) => usize::try_from(facts.len()).unwrap_or(0),
         Err(_) => 0,
     }
@@ -332,7 +326,7 @@ fn check_sha(url: &str, actual: &Sha, expected: Option<&Sha>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::{self as driver, TestGuard};
+    use confit_driver::{self as driver, fs::TestGuard};
 
     const URL: &str = "https://example.com/tool.bin";
     const FILE_URL: &str = "https://example.com/tool.tar.gz";
@@ -376,7 +370,7 @@ mod tests {
         assert_eq!(transport::calls(URL), 1, "seeding downloads once");
         match cache.fetch(URL, None, false, None) {
             Ok(handle) => {
-                let found = driver::read(handle.canonical()).unwrap();
+                let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
                 assert_eq!(transport::calls(URL), 1, "hit makes no download");
             }
@@ -393,7 +387,7 @@ mod tests {
         seed(&cache, URL, b"1.2.3");
         match cache.fetch(URL, None, false, None) {
             Ok(handle) => {
-                let found = driver::read(handle.canonical()).unwrap();
+                let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
                 assert_eq!(transport::calls(URL), 1, "offline hit calls no download");
             }
@@ -416,7 +410,7 @@ mod tests {
                     "cache path stays jailed: {}",
                     path.display()
                 );
-                match driver::read(&path) {
+                match driver::fs::read(&path) {
                     Ok(found) => assert_eq!(found, b"binary".to_vec()),
                     Err(error) => panic!("cached file reads: {error}"),
                 }
@@ -433,11 +427,11 @@ mod tests {
         let cache = file_cache(dir.path());
         let handle = seed(&cache, URL, b"genuine");
         assert!(cache.lookup(URL).is_some());
-        driver::write(handle.canonical(), b"tampered").unwrap();
+        driver::fs::write(handle.canonical(), b"tampered").unwrap();
         assert!(cache.lookup(URL).is_none());
         match cache.fetch(URL, None, false, None) {
             Ok(refetched) => {
-                let found = driver::read(refetched.canonical()).unwrap();
+                let found = driver::fs::read(refetched.canonical()).unwrap();
                 assert_eq!(found, b"genuine".to_vec(), "tamper redownloads");
                 assert_ne!(found, b"tampered".to_vec(), "tampered bytes never serve");
                 assert_eq!(transport::calls(URL), 2, "tamper redownloads once");
@@ -453,11 +447,11 @@ mod tests {
         transport::clear();
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
-        driver::remove_file(&index_file(dir.path(), URL)).unwrap();
+        driver::fs::remove_file(&index_file(dir.path(), URL)).unwrap();
         assert!(cache.lookup(URL).is_none());
         match cache.fetch(URL, None, false, None) {
             Ok(refetched) => {
-                let found = driver::read(refetched.canonical()).unwrap();
+                let found = driver::fs::read(refetched.canonical()).unwrap();
                 assert_eq!(found, b"genuine".to_vec(), "index loss redownloads");
                 assert_eq!(transport::calls(URL), 2, "index loss redownloads once");
             }
@@ -473,11 +467,11 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
         assert!(cache.lookup(URL).is_some());
-        driver::write(&index_file(dir.path(), URL), b"not-a-hex-digest").unwrap();
+        driver::fs::write(&index_file(dir.path(), URL), b"not-a-hex-digest").unwrap();
         assert!(cache.lookup(URL).is_none());
         match cache.fetch(URL, None, false, None) {
             Ok(refetched) => {
-                let found = driver::read(refetched.canonical()).unwrap();
+                let found = driver::fs::read(refetched.canonical()).unwrap();
                 assert_eq!(found, b"genuine".to_vec(), "corrupt index redownloads");
             }
             Err(error) => panic!("corrupt index redownloads: {error}"),
@@ -496,7 +490,7 @@ mod tests {
             content_file(dir.path(), &wanted.hex()),
             dir.path().join("cache").join(wanted.hex())
         );
-        assert!(driver::exists(&content_file(dir.path(), &wanted.hex())));
+        assert!(driver::fs::exists(&content_file(dir.path(), &wanted.hex())));
         let index = index_file(dir.path(), URL);
         assert_eq!(
             index,
@@ -505,7 +499,7 @@ mod tests {
                 .join(INDEX_DIR)
                 .join(Sha::hash(URL.as_bytes()).hex())
         );
-        assert_eq!(driver::read_to_string(&index).unwrap(), wanted.hex());
+        assert_eq!(driver::fs::read_to_string(&index).unwrap(), wanted.hex());
         assert_no_sha_suffix_files(&dir.path().join("cache"));
     }
 
@@ -572,8 +566,8 @@ mod tests {
     fn assert_no_sha_suffix_files(dir: &Path) {
         let mut stack = vec![dir.to_path_buf()];
         while let Some(next) = stack.pop() {
-            for path in driver::read_dir(&next).unwrap() {
-                if driver::metadata(&path).unwrap().is_dir() {
+            for path in driver::fs::read_dir(&next).unwrap() {
+                if driver::fs::metadata(&path).unwrap().is_dir() {
                     stack.push(path);
                 } else {
                     assert!(
@@ -639,7 +633,7 @@ mod tests {
         let wanted = Sha::hash(b"1.2.3");
         match cache.fetch(URL, Some(wanted.clone()), false, None) {
             Ok(handle) => {
-                let found = driver::read(handle.canonical()).unwrap();
+                let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
             }
             Err(error) => panic!("good user sha serves: {error}"),
@@ -655,7 +649,7 @@ mod tests {
         seed(&cache, URL, b"1.2.3");
         match cache.fetch(URL, None, false, None) {
             Ok(handle) => {
-                let found = driver::read(handle.canonical()).unwrap();
+                let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
                 assert_eq!(transport::calls(URL), 1, "hit makes no download");
             }
@@ -663,7 +657,7 @@ mod tests {
         }
         match cache.fetch(URL, None, true, None) {
             Ok(refetched) => {
-                let found = driver::read(refetched.canonical()).unwrap();
+                let found = driver::fs::read(refetched.canonical()).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec(), "forced fetch redownloads");
                 assert_eq!(transport::calls(URL), 2, "forced fetch downloads once");
             }
@@ -684,7 +678,7 @@ mod tests {
         match cache.fetch(URL, None, false, None) {
             Ok(handle) => {
                 assert_eq!(handle.sha(), &Sha::hash(&raw));
-                let found = driver::read(handle.canonical()).unwrap();
+                let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, raw);
             }
             Err(error) => panic!("large hit serves: {error}"),
@@ -830,7 +824,10 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         match cache.fetch(URL, None, false, Some(&sender)) {
             Ok(handle) => {
-                assert_eq!(driver::read(handle.canonical()).unwrap(), b"1.2.3".to_vec());
+                assert_eq!(
+                    driver::fs::read(handle.canonical()).unwrap(),
+                    b"1.2.3".to_vec()
+                );
             }
             Err(error) => panic!("miss downloads: {error}"),
         }
@@ -852,7 +849,10 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         match cache.fetch(URL, None, false, Some(&sender)) {
             Ok(handle) => {
-                assert_eq!(driver::read(handle.canonical()).unwrap(), b"1.2.3".to_vec());
+                assert_eq!(
+                    driver::fs::read(handle.canonical()).unwrap(),
+                    b"1.2.3".to_vec()
+                );
             }
             Err(error) => panic!("hit serves: {error}"),
         }
@@ -905,7 +905,7 @@ mod tests {
         let small = b"shared pool bytes".to_vec();
         let via_put = store.put(BlobSource::Bytes(&small)).unwrap();
         let source_path = dir.path().join("source.bin");
-        driver::write(&source_path, &small).unwrap();
+        driver::fs::write(&source_path, &small).unwrap();
         let source = FetchHandle::new(source_path, Sha::hash(&small), URL).unwrap();
         let via_source = store.put(BlobSource::Handle(&source)).unwrap();
         assert_eq!(via_source, via_put, "trusted source keeps sealed identity");
@@ -913,7 +913,7 @@ mod tests {
         assert!(large.len() > STREAM_BUF_BYTES);
         let large_put = store.put(BlobSource::Bytes(&large)).unwrap();
         let large_path = dir.path().join("large.bin");
-        driver::write(&large_path, &large).unwrap();
+        driver::fs::write(&large_path, &large).unwrap();
         let large_source = FetchHandle::new(large_path, Sha::hash(&large), URL).unwrap();
         let large_sourced = store.put(BlobSource::Handle(&large_source)).unwrap();
         assert_eq!(

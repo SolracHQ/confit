@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use confit_model::sha::Sha;
 use thiserror::Error;
 
+use crate::archive::error::ArchiveError;
+use crate::resources::error::ResourceError;
+
 /// Bundle failure shapes.
 #[derive(Debug, Error)]
 pub enum BundleError {
@@ -66,3 +69,43 @@ impl BundleError {
 
 /// Bundle result alias.
 pub type Result<T> = std::result::Result<T, BundleError>;
+
+/// Maps one archive failure at the bundle path into bundle language.
+pub(super) fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
+    match error {
+        ArchiveError::Missing { .. } => BundleError::Unreachable {
+            path: bundle.to_path_buf(),
+        },
+        ArchiveError::Denied { .. } => BundleError::Denied {
+            path: bundle.to_path_buf(),
+        },
+        ArchiveError::Unknown { message, .. } => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message,
+        },
+        other => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message: other.to_string(),
+        },
+    }
+}
+
+/// Maps one resource failure at the bundle path into bundle language.
+pub(super) fn from_resource(bundle: &Path, error: ResourceError) -> BundleError {
+    match error {
+        ResourceError::Missing { .. } => BundleError::Unreachable {
+            path: bundle.to_path_buf(),
+        },
+        ResourceError::Denied { .. } => BundleError::Denied {
+            path: bundle.to_path_buf(),
+        },
+        ResourceError::Unknown { message, .. } => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message,
+        },
+        other => BundleError::Unknown {
+            path: bundle.to_path_buf(),
+            message: other.to_string(),
+        },
+    }
+}

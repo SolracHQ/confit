@@ -77,8 +77,8 @@ kept.
 
 One portable `.cb` file holds `manifest.json` first and the
 referenced blobs alone. Blob entries sort by hash with no
-duplicates. Blob bytes compress with gzip level 6. The outer
-tar wraps with gzip level 0. Explicit plan outputs gain `.cb`
+duplicates. Blob entries hold gzip bytes at level 6. The
+outer envelope reads plain tar. Explicit plan outputs gain `.cb`
 while the suffix reads absent. Other inputs read as manifests
 first, then retry as bundles, so renamed bundles still load.
 

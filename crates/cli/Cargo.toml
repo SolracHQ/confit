@@ -17,9 +17,9 @@ confit-runtime = { path = "../runtime" }
 confit-model = { path = "../model" }
 confit-engine = { path = "../engine" }
 confit-store = { path = "../store" }
-crossbeam-channel = "0.5.17"
-diffy = "0.5.2"
-dirs = "7.0.0"
+crossbeam-channel.workspace = true
+diffy.workspace = true
+dirs.workspace = true
 fern = "0.7.1"
 indicatif = "0.18.6"
 log.workspace = true
@@ -30,6 +30,6 @@ confit-driver = { version = "0.8.0", path = "../driver" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }
-flate2 = "1.1.10"
-tar = "0.4.46"
+flate2.workspace = true
+tar.workspace = true
 tempfile.workspace = true

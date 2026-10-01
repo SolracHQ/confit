@@ -4,8 +4,9 @@
 
 use std::path::Path;
 
+use super::ArchiveBackend;
 use super::error::{ArchiveError, Result};
-use super::{ArchiveBackend, BornMember, spill_entry};
+use super::spill::{BornMember, spill_entry};
 use confit_driver as driver;
 
 /// Seekable zip member listing and extraction.
@@ -17,98 +18,106 @@ pub(crate) struct ZipBackend;
 
 impl ArchiveBackend for ZipBackend {
     fn names(&self, source: &Path) -> Result<Vec<String>> {
-        let mut archive = open_archive(source)?;
-        let mut names = Vec::with_capacity(archive.len());
-        for index in 0..archive.len() {
-            let entry = archive
-                .by_index(index)
-                .map_err(|error| from_zip(source, error))?;
-            if !entry.is_file() {
-                continue;
-            }
-            let name = entry.name().to_owned();
-            if name.is_empty() {
-                continue;
-            }
-            names.push(name);
-        }
-        Ok(names)
+        let reader = open_source(source)?;
+        driver::zip::list_names(reader).map_err(|error| from_zip(source, error))
     }
 
     fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-        let mut archive = open_archive(source)?;
-        let mut born = Vec::with_capacity(archive.len());
-        for index in 0..archive.len() {
-            let entry = archive
-                .by_index(index)
-                .map_err(|error| from_zip(source, error))?;
-            if !entry.is_file() {
-                continue;
-            }
-            let name = entry.name().to_owned();
-            if name.is_empty() {
-                continue;
-            }
-            born.push(spill_entry(source, staging, &name, entry)?);
-        }
-        Ok(born)
+        unpack_stream(open_source(source)?, source, staging)
     }
 }
 
-/// Opens one seekable zip archive without loading bytes.
-///
-/// Folders and links skip as absent downstream.
+/// Opens one archive source for seekable reading.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Missing`] for missing sources.
 /// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-/// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
 /// - [`ArchiveError::Unknown`] for other failures.
-fn open_archive(source: &Path) -> Result<zip::ZipArchive<Box<dyn driver::SeekRead>>> {
-    let seekable =
-        driver::open_seek(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    zip::ZipArchive::new(seekable).map_err(|error| from_zip(source, error))
+fn open_source(source: &Path) -> Result<Box<dyn driver::fs::FsFile>> {
+    let reader = driver::fs::open(source);
+    reader.map_err(|error| ArchiveError::from_io(source, error))
 }
 
 /// Maps one zip failure into its archive error.
-fn from_zip(source: &Path, error: zip::result::ZipError) -> ArchiveError {
+fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
     match error {
-        zip::result::ZipError::FileNotFound | zip::result::ZipError::InvalidArchive(_) => {
+        driver::zip::ZipError::FileNotFound | driver::zip::ZipError::InvalidArchive(_) => {
             ArchiveError::CorruptedArchive {
                 path: source.to_path_buf(),
             }
         }
-        zip::result::ZipError::InvalidPassword => ArchiveError::PasswordProtectedArchive {
+        driver::zip::ZipError::InvalidPassword => ArchiveError::PasswordProtectedArchive {
             path: source.to_path_buf(),
         },
-        zip::result::ZipError::CompressionMethodNotSupported(_) => {
+        driver::zip::ZipError::CompressionMethodNotSupported(_) => {
             ArchiveError::UnsupportedCompression {
                 path: source.to_path_buf(),
             }
         }
-        zip::result::ZipError::UnsupportedArchive(message)
-            if message == zip::result::ZipError::PASSWORD_REQUIRED =>
+        driver::zip::ZipError::UnsupportedArchive(message)
+            if message == driver::zip::ZipError::PASSWORD_REQUIRED =>
         {
             ArchiveError::PasswordProtectedArchive {
                 path: source.to_path_buf(),
             }
         }
-        zip::result::ZipError::UnsupportedArchive(
+        driver::zip::ZipError::UnsupportedArchive(
             "Seekable compressed files are not yet supported",
         ) => ArchiveError::UnsupportedCompression {
             path: source.to_path_buf(),
         },
-        zip::result::ZipError::UnsupportedArchive(message) => ArchiveError::Unknown {
+        driver::zip::ZipError::UnsupportedArchive(message) => ArchiveError::Unknown {
             path: source.to_path_buf(),
             message: message.to_string(),
         },
-        zip::result::ZipError::Io(error) => ArchiveError::from_io(source, error),
+        driver::zip::ZipError::Io(error) => ArchiveError::from_io(source, error),
         other => ArchiveError::Unknown {
             path: source.to_path_buf(),
             message: other.to_string(),
         },
+    }
+}
+/// Unpacks zip entries with per-entry streaming hashes.
+///
+/// Skipped entries drain inside framing, kept
+/// entries spill under staging with hashes.
+///
+/// # Errors
+///
+/// - [`ArchiveError::Escape`] for escaping members.
+/// - [`ArchiveError::Missing`] for missing archives.
+/// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Unknown`] for other stream failures.
+/// - [`ArchiveError::CorruptedArchive`] for broken archives.
+fn unpack_stream(
+    reader: Box<dyn driver::fs::FsFile>,
+    source: &Path,
+    staging: &Path,
+) -> Result<Vec<BornMember>> {
+    let mut born = Vec::new();
+    let mut failure: Option<ArchiveError> = None;
+    let outcome = driver::zip::walk(reader, |framed| {
+        let driver::zip::Member { name, reader } = framed;
+        match spill_entry(source, staging, &name, reader) {
+            Ok(member) => {
+                born.push(member);
+                Ok(())
+            }
+            Err(error) => {
+                failure = Some(error);
+                Err(std::io::Error::other("archive spill failed"))
+            }
+        }
+    });
+    match outcome {
+        Ok(()) => Ok(born),
+        Err(error) => {
+            if let Some(error) = failure {
+                Err(error)
+            } else {
+                Err(from_zip(source, error))
+            }
+        }
     }
 }

@@ -156,7 +156,7 @@ fn extended_path(dirs: &[PathBuf]) -> std::ffi::OsString {
 ///
 /// Read and write failures surface as io errors.
 pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
-    let mut bytes = match driver::read(log) {
+    let mut bytes = match driver::fs::read(log) {
         Ok(held) => held,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(Error::Plan(error.to_string())),
@@ -167,7 +167,7 @@ pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
     if !output.ends_with(b"\n") {
         bytes.extend_from_slice(b"\n");
     }
-    driver::write(log, &bytes).map_err(|error| Error::Plan(error.to_string()))?;
+    driver::fs::write(log, &bytes).map_err(|error| Error::Plan(error.to_string()))?;
     Ok(())
 }
 

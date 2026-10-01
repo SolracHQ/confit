@@ -461,7 +461,7 @@ manifest instead. Tables hold fixed key order through the
 sorted map. Ordered lists keep declaration order.
 
 Blobs gzip at level 6 for pool and bundle entries. The
-outer bundle tar gzips at level 0. Manifest files hold
+outer bundle envelope reads plain tar. Manifest files hold
 pretty JSON with blob hashes and sizes pointing into the
 shared pool. Raw
 bytes travel in the pool beside the manifests.

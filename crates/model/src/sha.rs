@@ -63,6 +63,27 @@ impl Sha {
         }
     }
 
+    /// Hashes a byte stream into a sealed digest with its byte count.
+    ///
+    /// # Errors
+    ///
+    /// Stream read failures surface as io errors.
+    ///
+    pub fn read_with_size(stream: &mut impl std::io::Read) -> std::io::Result<(Self, u64)> {
+        let mut hasher = sha2::Sha256::new();
+        let mut chunk = [0u8; READ_CHUNK_BYTES];
+        let mut len: u64 = 0;
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            len += read as u64;
+            hasher.update(&chunk[..read]);
+        }
+        Ok((Self::finish(hasher), len))
+    }
+
     /// Hashes a byte stream into a sealed digest.
     ///
     /// # Errors
@@ -70,16 +91,7 @@ impl Sha {
     /// Stream read failures surface as io errors.
     ///
     pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
-        let mut hasher = sha2::Sha256::new();
-        let mut chunk = [0u8; READ_CHUNK_BYTES];
-        loop {
-            let read = stream.read(&mut chunk)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&chunk[..read]);
-        }
-        Ok(Self::finish(hasher))
+        Ok(Self::read_with_size(stream)?.0)
     }
 
     /// Reads the hex digest.
@@ -122,6 +134,42 @@ impl<'de> Deserialize<'de> for Sha {
 impl std::fmt::Display for Sha {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.hex())
+    }
+}
+
+/// Writer hashing every byte passing through.
+///
+/// Spills write and hash in one pass, so the digest
+/// arrives without reading the file back.
+pub struct ShaWriter<W> {
+    inner: W,
+    hasher: sha2::Sha256,
+}
+
+impl<W: std::io::Write> ShaWriter<W> {
+    /// Wraps one writer with a running hash.
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            hasher: sha2::Sha256::new(),
+        }
+    }
+
+    /// Seals the running hash over every byte written so far.
+    pub fn digest(self) -> Sha {
+        Sha::finish(self.hasher)
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for ShaWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let wrote = self.inner.write(buf)?;
+        self.hasher.update(&buf[..wrote]);
+        Ok(wrote)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
 

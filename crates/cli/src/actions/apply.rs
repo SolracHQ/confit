@@ -203,7 +203,7 @@ impl<'a> ApplyRunner<'a> {
                 changed: BTreeSet::new(),
             });
         }
-        if !driver::exists(positional) {
+        if !driver::fs::exists(positional) {
             return Err(Error::Plan(format!(
                 "apply reads no profile '{}'",
                 positional.display()

@@ -5,18 +5,17 @@
 pub mod error;
 
 use std::collections::BTreeSet;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use confit_model::document::BlobRef;
-use confit_model::sha::Sha;
+use confit_model::sha::{Sha, ShaWriter};
 use sha2::Digest;
 
 use crate::StoreRoots;
 use crate::handles::{BlobHandle, TrustedHandle};
 use crate::slot::SlotStore;
-use confit_driver as driver;
+use confit_driver::{self as driver};
 use error::{BlobError, Result};
 
 /// Pool folder name under the config base.
@@ -24,18 +23,6 @@ const BLOBS_DIR: &str = "blobs";
 
 /// Pool gzip level.
 const BLOB_GZIP_LEVEL: u32 = 6;
-
-/// Staging suffix for atomic pool writes.
-const STAGING_SUFFIX: &str = ".part";
-
-/// Staging counter for pooled source writes.
-static STAGING_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Copy chunk size for trusted source streaming.
-const SOURCE_CHUNK: usize = 8192;
-
-/// Gzip footer size holding the raw byte count.
-const GZIP_ISIZE_LEN: u64 = 4;
 
 /// Content-addressed blob pool.
 ///
@@ -52,16 +39,10 @@ pub struct BlobStore {
 
 /// Verifying blob byte stream.
 struct VerifiedBlobReader {
-    decoder: flate2::read::GzDecoder<Box<dyn std::io::Read>>,
+    decoder: driver::gzip::Decoder<Box<dyn std::io::Read>>,
     sha: Sha,
     hasher: sha2::Sha256,
     done: bool,
-}
-
-/// Staging file hashing encoded pool bytes mid-stream.
-struct StoredWriter {
-    file: Box<dyn std::io::Write>,
-    hasher: sha2::Sha256,
 }
 
 /// Blob spill source shapes.
@@ -129,10 +110,9 @@ impl BlobStore {
     pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
         let sha = handle.sha().clone();
         let path = self.live_path(handle);
-        let file =
-            driver::open_read(&path).map_err(|error| BlobError::from_read_io(&sha, error))?;
+        let file = driver::fs::open(&path).map_err(|error| BlobError::from_read_io(&sha, error))?;
         Ok(Box::new(VerifiedBlobReader {
-            decoder: flate2::read::GzDecoder::new(file),
+            decoder: driver::gzip::Decoder::open(file as Box<dyn std::io::Read>),
             sha,
             hasher: sha2::Sha256::new(),
             done: false,
@@ -141,9 +121,11 @@ impl BlobStore {
 
     /// Spills bytes into the cache sealing both identities.
     ///
-    /// # Arguments
-    ///
-    /// * `source` - the bytes or trusted file under spilling.
+    /// Staging keys on the content hash since the stored name
+    /// arrives only after bytes land, so the first phase stages
+    /// by hand and the close renames straight into place. Same
+    /// stored names hold same bytes, so the rename needs no
+    /// present-wins race.
     ///
     /// # Errors
     ///
@@ -163,44 +145,30 @@ impl BlobStore {
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
                 let sha = handle.sha().clone();
-                let file = driver::open_read(path)
-                    .map_err(|error| BlobError::from_read_io(&sha, error))?;
-                (file, sha)
+                let file =
+                    driver::fs::open(path).map_err(|error| BlobError::from_read_io(&sha, error))?;
+                (file as Box<dyn Read>, sha)
             }
         };
-        driver::create_dir_all(&self.cache)
+        driver::fs::create_dir_all(&self.cache)
             .map_err(|error| BlobError::from_write_io(&self.cache, error))?;
-        let staging = staging_path(&self.cache);
-        let staged =
-            driver::create(&staging).map_err(|error| BlobError::from_write_io(&staging, error))?;
-        let mut encoder = flate2::write::GzEncoder::new(
-            StoredWriter::new(staged),
-            flate2::Compression::new(BLOB_GZIP_LEVEL),
-        );
-        let mut chunk = [0u8; SOURCE_CHUNK];
-        loop {
-            let read = reader
-                .read(&mut chunk)
-                .map_err(|error| BlobError::from_read_io(&sha, error))?;
-            if read == 0 {
-                break;
+        let staging = driver::stage_path(&self.cache.join(sha.hex()));
+        let staged = driver::fs::create(&staging)
+            .map_err(|error| BlobError::from_write_io(&staging, error))?;
+        let mut encoder = driver::gzip::Encoder::open(ShaWriter::new(staged), BLOB_GZIP_LEVEL);
+        driver::copy_stream(&mut reader, &mut encoder).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+                BlobError::from_read_io(&sha, error)
             }
-            encoder
-                .write_all(&chunk[..read])
-                .map_err(|_| BlobError::Compress)?;
-        }
+            _ => BlobError::Compress,
+        })?;
         let writer = encoder.finish().map_err(|_| BlobError::Compress)?;
         let stored = writer.digest();
-        let handle = BlobHandle::new(sha.clone(), stored)
-            .map_err(|_| BlobError::Corrupt { sha: sha.clone() })?;
+        let handle =
+            BlobHandle::new(sha.clone(), stored).map_err(|_| BlobError::Corrupt { sha })?;
         let dest = self.cache.join(handle.stored().hex());
-        if driver::exists(&dest) {
-            driver::remove_file(&staging)
-                .map_err(|error| BlobError::from_write_io(&dest, error))?;
-        } else {
-            driver::rename(&staging, &dest)
-                .map_err(|error| BlobError::from_write_io(&dest, error))?;
-        }
+        driver::fs::rename(&staging, &dest)
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
         Ok(handle)
     }
 
@@ -208,18 +176,13 @@ impl BlobStore {
     ///
     /// Presence covers the cache and the pool.
     fn present(&self, stored: &Sha) -> bool {
-        driver::exists(&self.cache.join(stored.hex()))
-            || driver::exists(&self.pool.join(stored.hex()))
+        driver::fs::exists(&self.cache.join(stored.hex()))
+            || driver::fs::exists(&self.pool.join(stored.hex()))
     }
 
     /// Lands already-compressed bytes from a trusted member into the cache.
     ///
     /// Presence wins and proof rides lazy at open.
-    ///
-    /// # Arguments
-    ///
-    /// * `stored` - the stored hash naming the cache file.
-    /// * `source` - the trusted member holding compressed bytes.
     ///
     /// # Errors
     ///
@@ -228,16 +191,13 @@ impl BlobStore {
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     pub(crate) fn receive(&self, stored: &Sha, source: &dyn TrustedHandle) -> Result<()> {
         let dest = self.cache.join(stored.hex());
-        if driver::exists(&dest) {
+        if driver::fs::exists(&dest) {
             return Ok(());
         }
-        driver::create_dir_all(&self.cache)
-            .map_err(|error| BlobError::from_write_io(&dest, error))?;
-        let staging = staging_path(&self.cache);
-        driver::copy(source.canonical(), &staging)
-            .map_err(|error| BlobError::from_write_io(&dest, error))?;
-        driver::rename(&staging, &dest).map_err(|error| BlobError::from_write_io(&dest, error))?;
-        Ok(())
+        driver::atomic_write(&dest, |staging| {
+            driver::fs::copy(source.canonical(), staging).map(|_| ())
+        })
+        .map_err(|error| BlobError::from_write_io(&dest, error))
     }
 
     /// Opens raw stored bytes with their encoded length.
@@ -253,12 +213,12 @@ impl BlobStore {
     /// - [`BlobError::Unknown`] for other failures.
     pub(crate) fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
         let path = self.live_path(handle);
-        let len = driver::metadata(&path)
+        let len = driver::fs::metadata(&path)
             .map_err(|error| BlobError::from_read_io(handle.sha(), error))?
             .len();
-        let file = driver::open_read(&path)
+        let file = driver::fs::open(&path)
             .map_err(|error| BlobError::from_read_io(handle.sha(), error))?;
-        Ok((len, file))
+        Ok((len, file as Box<dyn std::io::Read>))
     }
 
     /// Reads the raw byte count for one handle.
@@ -274,20 +234,22 @@ impl BlobStore {
     /// - [`BlobError::Corrupt`] for corrupt pool files.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
         let sha = handle.sha().clone();
-        let footer = driver::read_tail(&self.live_path(handle), GZIP_ISIZE_LEN).map_err(
-            |error| match error.kind() {
+        let footer = driver::fs::read_tail(&self.live_path(handle), driver::gzip::TRAILER_LEN)
+            .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => BlobError::Missing { sha: sha.clone() },
                 std::io::ErrorKind::PermissionDenied => BlobError::Denied { sha: sha.clone() },
                 std::io::ErrorKind::UnexpectedEof => BlobError::Corrupt { sha: sha.clone() },
                 _ => BlobError::from_read_io(&sha, error),
-            },
-        )?;
-        let mut raw = [0u8; GZIP_ISIZE_LEN as usize];
+            })?;
+        let mut raw = [0u8; driver::gzip::TRAILER_LEN as usize];
         raw.copy_from_slice(&footer);
         Ok(u32::from_le_bytes(raw) as u64)
     }
 
     /// Persists cache blobs into the shared pool.
+    ///
+    /// The cache copy cleans best effort once the pool holds
+    /// the bytes, and a cache file vanishing mid-run skips.
     ///
     /// # Errors
     ///
@@ -301,26 +263,21 @@ impl BlobStore {
         for blob in blobs {
             let dest = self.pool.join(blob.stored().hex());
             let source = self.cache.join(blob.stored().hex());
-            if driver::exists(&dest) {
+            if driver::fs::exists(&dest) {
                 // Cache copies clean best-effort; the OS reaps the rest.
-                let _ = driver::remove_file(&source);
+                let _ = driver::fs::remove_file(&source);
                 continue;
             }
-            if !driver::exists(&source) {
+            if !driver::fs::exists(&source) {
                 continue;
             }
-            if let Some(parent) = dest.parent() {
-                driver::create_dir_all(parent)
-                    .map_err(|error| BlobError::from_write_io(&dest, error))?;
-            }
-            match driver::rename(&source, &dest) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(_) => {
-                    stream_copy(&source, &dest, blob.sha())?;
+            match driver::atomic_write(&dest, |staging| move_cache_copy(&source, staging)) {
+                Ok(()) => {
                     // Cache copies clean best-effort; the OS reaps the rest.
-                    let _ = driver::remove_file(&source);
+                    let _ = driver::fs::remove_file(&source);
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(BlobError::from_write_io(&dest, error)),
             }
         }
         Ok(())
@@ -331,7 +288,7 @@ impl BlobStore {
     /// The cache wins while present.
     fn live_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.stored().hex());
-        if driver::exists(&cached) {
+        if driver::fs::exists(&cached) {
             cached
         } else {
             self.pool.join(handle.stored().hex())
@@ -362,59 +319,25 @@ impl BlobStore {
     }
 }
 
-/// Streams one cache file into the pool without loading bytes.
+/// Moves one cache file into its pool staging file.
+///
+/// A cross-device rename falls back to a verbatim copy.
 ///
 /// # Errors
 ///
-/// - [`BlobError::Missing`] for missing cache files.
-/// - [`BlobError::Denied`] for denied cache files.
-/// - [`BlobError::Unknown`] for other cache read failures.
-/// - [`BlobError::WriteMissing`] for missing pool paths.
-/// - [`BlobError::WriteDenied`] for denied pool paths.
-/// - [`BlobError::WriteUnknown`] for other pool write failures.
-fn stream_copy(source: &Path, dest: &Path, sha: &Sha) -> Result<()> {
-    let mut reader =
-        driver::open_read(source).map_err(|error| BlobError::from_read_io(sha, error))?;
-    let mut writer = driver::create(dest).map_err(|error| BlobError::from_write_io(dest, error))?;
-    std::io::copy(&mut reader, &mut writer)
-        .map_err(|error| BlobError::from_write_io(dest, error))?;
-    Ok(())
-}
-
-impl StoredWriter {
-    /// Wraps one staging file with an encoded-bytes hash.
-    fn new(file: Box<dyn std::io::Write>) -> Self {
-        Self {
-            file,
-            hasher: sha2::Sha256::new(),
+/// - io failures from rename, open, and copy carry the cache file.
+/// - a vanished cache file reports as NotFound.
+fn move_cache_copy(source: &Path, staging: &Path) -> std::io::Result<()> {
+    match driver::fs::rename(source, staging) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(error),
+        Err(_) => {
+            let mut reader = driver::fs::open(source)?;
+            let mut writer = driver::fs::create(staging)?;
+            driver::copy_stream(&mut reader, &mut writer)?;
+            Ok(())
         }
     }
-
-    /// Reads the encoded-bytes hash.
-    fn digest(self) -> Sha {
-        Sha::finish(self.hasher)
-    }
-}
-
-impl Write for StoredWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let wrote = self.file.write(buf)?;
-        self.hasher.update(&buf[..wrote]);
-        Ok(wrote)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
-    }
-}
-
-/// Scratch staging path for one pooled source write.
-///
-/// Names carry process and sequence, so concurrent writes
-/// never share a file.
-fn staging_path(pool: &Path) -> PathBuf {
-    let seq = STAGING_SEQ.fetch_add(1, Ordering::Relaxed);
-    pool.join(format!(".put-{}-{seq}{STAGING_SUFFIX}", std::process::id()))
 }
 
 impl std::io::Read for VerifiedBlobReader {
@@ -464,7 +387,7 @@ impl std::io::Read for VerifiedBlobReader {
 /// - [`BlobError::WriteDenied`] for denied paths.
 /// - [`BlobError::WriteUnknown`] for other listing and removal failures.
 fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
-    let entries = match driver::read_dir(dir) {
+    let entries = match driver::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(error) => {
@@ -476,7 +399,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
         if held(&path, keep) {
             continue;
         }
-        driver::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
+        driver::fs::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
         removed += 1;
     }
     Ok(removed)
@@ -501,7 +424,7 @@ mod tests {
 
     use crate::handles::FetchHandle;
 
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -512,7 +435,7 @@ mod tests {
     }
 
     fn pool_entries(roots: &StoreRoots) -> Vec<PathBuf> {
-        driver::read_dir(&roots.config_base.join("blobs")).unwrap_or_default()
+        driver::fs::read_dir(&roots.config_base.join("blobs")).unwrap_or_default()
     }
 
     fn test_store(dir: &Path) -> BlobStore {
@@ -576,13 +499,13 @@ mod tests {
             "a preview writes zero pool bytes"
         );
         assert!(
-            driver::read_dir(&roots.config_base)
+            driver::fs::read_dir(&roots.config_base)
                 .unwrap_or_default()
                 .is_empty(),
             "a preview writes zero config bytes with cache bytes allowed"
         );
         assert!(
-            driver::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
+            driver::fs::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
             "the handle points at its cache file"
         );
         assert_eq!(read_open(&store, &handle), b"preview bytes");
@@ -608,7 +531,7 @@ mod tests {
         }
         assert_eq!(pool_entries(&roots).len(), 1, "pool holds one file");
         assert!(
-            !driver::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
+            !driver::fs::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
             "persist leaves no cache copy"
         );
         assert!(
@@ -649,11 +572,11 @@ mod tests {
         let cached = roots.cache_base.join("blobs").join(handle.stored().hex());
         let pooled = roots.config_base.join("blobs").join(handle.stored().hex());
         assert!(
-            driver::exists(&cached) && driver::exists(&pooled),
+            driver::fs::exists(&cached) && driver::fs::exists(&pooled),
             "both homes hold the blob"
         );
         assert_eq!(read_open(&store, &handle), raw, "both homes read bytes");
-        driver::remove_file(&cached).unwrap();
+        driver::fs::remove_file(&cached).unwrap();
         assert_eq!(
             read_open(&store, &handle),
             raw,
@@ -664,7 +587,7 @@ mod tests {
             Err(error) => panic!("cache stores after loss: {error}"),
         };
         assert_eq!(remade, handle, "remade put keeps identity");
-        driver::remove_file(&pooled).unwrap();
+        driver::fs::remove_file(&pooled).unwrap();
         assert!(
             store.resolve(&handle.to_ref()).is_ok(),
             "resolve proves from cache alone"
@@ -709,7 +632,7 @@ mod tests {
             Err(error) => panic!("pool stores: {error}"),
         };
         let source_path = dir.path().join("source.bin");
-        driver::write(&source_path, raw).unwrap();
+        driver::fs::write(&source_path, raw).unwrap();
         let source =
             FetchHandle::new(source_path, Sha::hash(raw), "https://example.com/source").unwrap();
         match store.put(BlobSource::Handle(&source)) {

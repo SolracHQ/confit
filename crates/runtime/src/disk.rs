@@ -87,17 +87,19 @@ impl HostDisk {
     ) -> Option<Box<dyn std::io::Read>> {
         let dest = self.resolve(destination);
         let path = dest.join(relative);
-        if let Ok(target) = driver::read_link(&path) {
+        if let Ok(target) = driver::fs::read_link(&path) {
             return Some(Box::new(std::io::Cursor::new(
                 target.as_os_str().as_encoded_bytes().to_vec(),
             )) as Box<dyn std::io::Read>);
         }
-        driver::open_read(&path).ok()
+        driver::fs::open(&path)
+            .ok()
+            .map(|file| file as Box<dyn std::io::Read>)
     }
 
     /// Reports whether one backend path reads present.
     pub fn exists(&self, path: &Path) -> bool {
-        driver::exists(path)
+        driver::fs::exists(path)
     }
 
     /// Seeds one file behind a resolved path for memory runs.
@@ -108,7 +110,7 @@ impl HostDisk {
     /// Writes bytes to one path, creating parents as needed.
     pub fn write_bytes(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ensure_parent(path)?;
-        driver::write(path, bytes)
+        driver::fs::write(path, bytes)
     }
 
     /// Streams one blob to its destination through the blob pool.
@@ -135,7 +137,7 @@ impl HostDisk {
                 )),
                 transient => Error::Plan(transient.to_string()),
             })?;
-            driver::set_mode(&path, member.mode).map_err(|error| {
+            driver::fs::set_mode(&path, member.mode).map_err(|error| {
                 Error::Plan(format!(
                     "cannot write '{}': cannot set mode '{}': {error}",
                     dest.display(),
@@ -148,28 +150,28 @@ impl HostDisk {
 
     /// Creates one symlink, replacing present files.
     pub fn write_link(&self, link: &Path, target: &Path) -> std::io::Result<()> {
-        driver::write_link(link, target)
+        driver::fs::write_link(link, target)
     }
 
     /// Clears one symlink standing where a file lands.
     pub fn clear_link(&self, path: &Path) -> std::io::Result<()> {
-        if driver::read_link(path).is_ok() {
-            driver::remove_file(path)?;
+        if driver::fs::read_link(path).is_ok() {
+            driver::fs::remove_file(path)?;
         }
         Ok(())
     }
 
     /// Sets unix permission bits on one path.
     pub fn set_mode(&self, path: &Path, mode: u32) -> std::io::Result<()> {
-        driver::set_mode(path, mode)
+        driver::fs::set_mode(path, mode)
     }
 
     /// Removes one backend path, reporting whether anything left.
     pub fn remove(&self, path: &Path) -> std::io::Result<bool> {
-        if !driver::exists(path) {
+        if !driver::fs::exists(path) {
             return Ok(false);
         }
-        driver::remove_file(path)?;
+        driver::fs::remove_file(path)?;
         Ok(true)
     }
 }
@@ -183,19 +185,19 @@ impl Applier {
 
 /// Reads one host document destination through its kind-aware reader.
 fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
-    let target = match driver::read_link(expanded) {
+    let target = match driver::fs::read_link(expanded) {
         Ok(link) => join_link_target(expanded, &link),
         Err(_) => expanded.to_path_buf(),
     };
     if is_link {
-        return match driver::read_link(expanded) {
+        return match driver::fs::read_link(expanded) {
             Ok(link) => Live::Present {
                 reader: Box::new(std::io::Cursor::new(
                     link.as_os_str().as_encoded_bytes().to_vec(),
                 )),
                 mode: None,
             },
-            Err(_) => match driver::open_read(expanded) {
+            Err(_) => match driver::fs::open(expanded) {
                 Ok(file) => Live::Present {
                     reader: Box::new(file),
                     mode: file_mode(expanded),
@@ -207,7 +209,7 @@ fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
             },
         };
     }
-    match driver::open_read(&target) {
+    match driver::fs::open(&target) {
         Ok(file) => Live::Present {
             reader: Box::new(file),
             mode: file_mode(&target),
@@ -230,7 +232,7 @@ fn live_tree_host(dir: &Path) -> BTreeMap<String, LiveMember> {
 ///
 /// Missing folders read empty.
 fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
-    let children = match driver::read_dir(dir) {
+    let children = match driver::fs::read_dir(dir) {
         Ok(children) => children,
         Err(_) => return,
     };
@@ -242,13 +244,13 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
         let Some(name) = rel.to_str() else {
             continue;
         };
-        if let Ok(items) = driver::read_dir(&child)
+        if let Ok(items) = driver::fs::read_dir(&child)
             && !items.is_empty()
         {
             walk_tree(root, &child, out);
             continue;
         }
-        if let Ok(target) = driver::read_link(&child) {
+        if let Ok(target) = driver::fs::read_link(&child) {
             out.insert(
                 name.to_string(),
                 LiveMember::Present {
@@ -260,7 +262,7 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
             );
             continue;
         }
-        match driver::open_read(&child) {
+        match driver::fs::open(&child) {
             Ok(file) => {
                 out.insert(
                     name.to_string(),
@@ -311,25 +313,17 @@ fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
 ///
 /// Links read as None.
 fn file_mode(path: &Path) -> Option<u32> {
-    if driver::read_link(path).is_ok() {
+    if driver::fs::read_link(path).is_ok() {
         return None;
     }
-    driver::mode(path).ok()
+    driver::fs::mode(path).ok()
 }
 
-/// Drains one streaming reader into bytes chunk by chunk.
+/// Drains one streaming reader into bytes.
 pub(crate) fn drain(reader: &mut dyn std::io::Read) -> std::io::Result<Vec<u8>> {
-    const DRAIN_CHUNK: usize = 8192;
-
     let mut out = Vec::new();
-    let mut chunk = [0u8; DRAIN_CHUNK];
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            return Ok(out);
-        }
-        out.extend_from_slice(&chunk[..read]);
-    }
+    reader.read_to_end(&mut out)?;
+    Ok(out)
 }
 
 /// Creates the parent folder for one destination path.
@@ -343,7 +337,7 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        driver::create_dir_all(parent)?;
+        driver::fs::create_dir_all(parent)?;
     }
     Ok(())
 }
@@ -365,7 +359,7 @@ fn copy_blob(dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
         .open(&handle)
         .map_err(|error| Error::Plan(error.to_string()))?;
     ensure_parent(dest).map_err(|error| Error::Plan(error.to_string()))?;
-    let mut out = driver::create(dest).map_err(|error| Error::Plan(error.to_string()))?;
+    let mut out = driver::fs::create(dest).map_err(|error| Error::Plan(error.to_string()))?;
     std::io::copy(&mut reader, &mut out).map_err(|error| Error::Plan(error.to_string()))?;
     out.flush()
         .map_err(|error| Error::Plan(error.to_string()))?;
@@ -375,7 +369,7 @@ fn copy_blob(dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
 #[cfg(test)]
 mod live_tests {
     use super::*;
-    use confit_driver::TestGuard;
+    use confit_driver::fs::TestGuard;
     use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &Path) -> Route {
@@ -412,7 +406,7 @@ mod live_tests {
         let path = dir.path().join("present.txt");
         let disk = HostDisk;
         disk.write_bytes(&path, b"live bytes").unwrap();
-        driver::set_mode(&path, 0o755).unwrap();
+        driver::fs::set_mode(&path, 0o755).unwrap();
         match disk.live_doc(&text_doc(&path)) {
             Live::Present { mut reader, mode } => {
                 assert_eq!(drain(&mut reader).unwrap(), b"live bytes".to_vec());
@@ -428,7 +422,7 @@ mod live_tests {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blocked.txt");
-        driver::create_dir_all(&path).unwrap();
+        driver::fs::create_dir_all(&path).unwrap();
         let disk = HostDisk;
         match disk.live_doc(&text_doc(&path)) {
             Live::Unreadable { reason } => assert!(
