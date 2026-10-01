@@ -42,10 +42,9 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping member names.
-/// - [`ArchiveError::Missing`] for missing paths.
-/// - [`ArchiveError::Denied`] for denied paths.
+/// - [`ArchiveError::Read`] for failed source reads.
 /// - [`ArchiveError::Write`] for spill write faults.
-/// - [`ArchiveError::Unknown`] for other spill failures.
+/// - [`ArchiveError::WriteUnknown`] for other spill write failures.
 pub(crate) fn spill_entry(
     source: &Path,
     staging: &Path,

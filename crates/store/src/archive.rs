@@ -39,21 +39,17 @@ trait ArchiveBackend {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing sources.
-    /// - [`ArchiveError::Denied`] for denied sources.
+    /// - [`ArchiveError::Read`] for failed source reads.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
-    /// - [`ArchiveError::Unknown`] for other failures.
     fn names(&self, source: &Path) -> Result<Vec<String>>;
 
     /// Spills decoded members under staging with hashes.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing sources.
-    /// - [`ArchiveError::Denied`] for denied sources.
-    /// - [`ArchiveError::Unknown`] for other decoder and spill failures.
+    /// - [`ArchiveError::Read`] for failed source reads.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
@@ -99,9 +95,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing sources.
-    /// - [`ArchiveError::Denied`] for denied sources.
-    /// - [`ArchiveError::Unknown`] for other failures.
+    /// - [`ArchiveError::Read`] for failed source reads.
     /// - [`ArchiveError::NotArchive`] for non-archive sources.
     pub fn seal(&self, source: &Path) -> Result<ArchiveHandle> {
         let sha = file_sha(source)?;
@@ -113,12 +107,10 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing archives.
-    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::Read`] for failed archive reads.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
-    /// - [`ArchiveError::Unknown`] for other failures.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         let source = archive.canonical();
         match sniff(source)? {
@@ -138,13 +130,12 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing archives.
-    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::Read`] for failed archive reads.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
     /// - [`ArchiveError::Write`] for spill write faults.
-    /// - [`ArchiveError::Unknown`] for other failures.
+    /// - [`ArchiveError::WriteUnknown`] for other spill write failures.
     /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
@@ -189,10 +180,9 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Missing`] for missing archives.
-    /// - [`ArchiveError::Denied`] for denied archives.
+    /// - [`ArchiveError::Read`] for failed archive reads.
     /// - [`ArchiveError::Write`] for spill write faults.
-    /// - [`ArchiveError::Unknown`] for other failures.
+    /// - [`ArchiveError::WriteUnknown`] for other spill write failures.
     fn run_backend(
         &self,
         source: &Path,
@@ -250,10 +240,9 @@ impl ArchiveStore {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing archives.
-/// - [`ArchiveError::Denied`] for denied archives.
+/// - [`ArchiveError::Read`] for failed archive reads.
 /// - [`ArchiveError::Write`] for spill write faults.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::WriteUnknown`] for other spill write failures.
 /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
 /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
 /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
@@ -271,9 +260,7 @@ fn spill_members(
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn file_sha(source: &Path) -> Result<Sha> {
     let mut file =
         driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
@@ -288,9 +275,7 @@ fn file_sha(source: &Path) -> Result<Sha> {
 /// # Errors
 ///
 /// - [`ArchiveError::NotArchive`] for plain sources.
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn check_compressed_source(source: &Path) -> Result<()> {
     match sniff(source)? {
         Shape::Zip => ZipBackend
@@ -355,9 +340,7 @@ enum Shape {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn sniff(source: &Path) -> Result<Shape> {
     let head = read_head(source)?;
     if driver::zip::valid(&head) {
@@ -373,9 +356,7 @@ fn sniff(source: &Path) -> Result<Shape> {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn read_head(source: &Path) -> Result<Vec<u8>> {
     let file = driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
     let mut head = Vec::new();
@@ -390,9 +371,7 @@ fn read_head(source: &Path) -> Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing paths.
-/// - [`ArchiveError::Denied`] for denied paths.
-/// - [`ArchiveError::Unknown`] for other spill failures.
+/// - [`ArchiveError::Read`] for failed spill reads.
 /// - [`ArchiveError::UnknownMember`] for missing members.
 fn spilled_handles(
     dest: &Path,
@@ -416,8 +395,7 @@ fn spilled_handles(
 /// # Errors
 ///
 /// - [`ArchiveError::UnknownMember`] for missing members.
-/// - [`ArchiveError::Denied`] for denied members.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed member reads.
 fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
     let mut file = driver::fs::open(path).map_err(|error| spill_read_error(error, source, name))?;
     Sha::read(&mut file).map_err(|error| spill_read_error(error, source, name))
@@ -429,9 +407,7 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing paths.
-/// - [`ArchiveError::Denied`] for denied paths.
-/// - [`ArchiveError::Unknown`] for other listing failures.
+/// - [`ArchiveError::Read`] for failed spill listing.
 fn collect_spill_names(
     dir: &Path,
     root: &Path,
@@ -454,9 +430,11 @@ fn collect_spill_names(
         {
             let relative = path
                 .strip_prefix(root)
-                .map_err(|error| ArchiveError::Unknown {
+                .map_err(|error| ArchiveError::Read {
                     path: source.to_path_buf(),
-                    message: error.to_string(),
+                    fault: crate::faults::AccessFault::Unknown {
+                        message: error.to_string(),
+                    },
                 })?;
             names.push(relative.to_string_lossy().replace('\\', "/"));
         }
@@ -471,8 +449,9 @@ fn spill_read_error(error: std::io::Error, source: &Path, name: &str) -> Archive
             path: source.to_path_buf(),
             name: name.to_owned(),
         },
-        std::io::ErrorKind::PermissionDenied => ArchiveError::Denied {
+        std::io::ErrorKind::PermissionDenied => ArchiveError::Read {
             path: source.to_path_buf(),
+            fault: crate::faults::AccessFault::Denied,
         },
         _ => ArchiveError::from_io(source, error),
     }
@@ -482,9 +461,7 @@ fn spill_read_error(error: std::io::Error, source: &Path, name: &str) -> Archive
 fn from_resource(error: ResourceError) -> ArchiveError {
     match error {
         ResourceError::Escape { path } => ArchiveError::Escape { path },
-        ResourceError::Missing { path } => ArchiveError::Missing { path },
-        ResourceError::Denied { path } => ArchiveError::Denied { path },
-        ResourceError::Unknown { path, message } => ArchiveError::Unknown { path, message },
+        ResourceError::Read { path, fault } => ArchiveError::Read { path, fault },
     }
 }
 
@@ -764,7 +741,7 @@ mod tests {
                     "error names the member: {text}"
                 );
                 assert!(
-                    matches!(error, ResourceError::Missing { .. }),
+                    matches!(error, ResourceError::Read { .. }),
                     "absent reports loss: {text}"
                 );
             }
@@ -1162,5 +1139,32 @@ mod tests {
         }
         let spills = driver::fs::read_dir(&spill_base).unwrap();
         assert_eq!(spills.len(), 1, "the empty spill leaves no stray staging");
+    }
+
+    #[test]
+    fn extract_reports_write_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let store = test_store(dir.path());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+        encoder.write_all(b"plain").unwrap();
+        let raw = encoder.finish().unwrap();
+        let archive = born_archive(&store, dir.path(), "note.gz", &raw);
+        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
+        match store.extract(&archive) {
+            Ok(_) => panic!("capped disk passes"),
+            Err(ArchiveError::Write { path, fault }) => {
+                assert!(
+                    matches!(fault, crate::faults::AccessFault::QuotaExceeded),
+                    "spill keeps the fault"
+                );
+                assert_eq!(
+                    path,
+                    archive.canonical().to_path_buf(),
+                    "spill keeps the source"
+                );
+            }
+            Err(error) => panic!("wrong spill variant: {error}"),
+        }
     }
 }

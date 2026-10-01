@@ -30,11 +30,10 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Unknown`] for manifest render and other write failures.
+    /// - [`BundleError::Read`] for failed bundle reads.
     /// - [`BundleError::Missing`] for missing blobs.
-    /// - [`BundleError::Unreachable`] for unreachable archives.
-    /// - [`BundleError::Denied`] for denied archives.
     /// - [`BundleError::Write`] for seal write faults.
+    /// - [`BundleError::WriteUnknown`] for other seal write failures.
     pub fn write(
         &self,
         manifest: &Manifest,
@@ -43,7 +42,7 @@ impl BundleStore {
     ) -> Result<ArchiveHandle> {
         let _ = progress;
         let dest = ensure_bundle_extension(dest);
-        let text = manifest.json().map_err(|error| BundleError::Unknown {
+        let text = manifest.json().map_err(|error| BundleError::WriteUnknown {
             path: dest.clone(),
             message: error.to_string(),
         })?;
@@ -74,27 +73,37 @@ impl BundleStore {
     /// # Errors
     ///
     /// - [`BundleError::Missing`] for missing blobs.
-    /// - [`BundleError::Unknown`] for other blob failures.
+    /// - [`BundleError::Read`] for other failed blob reads.
     fn stored_member(
         &self,
         blob: &BlobRef,
         dest: &Path,
     ) -> Result<(String, u64, Box<dyn std::io::Read>)> {
         let handle = self.blobs.resolve(blob).map_err(|error| match error {
-            BlobError::Missing { sha } => BundleError::Missing { sha },
-            other => BundleError::Unknown {
+            BlobError::Read {
+                sha,
+                fault: crate::faults::AccessFault::Missing,
+            } => BundleError::Missing { sha },
+            other => BundleError::Read {
                 path: dest.to_path_buf(),
-                message: other.to_string(),
+                fault: crate::faults::AccessFault::Unknown {
+                    message: other.to_string(),
+                },
             },
         })?;
         let (len, reader) = self
             .blobs
             .open_stored(&handle)
             .map_err(|error| match error {
-                BlobError::Missing { sha } => BundleError::Missing { sha },
-                other => BundleError::Unknown {
+                BlobError::Read {
+                    sha,
+                    fault: crate::faults::AccessFault::Missing,
+                } => BundleError::Missing { sha },
+                other => BundleError::Read {
                     path: dest.to_path_buf(),
-                    message: other.to_string(),
+                    fault: crate::faults::AccessFault::Unknown {
+                        message: other.to_string(),
+                    },
                 },
             })?;
         let name = [BUNDLE_BLOBS_PREFIX, &blob.stored().to_string()].concat();
@@ -121,10 +130,9 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
 ///
 /// # Errors
 ///
-/// - [`BundleError::Unreachable`] for missing destinations.
-/// - [`BundleError::Denied`] for denied destinations.
+/// - [`BundleError::Read`] for failed bundle reads.
 /// - [`BundleError::Write`] for seal write faults.
-/// - [`BundleError::Unknown`] for other build and hash failures.
+/// - [`BundleError::WriteUnknown`] for other build and hash failures.
 fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Result<ArchiveHandle> {
     driver::atomic_write(dest, |path| {
         let sink = driver::fs::create(path)?;
@@ -133,7 +141,7 @@ fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Resul
     .map_err(|error| BundleError::from_write_io(dest, error))?;
     let sha = bundle_sha(dest)?;
     let sealed = ArchiveHandle::new(dest.to_path_buf(), sha);
-    sealed.map_err(|error| BundleError::Unknown {
+    sealed.map_err(|error| BundleError::WriteUnknown {
         path: dest.to_path_buf(),
         message: error.to_string(),
     })
@@ -143,9 +151,7 @@ fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Resul
 ///
 /// # Errors
 ///
-/// - [`BundleError::Unreachable`] for missing bundles.
-/// - [`BundleError::Denied`] for denied bundles.
-/// - [`BundleError::Unknown`] for other failures.
+/// - [`BundleError::Read`] for failed bundle reads.
 fn bundle_sha(source: &Path) -> Result<Sha> {
     let mut file = driver::fs::open(source).map_err(|error| BundleError::from_io(source, error))?;
     Sha::read(&mut file).map_err(|error| BundleError::from_io(source, error))
@@ -329,5 +335,29 @@ mod tests {
         let names = entry_names(written.canonical());
         assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
         assert_eq!(names.len(), 2, "the pool blob rides along");
+    }
+
+    #[test]
+    fn write_reports_write_storage_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"sealed bytes"]);
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        let dest = dir.path().join("plan");
+        match store.write(&manifest, &dest, None) {
+            Ok(_) => panic!("full disk passes"),
+            Err(BundleError::Write { path, fault }) => {
+                assert!(
+                    matches!(fault, crate::faults::AccessFault::StorageFull),
+                    "seal keeps the fault"
+                );
+                assert_eq!(
+                    path,
+                    dir.path().join("plan.cb"),
+                    "seal keeps the destination"
+                );
+            }
+            Err(error) => panic!("wrong seal variant: {error}"),
+        }
     }
 }

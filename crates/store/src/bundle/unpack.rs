@@ -20,9 +20,7 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Unreachable`] for missing files.
-    /// - [`BundleError::Denied`] for denied files.
-    /// - [`BundleError::Unknown`] for other failures.
+    /// - [`BundleError::Read`] for failed bundle reads.
     /// - [`BundleError::Version`] for unsupported versions.
     /// - [`BundleError::Missing`] for missing blobs.
     pub fn read(&self, path: &Path) -> Result<Manifest> {
@@ -60,9 +58,7 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Unreachable`] for missing members.
-    /// - [`BundleError::Denied`] for denied members.
-    /// - [`BundleError::Unknown`] for other failures.
+    /// - [`BundleError::Read`] for failed member reads.
     /// - [`BundleError::Version`] for stale versions.
     fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
         let member = self
@@ -84,10 +80,9 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Unreachable`] for missing members.
-    /// - [`BundleError::Denied`] for denied members.
+    /// - [`BundleError::Read`] for failed member reads.
     /// - [`BundleError::Write`] for receive write faults.
-    /// - [`BundleError::Unknown`] for other failures.
+    /// - [`BundleError::WriteUnknown`] for other receive write failures.
     fn receive_blob(&self, handle: &ArchiveHandle, stored: &str, bundle: &Path) -> Result<()> {
         let name = [BUNDLE_BLOBS_PREFIX, stored].concat();
         let member = self
@@ -106,7 +101,7 @@ impl BundleStore {
 ///
 /// # Errors
 ///
-/// - [`BundleError::Unknown`] for duplicate, unexpected, and malformed entries.
+/// - [`BundleError::Read`] for failed bundle reads.
 /// - [`BundleError::Version`] for stale codec versions.
 fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     let mut has_manifest = false;
@@ -131,11 +126,11 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     Ok((has_manifest, wanted))
 }
 
-/// Builds one bundle unknown error naming the bundle.
+/// Builds one bundle read failure naming the bundle.
 fn unknown(bundle: &Path, message: String) -> BundleError {
-    BundleError::Unknown {
+    BundleError::Read {
         path: bundle.to_path_buf(),
-        message,
+        fault: crate::faults::AccessFault::Unknown { message },
     }
 }
 
@@ -152,20 +147,22 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
 
 /// Maps one blob failure at the bundle path into bundle language.
 fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
+    use crate::faults::AccessFault;
+
     match error {
-        BlobError::Missing { sha } => BundleError::Missing { sha },
+        BlobError::Read {
+            sha,
+            fault: AccessFault::Missing,
+        } => BundleError::Missing { sha },
+        BlobError::Read { fault, .. } => BundleError::Read {
+            path: bundle.to_path_buf(),
+            fault,
+        },
         BlobError::Write { fault, .. } => BundleError::Write {
             path: bundle.to_path_buf(),
             fault,
         },
-        BlobError::Denied { .. } => BundleError::Denied {
-            path: bundle.to_path_buf(),
-        },
-        BlobError::Unknown { message, .. } => BundleError::Unknown {
-            path: bundle.to_path_buf(),
-            message,
-        },
-        BlobError::WriteUnknown { message, .. } => BundleError::Unknown {
+        BlobError::WriteUnknown { message, .. } => BundleError::WriteUnknown {
             path: bundle.to_path_buf(),
             message,
         },

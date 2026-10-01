@@ -13,6 +13,7 @@ use confit_model::sha::{Sha, ShaWriter};
 use sha2::Digest;
 
 use crate::StoreRoots;
+use crate::faults::AccessFault;
 use crate::handles::{BlobHandle, TrustedHandle};
 use crate::slot::SlotStore;
 use confit_driver::{self as driver};
@@ -81,7 +82,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing blobs.
+    /// - [`BlobError::Read`] for missing blobs.
     pub fn resolve(&self, blob: &BlobRef) -> Result<BlobHandle> {
         if self.present(blob.stored()) {
             BlobHandle::new(blob.sha().clone(), blob.stored().clone()).map_err(|_| {
@@ -90,8 +91,9 @@ impl BlobStore {
                 }
             })
         } else {
-            Err(BlobError::Missing {
+            Err(BlobError::Read {
                 sha: blob.sha().clone(),
+                fault: AccessFault::Missing,
             })
         }
     }
@@ -104,9 +106,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing blobs.
-    /// - [`BlobError::Denied`] for denied blobs.
-    /// - [`BlobError::Unknown`] for other failures.
+    /// - [`BlobError::Read`] for failed blob reads.
     pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
         let sha = handle.sha().clone();
         let path = self.live_path(handle);
@@ -129,9 +129,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing sources.
-    /// - [`BlobError::Denied`] for denied sources.
-    /// - [`BlobError::Unknown`] for other read failures.
+    /// - [`BlobError::Read`] for failed source reads.
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
@@ -206,9 +204,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing blobs.
-    /// - [`BlobError::Denied`] for denied blobs.
-    /// - [`BlobError::Unknown`] for other failures.
+    /// - [`BlobError::Read`] for failed blob reads.
     pub(crate) fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
         let path = self.live_path(handle);
         let len = driver::fs::metadata(&path)
@@ -226,16 +222,20 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing blobs.
-    /// - [`BlobError::Denied`] for denied blobs.
-    /// - [`BlobError::Unknown`] for other failures.
+    /// - [`BlobError::Read`] for failed blob reads.
     /// - [`BlobError::Corrupt`] for corrupt pool files.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
         let sha = handle.sha().clone();
         let footer = driver::fs::read_tail(&self.live_path(handle), driver::gzip::TRAILER_LEN)
             .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => BlobError::Missing { sha: sha.clone() },
-                std::io::ErrorKind::PermissionDenied => BlobError::Denied { sha: sha.clone() },
+                std::io::ErrorKind::NotFound => BlobError::Read {
+                    sha: sha.clone(),
+                    fault: AccessFault::Missing,
+                },
+                std::io::ErrorKind::PermissionDenied => BlobError::Read {
+                    sha: sha.clone(),
+                    fault: AccessFault::Denied,
+                },
                 std::io::ErrorKind::UnexpectedEof => BlobError::Corrupt { sha: sha.clone() },
                 _ => BlobError::from_read_io(&sha, error),
             })?;
@@ -251,9 +251,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Missing`] for missing blobs.
-    /// - [`BlobError::Denied`] for denied blobs.
-    /// - [`BlobError::Unknown`] for other cache read failures.
+    /// - [`BlobError::Read`] for failed cache reads.
     /// - [`BlobError::Write`] for pool write faults.
     /// - [`BlobError::WriteUnknown`] for other pool write failures.
     pub fn persist(&self, blobs: &[BlobHandle]) -> Result<()> {
@@ -644,8 +642,12 @@ mod tests {
         .unwrap();
         match store.put(BlobSource::Handle(&missing)) {
             Ok(_) => panic!("absent source passes"),
-            Err(BlobError::Missing { sha }) => {
-                assert_eq!(sha, Sha::hash(b"x"), "absent source keeps the content hash")
+            Err(BlobError::Read { sha, fault }) => {
+                assert_eq!(sha, Sha::hash(b"x"), "absent keeps hash");
+                assert!(
+                    matches!(fault, AccessFault::Missing),
+                    "absent source keeps the fault: {fault}"
+                );
             }
             Err(error) => panic!("wrong absent variant: {error}"),
         }
@@ -713,5 +715,28 @@ mod tests {
             store.resolve(&kept.to_ref()).is_err(),
             "resolve refuses the dangling blob"
         );
+    }
+
+    #[test]
+    fn put_reports_write_storage_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let roots = test_roots(dir.path());
+        let store = BlobStore::new(&roots);
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        match store.put(BlobSource::Bytes(b"full disk")) {
+            Ok(_) => panic!("full disk passes"),
+            Err(BlobError::Write { path, fault }) => {
+                assert!(
+                    matches!(fault, crate::faults::AccessFault::StorageFull),
+                    "put keeps the fault"
+                );
+                assert!(
+                    path.starts_with(roots.cache_base.join("blobs")),
+                    "put keeps the cache path"
+                );
+            }
+            Err(error) => panic!("wrong put variant: {error}"),
+        }
     }
 }

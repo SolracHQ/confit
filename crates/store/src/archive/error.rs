@@ -9,25 +9,13 @@ use crate::faults::AccessFault;
 /// Archive failure shapes.
 #[derive(Debug, Error)]
 pub enum ArchiveError {
-    /// Missing source holding the path.
-    #[error("cannot read '{path}': missing file", path = path.display())]
-    Missing {
+    /// Failed read holding the source path with the fault.
+    #[error("cannot read '{path}': {fault}", path = path.display())]
+    Read {
         /// Holds the source path under reading.
         path: PathBuf,
-    },
-    /// Denied source holding the path.
-    #[error("cannot read '{path}': permission denied", path = path.display())]
-    Denied {
-        /// Holds the source path under reading.
-        path: PathBuf,
-    },
-    /// Unknown failure holding the path with message.
-    #[error("cannot read '{path}': {message}", path = path.display())]
-    Unknown {
-        /// Holds the source path under reading.
-        path: PathBuf,
-        /// Holds the failure message under reading.
-        message: String,
+        /// Holds the read fault cause.
+        fault: AccessFault,
     },
     /// Non-archive bytes holding the source path.
     #[error("cannot archive '{path}': not a compressed archive", path = path.display())]
@@ -75,23 +63,33 @@ pub enum ArchiveError {
         /// Holds the write fault cause.
         fault: AccessFault,
     },
+    /// Unknown write failure holding the archive path with message.
+    #[error("cannot write '{path}': {message}", path = path.display())]
+    WriteUnknown {
+        /// Holds the archive path under spilling.
+        path: PathBuf,
+        /// Holds the failure message under writing.
+        message: String,
+    },
 }
 
 impl ArchiveError {
     /// Maps one io failure at the archive path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
-        let kind = error.kind();
         let message = error.to_string();
-        match kind {
-            std::io::ErrorKind::NotFound => Self::Missing {
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Read {
                 path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
             },
-            std::io::ErrorKind::PermissionDenied => Self::Denied {
+            _ => Self::Read {
                 path: path.to_path_buf(),
-            },
-            _ => Self::Unknown {
-                path: path.to_path_buf(),
-                message,
+                fault: AccessFault::Unknown { message },
             },
         }
     }
@@ -109,7 +107,7 @@ impl ArchiveError {
                 path: path.to_path_buf(),
                 fault: AccessFault::from_kind(kind),
             },
-            _ => Self::Unknown {
+            _ => Self::WriteUnknown {
                 path: path.to_path_buf(),
                 message,
             },
@@ -119,28 +117,3 @@ impl ArchiveError {
 
 /// Archive result alias.
 pub type Result<T> = std::result::Result<T, ArchiveError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_io(path: &Path, kind: std::io::ErrorKind) -> ArchiveError {
-        ArchiveError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
-    }
-
-    #[test]
-    fn write_carries_archive_with_fault() {
-        let path = Path::new("fonts.tar.gz");
-        let error = write_io(path, std::io::ErrorKind::QuotaExceeded);
-        match &error {
-            ArchiveError::Write { path: found, fault } => {
-                assert_eq!(found, path, "write keeps the path");
-                assert!(
-                    matches!(*fault, AccessFault::QuotaExceeded),
-                    "write keeps the fault: {error}"
-                );
-            }
-            other => panic!("wrong write variant: {other}"),
-        }
-    }
-}

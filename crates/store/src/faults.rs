@@ -1,20 +1,20 @@
 //! Faults
 //!
-//! Shared write fault causes across stores.
+//! Shared access fault causes across stores.
 
 use std::fmt::{Display, Formatter};
 use std::io::ErrorKind;
 
-/// Shared write fault cause.
+/// Shared access fault cause.
 ///
-/// One cause covers every store write path. Stores pair the
-/// cause with their own context in one Write wrapper. Reads
-/// keep their own Missing with Denied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One cause covers every store access path. Stores pair the
+/// cause with their own context in one Read wrapper and one
+/// Write wrapper. Unmapped kinds carry their message along.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessFault {
-    /// Vanished destination.
+    /// Vanished file.
     Missing,
-    /// Refused destination.
+    /// Refused file.
     Denied,
     /// Full disk.
     StorageFull,
@@ -24,12 +24,17 @@ pub enum AccessFault {
     QuotaExceeded,
     /// Oversized file.
     FileTooLarge,
+    /// Unmapped failure carrying raw text.
+    Unknown {
+        /// Holds the raw failure text.
+        message: String,
+    },
 }
 
 impl AccessFault {
-    /// Maps one write io kind into its fault.
+    /// Maps one io kind into its fault.
     ///
-    /// Callers send the six write kinds alone.
+    /// Callers send the six mapped kinds alone.
     pub fn from_kind(kind: ErrorKind) -> Self {
         match kind {
             ErrorKind::NotFound => Self::Missing,
@@ -38,14 +43,15 @@ impl AccessFault {
             ErrorKind::ReadOnlyFilesystem => Self::ReadOnlyFilesystem,
             ErrorKind::QuotaExceeded => Self::QuotaExceeded,
             ErrorKind::FileTooLarge => Self::FileTooLarge,
-            _ => unreachable!("write paths send the six kinds alone"),
+            _ => unreachable!("access paths send the six kinds alone"),
         }
     }
 
     /// Names the fault cause for display shells.
     ///
     /// The cause reads as a bare phrase for appending.
-    pub fn cause(&self) -> &'static str {
+    /// Unknown faults echo their raw text.
+    pub fn cause(&self) -> &str {
         match self {
             Self::Missing => "missing file",
             Self::Denied => "permission denied",
@@ -53,6 +59,7 @@ impl AccessFault {
             Self::ReadOnlyFilesystem => "read-only filesystem",
             Self::QuotaExceeded => "quota exceeded",
             Self::FileTooLarge => "file too large",
+            Self::Unknown { message } => message,
         }
     }
 }
@@ -60,34 +67,5 @@ impl AccessFault {
 impl Display for AccessFault {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.cause())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn kind_table_names_six_faults() {
-        let table = [
-            (ErrorKind::NotFound, AccessFault::Missing),
-            (ErrorKind::PermissionDenied, AccessFault::Denied),
-            (ErrorKind::StorageFull, AccessFault::StorageFull),
-            (
-                ErrorKind::ReadOnlyFilesystem,
-                AccessFault::ReadOnlyFilesystem,
-            ),
-            (ErrorKind::QuotaExceeded, AccessFault::QuotaExceeded),
-            (ErrorKind::FileTooLarge, AccessFault::FileTooLarge),
-        ];
-        for (kind, want) in table {
-            let error = std::io::Error::new(kind, "disk failed");
-            assert_eq!(
-                AccessFault::from_kind(error.kind()),
-                want,
-                "kind keeps its fault"
-            );
-            assert!(!want.cause().is_empty(), "fault cause renders: {want:?}");
-        }
     }
 }

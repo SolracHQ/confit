@@ -88,9 +88,7 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// - [`SlotError::Missing`] for present slots failing reads.
-    /// - [`SlotError::Denied`] for denied slots.
-    /// - [`SlotError::Unknown`] for other read failures.
+    /// - [`SlotError::Read`] for failed slot reads.
     /// - [`SlotError::Version`] for unsupported versions.
     pub fn load(&self) -> Result<Manifest> {
         load_bundle(&self.state)
@@ -100,18 +98,17 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// - [`SlotError::Unknown`] for render, clock, and write failures.
-    /// - [`SlotError::Missing`] for missing paths.
-    /// - [`SlotError::Denied`] for denied paths.
     /// - [`SlotError::Write`] for slot write faults.
+    /// - [`SlotError::WriteUnknown`] for render, clock, and other write
+    ///   failures.
     pub fn store(&self, manifest: &Manifest, progress: Option<&ProgressSender>) -> Result<PathBuf> {
         let _ = progress;
-        let text = manifest.json().map_err(|error| SlotError::Unknown {
+        let text = manifest.json().map_err(|error| SlotError::WriteUnknown {
             path: self.state.clone(),
             message: error.to_string(),
         })?;
         write_text(&self.state, &text)?;
-        let mut stamp = system_nanos().map_err(|error| SlotError::Unknown {
+        let mut stamp = system_nanos().map_err(|error| SlotError::WriteUnknown {
             path: self.previous.clone(),
             message: error.to_string(),
         })?;
@@ -180,9 +177,7 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// - [`SlotError::Missing`] for missing folders.
-    /// - [`SlotError::Denied`] for denied folders.
-    /// - [`SlotError::Unknown`] for other folder failures.
+    /// - [`SlotError::Read`] for failed folder reads.
     pub fn list_history(&self) -> Result<Vec<HistoryEntry>> {
         Ok(stored_bundles(&self.previous)?
             .into_iter()
@@ -198,13 +193,11 @@ impl SlotStore {
     /// # Errors
     ///
     /// - [`SlotError::BadPick`] for bad names.
-    /// - [`SlotError::Unknown`] for render and write failures.
-    /// - [`SlotError::Missing`] for missing paths.
-    /// - [`SlotError::Denied`] for denied paths.
     /// - [`SlotError::Write`] for slot write faults.
+    /// - [`SlotError::WriteUnknown`] for render and other write failures.
     pub fn store_named(&self, name: &str, manifest: &Manifest) -> Result<()> {
         let path = self.named_slot(name)?;
-        let text = manifest.json().map_err(|error| SlotError::Unknown {
+        let text = manifest.json().map_err(|error| SlotError::WriteUnknown {
             path: path.clone(),
             message: error.to_string(),
         })?;
@@ -217,10 +210,8 @@ impl SlotStore {
     /// # Errors
     ///
     /// - [`SlotError::BadPick`] for absent names.
-    /// - [`SlotError::Missing`] for missing paths.
-    /// - [`SlotError::Denied`] for denied paths.
     /// - [`SlotError::Write`] for slot write faults.
-    /// - [`SlotError::Unknown`] for other removal failures.
+    /// - [`SlotError::WriteUnknown`] for other removal failures.
     pub fn delete_named(&self, name: &str) -> Result<()> {
         let path = self.named_slot(name)?;
         if !driver::fs::exists(&path) {
@@ -245,8 +236,7 @@ impl SlotStore {
     ///
     /// # Errors
     ///
-    /// - [`SlotError::Denied`] for denied folders.
-    /// - [`SlotError::Unknown`] for other folder failures.
+    /// - [`SlotError::Read`] for failed folder reads.
     pub fn keep_set(&self) -> Result<BTreeSet<Sha>> {
         let mut keep = BTreeSet::new();
         collect_manifest_refs(&self.state, &mut keep);
@@ -263,9 +253,7 @@ impl SlotStore {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Missing`] for present files failing reads.
-/// - [`SlotError::Denied`] for denied files.
-/// - [`SlotError::Unknown`] for other read failures.
+/// - [`SlotError::Read`] for failed file reads.
 /// - [`SlotError::Corrupt`] for bad payloads.
 /// - [`SlotError::Version`] for version mismatch.
 fn load_bundle(path: &Path) -> Result<Manifest> {
@@ -303,8 +291,7 @@ fn from_codec(path: &Path, error: CodecError) -> SlotError {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
-/// - [`SlotError::Unknown`] for other listing failures.
+/// - [`SlotError::Read`] for failed folder reads beyond missing folders.
 fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
     let mut files = match driver::fs::read_dir(dir) {
         Ok(files) => files,
@@ -335,8 +322,7 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Denied`] for folder listing failures beyond missing folders.
-/// - [`SlotError::Unknown`] for other listing failures.
+/// - [`SlotError::Read`] for failed folder reads beyond missing folders.
 fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
     match driver::fs::read_dir(dir) {
         Ok(files) => Ok(files),
@@ -349,10 +335,8 @@ fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Missing`] for missing paths.
-/// - [`SlotError::Denied`] for denied paths.
 /// - [`SlotError::Write`] for slot write faults.
-/// - [`SlotError::Unknown`] for other listing and removal failures.
+/// - [`SlotError::WriteUnknown`] for other listing and removal failures.
 fn rotate_history(dir: &Path) -> Result<()> {
     let files = history_files(dir)?;
     if files.len() > HISTORY_KEPT {
@@ -368,10 +352,8 @@ fn rotate_history(dir: &Path) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Missing`] for missing parents and paths.
-/// - [`SlotError::Denied`] for denied parents and paths.
 /// - [`SlotError::Write`] for slot write faults.
-/// - [`SlotError::Unknown`] for other write failures.
+/// - [`SlotError::WriteUnknown`] for other write failures.
 fn write_text(path: &Path, text: &str) -> Result<()> {
     driver::atomic_write(path, |staging| driver::fs::write(staging, text.as_bytes()))
         .map_err(|error| SlotError::from_write_io(path, error))
@@ -447,8 +429,7 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
 ///
 /// # Errors
 ///
-/// - [`SlotError::Denied`] for denied folders.
-/// - [`SlotError::Unknown`] for other folder failures.
+/// - [`SlotError::Read`] for failed folder reads.
 fn collect_dir_refs(dir: &Path, keep: &mut BTreeSet<Sha>) -> Result<()> {
     for file in history_files(dir)? {
         collect_manifest_refs(&file, keep);
@@ -729,6 +710,25 @@ mod tests {
                 "unparsable and stale files lend no refs"
             ),
             Err(error) => panic!("keep set gathers: {error}"),
+        }
+    }
+
+    #[test]
+    fn store_reports_write_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let slots = test_store(dir.path());
+        guard.fail_writes(std::io::ErrorKind::ReadOnlyFilesystem);
+        match slots.store(&text_manifest("v1"), None) {
+            Ok(_) => panic!("sealed disk passes"),
+            Err(SlotError::Write { path, fault }) => {
+                assert!(
+                    matches!(fault, crate::faults::AccessFault::ReadOnlyFilesystem),
+                    "store keeps the fault"
+                );
+                assert!(path.ends_with("state.json"), "store keeps the slot path");
+            }
+            Err(error) => panic!("wrong store variant: {error}"),
         }
     }
 }

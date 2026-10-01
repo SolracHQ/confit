@@ -10,25 +10,13 @@ use crate::faults::AccessFault;
 /// Blob failure shapes.
 #[derive(Debug, Error)]
 pub enum BlobError {
-    /// Missing pool entry holding the content hash.
-    #[error("missing blob '{sha}'")]
-    Missing {
+    /// Failed read holding the content hash with the fault.
+    #[error("cannot read blob '{sha}': {fault}")]
+    Read {
         /// Holds the content hash under reading.
         sha: Sha,
-    },
-    /// Denied pool entry holding the content hash.
-    #[error("cannot read blob '{sha}': permission denied")]
-    Denied {
-        /// Holds the content hash under reading.
-        sha: Sha,
-    },
-    /// Unknown failure holding the content hash with message.
-    #[error("cannot read blob '{sha}': {message}")]
-    Unknown {
-        /// Holds the content hash under reading.
-        sha: Sha,
-        /// Holds the failure message under reading.
-        message: String,
+        /// Holds the read fault cause.
+        fault: AccessFault,
     },
     /// Failed write holding the destination path with the fault.
     #[error("cannot write '{path}': {fault}", path = path.display())]
@@ -60,14 +48,20 @@ pub enum BlobError {
 impl BlobError {
     /// Maps one read io failure at the content hash into domain language.
     pub fn from_read_io(sha: &Sha, error: std::io::Error) -> Self {
-        let kind = error.kind();
         let message = error.to_string();
-        match kind {
-            std::io::ErrorKind::NotFound => Self::Missing { sha: sha.clone() },
-            std::io::ErrorKind::PermissionDenied => Self::Denied { sha: sha.clone() },
-            _ => Self::Unknown {
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Read {
                 sha: sha.clone(),
-                message,
+                fault: AccessFault::from_kind(kind),
+            },
+            _ => Self::Read {
+                sha: sha.clone(),
+                fault: AccessFault::Unknown { message },
             },
         }
     }
@@ -95,28 +89,3 @@ impl BlobError {
 
 /// Blob result alias.
 pub type Result<T> = std::result::Result<T, BlobError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_io(path: &Path, kind: std::io::ErrorKind) -> BlobError {
-        BlobError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
-    }
-
-    #[test]
-    fn write_carries_destination_with_fault() {
-        let path = Path::new("cache/blobs/stored");
-        let error = write_io(path, std::io::ErrorKind::StorageFull);
-        match &error {
-            BlobError::Write { path: found, fault } => {
-                assert_eq!(found, path, "write keeps the path");
-                assert!(
-                    matches!(*fault, AccessFault::StorageFull),
-                    "write keeps the fault: {error}"
-                );
-            }
-            other => panic!("wrong write variant: {other}"),
-        }
-    }
-}

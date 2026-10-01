@@ -31,9 +31,7 @@ impl ArchiveBackend for ZipBackend {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn open_source(source: &Path) -> Result<Box<dyn driver::fs::FsFile>> {
     let reader = driver::fs::open(source);
     reader.map_err(|error| ArchiveError::from_io(source, error))
@@ -67,15 +65,19 @@ fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
         ) => ArchiveError::UnsupportedCompression {
             path: source.to_path_buf(),
         },
-        driver::zip::ZipError::UnsupportedArchive(message) => ArchiveError::Unknown {
-            path: source.to_path_buf(),
-            message: message.to_string(),
-        },
+        driver::zip::ZipError::UnsupportedArchive(message) => {
+            read_unknown(source, message.to_string())
+        }
         driver::zip::ZipError::Io(error) => ArchiveError::from_io(source, error),
-        other => ArchiveError::Unknown {
-            path: source.to_path_buf(),
-            message: other.to_string(),
-        },
+        other => read_unknown(source, other.to_string()),
+    }
+}
+
+/// Builds one raw read failure at the source path.
+fn read_unknown(source: &Path, message: String) -> ArchiveError {
+    ArchiveError::Read {
+        path: source.to_path_buf(),
+        fault: crate::faults::AccessFault::Unknown { message },
     }
 }
 /// Unpacks zip entries with per-entry streaming hashes.
@@ -86,9 +88,7 @@ fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::Missing`] for missing archives.
-/// - [`ArchiveError::Denied`] for denied archives.
-/// - [`ArchiveError::Unknown`] for other stream failures.
+/// - [`ArchiveError::Read`] for failed archive reads.
 /// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn unpack_stream(
     reader: Box<dyn driver::fs::FsFile>,

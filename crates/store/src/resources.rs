@@ -41,9 +41,7 @@ impl Resources {
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for escaping files.
-    /// - [`ResourceError::Missing`] for missing files.
-    /// - [`ResourceError::Denied`] for denied files.
-    /// - [`ResourceError::Unknown`] for other failures.
+    /// - [`ResourceError::Read`] for failed file reads.
     pub fn resource(&self, exec_root: &Path, path: &Path) -> Result<ResourceHandle> {
         if !path.starts_with(exec_root) {
             return Err(ResourceError::Escape {
@@ -66,9 +64,7 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Missing`] for missing files.
-    /// - [`ResourceError::Denied`] for denied files.
-    /// - [`ResourceError::Unknown`] for other failures.
+    /// - [`ResourceError::Read`] for failed file reads.
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         read_text(handle.canonical())
     }
@@ -109,9 +105,7 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Missing`] for missing files.
-    /// - [`ResourceError::Denied`] for denied files.
-    /// - [`ResourceError::Unknown`] for other failures.
+    /// - [`ResourceError::Read`] for failed file reads.
     pub fn open(&self, handle: &ResourceHandle) -> Result<Box<dyn std::io::Read>> {
         let path = handle.canonical();
         driver::fs::open(path)
@@ -123,9 +117,7 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Missing`] for missing files.
-    /// - [`ResourceError::Denied`] for denied files.
-    /// - [`ResourceError::Unknown`] for other failures.
+    /// - [`ResourceError::Read`] for failed file reads.
     pub fn mode(&self, handle: &ResourceHandle) -> Result<u32> {
         let path = handle.canonical();
         if driver::fs::read_link(path).is_ok() {
@@ -139,14 +131,14 @@ impl Resources {
 ///
 /// # Errors
 ///
-/// - [`ResourceError::Unknown`] for invalid text and other failures.
-/// - [`ResourceError::Missing`] for missing files.
-/// - [`ResourceError::Denied`] for denied files.
+/// - [`ResourceError::Read`] for failed file reads.
 fn read_text(path: &Path) -> Result<String> {
     match driver::fs::read(path) {
-        Ok(bytes) => String::from_utf8(bytes).map_err(|error| ResourceError::Unknown {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|error| ResourceError::Read {
             path: path.to_path_buf(),
-            message: error.to_string(),
+            fault: crate::faults::AccessFault::Unknown {
+                message: error.to_string(),
+            },
         }),
         Err(error) => Err(ResourceError::from_io(path, error)),
     }
@@ -155,6 +147,7 @@ fn read_text(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::faults::AccessFault;
     use confit_driver::fs::TestGuard;
 
     fn test_store() -> Resources {
@@ -243,8 +236,12 @@ mod tests {
         match store.resource(&root, &path) {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
-                Err(ResourceError::Unknown { path: found, .. }) => {
-                    assert_eq!(found, path, "binary reports the path")
+                Err(ResourceError::Read { path: found, fault }) => {
+                    assert_eq!(found, path, "binary reports the path");
+                    assert!(
+                        matches!(fault, AccessFault::Unknown { .. }),
+                        "binary keeps its text: {fault}"
+                    );
                 }
                 Err(error) => panic!("wrong text variant: {error}"),
             },
@@ -317,10 +314,38 @@ mod tests {
         };
         match store.open(&handle) {
             Ok(_) => panic!("absent spill passes"),
-            Err(ResourceError::Missing { path }) => {
-                assert!(path.ends_with("absent.txt"), "absent names file")
+            Err(ResourceError::Read { path, fault }) => {
+                assert!(path.ends_with("absent.txt"), "absent names file");
+                assert!(
+                    matches!(fault, AccessFault::Missing),
+                    "absent keeps the fault: {fault}"
+                );
             }
             Err(error) => panic!("wrong absent variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn open_reports_read_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let store = test_store();
+        let root = dir.path().join("project");
+        let path = root.join("profile.lua");
+        driver::fs::create_dir_all(&root).unwrap();
+        driver::fs::write(&path, b"return {}").unwrap();
+        let handle = match store.resource(&root, &path) {
+            Ok(handle) => handle,
+            Err(error) => panic!("resource births: {error}"),
+        };
+        guard.fail_reads(std::io::ErrorKind::PermissionDenied);
+        match store.open(&handle) {
+            Ok(_) => panic!("refused file passes"),
+            Err(ResourceError::Read { path: found, fault }) => {
+                assert_eq!(found, path, "open keeps the path");
+                assert!(matches!(fault, AccessFault::Denied), "open keeps the fault");
+            }
+            Err(error) => panic!("wrong open variant: {error}"),
         }
     }
 }

@@ -34,9 +34,7 @@ impl ArchiveBackend for TarBackend {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Missing`] for missing sources.
-/// - [`ArchiveError::Denied`] for denied sources.
-/// - [`ArchiveError::Unknown`] for other failures.
+/// - [`ArchiveError::Read`] for failed source reads.
 fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
     let reader = driver::fs::open(source);
     reader
@@ -53,9 +51,7 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::Missing`] for missing archives.
-/// - [`ArchiveError::Denied`] for denied archives.
-/// - [`ArchiveError::Unknown`] for other stream failures.
+/// - [`ArchiveError::Read`] for failed archive reads.
 /// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn unpack_stream(
     reader: Box<dyn std::io::Read>,

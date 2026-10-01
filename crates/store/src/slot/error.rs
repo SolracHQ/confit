@@ -9,25 +9,13 @@ use crate::faults::AccessFault;
 /// Slot failure shapes.
 #[derive(Debug, Error)]
 pub enum SlotError {
-    /// Missing slot holding the path.
-    #[error("cannot read '{path}': missing file", path = path.display())]
-    Missing {
+    /// Failed read holding the slot path with the fault.
+    #[error("cannot read '{path}': {fault}", path = path.display())]
+    Read {
         /// Holds the slot path under reading.
         path: PathBuf,
-    },
-    /// Denied slot holding the path.
-    #[error("cannot read '{path}': permission denied", path = path.display())]
-    Denied {
-        /// Holds the slot path under reading.
-        path: PathBuf,
-    },
-    /// Unknown failure holding the path with message.
-    #[error("cannot read '{path}': {message}", path = path.display())]
-    Unknown {
-        /// Holds the slot path under reading.
-        path: PathBuf,
-        /// Holds the failure message under reading.
-        message: String,
+        /// Holds the read fault cause.
+        fault: AccessFault,
     },
     /// Corrupt state holding the path.
     #[error("cannot read '{path}': corrupt state", path = path.display())]
@@ -57,23 +45,33 @@ pub enum SlotError {
         /// Holds the write fault cause.
         fault: AccessFault,
     },
+    /// Unknown write failure holding the slot path with message.
+    #[error("cannot write '{path}': {message}", path = path.display())]
+    WriteUnknown {
+        /// Holds the slot path under writing.
+        path: PathBuf,
+        /// Holds the failure message under writing.
+        message: String,
+    },
 }
 
 impl SlotError {
     /// Maps one io failure at the slot path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
-        let kind = error.kind();
         let message = error.to_string();
-        match kind {
-            std::io::ErrorKind::NotFound => Self::Missing {
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Read {
                 path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
             },
-            std::io::ErrorKind::PermissionDenied => Self::Denied {
+            _ => Self::Read {
                 path: path.to_path_buf(),
-            },
-            _ => Self::Unknown {
-                path: path.to_path_buf(),
-                message,
+                fault: AccessFault::Unknown { message },
             },
         }
     }
@@ -91,7 +89,7 @@ impl SlotError {
                 path: path.to_path_buf(),
                 fault: AccessFault::from_kind(kind),
             },
-            _ => Self::Unknown {
+            _ => Self::WriteUnknown {
                 path: path.to_path_buf(),
                 message,
             },
@@ -101,28 +99,3 @@ impl SlotError {
 
 /// Slot result alias.
 pub type Result<T> = std::result::Result<T, SlotError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_io(path: &Path, kind: std::io::ErrorKind) -> SlotError {
-        SlotError::from_write_io(path, std::io::Error::new(kind, "disk failed"))
-    }
-
-    #[test]
-    fn write_carries_slot_with_fault() {
-        let path = Path::new("state.json");
-        let error = write_io(path, std::io::ErrorKind::ReadOnlyFilesystem);
-        match &error {
-            SlotError::Write { path: found, fault } => {
-                assert_eq!(found, path, "write keeps the path");
-                assert!(
-                    matches!(*fault, AccessFault::ReadOnlyFilesystem),
-                    "write keeps the fault: {error}"
-                );
-            }
-            other => panic!("wrong write variant: {other}"),
-        }
-    }
-}

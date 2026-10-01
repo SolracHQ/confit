@@ -17,6 +17,8 @@ use vfs::{MemoryFS, VfsError, VfsFileType, VfsPath};
 thread_local! {
     static PARKED: RefCell<Option<VfsPath>> = const { RefCell::new(None) };
     static MODES: RefCell<BTreeMap<String, u32>> = const { RefCell::new(BTreeMap::new()) };
+    static READ_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
+    static WRITE_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
 }
 
 /// RAII guard parking one memory filesystem for the thread.
@@ -33,7 +35,23 @@ impl TestGuard {
         let root = VfsPath::new(MemoryFS::new());
         let prior = PARKED.with(|cell| cell.borrow_mut().replace(root));
         MODES.with(|cell| cell.borrow_mut().clear());
+        READ_FAULT.with(|cell| *cell.borrow_mut() = None);
+        WRITE_FAULT.with(|cell| *cell.borrow_mut() = None);
         Self { prior }
+    }
+
+    /// Arms one sticky read failure for the guard life.
+    ///
+    /// Open with read with read_to_string fail until drop.
+    pub fn fail_reads(&self, kind: io::ErrorKind) {
+        READ_FAULT.with(|cell| *cell.borrow_mut() = Some(kind));
+    }
+
+    /// Arms one sticky write failure for the guard life.
+    ///
+    /// Write with create with append fail until drop.
+    pub fn fail_writes(&self, kind: io::ErrorKind) {
+        WRITE_FAULT.with(|cell| *cell.borrow_mut() = Some(kind));
     }
 }
 
@@ -102,6 +120,7 @@ impl Drop for MemFile {
 /// - [Other] when the path holds a folder and when no
 ///   guard holds.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+    check_read()?;
     let root = rooted()?;
     mem_read(&root, path)
 }
@@ -116,6 +135,7 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 /// - [Other] when the path holds a folder and when no
 ///   guard holds.
 pub fn read_to_string(path: &Path) -> io::Result<String> {
+    check_read()?;
     let root = rooted()?;
     mem_read_to_string(&root, path)
 }
@@ -128,6 +148,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 /// - [Other] when the parent holds no entry and when
 ///   no guard holds.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    check_write()?;
     let root = rooted()?;
     mem_write(&root, path, bytes)
 }
@@ -234,6 +255,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
 /// - [Other] when the path holds a folder and when no
 ///   guard holds.
 pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
+    check_read()?;
     let root = rooted()?;
     let bytes = mem_read(&root, path)?;
     let handle = MemFile {
@@ -276,6 +298,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
 /// - [Other] when the parent holds no entry and when
 ///   no guard holds.
 pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
+    check_write()?;
     let root = rooted()?;
     to_vfs(&root, path)?.create_file().map_err(io_error)?;
     let handle = MemFile {
@@ -297,6 +320,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 /// - [Other] when the path holds a folder, when the
 ///   parent holds no entry, and when no guard holds.
 pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
+    check_write()?;
     let root = rooted()?;
     let target = to_vfs(&root, path)?;
     let bytes = if target.exists().map_err(io_error)? {
@@ -416,6 +440,26 @@ fn parked() -> Option<VfsPath> {
 /// Tests forgetting the guard fail here, never on the host.
 fn rooted() -> io::Result<VfsPath> {
     parked().ok_or_else(|| io::Error::other("confit driver: no test guard installed"))
+}
+
+/// Fails one read with the armed kind while set.
+///
+/// Sticky reads fail until the guard drops.
+fn check_read() -> io::Result<()> {
+    if let Some(kind) = READ_FAULT.with(|cell| *cell.borrow()) {
+        return Err(io::Error::new(kind, "confit driver: armed read fails"));
+    }
+    Ok(())
+}
+
+/// Fails one write with the armed kind while set.
+///
+/// Sticky writes fail until the guard drops.
+fn check_write() -> io::Result<()> {
+    if let Some(kind) = WRITE_FAULT.with(|cell| *cell.borrow()) {
+        return Err(io::Error::new(kind, "confit driver: armed write fails"));
+    }
+    Ok(())
 }
 
 /// Maps one host path onto the parked memory backend.

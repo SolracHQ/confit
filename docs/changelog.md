@@ -60,9 +60,6 @@
 - The bundle envelope reads plain tar, the outer gzip level
   compressed nothing since pool blobs already gzip alone.
   Readers keep both framings, writers emit plain tar.
-- Editor stubs still describe the old string surface. Completion
-  for the handle verbs lands with stub generation, hand edits fill
-  the gap until then.
 
 ## [0.8.1] (never released)
 

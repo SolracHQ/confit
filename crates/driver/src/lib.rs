@@ -4,7 +4,8 @@
 //!
 //! The `fs` module holds every verb with `FsFile` handles,
 //! `atomic` holds staging writes, `gzip` and `tar` and `zip`
-//! hold framing over caller streams.
+//! hold framing over caller streams, `http` holds downloads
+//! into caller streams.
 
 #![deny(missing_docs)]
 
@@ -13,6 +14,8 @@ mod atomic;
 pub mod fs;
 /// Gzip single streams over caller handles.
 pub mod gzip;
+/// HTTP downloads over caller streams.
+pub mod http;
 /// Tar framing over caller streams.
 pub mod tar;
 /// Zip framing over caller streams.

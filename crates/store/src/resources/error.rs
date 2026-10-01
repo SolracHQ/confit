@@ -4,14 +4,18 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::faults::AccessFault;
+
 /// Resource failure shapes.
 #[derive(Debug, Error)]
 pub enum ResourceError {
-    /// Missing file holding the path.
-    #[error("cannot read '{path}': missing file", path = path.display())]
-    Missing {
+    /// Failed read holding the resource path with the fault.
+    #[error("cannot read '{path}': {fault}", path = path.display())]
+    Read {
         /// Holds the resource path under reading.
         path: PathBuf,
+        /// Holds the read fault cause.
+        fault: AccessFault,
     },
     /// Escaping path holding the offending path.
     #[error("resource path '{path}' escapes exec root", path = path.display())]
@@ -19,37 +23,25 @@ pub enum ResourceError {
         /// Holds the offending resource path.
         path: PathBuf,
     },
-    /// Denied file holding the path.
-    #[error("cannot read '{path}': permission denied", path = path.display())]
-    Denied {
-        /// Holds the resource path under reading.
-        path: PathBuf,
-    },
-    /// Unknown failure holding the path with message.
-    #[error("cannot read '{path}': {message}", path = path.display())]
-    Unknown {
-        /// Holds the resource path under reading.
-        path: PathBuf,
-        /// Holds the failure message under reading.
-        message: String,
-    },
 }
 
 impl ResourceError {
     /// Maps one io failure at the resource path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
-        let kind = error.kind();
         let message = error.to_string();
-        match kind {
-            std::io::ErrorKind::NotFound => Self::Missing {
+        match error.kind() {
+            kind @ (std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::StorageFull
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::QuotaExceeded
+            | std::io::ErrorKind::FileTooLarge) => Self::Read {
                 path: path.to_path_buf(),
+                fault: AccessFault::from_kind(kind),
             },
-            std::io::ErrorKind::PermissionDenied => Self::Denied {
+            _ => Self::Read {
                 path: path.to_path_buf(),
-            },
-            _ => Self::Unknown {
-                path: path.to_path_buf(),
-                message,
+                fault: AccessFault::Unknown { message },
             },
         }
     }
