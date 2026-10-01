@@ -8,7 +8,6 @@ use confit_model::error::Result;
 use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
-use confit_runtime::Applier;
 use confit_runtime::Checks;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -174,10 +173,9 @@ fn decide<'a>(
     hook: &'a Hook,
     checks: &Checks,
     changed: &BTreeSet<Route>,
-    applier: &Applier,
 ) -> Result<EvaluatedHook<'a>> {
     if let Some(gate) = hook.requires.as_ref()
-        && !checks.check(gate, changed, applier)
+        && !checks.check(gate, changed)
     {
         return Ok(EvaluatedHook {
             hook,
@@ -185,20 +183,20 @@ fn decide<'a>(
         });
     }
     if let Some(gate) = hook.when.as_ref()
-        && !checks.check(gate, changed, applier)
+        && !checks.check(gate, changed)
     {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::WhenClosed(describe_condition(gate)),
         });
     }
-    if checks_pass(hook, checks, changed, applier) {
+    if checks_pass(hook, checks, changed) {
         return Ok(EvaluatedHook {
             hook,
             outcome: PreviewOutcome::ChecksPass,
         });
     }
-    let Some(binary) = resolve_hook(hook, checks, applier) else {
+    let Some(binary) = resolve_hook(hook, checks) else {
         let head = hook.argv.first().map(Arg::display).unwrap_or_default();
         return Err(confit_model::error::Error::Plan(format!(
             "hook '{}' cannot resolve '{head}'",
@@ -214,21 +212,14 @@ fn decide<'a>(
 /// Resolves one hook binary with routes expanded inline.
 ///
 /// Hook path entries search first, runtime dirs follow. Route
-/// slots expand through the resolver; text runs verbatim.
+/// slots expand against host folders; text runs verbatim.
 /// First existing executable wins. No hook copy.
-pub fn resolve_hook(hook: &Hook, checks: &Checks, applier: &Applier) -> Option<PathBuf> {
-    let head = match hook.argv.first()? {
-        Arg::Text(head) => head.clone(),
-        Arg::Route(route) => applier.resolve(route).to_string_lossy().into_owned(),
-    };
-    let mut dirs: Vec<PathBuf> = hook
-        .path
-        .iter()
-        .map(|slot| match slot {
-            Arg::Text(dir) => PathBuf::from(dir),
-            Arg::Route(route) => applier.resolve(route),
-        })
-        .collect();
+pub fn resolve_hook(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
+    let head = hook
+        .argv
+        .first()
+        .map(|slot| slot.materialize().to_string_lossy().into_owned())?;
+    let mut dirs: Vec<PathBuf> = hook.path.iter().map(Arg::materialize).collect();
     dirs.extend(checks.path_dirs.iter().cloned());
     confit_runtime::find_executable(&head, &dirs)
 }
@@ -242,12 +233,11 @@ pub fn evaluate_hooks<'a>(
     manifest: &'a Manifest,
     checks: &Checks,
     changed: &BTreeSet<Route>,
-    applier: &Applier,
 ) -> Result<Vec<EvaluatedHook<'a>>> {
     manifest
         .hooks
         .iter()
-        .map(|hook| decide(hook, checks, changed, applier))
+        .map(|hook| decide(hook, checks, changed))
         .collect()
 }
 
@@ -280,12 +270,8 @@ pub fn render_evaluated(evaluated: &[EvaluatedHook]) -> Vec<String> {
 }
 
 /// Reports whether one hook reads satisfied with passing checks.
-fn checks_pass(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>, applier: &Applier) -> bool {
-    !hook.checks.is_empty()
-        && hook
-            .checks
-            .iter()
-            .all(|check| checks.check(check, changed, applier))
+fn checks_pass(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> bool {
+    !hook.checks.is_empty() && hook.checks.iter().all(|check| checks.check(check, changed))
 }
 
 /// Renders one preview line for a runnable hook.
@@ -404,23 +390,17 @@ mod tests {
     use confit_driver::fs::TestGuard;
     use confit_model::hook::merge_hooks;
 
-    fn preview_hook(
-        hook: &Hook,
-        checks: &Checks,
-        changed: &BTreeSet<Route>,
-        applier: &Applier,
-    ) -> Result<String> {
-        Ok(render_preview(&decide(hook, checks, changed, applier)?))
+    fn preview_hook(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> Result<String> {
+        Ok(render_preview(&decide(hook, checks, changed)?))
     }
 
     fn hook_preview(
         manifest: &Manifest,
         checks: &Checks,
         changed: &BTreeSet<Route>,
-        applier: &Applier,
     ) -> Result<Vec<String>> {
         Ok(render_evaluated(&evaluate_hooks(
-            manifest, checks, changed, applier,
+            manifest, checks, changed,
         )?))
     }
 
@@ -561,13 +541,8 @@ mod tests {
             .collect()
     }
 
-    fn preview_line(
-        hook: &Hook,
-        checks: &Checks,
-        changed: &BTreeSet<Route>,
-        applier: &Applier,
-    ) -> String {
-        match preview_hook(hook, checks, changed, applier) {
+    fn preview_line(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> String {
+        match preview_hook(hook, checks, changed) {
             Ok(line) => line,
             Err(error) => panic!("preview renders: {error}"),
         }
@@ -586,11 +561,10 @@ mod tests {
     fn closed_requires_beats_open_when() {
         let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
         hook.requires = Some(changed("missing"));
         assert_eq!(
-            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            preview_line(&hook, &checks, &touched).as_str(),
             "warn: tool cannot run (changed(literal:missing))"
         );
     }
@@ -599,7 +573,6 @@ mod tests {
     fn closed_when_beats_passing_checks() {
         let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let probe_path = checks.path_dirs[0].join("probe");
         let mut hook = hook(
             &["tool"],
@@ -610,7 +583,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            preview_line(&hook, &checks, &touched).as_str(),
             "skipped: tool (no need: changed(literal:missing))"
         );
     }
@@ -619,7 +592,6 @@ mod tests {
     fn open_gates_with_passing_checks_skip_on_checks() {
         let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let probe_path = checks.path_dirs[0].join("probe");
         let mut hook = hook(
             &["tool"],
@@ -630,7 +602,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            preview_line(&hook, &checks, &touched).as_str(),
             "skipped: tool (checks pass)"
         );
     }
@@ -639,7 +611,6 @@ mod tests {
     fn open_gates_with_failing_checks_run() {
         let (_guard, _test, checks) = preview_state();
         let touched = changed_set(&["touched"]);
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let absent = checks.path_dirs[0].join("absent");
         let mut hook = hook(
             &["tool"],
@@ -650,7 +621,7 @@ mod tests {
         );
         hook.requires = Some(changed("touched"));
         assert_eq!(
-            preview_line(&hook, &checks, &touched, &applier).as_str(),
+            preview_line(&hook, &checks, &touched).as_str(),
             tool_line(&checks, "")
         );
     }
@@ -820,7 +791,6 @@ mod tests {
 
         let (_guard, _test, checks) = preview_runtime();
         let probe_path = checks.path_dirs[0].join("probe");
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let manifest = confit_model::manifest::Manifest {
             version: confit_model::manifest::MANIFEST_VERSION,
             documents: Vec::new(),
@@ -840,7 +810,7 @@ mod tests {
                 },
             ],
         };
-        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -864,7 +834,6 @@ mod tests {
 
         let (_guard, _test, checks) = preview_runtime();
         let absent = checks.path_dirs[0].join("absent");
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let manifest = confit_model::manifest::Manifest {
             version: confit_model::manifest::MANIFEST_VERSION,
             documents: Vec::new(),
@@ -875,7 +844,7 @@ mod tests {
                 ..hook_fixture(&["tool"])
             }],
         };
-        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
+        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new()) {
             Ok(lines) => lines,
             Err(error) => panic!("preview renders: {error}"),
         };
@@ -885,13 +854,12 @@ mod tests {
     #[test]
     fn hook_preview_miss_fails_naming_hook() {
         let (_guard, _test, checks) = preview_runtime();
-        let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
         let manifest = confit_model::manifest::Manifest {
             version: confit_model::manifest::MANIFEST_VERSION,
             documents: Vec::new(),
             hooks: vec![hook_fixture(&["absent", "install"])],
         };
-        match hook_preview(&manifest, &checks, &BTreeSet::new(), &applier) {
+        match hook_preview(&manifest, &checks, &BTreeSet::new()) {
             Ok(_) => panic!("missing binary passes"),
             Err(error) => assert_eq!(
                 error.to_string(),

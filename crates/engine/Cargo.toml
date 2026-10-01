@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 confit-model = { path = "../model" }
 confit-store = { version = "0.8.0", path = "../store" }
+crossbeam-channel.workspace = true
 log.workspace = true
 minijinja.workspace = true
 mlua = { workspace = true, features = ["lua54", "vendored"] }

@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use confit_model::progress::ProgressSender;
+
 pub mod archive;
 pub mod blob;
 pub mod bundle;
@@ -95,14 +97,19 @@ impl Stores {
     /// host. Downloads ride the network in production and
     /// the script registry under test; tests script bodies
     /// through the transport registry functions.
-    pub fn new(roots: StoreRoots) -> Self {
+    /// The sender carries blob with archive and fetch facts.
+    pub fn new(roots: StoreRoots, progress: ProgressSender) -> Self {
         let resources = Arc::new(Resources::new(&roots));
-        let blobs = Arc::new(BlobStore::new(&roots));
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
+        let blobs = Arc::new(BlobStore::new(&roots, progress.clone()));
+        let archives = Arc::new(ArchiveStore::new(
+            &roots,
+            resources.clone(),
+            progress.clone(),
+        ));
         Self {
             resources: resources.clone(),
             blobs: blobs.clone(),
-            fetch: Arc::new(FetchCache::new(&roots)),
+            fetch: Arc::new(FetchCache::new(&roots, progress)),
             archives: archives.clone(),
             bundles: Arc::new(BundleStore::new(archives, blobs, resources)),
             slots: Arc::new(SlotStore::new(&roots)),

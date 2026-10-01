@@ -35,6 +35,17 @@ impl Arg {
         }
     }
 
+    /// Materializes one argument into a host path.
+    ///
+    /// Text runs verbatim, routes expand against host
+    /// folders.
+    pub fn materialize(&self) -> std::path::PathBuf {
+        match self {
+            Self::Text(text) => std::path::PathBuf::from(text),
+            Self::Route(route) => route.expand(),
+        }
+    }
+
     /// Renders argv slots as one shell-safe display line.
     ///
     /// Slots holding shell-special text quote single, so the

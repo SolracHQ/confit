@@ -27,7 +27,7 @@ impl Applier {
         let blobs = self.stores.blobs();
         let mut written = 0;
         for document in documents {
-            let expanded = self.resolve(&document.destination);
+            let expanded = document.destination.expand();
             if document.data.unmanaged()
                 && self.disk.exists(&expanded)
                 && !changed.contains(&document.destination)
@@ -110,10 +110,8 @@ impl Applier {
     }
 
     fn emit_written(&self, destination: &Route) {
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::DocumentWritten {
-                path: destination.display(),
-            });
-        }
+        let _ = self.progress.send(Event::DocumentWritten {
+            path: destination.display(),
+        });
     }
 }

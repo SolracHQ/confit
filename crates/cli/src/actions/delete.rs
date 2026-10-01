@@ -38,7 +38,8 @@ pub struct DeleteReport {
 /// use confit_store::{StoreRoots, Stores};
 ///
 /// let args = DeleteArgs { name: "@personal".to_string() };
-/// let stores = Stores::new(StoreRoots::standard());
+/// let (sender, _) = crossbeam_channel::unbounded();
+/// let stores = Stores::new(StoreRoots::standard(), sender);
 /// let report = confit_cli::actions::delete::run(&args, stores);
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```

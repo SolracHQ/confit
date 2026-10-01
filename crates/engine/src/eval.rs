@@ -59,7 +59,10 @@ impl Session {
         let root = absolutize(&resolve_root(profile, &opts.root))?;
         let stores = match opts.stores {
             Some(stores) => stores,
-            None => Stores::new(confit_store::StoreRoots::standard()),
+            None => {
+                let (sender, _) = crossbeam_channel::unbounded();
+                Stores::new(confit_store::StoreRoots::standard(), sender)
+            }
         };
         let lua = Lua::new_with(
             StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,

@@ -19,14 +19,26 @@ use crate::presentation::spinner::{PrintSender, SuspendControl};
 ///
 /// Silent by default. Host runs attach live senders at the
 /// call site through the fields directly.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Sinks {
     /// Gains stderr lines through the renderer, holding `None` for silence.
     pub print: Option<PrintSender>,
-    /// Gains engine facts, holding `None` for silence.
-    pub progress: Option<ProgressSender>,
+    /// Gains engine facts.
+    pub progress: ProgressSender,
     /// Parks widgets across prompts, holding `None` while headless.
     pub suspend: Option<SuspendControl>,
+}
+
+impl Default for Sinks {
+    /// Silent sinks behind a dropped receiver.
+    fn default() -> Self {
+        let (sender, _) = crossbeam_channel::unbounded();
+        Self {
+            print: None,
+            progress: sender,
+            suspend: None,
+        }
+    }
 }
 
 impl Sinks {
@@ -85,25 +97,19 @@ impl Sinks {
 
     /// Emits one hashing fact while a sender passes.
     pub fn emit_hashing(&self) {
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::Hashing);
-        }
+        let _ = self.progress.send(Event::Hashing);
     }
 
     /// Emits one plan-reading fact while a sender passes.
     pub fn emit_reading_plan(&self, path: &Path) {
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::ReadingPlan {
-                path: path.display().to_string(),
-            });
-        }
+        let _ = self.progress.send(Event::ReadingPlan {
+            path: path.display().to_string(),
+        });
     }
 
     /// Emits one plan-writing fact while a sender passes.
     pub fn emit_writing_manifest(&self, documents: usize) {
-        if let Some(sender) = self.progress.as_ref() {
-            let _ = sender.send(Event::WritingManifest { documents });
-        }
+        let _ = self.progress.send(Event::WritingManifest { documents });
     }
 }
 

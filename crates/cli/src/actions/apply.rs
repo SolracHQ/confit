@@ -50,8 +50,9 @@ pub struct ApplyReport {
 /// use std::io::Cursor;
 ///
 /// let mut input = Cursor::new("yes\n");
-/// let stores = Stores::new(StoreRoots::standard());
-/// let applier = Applier::with_stores(stores.clone());
+/// let (sender, _) = crossbeam_channel::unbounded();
+/// let stores = Stores::new(StoreRoots::standard(), sender.clone());
+/// let applier = Applier::with_stores(stores.clone(), sender);
 /// let manifest = match Manifest::build(
 ///     vec![Document::new(
 ///         Route::new(RouteBase::Home, "note").unwrap(),
@@ -145,8 +146,9 @@ impl<'a> ApplyRunner<'a> {
     ///     force: true,
     /// };
     /// let mut input = Cursor::new(String::new());
-    /// let stores = Stores::new(StoreRoots::standard());
-    /// let applier = Applier::with_stores(stores.clone());
+    /// let (sender, _) = crossbeam_channel::unbounded();
+    /// let stores = Stores::new(StoreRoots::standard(), sender.clone());
+    /// let applier = Applier::with_stores(stores.clone(), sender);
     /// let runner = ApplyRunner::from_args(&args, &mut input, stores, applier, Default::default(), None);
     /// assert!(matches!(runner, Ok(_) | Err(_)));
     /// ```
@@ -209,8 +211,12 @@ impl<'a> ApplyRunner<'a> {
                 positional.display()
             )));
         }
-        let evaluation =
-            evaluate_shared(&args.shared, positional, sinks.progress.clone(), &stores)?;
+        let evaluation = evaluate_shared(
+            &args.shared,
+            positional,
+            Some(sinks.progress.clone()),
+            &stores,
+        )?;
         let previous = stores
             .slots()
             .load()
@@ -299,8 +305,9 @@ impl<'a> ApplyRunner<'a> {
     ///     force: true,
     /// };
     /// let mut input = Cursor::new(String::new());
-    /// let stores = Stores::new(StoreRoots::standard());
-    /// let applier = Applier::with_stores(stores.clone());
+    /// let (sender, _) = crossbeam_channel::unbounded();
+    /// let stores = Stores::new(StoreRoots::standard(), sender.clone());
+    /// let applier = Applier::with_stores(stores.clone(), sender);
     /// let report = ApplyRunner::run(&args, &mut input, stores, applier, Default::default(), None);
     /// assert!(matches!(report, Ok(_) | Err(_)));
     /// ```
@@ -344,7 +351,7 @@ impl<'a> ApplyRunner<'a> {
         let baseline = self.applier.drift(reference, order);
         self.checks = Checks::current();
         self.changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let evaluated = evaluate_hooks(&built, &self.checks, &self.changed, &self.applier)?;
+        let evaluated = evaluate_hooks(&built, &self.checks, &self.changed)?;
         let lifecycle = confit_model::hook::diff_lifecycle(&built.hooks, &self.previous.hooks);
         let report = Summary {
             built: &built,
@@ -388,7 +395,7 @@ impl<'a> ApplyRunner<'a> {
         let _ = self
             .stores
             .slots()
-            .store(&built, self.sinks.progress.as_ref())
+            .store(&built)
             .map_err(|error| Error::Plan(error.to_string()))?;
         let mut handles = Vec::new();
         for document in &built.documents {
@@ -429,7 +436,7 @@ impl<'a> ApplyRunner<'a> {
                 && hook
                     .checks
                     .iter()
-                    .all(|check| self.checks.check(check, &self.changed, &self.applier))
+                    .all(|check| self.checks.check(check, &self.changed))
             {
                 let line = format!("skipped: {} (checks pass)", Arg::join(&hook.argv));
                 self.sinks.print_line(line);
@@ -453,34 +460,24 @@ impl<'a> ApplyRunner<'a> {
         total: usize,
     ) -> Result<()> {
         let argv_text = Arg::join(&hook.argv);
-        let binary = resolve_hook(hook, &self.checks, &self.applier).ok_or_else(|| {
+        let binary = resolve_hook(hook, &self.checks).ok_or_else(|| {
             let head = hook.argv.first().map(Arg::display).unwrap_or_default();
             Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
         })?;
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for slot in hook.argv.iter().skip(1) {
-            match slot {
-                Arg::Text(text) => spawn.push(text.clone()),
-                Arg::Route(route) => {
-                    spawn.push(self.applier.resolve(route).to_string_lossy().into_owned())
-                }
-            }
+            spawn.push(slot.materialize().to_string_lossy().into_owned());
         }
         let line = format!("hook {position} of {total}: {argv_text}");
         self.sinks.print_line(line.clone());
-        if let Some(sender) = self.sinks.progress.as_ref() {
-            let _ = sender.send(Event::HookRunning {
-                position,
-                total,
-                argv: argv_text.clone(),
-            });
-        }
+        let _ = self.sinks.progress.send(Event::HookRunning {
+            position,
+            total,
+            argv: argv_text.clone(),
+        });
         let mut path_dirs: Vec<std::path::PathBuf> = Vec::with_capacity(hook.path.len());
         for slot in &hook.path {
-            match slot {
-                Arg::Text(text) => path_dirs.push(std::path::PathBuf::from(text)),
-                Arg::Route(route) => path_dirs.push(self.applier.resolve(route)),
-            }
+            path_dirs.push(slot.materialize());
         }
         let outcome = hooks::run(&spawn, &path_dirs, hook.timeout_secs)?;
         if let Some(log) = self.log_file.clone() {
@@ -501,7 +498,7 @@ impl<'a> ApplyRunner<'a> {
     fn gate_line(&self, hook: &confit_model::hook::Hook) -> Option<String> {
         let argv_text = Arg::join(&hook.argv);
         if let Some(gate) = hook.requires.as_ref()
-            && !self.checks.check(gate, &self.changed, &self.applier)
+            && !self.checks.check(gate, &self.changed)
         {
             return Some(format!(
                 "warn: {argv_text} cannot run ({})",
@@ -509,7 +506,7 @@ impl<'a> ApplyRunner<'a> {
             ));
         }
         if let Some(gate) = hook.when.as_ref()
-            && !self.checks.check(gate, &self.changed, &self.applier)
+            && !self.checks.check(gate, &self.changed)
         {
             return Some(format!(
                 "skipped: {argv_text} (no need: {})",
@@ -532,7 +529,7 @@ impl<'a> ApplyRunner<'a> {
         let failed: Vec<String> = hook
             .checks
             .iter()
-            .filter(|check| !self.checks.check(check, &self.changed, &self.applier))
+            .filter(|check| !self.checks.check(check, &self.changed))
             .map(describe_condition)
             .collect();
         if failed.is_empty() {

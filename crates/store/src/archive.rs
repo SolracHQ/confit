@@ -11,6 +11,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use confit_model::progress::{Event, ProgressSender};
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
@@ -63,16 +64,19 @@ trait ArchiveBackend {
 pub struct ArchiveStore {
     temp_base: PathBuf,
     resources: Arc<Resources>,
+    progress: ProgressSender,
 }
 
 impl ArchiveStore {
     /// Builds a file-backed archive store under the temp base.
     ///
     /// Roots arrive explicit from store construction.
-    pub fn new(roots: &StoreRoots, resources: Arc<Resources>) -> Self {
+    /// The sender carries unpack facts.
+    pub fn new(roots: &StoreRoots, resources: Arc<Resources>, progress: ProgressSender) -> Self {
         Self {
             temp_base: roots.temp_base.clone(),
             resources,
+            progress,
         }
     }
 
@@ -205,7 +209,17 @@ impl ArchiveStore {
             Ok(())
         });
         match outcome {
-            Ok(()) => streamed_handles(dest, built.unwrap_or_default().as_slice(), &self.resources),
+            Ok(()) => {
+                let handles =
+                    streamed_handles(dest, built.unwrap_or_default().as_slice(), &self.resources)?;
+                let count = handles.len();
+                let _ = self.progress.send(Event::Unpacked {
+                    archive: source.display().to_string(),
+                    kept: count,
+                    total: count,
+                });
+                Ok(handles)
+            }
             Err(error) => {
                 if let Some(path) = &staged {
                     let _ = driver::fs::remove_dir_all(path);
@@ -491,7 +505,8 @@ mod tests {
     fn test_store(dir: &Path) -> ArchiveStore {
         let roots = test_roots(dir);
         let resources = std::sync::Arc::new(Resources::new(&roots));
-        ArchiveStore::new(&roots, resources)
+        let (sender, _) = crossbeam_channel::unbounded();
+        ArchiveStore::new(&roots, resources, sender)
     }
 
     fn test_resources(dir: &Path) -> Resources {
@@ -1165,6 +1180,38 @@ mod tests {
                 );
             }
             Err(error) => panic!("wrong spill variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn extract_announces_unpacked_with_counts() {
+        use confit_model::progress::Event;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let roots = test_roots(dir.path());
+        let resources = std::sync::Arc::new(Resources::new(&roots));
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = ArchiveStore::new(&roots, resources, sender);
+        let archive = born_archive(
+            &store,
+            dir.path(),
+            "fonts.tar.gz",
+            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("b.txt", b"beta")]),
+        );
+        match store.extract(&archive) {
+            Ok(handles) => {
+                assert_eq!(handles.len(), 2, "spill births two members")
+            }
+            Err(error) => panic!("archive extracts: {error}"),
+        }
+        let events: Vec<Event> = receiver.try_iter().collect();
+        assert_eq!(events.len(), 1, "unpack fires one fact");
+        match &events[0] {
+            Event::Unpacked { kept, total, .. } => {
+                assert_eq!((*kept, *total), (2, 2), "unpack keeps every member");
+            }
+            other => panic!("unpack announces itself: {other:?}"),
         }
     }
 }

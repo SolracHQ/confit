@@ -9,6 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use confit_model::document::BlobRef;
+use confit_model::progress::{Event, ProgressSender};
 use confit_model::sha::{Sha, ShaWriter};
 use sha2::Digest;
 
@@ -36,6 +37,7 @@ pub struct BlobStore {
     roots: StoreRoots,
     pool: PathBuf,
     cache: PathBuf,
+    progress: ProgressSender,
 }
 
 /// Verifying blob byte stream.
@@ -62,11 +64,13 @@ impl BlobStore {
     /// Builds a file-backed blob pool under the config base.
     ///
     /// Roots arrive explicit from store construction.
-    pub fn new(roots: &StoreRoots) -> Self {
+    /// The sender carries compression facts.
+    pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
         Self {
             roots: roots.clone(),
             pool: roots.config_base.join(BLOBS_DIR),
             cache: roots.cache_base.join(BLOBS_DIR),
+            progress,
         }
     }
 
@@ -134,17 +138,24 @@ impl BlobStore {
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
     pub fn put(&self, source: BlobSource<'_>) -> Result<BlobHandle> {
-        let (mut reader, sha): (Box<dyn Read>, Sha) = match source {
+        let _ = self
+            .progress
+            .send(Event::CompressStarted { blobs: 1, bytes: 0 });
+        let (mut reader, sha, raw_len): (Box<dyn Read>, Sha, u64) = match source {
             BlobSource::Bytes(bytes) => (
                 Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>,
                 Sha::hash(bytes),
+                bytes.len() as u64,
             ),
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
                 let sha = handle.sha().clone();
+                let raw_len = driver::fs::metadata(path)
+                    .map(|facts| facts.len())
+                    .unwrap_or(0);
                 let file =
                     driver::fs::open(path).map_err(|error| BlobError::from_read_io(&sha, error))?;
-                (file as Box<dyn Read>, sha)
+                (file as Box<dyn Read>, sha, raw_len)
             }
         };
         driver::fs::create_dir_all(&self.cache)
@@ -166,6 +177,11 @@ impl BlobStore {
         let dest = self.cache.join(handle.stored().hex());
         driver::fs::rename(&staging, &dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
+        let _ = self.progress.send(Event::BlobCompressed {
+            done: 1,
+            total: 1,
+            bytes: raw_len,
+        });
         Ok(handle)
     }
 
@@ -255,6 +271,9 @@ impl BlobStore {
     /// - [`BlobError::Write`] for pool write faults.
     /// - [`BlobError::WriteUnknown`] for other pool write failures.
     pub fn persist(&self, blobs: &[BlobHandle]) -> Result<()> {
+        if !blobs.is_empty() {
+            let _ = self.progress.send(Event::Promoting { blobs: blobs.len() });
+        }
         for blob in blobs {
             let dest = self.pool.join(blob.stored().hex());
             let source = self.cache.join(blob.stored().hex());
@@ -432,7 +451,8 @@ mod tests {
     }
 
     fn test_store(dir: &Path) -> BlobStore {
-        BlobStore::new(&test_roots(dir))
+        let (sender, _) = crossbeam_channel::unbounded();
+        BlobStore::new(&test_roots(dir), sender)
     }
 
     fn read_open(store: &BlobStore, handle: &BlobHandle) -> Vec<u8> {
@@ -482,7 +502,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let store = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
         let handle = match store.put(BlobSource::Bytes(b"preview bytes")) {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
@@ -509,7 +530,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let store = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
         let handle = match store.put(BlobSource::Bytes(b"applied bytes")) {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
@@ -547,7 +569,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let store = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
         let raw = b"cache precedence bytes";
         let handle = match store.put(BlobSource::Bytes(raw)) {
             Ok(handle) => handle,
@@ -658,7 +681,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let store = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
         let slots = SlotStore::new(&roots);
         let kept = match store.put(BlobSource::Bytes(b"kept bytes")) {
             Ok(handle) => handle,
@@ -687,7 +711,7 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("persist lands: {error}"),
         }
-        match slots.store(&manifest, None) {
+        match slots.store(&manifest) {
             Ok(_) => {}
             Err(error) => panic!("referencing manifest stores: {error}"),
         }
@@ -702,7 +726,7 @@ mod tests {
         assert!(store.resolve(&dropped.to_ref()).is_err(), "the orphan dies");
         assert_eq!(read_open(&store, &kept), b"kept bytes");
         for _ in 1..=6 {
-            match slots.store(&Manifest::empty(), None) {
+            match slots.store(&Manifest::empty()) {
                 Ok(_) => {}
                 Err(error) => panic!("empty manifest stores: {error}"),
             }
@@ -722,7 +746,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let store = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
         guard.fail_writes(std::io::ErrorKind::StorageFull);
         match store.put(BlobSource::Bytes(b"full disk")) {
             Ok(_) => panic!("full disk passes"),
@@ -738,5 +763,58 @@ mod tests {
             }
             Err(error) => panic!("wrong put variant: {error}"),
         }
+    }
+
+    #[test]
+    fn put_announces_compression_pair_with_bytes() {
+        use confit_model::progress::Event;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&test_roots(dir.path()), sender);
+        let raw = b"announced bytes";
+        match store.put(BlobSource::Bytes(raw)) {
+            Ok(_) => {}
+            Err(error) => panic!("pool stores: {error}"),
+        }
+        let events: Vec<Event> = receiver.try_iter().collect();
+        assert_eq!(events.len(), 2, "put fires two facts");
+        assert!(
+            matches!(events[0], Event::CompressStarted { .. }),
+            "compression starts first"
+        );
+        match &events[1] {
+            Event::BlobCompressed { done, total, bytes } => {
+                assert_eq!((*done, *total), (1, 1), "single put seals one blob");
+                assert_eq!(*bytes, raw.len() as u64, "finished bytes name raw count");
+            }
+            other => panic!("compression finishes last: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn persist_announces_promoting_count() {
+        use confit_model::progress::Event;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&test_roots(dir.path()), sender);
+        let handle = match store.put(BlobSource::Bytes(b"promoted bytes")) {
+            Ok(handle) => handle,
+            Err(error) => panic!("cache stores: {error}"),
+        };
+        let _ = receiver.try_iter().collect::<Vec<_>>();
+        match store.persist(std::slice::from_ref(&handle)) {
+            Ok(()) => {}
+            Err(error) => panic!("persist lands: {error}"),
+        }
+        let events: Vec<Event> = receiver.try_iter().collect();
+        assert_eq!(
+            events,
+            vec![Event::Promoting { blobs: 1 }],
+            "persist fires one promoting fact"
+        );
     }
 }

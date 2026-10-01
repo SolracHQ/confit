@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use crate::bundle::codec::{CodecError, decode};
 use confit_model::manifest::{MANIFEST_VERSION, Manifest};
-use confit_model::progress::ProgressSender;
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
@@ -101,8 +100,7 @@ impl SlotStore {
     /// - [`SlotError::Write`] for slot write faults.
     /// - [`SlotError::WriteUnknown`] for render, clock, and other write
     ///   failures.
-    pub fn store(&self, manifest: &Manifest, progress: Option<&ProgressSender>) -> Result<PathBuf> {
-        let _ = progress;
+    pub fn store(&self, manifest: &Manifest) -> Result<PathBuf> {
         let text = manifest.json().map_err(|error| SlotError::WriteUnknown {
             path: self.state.clone(),
             message: error.to_string(),
@@ -511,7 +509,7 @@ mod tests {
             Err(SlotError::BadPick { .. }) => {}
             Err(error) => panic!("wrong absent variant: {error}"),
         }
-        match slots.store(&text_manifest("v1"), None) {
+        match slots.store(&text_manifest("v1")) {
             Ok(_) => assert!(!slots.is_first_run(), "stored slot ends first run"),
             Err(error) => panic!("applied slot stores: {error}"),
         }
@@ -523,7 +521,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         for index in 1..=7 {
-            match slots.store(&text_manifest(&format!("v{index}")), None) {
+            match slots.store(&text_manifest(&format!("v{index}"))) {
                 Ok(_) => {}
                 Err(error) => panic!("history stores v{index}: {error}"),
             }
@@ -553,7 +551,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         let applied = text_manifest("applied");
-        match slots.store(&applied, None) {
+        match slots.store(&applied) {
             Ok(_) => {}
             Err(error) => panic!("applied slot stores: {error}"),
         }
@@ -660,7 +658,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         for content in ["v1", "v2", "v3"] {
-            match slots.store(&text_manifest(content), None) {
+            match slots.store(&text_manifest(content)) {
                 Ok(_) => {}
                 Err(error) => panic!("history stores {content}: {error}"),
             }
@@ -687,7 +685,7 @@ mod tests {
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
         let blob = BlobRef::new(Sha::hash(b"slot payload"), Sha::hash(b"slot pool bytes"));
-        match slots.store(&blob_manifest(blob.clone()), None) {
+        match slots.store(&blob_manifest(blob.clone())) {
             Ok(_) => {}
             Err(error) => panic!("referencing manifest stores: {error}"),
         }
@@ -719,7 +717,7 @@ mod tests {
         let guard = TestGuard::install();
         let slots = test_store(dir.path());
         guard.fail_writes(std::io::ErrorKind::ReadOnlyFilesystem);
-        match slots.store(&text_manifest("v1"), None) {
+        match slots.store(&text_manifest("v1")) {
             Ok(_) => panic!("sealed disk passes"),
             Err(SlotError::Write { path, fault }) => {
                 assert!(

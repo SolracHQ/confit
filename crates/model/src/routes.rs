@@ -151,6 +151,32 @@ impl Route {
     pub fn relative(&self) -> &Path {
         &self.relative
     }
+
+    /// Expands one destination route to its host path.
+    ///
+    /// Literal carries its path verbatim. Unset homes pass
+    /// the relative path through intact.
+    pub fn expand(&self) -> PathBuf {
+        match self.base {
+            RouteBase::Literal => self.relative.clone(),
+            RouteBase::Home => match dirs::home_dir() {
+                Some(home) => home.join(&self.relative),
+                None => self.relative.clone(),
+            },
+            RouteBase::Config => match dirs::config_dir() {
+                Some(base) => base.join(&self.relative),
+                None => self.relative.clone(),
+            },
+            RouteBase::Data => match dirs::data_dir() {
+                Some(base) => base.join(&self.relative),
+                None => self.relative.clone(),
+            },
+            RouteBase::Cache => match dirs::cache_dir() {
+                Some(base) => base.join(&self.relative),
+                None => self.relative.clone(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -180,5 +206,32 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(error, Error::Parse { .. }));
+    }
+
+    #[test]
+    fn expand_matches_host_mapping_for_every_base() {
+        let relative = Path::new("starship/starship.toml");
+        let cases = [
+            (RouteBase::Home, dirs::home_dir()),
+            (RouteBase::Config, dirs::config_dir()),
+            (RouteBase::Data, dirs::data_dir()),
+            (RouteBase::Cache, dirs::cache_dir()),
+        ];
+        for (base, found) in cases {
+            let route = Route::new(base, relative).unwrap();
+            let want = match found {
+                Some(home) => home.join(relative),
+                None => relative.to_path_buf(),
+            };
+            assert_eq!(route.expand(), want);
+        }
+    }
+
+    #[test]
+    fn expand_carries_literal_verbatim() {
+        for path in ["/opt/confit/tool", "relative/tool"] {
+            let route = Route::new(RouteBase::Literal, path).unwrap();
+            assert_eq!(route.expand(), Path::new(path));
+        }
     }
 }

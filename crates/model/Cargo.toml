@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 crossbeam-channel.workspace = true
 diffy.workspace = true
+dirs.workspace = true
 noyalib.workspace = true
 serde.workspace = true
 serde_json.workspace = true

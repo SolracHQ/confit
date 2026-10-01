@@ -1,7 +1,7 @@
 //! Disk backend behind live reads, writes, and removals.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use confit_driver as driver;
 use confit_model::document::{BlobRef, Data, Document, ManifestMember};
@@ -10,7 +10,6 @@ use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
 
 use crate::Applier;
-use crate::resolve::resolve_host;
 
 /// Disk reads and writes behind one applier run.
 ///
@@ -61,21 +60,16 @@ pub enum LiveMember {
 }
 
 impl HostDisk {
-    /// Expands one destination route to its backend path.
-    pub fn resolve(&self, route: &Route) -> PathBuf {
-        resolve_host(route)
-    }
-
     /// Reads one document destination through its kind-aware reader.
     pub fn live_doc(&self, document: &Document) -> Live {
-        let expanded = self.resolve(&document.destination);
+        let expanded = document.destination.expand();
         let is_link = matches!(document.data, Data::Link { .. });
         live_doc_host(&expanded, is_link)
     }
 
     /// Reads one tree destination into relative member readers.
     pub fn live_tree(&self, document: &Document) -> BTreeMap<String, LiveMember> {
-        let dir = self.resolve(&document.destination);
+        let dir = document.destination.expand();
         live_tree_host(&dir)
     }
 
@@ -85,7 +79,7 @@ impl HostDisk {
         destination: &Route,
         relative: &str,
     ) -> Option<Box<dyn std::io::Read>> {
-        let dest = self.resolve(destination);
+        let dest = destination.expand();
         let path = dest.join(relative);
         if let Ok(target) = driver::fs::read_link(&path) {
             return Some(Box::new(std::io::Cursor::new(

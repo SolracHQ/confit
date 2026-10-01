@@ -13,7 +13,6 @@ use super::document::{check_rel, tree_table};
 use crate::error::plan_error;
 use crate::lua::{JsonExt, ValueExt};
 use crate::model::TreeMemberDecl;
-use confit_model::progress::ProgressSender;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
 use confit_store::Stores;
@@ -939,11 +938,10 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
     let stores = session.stores.clone();
     let root = session.root.clone();
     let re_fetch = session.re_fetch;
-    let progress = session.progress.clone();
     confit.set(
         "fetch",
         lua.create_function(move |lua, args: (Value, Option<Value>)| {
-            fetch_impl(lua, &stores, &root, re_fetch, progress.as_ref(), args)
+            fetch_impl(lua, &stores, &root, re_fetch, args)
         })?,
     )?;
     Ok(())
@@ -966,7 +964,6 @@ fn fetch_impl(
     stores: &Stores,
     root: &std::path::Path,
     re_fetch: bool,
-    progress: Option<&ProgressSender>,
     args: (Value, Option<Value>),
 ) -> mlua::Result<Value> {
     const CALLER: &str = "confit.fetch";
@@ -979,7 +976,7 @@ fn fetch_impl(
     }
     if raw.contains("://") {
         let (url, wanted) = parse_fetch_args(raw, opts, CALLER)?;
-        return match stores.fetch().fetch(&url, wanted, re_fetch, progress) {
+        return match stores.fetch().fetch(&url, wanted, re_fetch) {
             Ok(handle) => lua
                 .create_userdata(LuaFetchHandle::new(handle, stores.clone()))
                 .map(Value::UserData),

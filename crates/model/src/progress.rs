@@ -71,6 +71,11 @@ pub enum Event {
         /// Destination path under writing.
         path: String,
     },
+    /// One document left disk.
+    DocumentRemoved {
+        /// Destination path under removing.
+        path: String,
+    },
     /// One hook started.
     HookRunning {
         /// One-based hook position.
@@ -95,5 +100,10 @@ pub enum Event {
         total: usize,
         /// Raw bytes finished including this blob.
         bytes: u64,
+    },
+    /// Promotion started with a known blob count.
+    Promoting {
+        /// Blob count under promoting.
+        blobs: usize,
     },
 }

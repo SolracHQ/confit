@@ -297,7 +297,7 @@ pub(crate) fn translate_entry(table: &Table, ctx: &str) -> mlua::Result<Json> {
     Ok(Json::Object(object))
 }
 
-/// Translates one op inner table into canonical JSON.
+/// Translates one entry inner table into canonical JSON.
 fn translate_op(key: &str, inner: &Table, ctx: &str) -> mlua::Result<Json> {
     let mut map = serde_json::Map::new();
     match key {
@@ -428,7 +428,7 @@ fn translate_route_table(table: &Table, field: &str, ctx: &str) -> mlua::Result<
     }
 }
 
-/// Rejects unknown keys on an op inner table.
+/// Rejects unknown keys on an entry inner table.
 fn check_inner(inner: &Table, known: &[&str], ctx: &str) -> mlua::Result<()> {
     for pair in inner.pairs::<Value, Value>() {
         let (field, _) = pair?;
@@ -442,7 +442,7 @@ fn check_inner(inner: &Table, known: &[&str], ctx: &str) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Reads one required string field from an op inner table.
+/// Reads one required string field from an entry inner table.
 fn inner_string(inner: &Table, field: &str, ctx: &str) -> mlua::Result<String> {
     let value: Value = inner.get(field)?;
     value
@@ -450,8 +450,8 @@ fn inner_string(inner: &Table, field: &str, ctx: &str) -> mlua::Result<String> {
         .ok_or_else(|| plan_error(format!("{ctx}: field '{field}' must be a string")))
 }
 
-/// Reads the single op key from one entry object.
-fn op_key(json: &Json, ctx: &str) -> mlua::Result<&'static str> {
+/// Reads the single entry kind from one entry object.
+fn entry_kind(json: &Json, ctx: &str) -> mlua::Result<&'static str> {
     let object = match json {
         Json::Object(map) => map,
         _ => return Err(plan_error(format!("{ctx} holds no rc entry table"))),
@@ -485,11 +485,11 @@ pub(crate) fn entry_slot(
         Some(when) => crate::lua::json_text(when, &ctx)?,
         None => "null".to_string(),
     };
-    let key = op_key(json, &ctx)?;
-    if matches!(key, "eval" | "cmd" | "source") {
+    let kind = entry_kind(json, &ctx)?;
+    if matches!(kind, "eval" | "cmd" | "source") {
         return Ok(None);
     }
-    let inner = match object.get(key) {
+    let inner = match object.get(kind) {
         Some(Json::Object(map)) => map,
         _ => return Err(plan_error(ctx)),
     };
@@ -497,7 +497,7 @@ pub(crate) fn entry_slot(
         Some(name) => name.to_string(),
         None => return Err(plan_error(ctx)),
     };
-    Ok(Some((name.clone(), format!("{name}/{when_text}"), key)))
+    Ok(Some((name.clone(), format!("{name}/{when_text}"), kind)))
 }
 
 /// Pushes one live entry JSON into the core rc lists.
@@ -529,13 +529,13 @@ pub(crate) fn push_live_entry(
             Some(cond)
         }
     };
-    let key = op_key(
+    let kind = entry_kind(
         json,
         &format!("{ctx}: invalid rc entry for section '{section}'"),
     )?;
-    let op = match key {
+    let op = match kind {
         "env" => {
-            let inner = entry_object(object, key, section, ctx)?;
+            let inner = entry_object(object, kind, section, ctx)?;
             check_fields(inner, &["name", "value"], section, ctx)?;
             RcOp::Env {
                 name: entry_string(inner, "name", section, ctx)?,
@@ -543,7 +543,7 @@ pub(crate) fn push_live_entry(
             }
         }
         "path" => {
-            let inner = entry_object(object, key, section, ctx)?;
+            let inner = entry_object(object, kind, section, ctx)?;
             check_fields(inner, &["name", "dir"], section, ctx)?;
             RcOp::Path {
                 name: entry_string(inner, "name", section, ctx)?,
@@ -551,7 +551,7 @@ pub(crate) fn push_live_entry(
             }
         }
         "alias" => {
-            let inner = entry_object(object, key, section, ctx)?;
+            let inner = entry_object(object, kind, section, ctx)?;
             check_fields(inner, &["name", "expansion"], section, ctx)?;
             RcOp::Alias {
                 name: entry_string(inner, "name", section, ctx)?,
@@ -559,24 +559,24 @@ pub(crate) fn push_live_entry(
             }
         }
         "eval" | "cmd" => {
-            let inner = entry_object(object, key, section, ctx)?;
+            let inner = entry_object(object, kind, section, ctx)?;
             check_fields(inner, &["argv"], section, ctx)?;
             let argv = entry_args(inner, section, ctx)?;
-            if key == "eval" {
+            if kind == "eval" {
                 RcOp::Eval { argv }
             } else {
                 RcOp::Cmd { argv }
             }
         }
         _ => {
-            let inner = entry_object(object, key, section, ctx)?;
+            let inner = entry_object(object, kind, section, ctx)?;
             check_fields(inner, &["path"], section, ctx)?;
             RcOp::Source {
                 path: entry_route(inner, "path", section, ctx)?,
             }
         }
     };
-    check_fields(object, &[key, "when"], section, ctx)?;
+    check_fields(object, &[kind, "when"], section, ctx)?;
     let entry = RcEntry { op, when };
     match section {
         "profile" => profile.push(entry),
@@ -591,14 +591,14 @@ pub(crate) fn push_live_entry(
     Ok(())
 }
 
-/// Reads one op inner object from an entry object.
+/// Reads one entry inner object from an entry object.
 fn entry_object<'a>(
     object: &'a serde_json::Map<String, Json>,
-    key: &str,
+    kind: &str,
     section: &str,
     ctx: &str,
 ) -> mlua::Result<&'a serde_json::Map<String, Json>> {
-    match object.get(key) {
+    match object.get(kind) {
         Some(Json::Object(map)) => Ok(map),
         _ => Err(plan_error(format!(
             "{ctx}: invalid rc entry for section '{section}'"

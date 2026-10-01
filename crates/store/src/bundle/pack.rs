@@ -8,7 +8,6 @@ use std::path::Path;
 use confit_driver::{self as driver};
 use confit_model::document::BlobRef;
 use confit_model::manifest::Manifest;
-use confit_model::progress::ProgressSender;
 use confit_model::sha::Sha;
 
 use super::BundleStore;
@@ -34,13 +33,7 @@ impl BundleStore {
     /// - [`BundleError::Missing`] for missing blobs.
     /// - [`BundleError::Write`] for seal write faults.
     /// - [`BundleError::WriteUnknown`] for other seal write failures.
-    pub fn write(
-        &self,
-        manifest: &Manifest,
-        dest: &Path,
-        progress: Option<&ProgressSender>,
-    ) -> Result<ArchiveHandle> {
-        let _ = progress;
+    pub fn write(&self, manifest: &Manifest, dest: &Path) -> Result<ArchiveHandle> {
         let dest = ensure_bundle_extension(dest);
         let text = manifest.json().map_err(|error| BundleError::WriteUnknown {
             path: dest.clone(),
@@ -187,8 +180,9 @@ mod tests {
 
         let roots = test_roots(dir);
         let resources = Arc::new(Resources::new(&roots));
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots));
+        let (sender, _) = crossbeam_channel::unbounded();
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
+        let blobs = Arc::new(BlobStore::new(&roots, sender));
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match blobs.put(BlobSource::Bytes(body)) {
@@ -252,7 +246,7 @@ mod tests {
             "plan output sources the cache with zero pool bytes"
         );
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan, None) {
+        let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
@@ -267,7 +261,7 @@ mod tests {
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan, None) {
+        let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
@@ -308,7 +302,8 @@ mod tests {
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"pool bytes"]);
         let roots = test_roots(dir.path());
-        let pools = BlobStore::new(&roots);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let pools = BlobStore::new(&roots, sender);
         let mut handles = Vec::new();
         for blob in manifest.refs() {
             match pools.resolve(&blob) {
@@ -328,7 +323,7 @@ mod tests {
             driver::fs::remove_file(&path).unwrap();
         }
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan, None) {
+        let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
@@ -344,7 +339,7 @@ mod tests {
         let (store, manifest) = opaque_manifest(dir.path(), &[b"sealed bytes"]);
         guard.fail_writes(std::io::ErrorKind::StorageFull);
         let dest = dir.path().join("plan");
-        match store.write(&manifest, &dest, None) {
+        match store.write(&manifest, &dest) {
             Ok(_) => panic!("full disk passes"),
             Err(BundleError::Write { path, fault }) => {
                 assert!(

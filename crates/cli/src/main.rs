@@ -61,16 +61,17 @@ fn run_plan(
     log_path: &std::path::Path,
 ) -> confit_model::error::Result<()> {
     let live = Live::new();
-    let stores = Stores::new(StoreRoots::standard());
+    let sender = live.sink();
+    let stores = Stores::new(StoreRoots::standard(), sender.clone());
     let sinks = Sinks {
-        progress: live.sink(),
+        progress: sender.clone(),
         print: live.print_handle(),
         suspend: live.suspend_handle(),
     };
     let outcome = confit_cli::actions::plan::PlanRunner {
         args,
         stores: stores.clone(),
-        applier: Applier::with_stores(stores),
+        applier: Applier::with_stores(stores, sender),
         sinks,
     }
     .execute()?;
@@ -100,9 +101,10 @@ fn run_apply(
 ) -> confit_model::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
-    let stores = Stores::new(StoreRoots::standard());
+    let sender = live.sink();
+    let stores = Stores::new(StoreRoots::standard(), sender.clone());
     let sinks = Sinks {
-        progress: live.sink(),
+        progress: sender.clone(),
         print: live.print_handle(),
         suspend: live.suspend_handle(),
     };
@@ -110,7 +112,7 @@ fn run_apply(
         args,
         &mut input,
         stores.clone(),
-        Applier::with_stores(stores).with_progress(sinks.progress.clone()),
+        Applier::with_stores(stores, sender),
         sinks,
         Some(log_path.to_path_buf()),
     ) {
@@ -136,7 +138,8 @@ fn run_apply(
 
 /// Runs export writing a bundle file or printing its manifest.
 fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_model::error::Result<()> {
-    let stores = Stores::new(StoreRoots::standard());
+    let live = Live::new();
+    let stores = Stores::new(StoreRoots::standard(), live.sink());
     let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
     if let Some(dest) = report.dest {
         anstream::println!("export: {}", dest.display());
@@ -148,7 +151,8 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_model::error::Result
 
 /// Runs delete dropping one named slot and orphan blobs.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_model::error::Result<()> {
-    let stores = Stores::new(StoreRoots::standard());
+    let live = Live::new();
+    let stores = Stores::new(StoreRoots::standard(), live.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
     anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
     Ok(())

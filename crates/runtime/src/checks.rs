@@ -9,8 +9,6 @@ use confit_driver as driver;
 use confit_model::condition::Condition;
 use confit_model::routes::Route;
 
-use crate::Applier;
-
 /// Default hook timeout in seconds backing the `10m` opt default.
 ///
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
@@ -67,24 +65,22 @@ impl Checks {
     ///     Condition::EnvSet { key: "SHELL".into() },
     ///     Condition::EnvEq { key: "SHELL".into(), value: "bash".into() },
     /// ]);
-    /// let applier = confit_runtime::Applier::host(confit_store::StoreRoots::default());
-    /// assert!(checks.check(&cond, &BTreeSet::new(), &applier));
+    /// assert!(checks.check(&cond, &BTreeSet::new()));
     /// assert!(!checks.check(
     ///     &Condition::EnvSet { key: "MISSING".into() },
     ///     &BTreeSet::new(),
-    ///     &applier
     /// ));
     /// ```
-    pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>, applier: &Applier) -> bool {
+    pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => find_executable(name, &self.path_dirs).is_some(),
-            Condition::Exists { route } => driver::fs::exists(&applier.resolve(route)),
+            Condition::Exists { route } => driver::fs::exists(&route.expand()),
             Condition::Changed { route } => changed.contains(route),
-            Condition::All(items) => items.iter().all(|item| self.check(item, changed, applier)),
-            Condition::Any(items) => items.iter().any(|item| self.check(item, changed, applier)),
-            Condition::Not(inner) => !self.check(inner, changed, applier),
+            Condition::All(items) => items.iter().all(|item| self.check(item, changed)),
+            Condition::Any(items) => items.iter().any(|item| self.check(item, changed)),
+            Condition::Not(inner) => !self.check(inner, changed),
         }
     }
 }
@@ -127,10 +123,6 @@ mod tests {
             vars: BTreeMap::new(),
             path_dirs: dirs,
         }
-    }
-
-    fn applier() -> Applier {
-        Applier::host(confit_store::StoreRoots::default())
     }
 
     fn place(path: &std::path::Path, mode: u32) {
@@ -185,7 +177,6 @@ mod tests {
                     name: "tool".into()
                 },
                 &BTreeSet::new(),
-                &applier()
             ),
             "InPath holds a 755 hit"
         );
@@ -195,7 +186,6 @@ mod tests {
                     name: "regular".into()
                 },
                 &BTreeSet::new(),
-                &applier()
             ),
             "InPath misses a 644 file"
         );
@@ -301,25 +291,20 @@ mod tests {
         driver::fs::create_dir_all(dir.path()).unwrap();
         driver::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
-        let expanded = applier().resolve(&route);
-        assert_eq!(expanded, path, "literal routes resolve verbatim");
+        assert_eq!(route.expand(), path, "literal routes resolve verbatim");
         assert!(
             checks_with(Vec::new()).check(
                 &Condition::Exists {
                     route: route.clone()
                 },
                 &BTreeSet::new(),
-                &applier()
             ),
             "seeded path presence holds"
         );
         let missing = literal(&dir.path().join("absent"));
         assert!(
-            !checks_with(Vec::new()).check(
-                &Condition::Exists { route: missing },
-                &BTreeSet::new(),
-                &applier()
-            ),
+            !checks_with(Vec::new())
+                .check(&Condition::Exists { route: missing }, &BTreeSet::new(),),
             "absent path fails"
         );
     }
@@ -335,16 +320,11 @@ mod tests {
                     route: route.clone()
                 },
                 &changed,
-                &applier()
             ),
             "member route holds"
         );
         assert!(
-            !checks_with(Vec::new()).check(
-                &Condition::Changed { route: other },
-                &changed,
-                &applier()
-            ),
+            !checks_with(Vec::new()).check(&Condition::Changed { route: other }, &changed,),
             "absent route fails"
         );
     }

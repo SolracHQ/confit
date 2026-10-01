@@ -257,6 +257,7 @@ version = "0.8.0"
 dependencies = [
  "confit-model",
  "confit-store",
+ "crossbeam-channel",
  "log",
  "minijinja",
  "mlua",
@@ -274,6 +275,7 @@ version = "0.8.0"
 dependencies = [
  "crossbeam-channel",
  "diffy",
+ "dirs",
  "noyalib",
  "serde",
  "serde_json",
@@ -290,7 +292,7 @@ dependencies = [
  "confit-driver",
  "confit-model",
  "confit-store",
- "dirs",
+ "crossbeam-channel",
  "noyalib",
  "serde_json",
  "sha2",

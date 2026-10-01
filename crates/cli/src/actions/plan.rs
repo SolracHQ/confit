@@ -48,8 +48,9 @@ pub struct PlanOutcome {
 ///     },
 ///     output: None,
 /// };
-/// let stores = Stores::new(StoreRoots::standard());
-/// let applier = Applier::with_stores(stores.clone());
+/// let (sender, _) = crossbeam_channel::unbounded();
+/// let stores = Stores::new(StoreRoots::standard(), sender.clone());
+/// let applier = Applier::with_stores(stores.clone(), sender);
 /// let runner = PlanRunner { args: &args, stores, applier, sinks: Default::default() };
 /// let outcome = runner.execute();
 /// assert!(matches!(outcome, Ok(_) | Err(_)));
@@ -81,7 +82,7 @@ impl PlanRunner<'_> {
         let evaluation = evaluate_shared(
             &self.args.shared,
             &self.args.profile,
-            self.sinks.progress.clone(),
+            Some(self.sinks.progress.clone()),
             &self.stores,
         )?;
         let documents = evaluation.documents;
@@ -121,7 +122,7 @@ impl PlanRunner<'_> {
             Some(dest) => self
                 .stores
                 .bundles()
-                .write(&built, dest, self.sinks.progress.as_ref())
+                .write(&built, dest)
                 .map(|_| ())
                 .map_err(|error| Error::Plan(error.to_string())),
             None => Ok(()),

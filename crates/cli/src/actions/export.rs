@@ -39,7 +39,8 @@ pub struct ExportReport {
 /// use confit_store::{StoreRoots, Stores};
 ///
 /// let args = ExportArgs { picker: None, output: None, manifest: true };
-/// let stores = Stores::new(StoreRoots::standard());
+/// let (sender, _) = crossbeam_channel::unbounded();
+/// let stores = Stores::new(StoreRoots::standard(), sender);
 /// let report = ExportRunner { args: &args, stores, sinks: Default::default() }.execute();
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
@@ -111,7 +112,7 @@ impl<'a> ExportRunner<'a> {
         let written = timed("export write", || {
             stores
                 .bundles()
-                .write(&manifest, &dest, sinks.progress.as_ref())
+                .write(&manifest, &dest)
                 .map_err(|error| Error::Plan(error.to_string()))
         })?;
         Ok(ExportReport {

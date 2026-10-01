@@ -82,7 +82,7 @@ impl SuspendControl {
 ///
 pub struct Live {
     /// Facts under sending toward the renderer thread.
-    tx: Option<ProgressSender>,
+    tx: ProgressSender,
     /// Lines under sending toward the renderer thread.
     print_tx: Option<PrintSender>,
     /// Shutdown signal under sending at finish.
@@ -127,7 +127,7 @@ impl Live {
             .spawn(move || run(rx, print_rx, shutdown_rx, spinner))
             .ok();
         Self {
-            tx: Some(tx),
+            tx,
             print_tx: Some(print_tx),
             shutdown: shutdown_tx,
             thread: std::sync::Mutex::new(thread),
@@ -139,13 +139,8 @@ impl Live {
 
     /// Reads the sender for one run.
     ///
-    /// # Returns
-    ///
-    /// The run facts sender, holding `None` off terminal.
-    pub fn sink(&self) -> Option<ProgressSender> {
-        if self.headless {
-            return None;
-        }
+    /// The run facts sender.
+    pub fn sink(&self) -> ProgressSender {
         self.tx.clone()
     }
 
@@ -218,11 +213,12 @@ fn run(
     spinner: indicatif::ProgressBar,
 ) {
     let mut writes = 0_usize;
+    let mut removes = 0_usize;
     loop {
         crossbeam_channel::select! {
             recv(rx) -> fact => {
                 match fact {
-                    Ok(event) => render(&spinner, event, &mut writes),
+                    Ok(event) => render(&spinner, event, &mut writes, &mut removes),
                     Err(_) => break,
                 }
             }
@@ -239,7 +235,7 @@ fn run(
 }
 
 /// Maps one run fact onto the spinner message.
-fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize) {
+fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize, removes: &mut usize) {
     match event {
         Event::FetchStarted { url } => {
             spinner.set_message(format!("collecting artifacts: {url}"));
@@ -278,6 +274,10 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize) {
             *writes += 1;
             spinner.set_message(format!("writing {writes}: {path}"));
         }
+        Event::DocumentRemoved { path } => {
+            *removes += 1;
+            spinner.set_message(format!("removing {removes}: {path}"));
+        }
         Event::HookRunning {
             position,
             total,
@@ -290,6 +290,9 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize) {
         }
         Event::BlobCompressed { done, total, .. } => {
             spinner.set_message(format!("compressing blobs ({done}/{total})"));
+        }
+        Event::Promoting { blobs } => {
+            spinner.set_message(format!("promoting {blobs} blobs"));
         }
     }
     spinner.tick();

@@ -9,7 +9,6 @@ mod disk;
 mod drift;
 mod remove;
 mod render;
-mod resolve;
 mod write;
 
 pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, find_executable};
@@ -27,37 +26,32 @@ pub struct Applier {
     pub(crate) stores: Stores,
     /// Disk reads and writes.
     pub(crate) disk: HostDisk,
-    /// Write events, `None` for silence.
-    pub(crate) progress: Option<ProgressSender>,
+    /// Write events.
+    pub(crate) progress: ProgressSender,
 }
 
 impl Applier {
     /// Applier for CLI wiring.
     ///
     /// Roots arrive explicit from CLI wiring. File backends
-    /// serve every read and write.
+    /// serve every read and write. A dropped receiver backs
+    /// the sender while callers assert nothing.
     pub fn host(roots: StoreRoots) -> Self {
-        Self::with_stores(Stores::new(roots))
+        let (sender, _) = crossbeam_channel::unbounded();
+        Self::with_stores(Stores::new(roots, sender.clone()), sender)
     }
 
     /// Applier over shared stores.
     ///
     /// The stores arrive explicit, so callers sharing one
     /// `Stores` keep blobs and disk behind one value.
-    pub fn with_stores(stores: Stores) -> Self {
+    /// The sender carries write facts.
+    pub fn with_stores(stores: Stores, progress: ProgressSender) -> Self {
         Self {
             stores,
             disk: HostDisk,
-            progress: None,
+            progress,
         }
-    }
-
-    /// Builder carrying the progress sender behind write events.
-    ///
-    /// `None` holds silence.
-    pub fn with_progress(mut self, progress: Option<ProgressSender>) -> Self {
-        self.progress = progress;
-        self
     }
 
     /// Reads the write capabilities behind blob resolution.

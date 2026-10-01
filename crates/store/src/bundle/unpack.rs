@@ -198,8 +198,9 @@ mod tests {
 
         let roots = test_roots(dir);
         let resources = Arc::new(Resources::new(&roots));
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots));
+        let (sender, _) = crossbeam_channel::unbounded();
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
+        let blobs = Arc::new(BlobStore::new(&roots, sender));
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match blobs.put(BlobSource::Bytes(body)) {
@@ -258,7 +259,7 @@ mod tests {
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan, None) {
+        let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
@@ -317,8 +318,9 @@ mod tests {
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let resources = Arc::new(Resources::new(&roots));
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots));
+        let (sender, _) = crossbeam_channel::unbounded();
+        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
+        let blobs = Arc::new(BlobStore::new(&roots, sender));
         let store = BundleStore::new(archives, blobs.clone(), resources);
         let handle = match blobs.put(BlobSource::Bytes(b"wanted bytes")) {
             Ok(handle) => handle,
@@ -413,7 +415,7 @@ mod tests {
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan, None) {
+        let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
