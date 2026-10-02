@@ -8,7 +8,7 @@ use super::confit_table;
 use super::handles::{LuaBlobHandle, LuaRoute, blob_for_opaque, req_route};
 use super::hook::{read_slots, write_slots};
 use super::runtime::check_condition_json;
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope, find_engine};
 use crate::lua::{TableExt, ValueExt, set_marker};
 use crate::model::{
     LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
@@ -64,44 +64,65 @@ pub(crate) fn install(session: &crate::eval::Session) -> mlua::Result<()> {
 }
 
 /// Builds a structured document table from format and args.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn structured_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.structured";
+    let scope = Scope::method(CTOR);
     let (format_value, args_value) = args;
-    let format_name = format_value.req_str(CTOR, "format")?;
-    let table = args_value.req_table(CTOR, "args")?;
-    DocumentTables::structured(lua, CTOR, format_name, table)
+    let format_name = format_value.req_str(&scope, "format")?;
+    let table = args_value.req_table(&scope, "args")?;
+    DocumentTables::structured(lua, &scope, format_name, table)
 }
 
 /// Builds a plain text document table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn text_impl(lua: &Lua, args: (Value, Value, Option<Value>)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.text";
+    let scope = Scope::method(CTOR);
     let (dest_value, content_value, opts) = args;
-    let destination = req_route(&dest_value, CTOR, "path")?;
-    let content = content_value.req_str(CTOR, "content")?;
-    let resolved = DocOpts::resolve(opts, CTOR)?;
+    let destination = req_route(&dest_value, &scope, "path")?;
+    let content = content_value.req_str(&scope, "content")?;
+    let resolved = DocOpts::resolve(opts, &scope)?;
     DocumentTables::text(lua, destination, content, resolved.mode, resolved.unmanaged)
 }
 
 /// Builds a symlink document table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn link_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.link";
+    let scope = Scope::method(CTOR);
     let (dest_value, target_value) = args;
-    let destination = req_route(&dest_value, CTOR, "path")?;
-    let target = target_value.req_str(CTOR, "target")?;
+    let destination = req_route(&dest_value, &scope, "path")?;
+    let target = target_value.req_str(&scope, "target")?;
     DocumentTables::link(lua, destination, target)
 }
 
 /// Builds an opaque document table from a source handle.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
+/// - [`EngineError::Blob`] for unreadable sources.
 fn opaque_impl(
     lua: &Lua,
     stores: &confit_store::Stores,
     args: (Value, Value, Option<Value>),
 ) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.opaque";
+    let scope = Scope::method(CTOR);
     let (dest_value, source_value, opts) = args;
-    let destination = req_route(&dest_value, CTOR, "path")?;
-    let (blob, size) = blob_for_opaque(&source_value, stores, CTOR)?;
-    let resolved = DocOpts::resolve(opts, CTOR)?;
+    let destination = req_route(&dest_value, &scope, "path")?;
+    let (blob, size) = blob_for_opaque(&source_value, stores, &scope)?;
+    let resolved = DocOpts::resolve(opts, &scope)?;
     DocumentTables::opaque(
         lua,
         destination,
@@ -117,25 +138,43 @@ struct DocumentTables;
 
 impl DocumentTables {
     /// Builds a structured document table from format and args.
-    fn structured(lua: &Lua, ctor: &str, format_name: String, args: Table) -> mlua::Result<Table> {
-        const KNOWN: &str = "'json', 'toml', or 'yaml'";
-        let format = StructuredFormat::parse(&format_name)
-            .ok_or_else(|| plan_error(format!("{ctor}: field 'format' must be one of {KNOWN}")))?;
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Field`] for misshaped arguments.
+    /// - [`EngineError::OptUnknown`] for unknown fields.
+    fn structured(
+        lua: &Lua,
+        scope: &Scope,
+        format_name: String,
+        args: Table,
+    ) -> mlua::Result<Table> {
+        let format = StructuredFormat::parse(&format_name).ok_or_else(|| EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("format"),
+            want: "must be one of 'json', 'toml', or 'yaml'",
+        })?;
         for pair in args.pairs::<Value, Value>() {
             let (key, _) = pair?;
             let Some(name) = key.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'args' must hold string keys"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("args"),
+                    want: "must hold string keys",
+                }
+                .into());
             };
             if name != "path" && name != "data" {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'args' unknown field '{name}'"
-                )));
+                return Err(EngineError::OptUnknown {
+                    scope: scope.clone(),
+                    field: FieldRef::name("args"),
+                    name,
+                }
+                .into());
             }
         }
         let path_value: Value = args.get("path")?;
-        req_route(&path_value, ctor, "path")?;
+        req_route(&path_value, scope, "path")?;
         let out = lua.create_table()?;
         out.set("path", path_value)?;
         let data: Value = args.get("data")?;
@@ -233,7 +272,13 @@ struct DocOpts {
 
 impl DocOpts {
     /// Resolves the document opts from an opts value.
-    fn resolve(opts: Option<Value>, ctor: &str) -> mlua::Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Field`] for misshaped options.
+    /// - [`EngineError::OptUnknown`] for unknown fields.
+    /// - [`EngineError::ModeBits`] for bad mode text.
+    fn resolve(opts: Option<Value>, scope: &Scope) -> mlua::Result<Self> {
         let Some(opts) = opts else {
             return Ok(Self {
                 mode: None,
@@ -246,42 +291,51 @@ impl DocOpts {
                 unmanaged: false,
             });
         }
-        let table = opts.req_table(ctor, "opts")?;
+        let table = opts.req_table(scope, "opts")?;
         for pair in table.pairs::<Value, Value>() {
             let (key, _) = pair?;
             let Some(name) = key.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' must hold string keys"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("opts"),
+                    want: "must hold string keys",
+                }
+                .into());
             };
             if name != "mode" && name != "unmanaged" {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' unknown field '{name}'"
-                )));
+                return Err(EngineError::OptUnknown {
+                    scope: scope.clone(),
+                    field: FieldRef::name("opts"),
+                    name,
+                }
+                .into());
             }
         }
         let mode_value: Value = table.get("mode")?;
         let mode = if mode_value.is_nil() {
             None
         } else {
-            let raw = mode_value.req_str(ctor, "mode")?;
-            Some(mode_bits(&raw, ctor)?)
+            let raw = mode_value.req_str(scope, "mode")?;
+            Some(mode_bits(&raw, scope)?)
         };
         let unmanaged_value: Value = table.get("unmanaged")?;
         let unmanaged = match unmanaged_value {
             Value::Nil => false,
             Value::Boolean(flag) => flag,
             _ => {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'unmanaged' must be a boolean"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("unmanaged"),
+                    want: "must be a boolean",
+                }
+                .into());
             }
         };
         Ok(Self { mode, unmanaged })
     }
 }
 
-/// Parses octal or symbolic permission text under a method path.
+/// Parses octal or symbolic permission text under a scope.
 ///
 /// Octal text holds three digits like `755` or four digits with
 /// a leading zero like `0755`. Symbolic text holds nine
@@ -289,19 +343,20 @@ impl DocOpts {
 ///
 /// # Errors
 ///
-/// Leading `d`, wrong lengths, and bad characters fail as plan
-/// errors naming the method path.
-fn mode_bits(text: &str, path: &str) -> mlua::Result<u32> {
+/// - [`EngineError::ModeBits`] for leading `d`, wrong
+///   lengths, and bad characters.
+pub(crate) fn mode_bits(text: &str, scope: &Scope) -> mlua::Result<u32> {
     const SHAPE: &str = "octal like 755 or symbolic like rwxr-xr-x";
     const SYMBOLIC: &str = "nine rwx characters like rwxr-xr-x";
     const FOUR_DIGIT: &str = "four digit octal starting with 0 like 0755";
     const DIGITS: &str = "octal digits 0-7";
-    let invalid = |want: &str| {
-        let detail = format!("invalid '{text}': want {want}");
-        plan_error(format!("{path}: {detail}"))
+    let invalid = |want: &'static str| EngineError::ModeBits {
+        scope: scope.clone(),
+        text: text.to_owned(),
+        want,
     };
     if text.starts_with('d') {
-        return Err(invalid(SHAPE));
+        return Err(invalid(SHAPE).into());
     }
     match text.len() {
         9 => {
@@ -312,7 +367,7 @@ fn mode_bits(text: &str, path: &str) -> mlua::Result<u32> {
                     (1, b'w') => 2,
                     (2, b'x') => 1,
                     (_, b'-') => 0,
-                    _ => return Err(invalid(SYMBOLIC)),
+                    _ => return Err(invalid(SYMBOLIC).into()),
                 };
                 bits |= bit << ((2 - index / 3) * 3);
             }
@@ -324,31 +379,45 @@ fn mode_bits(text: &str, path: &str) -> mlua::Result<u32> {
                 _ => text.strip_prefix('0').ok_or_else(|| invalid(FOUR_DIGIT))?,
             };
             if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
-                return Err(invalid(DIGITS));
+                return Err(invalid(DIGITS).into());
             }
-            u32::from_str_radix(body, 8).map_err(|_| invalid(DIGITS))
+            u32::from_str_radix(body, 8).map_err(|_| invalid(DIGITS).into())
         }
-        _ => Err(invalid(SHAPE)),
+        _ => Err(invalid(SHAPE).into()),
     }
 }
 
 /// Rejects destination paths escaping the tree folder.
-pub(crate) fn check_rel(ctor: &str, relpath: &str) -> mlua::Result<()> {
+///
+/// # Errors
+///
+/// - [`EngineError::Detail`] for empty destination paths.
+/// - [`EngineError::Destination`] for absolute and
+///   non-file destinations.
+pub(crate) fn check_rel(scope: &Scope, relpath: &str) -> mlua::Result<()> {
     if relpath.is_empty() {
-        return Err(plan_error(format!(
-            "{ctor}: callback must not return an empty destination path"
-        )));
+        return Err(EngineError::Detail {
+            scope: scope.clone(),
+            want: "callback must not return an empty destination path",
+        }
+        .into());
     }
     if relpath.starts_with('/') {
-        return Err(plan_error(format!(
-            "{ctor}: destination '{relpath}' must stay relative"
-        )));
+        return Err(EngineError::Destination {
+            scope: scope.clone(),
+            path: relpath.to_owned(),
+            want: "must stay relative",
+        }
+        .into());
     }
     for segment in relpath.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
-            return Err(plan_error(format!(
-                "{ctor}: destination '{relpath}' must name files under the folder"
-            )));
+            return Err(EngineError::Destination {
+                scope: scope.clone(),
+                path: relpath.to_owned(),
+                want: "must name files under the folder",
+            }
+            .into());
         }
     }
     Ok(())
@@ -389,42 +458,46 @@ fn install_rc(lua: &Lua, namespace: &Table) -> mlua::Result<()> {
 }
 
 /// Builds the single rc document table from section lists.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped sections.
 fn rc_new_impl(lua: &Lua, sections: Value) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.new";
-    let table = sections.req_table(CTOR, "sections")?;
-    RcDocs::build(lua, CTOR, table)
+    let scope = Scope::method(CTOR);
+    let table = sections.req_table(&scope, "sections")?;
+    RcDocs::build(lua, &scope, table)
 }
 
 /// Rc document builder holding domain validation.
 struct RcDocs;
 
 impl RcDocs {
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the output table.
-    /// * `ctor` - error prefix naming the constructor.
-    /// * `sections` - section buckets table.
-    ///
-    /// # Returns
-    ///
-    /// Rc document table stamped with the rc marker.
+    /// Builds one rc document table from section buckets.
     ///
     /// # Errors
     ///
-    /// Non-string section names fail as plan errors. Unknown sections fail as plan errors.
+    /// - [`EngineError::Field`] for non-string section names.
+    /// - [`EngineError::NestScope`] for bad section names.
     ///
-    fn build(lua: &Lua, ctor: &str, sections: Table) -> mlua::Result<Table> {
+    fn build(lua: &Lua, scope: &Scope, sections: Table) -> mlua::Result<Table> {
         let out = lua.create_table()?;
         for pair in sections.pairs::<Value, Value>() {
             let (key, value) = pair?;
             let Some(name) = key.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'sections' must hold section names"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("sections"),
+                    want: "must hold section names",
+                }
+                .into());
             };
             if let Err(parsed) = RcSection::parse(&name) {
-                return Err(plan_error(format!("{ctor}: {parsed}")));
+                return Err(EngineError::NestScope {
+                    scope: scope.clone(),
+                    reason: parsed.to_string(),
+                }
+                .into());
             }
             out.set(name.as_str(), value)?;
         }
@@ -434,35 +507,51 @@ impl RcDocs {
 }
 
 /// Builds one rc alias entry table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn rc_alias_impl(lua: &Lua, args: (Value, Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.alias";
+    let scope = Scope::method(CTOR);
     let (name_value, value_value, opts) = args;
-    let name = name_value.req_str(CTOR, "name")?;
-    let value = value_value.req_str(CTOR, "value")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    let name = name_value.req_str(&scope, "name")?;
+    let value = value_value.req_str(&scope, "value")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::alias(lua, name, value, when)
 }
 
 /// Builds one rc env entry table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn rc_env_impl(lua: &Lua, args: (Value, Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.env";
+    let scope = Scope::method(CTOR);
     let (name_value, value_value, opts) = args;
-    let name = name_value.req_str(CTOR, "name")?;
-    let value = value_value.req_str(CTOR, "value")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    let name = name_value.req_str(&scope, "name")?;
+    let value = value_value.req_str(&scope, "value")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::env(lua, name, value, when)
 }
 
 /// Builds one rc path prepend entry table from dir or var and dir.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
+/// - [`EngineError::OpArity`] for wrong arity.
 fn rc_prepend_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.prepend";
+    let scope = Scope::method(CTOR);
     let collected: Vec<Value> = args.into_iter().collect();
     let (name, dir, opts) = match collected.as_slice() {
         [dir_value] => ("PATH".to_string(), dir_value.clone(), Value::Nil),
         [first, second] => {
             if is_route_slot(second) {
                 (
-                    first.clone().req_str(CTOR, "var")?,
+                    first.clone().req_str(&scope, "var")?,
                     second.clone(),
                     Value::Nil,
                 )
@@ -471,18 +560,21 @@ fn rc_prepend_impl(lua: &Lua, args: MultiValue) -> mlua::Result<Table> {
             }
         }
         [var_value, dir_value, opts] => (
-            var_value.clone().req_str(CTOR, "var")?,
+            var_value.clone().req_str(&scope, "var")?,
             dir_value.clone(),
             opts.clone(),
         ),
         _ => {
-            return Err(plan_error(format!(
-                "{CTOR}: 'prepend' expects (dir, opts?) or (var, dir, opts?)"
-            )));
+            return Err(EngineError::OpArity {
+                scope: scope.clone(),
+                op: "prepend".to_owned(),
+                want: "(dir, opts?) or (var, dir, opts?)",
+            }
+            .into());
         }
     };
-    check_route_slot(&dir, CTOR, "dir")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    check_route_slot(&dir, &scope, "dir")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::path(lua, name, dir, when)
 }
 
@@ -502,26 +594,19 @@ fn is_route_slot(value: &Value) -> bool {
 
 /// Rejects one route slot holding neither string nor route.
 ///
-/// # Arguments
-///
-/// * `value` - the slot value under checking.
-/// * `ctor` - error prefix naming the constructor.
-/// * `field` - field name under reading.
-///
-/// # Returns
-///
-/// Unit for strings and route userdata.
-///
 /// # Errors
 ///
-/// Anything else fails as a plan error naming the field.
-fn check_route_slot(value: &Value, ctor: &str, field: &str) -> mlua::Result<()> {
+/// - [`EngineError::Field`] for non-route slots.
+fn check_route_slot(value: &Value, scope: &Scope, field: &str) -> mlua::Result<()> {
     if is_route_slot(value) {
         return Ok(());
     }
-    Err(plan_error(format!(
-        "{ctor}: field '{field}' must be a string or a confit.path value"
-    )))
+    Err(EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name(field),
+        want: "must be a string or a confit.path value",
+    }
+    .into())
 }
 
 /// Rc entry table builders holding shared shapes.
@@ -643,29 +728,44 @@ impl RcEntries {
 }
 
 /// Builds one rc eval init entry table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn rc_eval_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.eval";
+    let scope = Scope::method(CTOR);
     let (argv_value, opts) = args;
-    let argv = read_slots(&argv_value, CTOR, "argv")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    let argv = read_slots(&argv_value, &scope, "argv")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::init(lua, "eval", argv, None, when)
 }
 
 /// Builds one rc cmd init entry table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn rc_cmd_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.cmd";
+    let scope = Scope::method(CTOR);
     let (argv_value, opts) = args;
-    let argv = read_slots(&argv_value, CTOR, "argv")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    let argv = read_slots(&argv_value, &scope, "argv")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::init(lua, "cmd", argv, None, when)
 }
 
 /// Builds one rc source init entry table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn rc_source_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.document.rc.source";
+    let scope = Scope::method(CTOR);
     let (path_value, opts) = args;
-    check_route_slot(&path_value, CTOR, "path")?;
-    let when = OptsGuard::resolve(lua, CTOR, opts)?;
+    check_route_slot(&path_value, &scope, "path")?;
+    let when = OptsGuard::resolve(lua, &scope, opts)?;
     RcEntries::init(lua, "source", Vec::new(), Some(path_value), when)
 }
 
@@ -675,42 +775,39 @@ struct OptsGuard;
 impl OptsGuard {
     /// Resolves the `when` guard from an opts value.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state calling builder functions.
-    /// * `ctor` - error prefix naming the constructor.
-    /// * `opts` - opts value holding nil or a table with a `when` field.
-    ///
-    /// # Returns
-    ///
-    /// Guard table holding `None` for no guard.
-    ///
     /// # Errors
     ///
-    /// Non-table opts fail as plan errors. Unknown opts fields fail as plan errors.
-    /// Bad guard shapes fail as plan errors.
+    /// - [`EngineError::Field`] for misshaped options.
+    /// - [`EngineError::OptUnknown`] for unknown fields.
+    /// - [`EngineError::GateFailed`] for failing guard calls.
     ///
-    fn resolve(lua: &Lua, ctor: &str, opts: Value) -> mlua::Result<Option<Table>> {
+    fn resolve(lua: &Lua, scope: &Scope, opts: Value) -> mlua::Result<Option<Table>> {
         if opts.is_nil() {
             return Ok(None);
         }
-        let table = opts.req_table(ctor, "opts")?;
+        let table = opts.req_table(scope, "opts")?;
         for pair in table.pairs::<Value, Value>() {
             let (key, _) = pair?;
             let Some(name) = key.opt_str() else {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' must hold string keys"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("opts"),
+                    want: "must hold string keys",
+                }
+                .into());
             };
             if name != "when" {
-                return Err(plan_error(format!(
-                    "{ctor}: field 'opts' unknown field '{name}'"
-                )));
+                return Err(EngineError::OptUnknown {
+                    scope: scope.clone(),
+                    field: FieldRef::name("opts"),
+                    name,
+                }
+                .into());
             }
         }
         let when_value: Value = table.get("when")?;
         if let Some(func) = when_value.clone().opt_func() {
-            let resolved = call_when_function(lua, ctor, &func)?;
+            let resolved = call_when_function(lua, scope, &func)?;
             table.set("when", resolved)?;
         }
         let guard_value: Value = table.get("when")?;
@@ -718,37 +815,53 @@ impl OptsGuard {
             return Ok(None);
         }
         let Some(guard) = guard_value.opt_table() else {
-            return Err(plan_error(format!(
-                "{ctor}: field 'when' must be a condition table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("when"),
+                want: "must be a condition table",
+            }
+            .into());
         };
-        let json = guard
-            .to_json(&format!("{ctor}: field 'when'"))
-            .map_err(|error| plan_error(format!("{ctor}: field 'when' {error}")))?;
-        check_condition_json(&json, &format!("{ctor}: field 'when'"))
-            .map_err(|detail| plan_error(format!("{ctor}: field 'when' {detail}")))?;
+        let nested = scope.slot(FieldRef::name("when"));
+        let json = guard.to_json(&nested)?;
+        check_condition_json(&json, &nested)?;
         Ok(Some(guard))
     }
 }
 
 /// Calls one `when` builder function with the runtime namespace.
-fn call_when_function(lua: &Lua, ctor: &str, func: &Function) -> mlua::Result<Table> {
-    let missing = || {
-        plan_error(format!(
-            "{ctor}: field 'when' needs the confit.runtime table"
-        ))
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for missing runtime tables.
+/// - [`EngineError::GateFailed`] for failing guard calls.
+fn call_when_function(lua: &Lua, scope: &Scope, func: &Function) -> mlua::Result<Table> {
+    let field = FieldRef::name("when");
+    let missing = || EngineError::Field {
+        scope: scope.clone(),
+        field: field.clone(),
+        want: "needs the confit.runtime table",
     };
     let confit: Value = lua.globals().get("confit")?;
-    let confit = confit.req_table(ctor, "when").map_err(|_| missing())?;
+    let confit = confit
+        .req_table(scope, &field.to_string())
+        .map_err(|_| missing())?;
     let runtime: Value = confit.get("runtime")?;
-    let runtime = runtime.req_table(ctor, "when").map_err(|_| missing())?;
+    let runtime = runtime
+        .req_table(scope, &field.to_string())
+        .map_err(|_| missing())?;
     match func.call::<Table>(runtime) {
         Ok(table) => Ok(table),
         Err(error) => {
-            if crate::error::find_plan(&error).is_some() {
+            if find_engine(&error).is_some() {
                 return Err(error);
             }
-            Err(plan_error(format!("{ctor}: field 'when' failed: {error}")))
+            Err(EngineError::GateFailed {
+                scope: scope.clone(),
+                field,
+                reason: error.to_string(),
+            }
+            .into())
         }
     }
 }

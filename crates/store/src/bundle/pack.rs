@@ -35,9 +35,9 @@ impl BundleStore {
     /// - [`BundleError::WriteUnknown`] for other seal write failures.
     pub fn write(&self, manifest: &Manifest, dest: &Path) -> Result<ArchiveHandle> {
         let dest = ensure_bundle_extension(dest);
-        let text = manifest.json().map_err(|error| BundleError::WriteUnknown {
+        let text = manifest.json().map_err(|error| BundleError::Manifest {
             path: dest.clone(),
-            message: error.to_string(),
+            source: error,
         })?;
         let mut members = Vec::with_capacity(manifest.refs().len() + 1);
         members.push(driver::tar::BuildMember {
@@ -133,8 +133,7 @@ fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Resul
     })
     .map_err(|error| BundleError::from_write_io(dest, error))?;
     let sha = bundle_sha(dest)?;
-    let sealed = ArchiveHandle::new(dest.to_path_buf(), sha);
-    sealed.map_err(|error| BundleError::WriteUnknown {
+    ArchiveHandle::new(dest.to_path_buf(), sha).map_err(|error| BundleError::WriteUnknown {
         path: dest.to_path_buf(),
         message: error.to_string(),
     })

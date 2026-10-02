@@ -89,11 +89,7 @@ impl BlobStore {
     /// - [`BlobError::Read`] for missing blobs.
     pub fn resolve(&self, blob: &BlobRef) -> Result<BlobHandle> {
         if self.present(blob.stored()) {
-            BlobHandle::new(blob.sha().clone(), blob.stored().clone()).map_err(|_| {
-                BlobError::Corrupt {
-                    sha: blob.sha().clone(),
-                }
-            })
+            Ok(BlobHandle::new(blob.sha().clone(), blob.stored().clone()))
         } else {
             Err(BlobError::Read {
                 sha: blob.sha().clone(),
@@ -172,8 +168,7 @@ impl BlobStore {
         })?;
         let writer = encoder.finish().map_err(|_| BlobError::Compress)?;
         let stored = writer.digest();
-        let handle =
-            BlobHandle::new(sha.clone(), stored).map_err(|_| BlobError::Corrupt { sha })?;
+        let handle = BlobHandle::new(sha.clone(), stored);
         let dest = self.cache.join(handle.stored().hex());
         driver::fs::rename(&staging, &dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
@@ -616,7 +611,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
-        let handle = BlobHandle::new(Sha::hash(b"absent"), Sha::hash(b"absent-stored")).unwrap();
+        let handle = BlobHandle::new(Sha::hash(b"absent"), Sha::hash(b"absent-stored"));
         assert!(
             store.resolve(&handle.to_ref()).is_err(),
             "absent ref never resolves"

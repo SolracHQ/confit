@@ -6,7 +6,7 @@ use mlua::{Table, Value};
 use serde_json::Value as Json;
 
 use super::Declared;
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope};
 use crate::lua::{TableExt, ValueExt, read_marker};
 use crate::model::{
     LinkDecl, OpaqueDecl, RcEntryDecl, StructuredDecl, TextDecl, TreeDecl, TreeMemberDecl,
@@ -19,30 +19,42 @@ use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::BlobHandle;
 
 /// Converts one document table into registration form.
-pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declared> {
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for missing markers.
+/// - [`EngineError::Field`] for misshaped fields.
+/// - [`EngineError::Repeat`] for repeated tree members.
+/// - [`EngineError::UnknownKind`] for unknown kinds.
+pub(crate) fn convert_document(table: &Table, scope: &Scope) -> mlua::Result<Declared> {
     let kind = match read_marker(table, "__kind") {
         Some(kind) => kind,
         None => {
-            return Err(plan_error(format!(
-                "{ctx} must be a confit.document value (missing '__kind')"
-            )));
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "must be a confit.document value (missing '__kind')",
+            }
+            .into());
         }
     };
     match kind.as_str() {
         "structured" => {
             let format_name = read_marker(table, "__format").unwrap_or_default();
-            let format = StructuredFormat::parse(&format_name).ok_or_else(|| {
-                plan_error(format!(
-                    "{ctx}: field 'format' must be one of 'json', 'toml', or 'yaml'"
-                ))
-            })?;
-            let destination = req_destination(table, ctx)?;
-            let data_table = table.req_table(ctx, "data").map_err(|_| {
-                plan_error(format!(
-                    "{ctx}: field 'data' must be a table with string keys"
-                ))
-            })?;
-            let data = data_table.req_object(ctx, "data")?;
+            let format =
+                StructuredFormat::parse(&format_name).ok_or_else(|| EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("format"),
+                    want: "must be one of 'json', 'toml', or 'yaml'",
+                })?;
+            let destination = req_destination(table, scope)?;
+            let data_table = table
+                .req_table(scope, "data")
+                .map_err(|_| EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("data"),
+                    want: "must be a table with string keys",
+                })?;
+            let data = data_table.req_object(scope, "data")?;
             Ok(Declared::Structured(StructuredDecl {
                 destination,
                 format,
@@ -50,10 +62,10 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             }))
         }
         "text" => {
-            let destination = req_destination(table, ctx)?;
-            let content = table.req_str(ctx, "content")?;
-            let mode = read_mode(table, ctx)?;
-            let unmanaged = read_unmanaged(table, ctx)?;
+            let destination = req_destination(table, scope)?;
+            let content = table.req_str(scope, "content")?;
+            let mode = read_mode(table, scope)?;
+            let unmanaged = read_unmanaged(table, scope)?;
             Ok(Declared::Text(TextDecl {
                 destination,
                 content,
@@ -62,25 +74,28 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             }))
         }
         "link" => {
-            let destination = req_destination(table, ctx)?;
-            let target = table.req_str(ctx, "target")?;
+            let destination = req_destination(table, scope)?;
+            let target = table.req_str(scope, "target")?;
             Ok(Declared::Link(LinkDecl {
                 destination,
                 target,
             }))
         }
         "opaque" => {
-            let destination = req_destination(table, ctx)?;
-            let blob = req_blob(table, ctx)?;
+            let destination = req_destination(table, scope)?;
+            let blob = req_blob(table, scope)?;
             let size_value: Value = table.get("size")?;
-            let size = size_value.req_int(ctx, "size")?;
+            let size = size_value.req_int(scope, "size")?;
             if size < 0 {
-                return Err(plan_error(format!(
-                    "{ctx}: field 'size' must not be negative"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("size"),
+                    want: "must not be negative",
+                }
+                .into());
             }
-            let mode = read_mode(table, ctx)?;
-            let unmanaged = read_unmanaged(table, ctx)?;
+            let mode = read_mode(table, scope)?;
+            let unmanaged = read_unmanaged(table, scope)?;
             Ok(Declared::Opaque(OpaqueDecl {
                 destination,
                 blob,
@@ -90,36 +105,49 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
             }))
         }
         "tree" => {
-            let destination = req_destination(table, ctx)?;
-            let members_table = table.req_table(ctx, "members")?;
+            let destination = req_destination(table, scope)?;
+            let members_table = table.req_table(scope, "members")?;
             let len = members_table.raw_len();
             let mut members = Vec::with_capacity(len);
             for index in 1..=len {
                 let item: Value = members_table.get(index)?;
-                let member = item.req_table(ctx, "members").map_err(|_| {
-                    plan_error(format!("{ctx}: field 'members' must hold member tables"))
-                })?;
-                let rel = member.req_str(ctx, "rel")?;
-                super::check_rel(ctx, &rel)?;
+                let member = item
+                    .req_table(scope, "members")
+                    .map_err(|_| EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::name("members"),
+                        want: "must hold member tables",
+                    })?;
+                let rel = member.req_str(scope, "rel")?;
+                super::check_rel(scope, &rel)?;
                 if members.iter().any(|item: &TreeMemberDecl| item.rel == rel) {
-                    return Err(plan_error(format!(
-                        "{ctx}: tree keeps '{rel}' more than once"
-                    )));
+                    return Err(EngineError::Repeat {
+                        scope: scope.clone(),
+                        collection: "tree",
+                        item: rel.clone(),
+                    }
+                    .into());
                 }
-                let blob = req_blob(&member, ctx)?;
+                let blob = req_blob(&member, scope)?;
                 let size_value: Value = member.get("size")?;
-                let size = size_value.req_int(ctx, "size")?;
+                let size = size_value.req_int(scope, "size")?;
                 if size < 0 {
-                    return Err(plan_error(format!(
-                        "{ctx}: field 'size' must not be negative"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::name("size"),
+                        want: "must not be negative",
+                    }
+                    .into());
                 }
                 let mode_value: Value = member.get("mode")?;
-                let mode = mode_value.req_int(ctx, "mode")?;
+                let mode = mode_value.req_int(scope, "mode")?;
                 if !(0..=0o777).contains(&mode) {
-                    return Err(plan_error(format!(
-                        "{ctx}: field 'mode' must hold permission bits"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::name("mode"),
+                        want: "must hold permission bits",
+                    }
+                    .into());
                 }
                 members.push(TreeMemberDecl {
                     rel,
@@ -140,107 +168,127 @@ pub(crate) fn convert_document(table: &Table, ctx: &str) -> mlua::Result<Declare
                 if list_value.is_nil() {
                     continue;
                 }
-                let list = list_value.req_table(ctx, section).map_err(|_| {
-                    plan_error(format!(
-                        "{ctx}: field '{section}' must be a list of rc entry tables"
-                    ))
-                })?;
+                let list =
+                    list_value
+                        .req_table(scope, section)
+                        .map_err(|_| EngineError::Field {
+                            scope: scope.clone(),
+                            field: FieldRef::name(section),
+                            want: "must be a list of rc entry tables",
+                        })?;
                 let len = list.raw_len();
                 for index in 1..=len {
                     let item: Value = list.get(index)?;
-                    let entry_table = item.req_table(ctx, section).map_err(|_| {
-                        plan_error(format!(
-                            "{ctx}: field '{section}' must be a list of rc entry tables"
-                        ))
-                    })?;
+                    let entry_table =
+                        item.req_table(scope, section)
+                            .map_err(|_| EngineError::Field {
+                                scope: scope.clone(),
+                                field: FieldRef::name(section),
+                                want: "must be a list of rc entry tables",
+                            })?;
                     entries.push(convert_section_entry(
                         &entry_table,
                         section,
-                        &format!("{ctx}: field '{section}'"),
+                        &scope.slot(FieldRef::name(section)),
                     )?);
                 }
             }
             Ok(Declared::Rc(entries))
         }
-        other => Err(plan_error(format!("{ctx} unknown document kind '{other}'"))),
+        other => Err(EngineError::UnknownKind {
+            scope: scope.clone(),
+            what: "document kind",
+            name: other.to_owned(),
+        }
+        .into()),
     }
 }
 
 /// Reads one destination route from a document table.
-fn req_destination(table: &Table, ctx: &str) -> mlua::Result<Route> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for missing route paths.
+fn req_destination(table: &Table, scope: &Scope) -> mlua::Result<Route> {
     let value: Value = table.get("path")?;
-    super::super::handles::req_route(&value, ctx, "path")
+    super::super::handles::req_route(&value, scope, "path")
 }
 
 /// Reads one sealed blob handle from a document table.
-fn req_blob(table: &Table, ctx: &str) -> mlua::Result<BlobHandle> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-blob handles.
+fn req_blob(table: &Table, scope: &Scope) -> mlua::Result<BlobHandle> {
     let value: Value = table.get("blob")?;
     let Some(data) = value.as_userdata() else {
-        return Err(plan_error(format!(
-            "{ctx}: field 'blob' must be a blob handle"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("blob"),
+            want: "must be a blob handle",
+        }
+        .into());
     };
     match data.borrow::<LuaBlobHandle>() {
         Ok(handle) => Ok(handle.core().clone()),
-        Err(_) => Err(plan_error(format!(
-            "{ctx}: field 'blob' must be a blob handle"
-        ))),
+        Err(_) => Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("blob"),
+            want: "must be a blob handle",
+        }
+        .into()),
     }
 }
 
 /// Reads the stamped mode bits from a document table.
 ///
-/// # Arguments
-///
-/// * `table` - document table carrying the mode marker.
-/// * `ctx` - error prefix naming the constructor.
-///
-/// # Returns
-///
-/// Mode bits for stamped tables, holding `None` for default handling.
-///
 /// # Errors
 ///
-/// Corrupt mode stamps fail as plan errors.
+/// - [`EngineError::Field`] for corrupt mode stamps.
 ///
-fn read_mode(table: &Table, ctx: &str) -> mlua::Result<Option<u32>> {
+fn read_mode(table: &Table, scope: &Scope) -> mlua::Result<Option<u32>> {
     let Some(text) = read_marker(table, "__mode") else {
         return Ok(None);
     };
-    text.parse::<u32>()
-        .map(Some)
-        .map_err(|_| plan_error(format!("{ctx}: field 'mode' holds a corrupt stamp")))
+    text.parse::<u32>().map(Some).map_err(|_| {
+        EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("mode"),
+            want: "holds a corrupt stamp",
+        }
+        .into()
+    })
 }
 
 /// Reads the unmanaged flag from a document table.
 ///
-/// # Arguments
-///
-/// * `table` - document table carrying the unmanaged field.
-/// * `ctx` - error prefix naming the constructor.
-///
-/// # Returns
-///
-/// The flag, holding false for missing fields.
-///
 /// # Errors
 ///
-/// Non-boolean flags fail as plan errors.
+/// - [`EngineError::Field`] for non-boolean flags.
 ///
-fn read_unmanaged(table: &Table, ctx: &str) -> mlua::Result<bool> {
+fn read_unmanaged(table: &Table, scope: &Scope) -> mlua::Result<bool> {
     let value: Value = table.get("unmanaged")?;
     match value {
         Value::Nil => Ok(false),
         Value::Boolean(flag) => Ok(flag),
-        _ => Err(plan_error(format!(
-            "{ctx}: field 'unmanaged' must be a boolean"
-        ))),
+        _ => Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("unmanaged"),
+            want: "must be a boolean",
+        }
+        .into()),
     }
 }
 
 /// Converts one section bucket rc entry table into registration form.
-fn convert_section_entry(table: &Table, section: &str, ctx: &str) -> mlua::Result<RcEntryDecl> {
-    let json = translate_entry(table, ctx)?;
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for misshaped entries.
+/// - [`EngineError::UnknownField`] for unknown fields.
+/// - [`EngineError::Field`] for misshaped fields.
+fn convert_section_entry(table: &Table, section: &str, scope: &Scope) -> mlua::Result<RcEntryDecl> {
+    let json = translate_entry(table, scope)?;
     Ok(RcEntryDecl {
         section: section.to_string(),
         json,
@@ -252,98 +300,134 @@ fn convert_section_entry(table: &Table, section: &str, ctx: &str) -> mlua::Resul
 /// Strings pass through intact. Route userdata renders as
 /// route objects. Dense argv arrays translate item by item
 /// through the hook slot reader. Condition guards convert
-/// as data. Anything else fails naming the field.
-pub(crate) fn translate_entry(table: &Table, ctx: &str) -> mlua::Result<Json> {
+/// as data.
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for misshaped entries.
+/// - [`EngineError::UnknownBare`] for missing kinds.
+/// - [`EngineError::UnknownField`] for unknown fields.
+/// - [`EngineError::Field`] for misshaped guards.
+pub(crate) fn translate_entry(table: &Table, scope: &Scope) -> mlua::Result<Json> {
     let mut found: Option<&'static str> = None;
     for key in ["env", "path", "alias", "eval", "cmd", "source"] {
         let value: Value = table.get(key)?;
         if !value.is_nil() {
             if found.is_some() {
-                return Err(plan_error(format!(
-                    "{ctx} holds more than one rc entry kind"
-                )));
+                return Err(EngineError::Shape {
+                    scope: scope.clone(),
+                    want: "holds more than one rc entry kind",
+                }
+                .into());
             }
             found = Some(key);
         }
     }
-    let key = found.ok_or_else(|| plan_error(format!("{ctx} unknown rc entry kind")))?;
+    let key = found.ok_or_else(|| EngineError::UnknownBare {
+        scope: scope.clone(),
+        what: "rc entry kind",
+    })?;
     let inner_value: Value = table.get(key)?;
     let Some(inner) = inner_value.opt_table() else {
-        return Err(plan_error(format!("{ctx} holds no rc entry table")));
+        return Err(EngineError::Shape {
+            scope: scope.clone(),
+            want: "holds no rc entry table",
+        }
+        .into());
     };
     for pair in table.pairs::<Value, Value>() {
         let (field, _) = pair?;
         let Some(name) = field.opt_str() else {
-            return Err(plan_error(format!("{ctx} holds a non-string field")));
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "holds a non-string field",
+            }
+            .into());
         };
         if name != key && name != "when" {
-            return Err(plan_error(format!("{ctx} holds unknown field '{name}'")));
+            return Err(EngineError::UnknownField {
+                scope: scope.clone(),
+                name,
+            }
+            .into());
         }
     }
     let mut object = serde_json::Map::new();
-    object.insert(key.to_string(), translate_op(key, &inner, ctx)?);
+    object.insert(key.to_string(), translate_op(key, &inner, scope)?);
     let when_value: Value = table.get("when")?;
     if !when_value.is_nil() {
         let Some(guard) = when_value.opt_table() else {
-            return Err(plan_error(format!(
-                "{ctx}: field 'when' must be a condition table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("when"),
+                want: "must be a condition table",
+            }
+            .into());
         };
         object.insert(
             "when".to_string(),
-            guard.to_json(&format!("{ctx}: field 'when'"))?,
+            guard.to_json(&scope.slot(FieldRef::name("when")))?,
         );
     }
     Ok(Json::Object(object))
 }
 
 /// Translates one entry inner table into canonical JSON.
-fn translate_op(key: &str, inner: &Table, ctx: &str) -> mlua::Result<Json> {
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for misshaped entries.
+/// - [`EngineError::UnknownField`] for unknown fields.
+/// - [`EngineError::Field`] for misshaped fields.
+fn translate_op(key: &str, inner: &Table, scope: &Scope) -> mlua::Result<Json> {
     let mut map = serde_json::Map::new();
     match key {
         "env" => {
-            check_inner(inner, &["name", "value"], ctx)?;
+            check_inner(inner, &["name", "value"], scope)?;
             map.insert(
                 "name".to_string(),
-                Json::String(inner_string(inner, "name", ctx)?),
+                Json::String(inner_string(inner, "name", scope)?),
             );
             map.insert(
                 "value".to_string(),
-                Json::String(inner_string(inner, "value", ctx)?),
+                Json::String(inner_string(inner, "value", scope)?),
             );
         }
         "path" => {
-            check_inner(inner, &["name", "dir"], ctx)?;
+            check_inner(inner, &["name", "dir"], scope)?;
             map.insert(
                 "name".to_string(),
-                Json::String(inner_string(inner, "name", ctx)?),
+                Json::String(inner_string(inner, "name", scope)?),
             );
             let dir_value: Value = inner.get("dir")?;
-            map.insert("dir".to_string(), translate_slot(dir_value, "dir", ctx)?);
+            map.insert("dir".to_string(), translate_slot(dir_value, "dir", scope)?);
         }
         "alias" => {
-            check_inner(inner, &["name", "expansion"], ctx)?;
+            check_inner(inner, &["name", "expansion"], scope)?;
             map.insert(
                 "name".to_string(),
-                Json::String(inner_string(inner, "name", ctx)?),
+                Json::String(inner_string(inner, "name", scope)?),
             );
             map.insert(
                 "expansion".to_string(),
-                Json::String(inner_string(inner, "expansion", ctx)?),
+                Json::String(inner_string(inner, "expansion", scope)?),
             );
         }
         "eval" | "cmd" => {
-            check_inner(inner, &["argv"], ctx)?;
+            check_inner(inner, &["argv"], scope)?;
             let argv_value: Value = inner.get("argv")?;
             map.insert(
                 "argv".to_string(),
-                translate_slots(argv_value, "argv", ctx)?,
+                translate_slots(argv_value, "argv", scope)?,
             );
         }
         _ => {
-            check_inner(inner, &["path"], ctx)?;
+            check_inner(inner, &["path"], scope)?;
             let path_value: Value = inner.get("path")?;
-            map.insert("path".to_string(), translate_slot(path_value, "path", ctx)?);
+            map.insert(
+                "path".to_string(),
+                translate_slot(path_value, "path", scope)?,
+            );
         }
     }
     Ok(Json::Object(map))
@@ -354,30 +438,47 @@ fn translate_op(key: &str, inner: &Table, ctx: &str) -> mlua::Result<Json> {
 /// Strings pass through intact. Route userdata and live
 /// route tables render as route objects. Density follows
 /// the hook slot reader.
-fn translate_slots(value: Value, field: &str, ctx: &str) -> mlua::Result<Json> {
-    const DENSE: &str = "must be a dense string-or-route array";
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-dense arrays.
+fn translate_slots(value: Value, field: &str, scope: &Scope) -> mlua::Result<Json> {
+    let field = FieldRef::name(field);
     let Some(list) = value.opt_table() else {
-        return Err(plan_error(format!("{ctx}: field '{field}' {DENSE}")));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a dense string-or-route array",
+        }
+        .into());
     };
     let mut indexed: Vec<(i64, Value)> = Vec::new();
     for pair in list.pairs::<Value, Value>() {
         let (key, item) = pair?;
         let Some(index) = key.as_integer() else {
-            return Err(plan_error(format!("{ctx}: field '{field}' {DENSE}")));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a dense string-or-route array",
+            }
+            .into());
         };
         indexed.push((index, item));
     }
     indexed.sort_by_key(|(index, _)| *index);
     for (position, (index, _)) in indexed.iter().enumerate() {
         if *index != position as i64 + 1 {
-            return Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a dense string-or-route array starting at 1"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a dense string-or-route array starting at 1",
+            }
+            .into());
         }
     }
     let mut out = Vec::with_capacity(indexed.len());
     for (_, item) in indexed {
-        out.push(translate_slot(item, field, ctx)?);
+        out.push(translate_slot(item, &field.to_string(), scope)?);
     }
     Ok(Json::Array(out))
 }
@@ -387,181 +488,266 @@ fn translate_slots(value: Value, field: &str, ctx: &str) -> mlua::Result<Json> {
 /// Strings pass through intact. Route userdata renders as
 /// a route object. Route tables from live roundtrips
 /// normalize into route objects.
-fn translate_slot(value: Value, field: &str, ctx: &str) -> mlua::Result<Json> {
+///
+/// # Errors
+///
+/// - [`EngineError::SlotRender`] for render failures.
+/// - [`EngineError::Field`] for non-route values.
+fn translate_slot(value: Value, field: &str, scope: &Scope) -> mlua::Result<Json> {
     if let Some(text) = value.clone().opt_str() {
         return Ok(Json::String(text));
     }
     if let Some(data) = value.as_userdata() {
         if let Ok(route) = data.borrow::<LuaRoute>() {
             return serde_json::to_value(route.core().clone()).map_err(|error| {
-                plan_error(format!("{ctx}: field '{field}' failed to render: {error}"))
+                EngineError::SlotRender {
+                    scope: scope.clone(),
+                    field: FieldRef::name(field),
+                    reason: error.to_string(),
+                }
+                .into()
             });
         }
-        return Err(plan_error(format!(
-            "{ctx}: field '{field}' must be a string or a confit.path value"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name(field),
+            want: "must be a string or a confit.path value",
+        }
+        .into());
     }
     if let Some(table) = value.opt_table() {
-        return translate_route_table(&table, field, ctx);
+        return translate_route_table(&table, field, scope);
     }
-    Err(plan_error(format!(
-        "{ctx}: field '{field}' must be a string or a confit.path value"
-    )))
+    Err(EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name(field),
+        want: "must be a string or a confit.path value",
+    }
+    .into())
 }
 
 /// Normalizes one live route table into a route object.
-fn translate_route_table(table: &Table, field: &str, ctx: &str) -> mlua::Result<Json> {
-    let json = table.to_json(&format!("{ctx}: field '{field}'"))?;
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-route tables.
+fn translate_route_table(table: &Table, field: &str, scope: &Scope) -> mlua::Result<Json> {
+    let field = FieldRef::name(field);
+    let json = table.to_json(&scope.slot(field.clone()))?;
     let Json::Object(map) = &json else {
-        return Err(plan_error(format!(
-            "{ctx}: field '{field}' must be a string or a confit.path value"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a string or a confit.path value",
+        }
+        .into());
     };
     match (
         map.get("base").and_then(Json::as_str),
         map.get("relative").and_then(Json::as_str),
     ) {
         (Some(_), Some(_)) if map.len() == 2 => Ok(json),
-        _ => Err(plan_error(format!(
-            "{ctx}: field '{field}' must be a string or a confit.path value"
-        ))),
+        _ => Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a string or a confit.path value",
+        }
+        .into()),
     }
 }
 
 /// Rejects unknown keys on an entry inner table.
-fn check_inner(inner: &Table, known: &[&str], ctx: &str) -> mlua::Result<()> {
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for non-string fields.
+/// - [`EngineError::UnknownField`] for unknown fields.
+fn check_inner(inner: &Table, known: &[&str], scope: &Scope) -> mlua::Result<()> {
     for pair in inner.pairs::<Value, Value>() {
         let (field, _) = pair?;
         let Some(name) = field.opt_str() else {
-            return Err(plan_error(format!("{ctx} holds a non-string field")));
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "holds a non-string field",
+            }
+            .into());
         };
         if !known.contains(&name.as_str()) {
-            return Err(plan_error(format!("{ctx} holds unknown field '{name}'")));
+            return Err(EngineError::UnknownField {
+                scope: scope.clone(),
+                name,
+            }
+            .into());
         }
     }
     Ok(())
 }
 
 /// Reads one required string field from an entry inner table.
-fn inner_string(inner: &Table, field: &str, ctx: &str) -> mlua::Result<String> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-string fields.
+fn inner_string(inner: &Table, field: &str, scope: &Scope) -> mlua::Result<String> {
     let value: Value = inner.get(field)?;
-    value
-        .opt_str()
-        .ok_or_else(|| plan_error(format!("{ctx}: field '{field}' must be a string")))
+    value.opt_str().ok_or_else(|| {
+        EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name(field),
+            want: "must be a string",
+        }
+        .into()
+    })
 }
 
 /// Reads the single entry kind from one entry object.
-fn entry_kind(json: &Json, ctx: &str) -> mlua::Result<&'static str> {
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for misshaped entries.
+/// - [`EngineError::UnknownBare`] for missing kinds.
+fn entry_kind(json: &Json, scope: &Scope) -> mlua::Result<&'static str> {
     let object = match json {
         Json::Object(map) => map,
-        _ => return Err(plan_error(format!("{ctx} holds no rc entry table"))),
+        _ => {
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "holds no rc entry table",
+            }
+            .into());
+        }
     };
     let mut found: Option<&'static str> = None;
     for key in ["env", "path", "alias", "eval", "cmd", "source"] {
         if object.contains_key(key) {
             if found.is_some() {
-                return Err(plan_error(format!(
-                    "{ctx} holds more than one rc entry kind"
-                )));
+                return Err(EngineError::Shape {
+                    scope: scope.clone(),
+                    want: "holds more than one rc entry kind",
+                }
+                .into());
             }
             found = Some(key);
         }
     }
-    found.ok_or_else(|| plan_error(format!("{ctx} unknown rc entry kind")))
+    found.ok_or_else(|| {
+        EngineError::UnknownBare {
+            scope: scope.clone(),
+            what: "rc entry kind",
+        }
+        .into()
+    })
 }
 
 /// Derives the slot key and display name for one entry.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
+/// - [`EngineError::RenderDetail`] for render failures.
+/// - [`EngineError::Shape`] for misshaped entries.
+/// - [`EngineError::UnknownBare`] for missing kinds.
 pub(crate) fn entry_slot(
     json: &Json,
     section: &str,
-    caller: &str,
+    scope: &Scope,
 ) -> mlua::Result<Option<(String, String, &'static str)>> {
-    let ctx = format!("{caller}: invalid rc entry for section '{section}'");
+    let invalid = || EngineError::RcEntry {
+        scope: scope.clone(),
+        section: section.to_owned(),
+    };
     let object = match json {
         Json::Object(map) => map,
-        _ => return Err(plan_error(ctx)),
+        _ => return Err(invalid().into()),
     };
     let when_text = match object.get("when") {
-        Some(when) => crate::lua::json_text(when, &ctx)?,
+        Some(when) => crate::lua::json_text(when, scope)?,
         None => "null".to_string(),
     };
-    let kind = entry_kind(json, &ctx)?;
+    let kind = entry_kind(json, scope)?;
     if matches!(kind, "eval" | "cmd" | "source") {
         return Ok(None);
     }
     let inner = match object.get(kind) {
         Some(Json::Object(map)) => map,
-        _ => return Err(plan_error(ctx)),
+        _ => return Err(invalid().into()),
     };
     let name = match inner.get("name").and_then(Json::as_str) {
         Some(name) => name.to_string(),
-        None => return Err(plan_error(ctx)),
+        None => return Err(invalid().into()),
     };
     Ok(Some((name.clone(), format!("{name}/{when_text}"), kind)))
 }
 
 /// Pushes one live entry JSON into the core rc lists.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
+/// - [`EngineError::Field`] for misshaped guards.
 pub(crate) fn push_live_entry(
     profile: &mut Vec<RcEntry>,
     config: &mut Vec<RcEntry>,
     finals: &mut Vec<RcEntry>,
     section: &str,
     json: &Json,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<()> {
+    let invalid = || EngineError::RcEntry {
+        scope: scope.clone(),
+        section: section.to_owned(),
+    };
     let object = match json {
         Json::Object(map) => map,
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: invalid rc entry for section '{section}'"
-            )));
+            return Err(invalid().into());
         }
     };
     let when = match object.get("when") {
         None | Some(Json::Null) => None,
         Some(raw) => {
-            let cond = condition_from_json(raw, &format!("{ctx}: field 'when'"))?;
+            let cond = condition_from_json(raw, &scope.slot(FieldRef::name("when")))?;
             if cond.holds_changed() {
-                return Err(plan_error(format!(
-                    "{ctx}: field 'when' holds 'changed' (hooks only)"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("when"),
+                    want: "holds 'changed' (hooks only)",
+                }
+                .into());
             }
             Some(cond)
         }
     };
-    let kind = entry_kind(
-        json,
-        &format!("{ctx}: invalid rc entry for section '{section}'"),
-    )?;
+    let kind = entry_kind(json, scope)?;
     let op = match kind {
         "env" => {
-            let inner = entry_object(object, kind, section, ctx)?;
-            check_fields(inner, &["name", "value"], section, ctx)?;
+            let inner = entry_object(object, kind, section, scope)?;
+            check_fields(inner, &["name", "value"], section, scope)?;
             RcOp::Env {
-                name: entry_string(inner, "name", section, ctx)?,
-                value: entry_string(inner, "value", section, ctx)?,
+                name: entry_string(inner, "name", section, scope)?,
+                value: entry_string(inner, "value", section, scope)?,
             }
         }
         "path" => {
-            let inner = entry_object(object, kind, section, ctx)?;
-            check_fields(inner, &["name", "dir"], section, ctx)?;
+            let inner = entry_object(object, kind, section, scope)?;
+            check_fields(inner, &["name", "dir"], section, scope)?;
             RcOp::Path {
-                name: entry_string(inner, "name", section, ctx)?,
-                dir: entry_route(inner, "dir", section, ctx)?,
+                name: entry_string(inner, "name", section, scope)?,
+                dir: entry_route(inner, "dir", section, scope)?,
             }
         }
         "alias" => {
-            let inner = entry_object(object, kind, section, ctx)?;
-            check_fields(inner, &["name", "expansion"], section, ctx)?;
+            let inner = entry_object(object, kind, section, scope)?;
+            check_fields(inner, &["name", "expansion"], section, scope)?;
             RcOp::Alias {
-                name: entry_string(inner, "name", section, ctx)?,
-                expansion: entry_string(inner, "expansion", section, ctx)?,
+                name: entry_string(inner, "name", section, scope)?,
+                expansion: entry_string(inner, "expansion", section, scope)?,
             }
         }
         "eval" | "cmd" => {
-            let inner = entry_object(object, kind, section, ctx)?;
-            check_fields(inner, &["argv"], section, ctx)?;
-            let argv = entry_args(inner, section, ctx)?;
+            let inner = entry_object(object, kind, section, scope)?;
+            check_fields(inner, &["argv"], section, scope)?;
+            let argv = entry_args(inner, section, scope)?;
             if kind == "eval" {
                 RcOp::Eval { argv }
             } else {
@@ -569,40 +755,44 @@ pub(crate) fn push_live_entry(
             }
         }
         _ => {
-            let inner = entry_object(object, kind, section, ctx)?;
-            check_fields(inner, &["path"], section, ctx)?;
+            let inner = entry_object(object, kind, section, scope)?;
+            check_fields(inner, &["path"], section, scope)?;
             RcOp::Source {
-                path: entry_route(inner, "path", section, ctx)?,
+                path: entry_route(inner, "path", section, scope)?,
             }
         }
     };
-    check_fields(object, &[kind, "when"], section, ctx)?;
+    check_fields(object, &[kind, "when"], section, scope)?;
     let entry = RcEntry { op, when };
     match section {
         "profile" => profile.push(entry),
         "config" => config.push(entry),
         "final" => finals.push(entry),
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: invalid rc entry for section '{section}'"
-            )));
+            return Err(invalid().into());
         }
     }
     Ok(())
 }
 
 /// Reads one entry inner object from an entry object.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
 fn entry_object<'a>(
     object: &'a serde_json::Map<String, Json>,
     kind: &str,
     section: &str,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<&'a serde_json::Map<String, Json>> {
     match object.get(kind) {
         Some(Json::Object(map)) => Ok(map),
-        _ => Err(plan_error(format!(
-            "{ctx}: invalid rc entry for section '{section}'"
-        ))),
+        _ => Err(EngineError::RcEntry {
+            scope: scope.clone(),
+            section: section.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -610,12 +800,19 @@ fn entry_object<'a>(
 ///
 /// Strings run verbatim. Route objects resolve at apply
 /// time through the workspace.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
 fn entry_args(
     inner: &serde_json::Map<String, Json>,
     section: &str,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<Vec<Arg>> {
-    let invalid = || plan_error(format!("{ctx}: invalid rc entry for section '{section}'"));
+    let invalid = || EngineError::RcEntry {
+        scope: scope.clone(),
+        section: section.to_owned(),
+    };
     match inner.get("argv") {
         Some(Json::Array(items)) => {
             let mut out = Vec::with_capacity(items.len());
@@ -625,7 +822,7 @@ fn entry_args(
             }
             Ok(out)
         }
-        _ => Err(invalid()),
+        _ => Err(invalid().into()),
     }
 }
 
@@ -633,50 +830,70 @@ fn entry_args(
 ///
 /// Strings parse as route displays, raw paths fall back
 /// to literals. Route objects decode through serde.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
 fn entry_route(
     inner: &serde_json::Map<String, Json>,
     field: &str,
     section: &str,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<Route> {
-    let invalid = || plan_error(format!("{ctx}: invalid rc entry for section '{section}'"));
+    let invalid = || EngineError::RcEntry {
+        scope: scope.clone(),
+        section: section.to_owned(),
+    };
     match inner.get(field) {
         Some(Json::String(text)) => Route::parse(text)
-            .or_else(|_| Route::new(RouteBase::Literal, text.clone()).map_err(|_| invalid())),
+            .or_else(|_| Route::new(RouteBase::Literal, text.clone()).map_err(|_| invalid()))
+            .map_err(mlua::Error::from),
         Some(value @ Json::Object(_)) => {
-            serde_json::from_value::<Route>(value.clone()).map_err(|_| invalid())
+            serde_json::from_value::<Route>(value.clone()).map_err(|_| mlua::Error::from(invalid()))
         }
-        _ => Err(invalid()),
+        _ => Err(invalid().into()),
     }
 }
 
 /// Reads one required string field from an entry object.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
 fn entry_string(
     object: &serde_json::Map<String, Json>,
     field: &str,
     section: &str,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<String> {
     match object.get(field).and_then(Json::as_str) {
         Some(value) => Ok(value.to_string()),
-        None => Err(plan_error(format!(
-            "{ctx}: invalid rc entry for section '{section}'"
-        ))),
+        None => Err(EngineError::RcEntry {
+            scope: scope.clone(),
+            section: section.to_owned(),
+        }
+        .into()),
     }
 }
 
 /// Rejects unknown keys on an entry object.
+///
+/// # Errors
+///
+/// - [`EngineError::RcEntry`] for bad rc entries.
 fn check_fields(
     object: &serde_json::Map<String, Json>,
     known: &[&str],
     section: &str,
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<()> {
     for key in object.keys() {
         if !known.contains(&key.as_str()) {
-            return Err(plan_error(format!(
-                "{ctx}: invalid rc entry for section '{section}'"
-            )));
+            return Err(EngineError::RcEntry {
+                scope: scope.clone(),
+                section: section.to_owned(),
+            }
+            .into());
         }
     }
     Ok(())

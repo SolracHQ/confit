@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use mlua::{Lua, Table, Value};
 
 use super::confit_table;
-use crate::error::plan_error;
+use crate::error::{EngineError, Scope};
 use crate::lua::ValueExt;
 use crate::require::{Requirer, chunk_env};
 
@@ -130,9 +130,11 @@ fn names_index(lua: &Lua, user: &str, key: Value, root: PathBuf) -> mlua::Result
         None => match external {
             Some(file) => load_external(lua, user, &name, &file)?,
             None => {
-                return Err(plan_error(format!(
-                    "confit.plugin.{user}.{name}: cannot read 'plugin.lua': no such plugin"
-                )));
+                return Err(EngineError::MissingPlugin {
+                    user: user.to_owned(),
+                    name: name.to_owned(),
+                }
+                .into());
             }
         },
     };
@@ -141,19 +143,27 @@ fn names_index(lua: &Lua, user: &str, key: Value, root: PathBuf) -> mlua::Result
 }
 
 /// Loads one external plugin file with a scoped require.
+///
+/// # Errors
+///
+/// - [`EngineError::BadPluginPath`] for parent-free files.
+/// - [`EngineError::PluginRead`] for unreadable files.
+/// - [`EngineError::NestScope`] for chunk failures.
 fn load_external(lua: &Lua, user: &str, name: &str, file: &Path) -> mlua::Result<Value> {
+    let scope = Scope::plugin(user, name);
     let folder = match file.parent() {
         Some(parent) => parent.to_path_buf(),
         None => {
-            return Err(plan_error(format!(
-                "confit.plugin.{user}.{name}: cannot read 'plugin.lua': bad path"
-            )));
+            return Err(EngineError::BadPluginPath {
+                user: user.to_owned(),
+                name: name.to_owned(),
+            }
+            .into());
         }
     };
-    let source = std::fs::read_to_string(file).map_err(|error| {
-        plan_error(format!(
-            "confit.plugin.{user}.{name}: cannot read 'plugin.lua': {error}"
-        ))
+    let source = std::fs::read_to_string(file).map_err(|error| EngineError::PluginRead {
+        scope: scope.clone(),
+        reason: error.to_string(),
     })?;
     let requirer = Requirer {
         current: folder.clone(),
@@ -166,38 +176,43 @@ fn load_external(lua: &Lua, user: &str, name: &str, file: &Path) -> mlua::Result
         .load(&source)
         .set_name(format!("@{}", file.display()))
         .set_environment(env);
-    chunk
-        .call(())
-        .map_err(|error| plan_error(format!("confit.plugin.{user}.{name}: {error}")))
+    chunk.call(()).map_err(|error| {
+        EngineError::NestScope {
+            scope,
+            reason: error.to_string(),
+        }
+        .into()
+    })
 }
 
-/// Raises one plan error with plugin attribution.
+/// Raises one attributed plugin failure.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-string messages.
+/// - [`EngineError::Raise`] carrying the message.
 fn helpers_error_impl(message: Value) -> mlua::Result<Value> {
     const CALLER: &str = "confit.plugin.helpers.error";
-    let message = message.req_str(CALLER, "message")?;
-    PluginHelpers::error(CALLER, message)
+    let scope = Scope::method(CALLER);
+    let message = message.req_str(&scope, "message")?;
+    PluginHelpers::error(&scope, message)
 }
 
 /// Plugin helper errors holding attribution.
 struct PluginHelpers;
 
 impl PluginHelpers {
-    /// Raises one plan error with plugin attribution.
-    ///
-    /// # Arguments
-    ///
-    /// * `caller` - error prefix naming the constructor.
-    /// * `message` - message under reporting.
-    ///
-    /// # Returns
-    ///
-    /// Never returns a value.
+    /// Raises one attributed plugin failure.
     ///
     /// # Errors
     ///
-    /// Always fails as a plan error carrying the message.
+    /// - [`EngineError::Raise`] carrying the message.
     ///
-    fn error(caller: &str, message: String) -> mlua::Result<Value> {
-        Err(plan_error(format!("{caller}: {message}")))
+    fn error(scope: &Scope, message: String) -> mlua::Result<Value> {
+        Err(EngineError::Raise {
+            scope: scope.clone(),
+            message,
+        }
+        .into())
     }
 }

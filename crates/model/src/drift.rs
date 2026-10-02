@@ -46,7 +46,7 @@ pub enum Drift {
     Unreadable {
         /// Holds the recorded destination route.
         path: Route,
-        /// Holds the raw failure detail from the read.
+        /// Holds the fault cause behind the failed read.
         reason: String,
     },
 }

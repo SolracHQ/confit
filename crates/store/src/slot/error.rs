@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_model::error::Error as ModelError;
 use thiserror::Error;
 
 use crate::faults::AccessFault;
@@ -45,6 +46,14 @@ pub enum SlotError {
         /// Holds the write fault cause.
         fault: AccessFault,
     },
+    /// Failed manifest render holding the slot path with the model cause.
+    #[error("cannot write '{path}': cannot render manifest: {source}", path = path.display())]
+    Manifest {
+        /// Holds the slot path under storing.
+        path: PathBuf,
+        /// Holds the model render cause.
+        source: ModelError,
+    },
     /// Unknown write failure holding the slot path with message.
     #[error("cannot write '{path}': {message}", path = path.display())]
     WriteUnknown {
@@ -58,18 +67,14 @@ pub enum SlotError {
 impl SlotError {
     /// Maps one io failure at the slot path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Read {
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Read {
                 path: path.to_path_buf(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::Read {
+            None => Self::Read {
                 path: path.to_path_buf(),
                 fault: AccessFault::Unknown { message },
             },
@@ -78,18 +83,14 @@ impl SlotError {
 
     /// Maps one write io failure at the slot path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Write {
                 path: path.to_path_buf(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::WriteUnknown {
+            None => Self::WriteUnknown {
                 path: path.to_path_buf(),
                 message,
             },

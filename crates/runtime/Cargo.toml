@@ -15,6 +15,8 @@ toml.workspace = true
 noyalib.workspace = true
 sha2.workspace = true
 crossbeam-channel.workspace = true
+thiserror.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

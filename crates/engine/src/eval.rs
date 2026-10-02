@@ -10,7 +10,7 @@ use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use serde_json::Value as Json;
 
 use crate::EvalOpts;
-use crate::error::{find_plan, plan, plan_error};
+use crate::error::{EngineError, FieldRef, Scope, wrap};
 use crate::exec::{Area, ExecPatch, Executor, OwnerMap};
 use crate::lua::{JsonExt, TableExt};
 use crate::model::{ConfigData, StoredPatch};
@@ -23,12 +23,13 @@ use crate::surface::utils;
 use confit_model::arg::Arg;
 use confit_model::document::Document;
 use confit_model::document::{BlobRef, Data, RcData, RcEntry, RcOp, StructuredFormat};
-use confit_model::error::{Error, Result};
 use confit_model::hook::{Hook, merge_hooks};
 use confit_model::progress::{Event, ProgressSender};
 use confit_model::routes::{Route, RouteBase};
 use confit_store::Stores;
 use confit_store::handles::BlobHandle;
+
+use crate::error::Result;
 
 /// One evaluation holding the Lua state and its context.
 ///
@@ -68,7 +69,10 @@ impl Session {
             StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
             LuaOptions::default(),
         )
-        .map_err(|error| plan(format!("lua state: {error}")))?;
+        .map_err(|error| EngineError::Unknown {
+            context: "lua state".to_owned(),
+            message: error.to_string(),
+        })?;
         let session = Self {
             lua,
             root,
@@ -84,22 +88,24 @@ impl Session {
             scope: "profile",
         }
         .make(&session.lua)
-        .map_err(|error| plan(format!("require: {error}")))?;
+        .map_err(|error| EngineError::Unknown {
+            context: "require".to_owned(),
+            message: error.to_string(),
+        })?;
         session
             .lua
             .globals()
             .set("require", requirer)
-            .map_err(|error| plan(format!("require: {error}")))?;
+            .map_err(|error| EngineError::Unknown {
+                context: "require".to_owned(),
+                message: error.to_string(),
+            })?;
         crate::surface::install(&session)?;
         let resources = session.stores.resources();
         let absolute = absolutize(profile)?;
-        let handle = resources
-            .resource(&session.root, &absolute)
-            .map_err(|error| plan(error.to_string()))?;
-        let source = resources
-            .read_text(&handle)
-            .map_err(|error| plan(error.to_string()))?;
-        let profile_ctx = format!("profile '{}'", profile.display());
+        let handle = resources.resource(&session.root, &absolute)?;
+        let source = resources.read_text(&handle)?;
+        let scope = Scope::profile(profile);
         let returned: Value = session
             .lua
             .load(&source)
@@ -107,8 +113,8 @@ impl Session {
             .call(())
             .map_err(wrap)?;
         let table = coerce_profile_table(returned).map_err(wrap)?;
-        let profile = Profile::read(&table, &profile_ctx)?;
-        profile.check(&profile_ctx)?;
+        let profile = Profile::read(&table, &scope)?;
+        profile.check(&scope)?;
         let patches = profile.patches();
         let total = patches.len();
         if total > 0
@@ -118,14 +124,14 @@ impl Session {
         }
         let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
         let mut out = session
-            .assemble_structured(&profile, &patches, &profile_ctx)
+            .assemble_structured(&profile, &patches, &scope)
             .map_err(wrap)?;
-        let (rest, handles) = profile.text_link(&profile_ctx)?;
+        let (rest, handles) = profile.text_link(&scope)?;
         blobs.extend(handles);
         out.extend(rest);
         out.extend(
             session
-                .assemble_rc(&profile, &patches, &profile_ctx)
+                .assemble_rc(&profile, &patches, &scope)
                 .map_err(wrap)?,
         );
         log::debug!(
@@ -159,25 +165,28 @@ fn resolve_root(profile: &Path, root: &Path) -> PathBuf {
 }
 
 /// Resolves one profile path against the working folder.
+///
+/// # Errors
+///
+/// - [`EngineError::Unknown`] for working folder failures.
 fn absolutize(profile: &Path) -> Result<PathBuf> {
     if profile.is_absolute() {
         return Ok(profile.to_path_buf());
     }
-    let cwd = std::env::current_dir().map_err(|error| Error::Plan(error.to_string()))?;
+    let cwd = std::env::current_dir().map_err(|error| EngineError::Unknown {
+        context: "working directory".to_owned(),
+        message: error.to_string(),
+    })?;
     Ok(cwd.join(profile))
 }
 
-/// Maps one Lua failure onto the core error.
-fn wrap(error: mlua::Error) -> Error {
-    if let Some(message) = find_plan(&error) {
-        return plan(message);
-    }
-    plan(error.to_string())
-}
-
 /// Rejects changed gates naming documents outside the built set.
+///
+/// # Errors
+///
+/// - [`EngineError::ChangedUnknown`] for gates naming
+///   documents outside the built set.
 fn validate_changed(hooks: &[Hook], documents: &[Document]) -> mlua::Result<()> {
-    const CTOR: &str = "confit.runtime.changed";
     let built: std::collections::BTreeSet<Route> = documents
         .iter()
         .map(|document| document.destination.clone())
@@ -196,59 +205,81 @@ fn validate_changed(hooks: &[Hook], documents: &[Document]) -> mlua::Result<()> 
     }
     for path in paths {
         if !built.contains(&path) {
-            return Err(crate::error::plan_error(format!(
-                "{CTOR}: unknown document '{}'",
-                path.display()
-            )));
+            return Err(EngineError::ChangedUnknown {
+                route: path.display(),
+            }
+            .into());
         }
     }
     Ok(())
 }
 
 /// Coerces the profile return into a table.
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for non-table returns.
 fn coerce_profile_table(returned: Value) -> mlua::Result<Table> {
-    const WHAT: &str = "profile must return a table with 'shells' and 'configs'";
     match returned {
         Value::Table(table) => Ok(table),
         Value::Function(func) => match func.call::<Value>(())? {
             Value::Table(table) => Ok(table),
-            _ => Err(plan_error(WHAT.to_string())),
+            _ => Err(EngineError::Shape {
+                scope: Scope::method("profile"),
+                want: "must return a table with 'shells' and 'configs'",
+            }
+            .into()),
         },
-        _ => Err(plan_error(WHAT.to_string())),
+        _ => Err(EngineError::Shape {
+            scope: Scope::method("profile"),
+            want: "must return a table with 'shells' and 'configs'",
+        }
+        .into()),
     }
 }
 
 /// Reads the profile shells field.
-fn read_shells(profile: &Table, ctx: &str) -> Result<Vec<String>> {
-    let raw: Value = profile.get("shells").map_err(|_| {
-        plan(format!(
-            "{ctx}: field 'shells' must be a non-empty string array"
-        ))
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped shells fields.
+/// - [`EngineError::Repeat`] for repeated shell names.
+fn read_shells(profile: &Table, scope: &Scope) -> Result<Vec<String>> {
+    let raw: Value = profile.get("shells").map_err(|_| EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name("shells"),
+        want: "must be a non-empty string array",
     })?;
     let list = match raw {
         Value::Table(list) => list,
         _ => {
-            return Err(plan(format!(
-                "{ctx}: field 'shells' must be a non-empty string array"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("shells"),
+                want: "must be a non-empty string array",
+            });
         }
     };
-    let shells = read_string_array(&list).ok_or_else(|| {
-        plan(format!(
-            "{ctx}: field 'shells' must be a non-empty string array"
-        ))
+    let shells = read_string_array(&list).ok_or_else(|| EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name("shells"),
+        want: "must be a non-empty string array",
     })?;
     if shells.is_empty() {
-        return Err(plan(format!(
-            "{ctx}: field 'shells' must be a non-empty string array"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("shells"),
+            want: "must be a non-empty string array",
+        });
     }
     let mut seen = std::collections::BTreeSet::new();
     for shell in &shells {
         if !seen.insert(shell.as_str()) {
-            return Err(plan(format!(
-                "{ctx}: field 'shells' declares '{shell}' more than once"
-            )));
+            return Err(EngineError::Repeat {
+                scope: scope.clone(),
+                collection: "shells",
+                item: shell.clone(),
+            });
         }
     }
     Ok(shells)
@@ -276,84 +307,114 @@ fn read_string_array(table: &Table) -> Option<Vec<String>> {
 }
 
 /// Reads config contributions from the profile configs field.
-fn read_builders(profile: &Table, ctx: &str) -> Result<Vec<ConfigData>> {
-    let raw: Value = profile.get("configs").map_err(|_| {
-        plan(format!(
-            "{ctx}: field 'configs' must be a non-empty array of configs"
-        ))
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped configs fields.
+/// - [`EngineError::Item`] for unreadable entries.
+fn read_builders(profile: &Table, scope: &Scope) -> Result<Vec<ConfigData>> {
+    let raw: Value = profile.get("configs").map_err(|_| EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name("configs"),
+        want: "must be a non-empty array of configs",
     })?;
     let list = match raw {
         Value::Table(list) => list,
         _ => {
-            return Err(plan(format!(
-                "{ctx}: field 'configs' must be a non-empty array of configs"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("configs"),
+                want: "must be a non-empty array of configs",
+            });
         }
     };
     let len = list.raw_len();
     let mut out = Vec::with_capacity(len);
     for index in 1..=len {
-        let item: Value = list
-            .get(index)
-            .map_err(|error| plan(format!("{ctx}: configs[{index}] unreadable: {error}")))?;
+        let item: Value = list.get(index).map_err(|error| EngineError::Item {
+            scope: scope.clone(),
+            collection: "configs",
+            index,
+            reason: error.to_string(),
+        })?;
         match item {
             Value::UserData(handle) => match handle.borrow::<ConfigBuilder>() {
                 Ok(builder) => out.push(builder.contribution().clone()),
                 Err(_) => {
-                    return Err(plan(format!(
-                        "{ctx}: configs[{index}] must be a config (expected config userdata)"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::index("configs", index),
+                        want: "must be a config (expected config userdata)",
+                    });
                 }
             },
             _ => {
-                return Err(plan(format!(
-                    "{ctx}: configs[{index}] must be a config (expected config userdata)"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::index("configs", index),
+                    want: "must be a config (expected config userdata)",
+                });
             }
         }
     }
     if out.is_empty() {
-        return Err(plan(format!(
-            "{ctx}: field 'configs' must be a non-empty array of configs"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("configs"),
+            want: "must be a non-empty array of configs",
+        });
     }
     Ok(out)
 }
 
 /// Reads profile-declared documents with profile ownership.
-fn read_documents(profile: &Table, ctx: &str) -> mlua::Result<ProfileDeclared> {
-    let raw: Value = profile.get("documents").map_err(|_| {
-        plan_error(format!(
-            "{ctx}: field 'documents' must be an array of documents"
-        ))
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped documents fields.
+/// - [`EngineError::Item`] for unreadable entries.
+fn read_documents(profile: &Table, scope: &Scope) -> mlua::Result<ProfileDeclared> {
+    let raw: Value = profile.get("documents").map_err(|_| EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name("documents"),
+        want: "must be an array of documents",
     })?;
     let list = match raw {
         Value::Nil => return Ok(ProfileDeclared::default()),
         Value::Table(list) => list,
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'documents' must be an array of documents"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("documents"),
+                want: "must be an array of documents",
+            }
+            .into());
         }
     };
     let len = list.raw_len();
     let mut out = ProfileDeclared::default();
     for index in 1..=len {
-        let item: Value = list.get(index).map_err(|error| {
-            plan_error(format!("{ctx}: documents[{index}] unreadable: {error}"))
+        let item: Value = list.get(index).map_err(|error| EngineError::Item {
+            scope: scope.clone(),
+            collection: "documents",
+            index,
+            reason: error.to_string(),
         })?;
         let table = match item {
             Value::Table(table) => table,
             _ => {
-                return Err(plan_error(format!(
-                    "{ctx}: documents[{index}] must be a document (expected document table)"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::index("documents", index),
+                    want: "must be a document (expected document table)",
+                }
+                .into());
             }
         };
-        let item_ctx = format!("{ctx}: documents[{index}]");
+        let item_scope = scope.item("documents", index);
         out.push(
-            crate::surface::document::convert::convert_document(&table, &item_ctx)?,
-            ctx,
+            crate::surface::document::convert::convert_document(&table, &item_scope)?,
+            scope,
         )?;
     }
     Ok(out)
@@ -377,9 +438,13 @@ struct ProfileDeclared {
 }
 
 /// Pushes one declared document into the profile accumulator.
+///
+/// # Errors
+///
+/// - [`EngineError::Duplicate`] for repeated rc bases.
 impl ProfileDeclared {
     /// Pushes one declared document into the accumulator.
-    fn push(&mut self, declared: Declared, ctx: &str) -> mlua::Result<()> {
+    fn push(&mut self, declared: Declared, scope: &Scope) -> mlua::Result<()> {
         match declared {
             Declared::Structured(decl) => self.structured.push(decl),
             Declared::Text(decl) => self.texts.push(decl),
@@ -388,9 +453,13 @@ impl ProfileDeclared {
             Declared::Tree(decl) => self.trees.push(decl),
             Declared::Rc(entries) => {
                 if self.rc_base.is_some() {
-                    return Err(crate::error::plan_error(format!(
-                        "{ctx}: document 'rc' is declared more than once ('profile' plus 'profile')"
-                    )));
+                    return Err(EngineError::Duplicate {
+                        scope: scope.clone(),
+                        item: "rc".to_owned(),
+                        first: "profile".to_owned(),
+                        second: "profile".to_owned(),
+                    }
+                    .into());
                 }
                 self.rc_base = Some(entries);
             }
@@ -435,14 +504,11 @@ fn walk_requires(
     };
     for edge in &config.requires {
         let Some(_) = present.get(edge.target.as_str()) else {
-            let mut message = format!(
-                "config \"{}\" requires \"{}\" config",
-                config.name, edge.target
-            );
-            if let Some(hint) = edge.hint.as_ref() {
-                message.push_str(&format!("\nhint: {hint}"));
-            }
-            return Err(plan(message));
+            return Err(EngineError::Require {
+                name: config.name.clone(),
+                target: edge.target.clone(),
+                hint: edge.hint.clone(),
+            });
         };
         walk_requires(edge.target.as_str(), present, visited)?;
     }
@@ -451,33 +517,48 @@ fn walk_requires(
 
 impl Profile {
     /// Reads shells, documents, and configs from a profile table.
-    fn read(table: &Table, ctx: &str) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Field`] for misshaped profile fields.
+    /// - [`EngineError::Item`] for unreadable entries.
+    fn read(table: &Table, scope: &Scope) -> Result<Self> {
         Ok(Self {
-            shells: read_shells(table, ctx)?,
-            declared: read_documents(table, ctx).map_err(wrap)?,
-            configs: read_builders(table, ctx)?,
+            shells: read_shells(table, scope)?,
+            declared: read_documents(table, scope).map_err(wrap)?,
+            configs: read_builders(table, scope)?,
         })
     }
 
     /// Rejects repeated declarations across profile and configs.
-    fn check(&self, ctx: &str) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Duplicate`] for repeated declarations.
+    /// - [`EngineError::Require`] for dangling require edges.
+    fn check(&self, scope: &Scope) -> Result<()> {
         let mut owners: BTreeMap<String, &str> = BTreeMap::new();
         for item in &self.declared.structured {
             let display = item.destination.display();
             if let Some(first) = owners.insert(display.clone(), "profile") {
-                return Err(plan(format!(
-                    "{ctx}: document '{display}' is declared more than once ('{first}' plus 'profile')"
-                )));
+                return Err(EngineError::Duplicate {
+                    scope: scope.clone(),
+                    item: display,
+                    first: first.to_owned(),
+                    second: "profile".to_owned(),
+                });
             }
         }
         for config in &self.configs {
             for item in &config.structured {
                 let display = item.destination.display();
                 if let Some(first) = owners.insert(display.clone(), config.name.as_str()) {
-                    return Err(plan(format!(
-                        "{ctx}: document '{display}' is declared more than once ('{first}' plus '{}')",
-                        config.name
-                    )));
+                    return Err(EngineError::Duplicate {
+                        scope: scope.clone(),
+                        item: display,
+                        first: first.to_owned(),
+                        second: config.name.clone(),
+                    });
                 }
             }
         }
@@ -490,10 +571,12 @@ impl Profile {
                 match first {
                     None => first = Some(config.name.as_str()),
                     Some(owner) => {
-                        return Err(plan(format!(
-                            "{ctx}: document 'rc' is declared more than once ('{owner}' plus '{}')",
-                            config.name
-                        )));
+                        return Err(EngineError::Duplicate {
+                            scope: scope.clone(),
+                            item: "rc".to_owned(),
+                            first: owner.to_owned(),
+                            second: config.name.clone(),
+                        });
                     }
                 }
             }
@@ -531,18 +614,27 @@ impl Profile {
     }
 
     /// Assembles text, link, opaque, and tree documents in route order.
-    fn text_link(&self, ctx: &str) -> Result<(Vec<Document>, BTreeMap<String, BlobRef>)> {
-        assemble_text_link(&self.declared, &self.configs, ctx)
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Duplicate`] for repeated declarations.
+    fn text_link(&self, scope: &Scope) -> Result<(Vec<Document>, BTreeMap<String, BlobRef>)> {
+        assemble_text_link(&self.declared, &self.configs, scope)
     }
 }
 
 impl Session {
     /// Assembles structured documents in destination order.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Mismatch`] for format mismatches.
+    /// - [`EngineError::RouteDetail`] for destination builds.
     fn assemble_structured(
         &self,
         profile: &Profile,
         patches: &[StoredPatch],
-        ctx: &str,
+        scope: &Scope,
     ) -> mlua::Result<Vec<Document>> {
         let mut bases: BTreeMap<String, StructuredBase> = BTreeMap::new();
         for item in &profile.declared.structured {
@@ -589,10 +681,10 @@ impl Session {
                 if let Some(other) = patch.format
                     && other != base.format
                 {
-                    let patch_ctx = format!("confit.patch.structured('{display}')");
-                    return Err(plan_error(format!(
-                        "{patch_ctx}: cannot merge document at '{display}': format mismatch"
-                    )));
+                    return Err(EngineError::Mismatch {
+                        target: display.clone(),
+                    }
+                    .into());
                 }
             }
             let document = run_structured_doc(
@@ -602,7 +694,7 @@ impl Session {
                 base.format,
                 Some((&base.data, base.owner.as_str())),
                 &refs,
-                ctx,
+                scope,
             )?;
             out.insert(display.clone(), document);
         }
@@ -613,10 +705,12 @@ impl Session {
             let mut refs = items.clone();
             Executor::sort_patches(&mut refs);
             let format = created_format(display, &refs)?;
-            let destination =
-                Route::parse(display).map_err(|error| plan_error(error.to_string()))?;
+            let destination = Route::parse(display).map_err(|error| EngineError::NestScope {
+                scope: scope.clone(),
+                reason: error.to_string(),
+            })?;
             let document =
-                run_structured_doc(&self.lua, &exec, &destination, format, None, &refs, ctx)?;
+                run_structured_doc(&self.lua, &exec, &destination, format, None, &refs, scope)?;
             out.insert(display.clone(), document);
         }
         Ok(out.into_values().collect())
@@ -626,10 +720,6 @@ impl Session {
 /// Runs one structured document from its base through patches.
 ///
 /// The live table seeds from the declared base, so patch callbacks merge over owned leaves.
-///
-/// # Arguments
-///
-/// * `base` - the declared data and owner under seeding, holding `None` for patch-created documents.
 ///
 /// # Errors
 ///
@@ -641,18 +731,18 @@ fn run_structured_doc(
     format: StructuredFormat,
     base: Option<(&BTreeMap<String, Json>, &str)>,
     refs: &[&StoredPatch],
-    ctx: &str,
+    scope: &Scope,
 ) -> mlua::Result<Document> {
     let doc = lua.create_table()?;
     let mut seeds: OwnerMap = BTreeMap::new();
     if let Some((data, owner)) = base {
         for (key, value) in data {
-            let seed_ctx = if owner == "profile" {
-                format!("{ctx}: field '{key}'")
+            let seed = if owner == "profile" {
+                scope.slot(FieldRef::name(key))
             } else {
-                format!("config '{owner}': field '{key}'")
+                Scope::config(owner).slot(FieldRef::name(key))
             };
-            doc.set(key.as_str(), value.to_lua(lua, &seed_ctx)?)?;
+            doc.set(key.as_str(), value.to_lua(lua, &seed)?)?;
         }
         seed_owners(data, owner, &mut seeds);
     }
@@ -680,13 +770,21 @@ fn finish_structured(
 }
 
 /// Converts one live table into a data map.
+///
+/// # Errors
+///
+/// - [`EngineError::NoObject`] for non-object tables.
 fn live_to_map(doc: &Table, path: &str) -> mlua::Result<BTreeMap<String, Json>> {
-    let patch = format!("confit.patch.structured('{path}')");
-    match doc.to_json(&format!("{patch}: convert"))? {
+    let scope = Scope::Call {
+        method: "confit.patch.structured",
+        target: path.to_owned(),
+    };
+    match doc.to_json(&scope.slot(FieldRef::name("convert")))? {
         Json::Object(map) => Ok(map.into_iter().collect()),
-        _ => Err(plan_error(format!(
-            "{patch}: patch for '{path}' holds no object"
-        ))),
+        _ => Err(EngineError::NoObject {
+            target: path.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -704,24 +802,30 @@ fn seed_owners(base: &BTreeMap<String, Json>, owner: &str, seeds: &mut OwnerMap)
 }
 
 /// Resolves the format for one patch-created document.
+///
+/// # Errors
+///
+/// - [`EngineError::Mismatch`] for format mismatches.
+/// - [`EngineError::NoFormat`] for format-free patches.
 fn created_format(path: &str, patches: &[&StoredPatch]) -> mlua::Result<StructuredFormat> {
-    let patch_ctx = format!("confit.patch.structured('{path}')");
     let mut format: Option<StructuredFormat> = None;
     for item in patches {
         match (format, item.format) {
             (None, Some(next)) => format = Some(next),
             (Some(current), Some(next)) if current != next => {
-                return Err(plan_error(format!(
-                    "{patch_ctx}: cannot merge document at '{path}': format mismatch"
-                )));
+                return Err(EngineError::Mismatch {
+                    target: path.to_owned(),
+                }
+                .into());
             }
             _ => {}
         }
     }
     format.ok_or_else(|| {
-        plan_error(format!(
-            "{patch_ctx}: patch for '{path}' holds no format (structured patches name one)"
-        ))
+        EngineError::NoFormat {
+            target: path.to_owned(),
+        }
+        .into()
     })
 }
 
@@ -738,10 +842,15 @@ fn exec_list(refs: &[&StoredPatch]) -> Vec<ExecPatch> {
 }
 
 /// Assembles text, link, opaque, and tree documents in route order.
+///
+/// # Errors
+///
+/// - [`EngineError::Duplicate`] for repeated declarations.
+/// - [`EngineError::NestScope`] for destination builds.
 fn assemble_text_link(
     declared: &ProfileDeclared,
     configs: &[ConfigData],
-    ctx: &str,
+    scope: &Scope,
 ) -> Result<(Vec<Document>, BTreeMap<String, BlobRef>)> {
     let mut grouped: BTreeMap<String, Vec<(Data, String)>> = BTreeMap::new();
     let mut blobs: BTreeMap<String, BlobRef> = BTreeMap::new();
@@ -845,11 +954,17 @@ fn assemble_text_link(
             continue;
         };
         if let Some((_, second)) = rest.first() {
-            return Err(plan(format!(
-                "{ctx}: document '{display}' is declared more than once ('{first}' plus '{second}'): declare once, patch to modify"
-            )));
+            return Err(EngineError::Duplicate {
+                scope: scope.clone(),
+                item: display.clone(),
+                first: first.clone(),
+                second: second.clone(),
+            });
         }
-        let destination = Route::parse(display).map_err(|error| plan(error.to_string()))?;
+        let destination = Route::parse(display).map_err(|error| EngineError::NestScope {
+            scope: scope.clone(),
+            reason: error.to_string(),
+        })?;
         out.push(Document::new(destination, data.clone()));
     }
     Ok((out, blobs))
@@ -881,11 +996,15 @@ fn collect_tree(
 
 impl Session {
     /// Assembles one rc document per shell.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::Duplicate`] for repeated rc bases.
     fn assemble_rc(
         &self,
         profile: &Profile,
         patches: &[StoredPatch],
-        ctx: &str,
+        scope: &Scope,
     ) -> mlua::Result<Vec<Document>> {
         let mut handles: Vec<&StoredPatch> =
             patches.iter().filter(|item| item.target == "rc").collect();
@@ -897,10 +1016,13 @@ impl Session {
             if let Some(entries) = config.rc_base.as_ref() {
                 if base.is_some() {
                     let (first, _) = base.unwrap_or(("profile", entries));
-                    return Err(crate::error::plan_error(format!(
-                        "{ctx}: document 'rc' is declared more than once ('{first}' plus '{}')",
-                        config.name
-                    )));
+                    return Err(EngineError::Duplicate {
+                        scope: scope.clone(),
+                        item: "rc".to_owned(),
+                        first: first.to_owned(),
+                        second: config.name.clone(),
+                    }
+                    .into());
                 }
                 base = Some((config.name.as_str(), entries));
             }
@@ -921,13 +1043,20 @@ impl Session {
         }
         let owners = std::rc::Rc::new(std::cell::RefCell::new(OwnerMap::new()));
         if let Some((owner, entries)) = base {
-            let base_ctx = if owner == "profile" {
-                ctx.to_string()
+            let base_scope = if owner == "profile" {
+                scope.clone()
             } else {
-                format!("config '{owner}'")
+                Scope::config(owner)
             };
             for entry in entries {
-                exec.rc_insert(&doc, &entry.json, &entry.section, owner, &owners, &base_ctx)?;
+                exec.rc_insert(
+                    &doc,
+                    &entry.json,
+                    &entry.section,
+                    owner,
+                    &owners,
+                    &base_scope,
+                )?;
             }
         }
         let seeds = owners.borrow().clone();
@@ -936,14 +1065,11 @@ impl Session {
         let mut out = Vec::with_capacity(profile.shells.len());
         for shell in &profile.shells {
             let mut per_shell = data.clone();
-            materialize_shell(&mut per_shell.profile, shell)
-                .map_err(|error| plan_error(error.to_string()))?;
-            materialize_shell(&mut per_shell.config, shell)
-                .map_err(|error| plan_error(error.to_string()))?;
-            materialize_shell(&mut per_shell.final_entries, shell)
-                .map_err(|error| plan_error(error.to_string()))?;
+            materialize_shell(&mut per_shell.profile, shell)?;
+            materialize_shell(&mut per_shell.config, shell)?;
+            materialize_shell(&mut per_shell.final_entries, shell)?;
             out.push(Document::new(
-                shell_route(shell).map_err(|error| plan_error(error.to_string()))?,
+                shell_route(shell).map_err(EngineError::from)?,
                 Data::Rc(per_shell),
             ));
         }
@@ -952,8 +1078,13 @@ impl Session {
 }
 
 /// Converts one final live rc table into core data.
+///
+/// # Errors
+///
+/// - [`EngineError::SectionLeaf`] for misshaped sections.
 fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
     const PATCH: &str = "confit.patch.rc";
+    let scope = Scope::method(PATCH);
     let mut profile: Vec<RcEntry> = Vec::new();
     let mut config: Vec<RcEntry> = Vec::new();
     let mut finals: Vec<RcEntry> = Vec::new();
@@ -963,9 +1094,12 @@ fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
             Value::Nil => continue,
             Value::Table(table) => table,
             _ => {
-                return Err(plan_error(format!(
-                    "{PATCH}: section '{section}' holds a non-list leaf"
-                )));
+                return Err(EngineError::SectionLeaf {
+                    scope: scope.clone(),
+                    section: section.to_owned(),
+                    want: "holds a non-list leaf",
+                }
+                .into());
             }
         };
         for index in 1..=table.raw_len() {
@@ -973,19 +1107,22 @@ fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
             let entry = match item {
                 Value::Table(entry) => entry,
                 _ => {
-                    return Err(plan_error(format!(
-                        "{PATCH}: section '{section}' holds a non-table entry"
-                    )));
+                    return Err(EngineError::SectionLeaf {
+                        scope: scope.clone(),
+                        section: section.to_owned(),
+                        want: "holds a non-table entry",
+                    }
+                    .into());
                 }
             };
-            let json = translate_entry(&entry, &format!("{PATCH}: convert"))?;
+            let json = translate_entry(&entry, &scope.slot(FieldRef::name("convert")))?;
             crate::surface::document::convert::push_live_entry(
                 &mut profile,
                 &mut config,
                 &mut finals,
                 section,
                 &json,
-                PATCH,
+                &scope,
             )?;
         }
     }
@@ -997,7 +1134,11 @@ fn convert_live_rc(doc: &Table) -> mlua::Result<RcData> {
 }
 
 /// Derives the rc destination route for one shell name.
-fn shell_route(shell: &str) -> Result<Route> {
+///
+/// # Errors
+///
+/// - [`confit_model::error::Error::Parse`] for bad shell names.
+fn shell_route(shell: &str) -> confit_model::error::Result<Route> {
     let relative = match shell {
         "bash" => ".bashrc".to_string(),
         "zsh" => ".zshrc".to_string(),
@@ -1035,7 +1176,14 @@ fn materialize_shell(entries: &mut [RcEntry], shell: &str) -> Result<()> {
 }
 
 /// Renders one init string with the shell facts.
+///
+/// # Errors
+///
+/// - [`EngineError::NestScope`] for template failures.
 fn render_init(text: &str, facts: &BTreeMap<String, Json>, shell: &str) -> Result<String> {
-    let prefix = format!("confit.document.rc '{}': ", shell_path(shell));
-    utils::render(text, facts, &prefix).map_err(wrap)
+    let scope = Scope::Call {
+        method: "confit.document.rc",
+        target: shell_path(shell),
+    };
+    utils::render(text, facts, &scope).map_err(wrap)
 }

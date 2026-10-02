@@ -5,7 +5,8 @@
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
 use confit_model::document::{Data, Document, RcData, RcEntry, RcOp, StructuredFormat, Table};
-use confit_model::error::{Error, Result};
+
+use crate::error::{RefusalShape, Result, RuntimeError};
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -17,9 +18,8 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// # Errors
 ///
-/// Opaque and tree payloads fail as plan errors; their
-/// bytes ride the blob store.
-/// Serializer failures fail as plan errors.
+/// - [`RuntimeError::Refusal`] for opaque with tree payloads.
+/// - [`RuntimeError::Render`] for serializer failures.
 ///
 /// # Examples
 ///
@@ -44,44 +44,80 @@ impl crate::Applier {
     ///
     /// # Errors
     ///
-    /// Opaque and tree payloads fail as plan errors; their
-    /// bytes ride the blob store.
-    /// Serializer failures fail as plan errors.
+    /// - [`RuntimeError::Refusal`] for opaque with tree payloads.
+    /// - [`RuntimeError::Render`] for serializer failures.
     pub fn render_document(&self, document: &Document) -> Result<Vec<u8>> {
         match &document.data {
             Data::Structured { format, data } => match format {
-                StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
-                StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
-                StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
+                StructuredFormat::Toml => {
+                    Ok(render_toml(&document.destination, data)?.into_bytes())
+                }
+                StructuredFormat::Json => {
+                    Ok(render_json(&document.destination, data)?.into_bytes())
+                }
+                StructuredFormat::Yaml => {
+                    Ok(render_yaml(&document.destination, data)?.into_bytes())
+                }
             },
             Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
             Data::Link { target } => Ok(target.as_bytes().to_vec()),
             Data::Rc(data) => Ok(render_rc(data).into_bytes()),
-            Data::Opaque { blob, .. } => Err(Error::Plan(format!(
-                "render opaque '{}': blob bytes ride the blob store",
-                blob.sha()
-            ))),
-            Data::Tree { .. } => Err(Error::Plan(
-                "render tree: tree documents hold member bytes".to_string(),
-            )),
+            Data::Opaque { blob, .. } => {
+                log::error!(
+                    "opaque '{}' rides blob '{}'",
+                    document.destination.display(),
+                    blob.sha().hex()
+                );
+                Err(RuntimeError::Refusal {
+                    route: document.destination.clone(),
+                    shape: RefusalShape::Opaque,
+                })
+            }
+            Data::Tree { .. } => Err(RuntimeError::Refusal {
+                route: document.destination.clone(),
+                shape: RefusalShape::Tree,
+            }),
         }
     }
 }
 
 /// Renders a table to TOML text.
-fn render_toml(table: &Table) -> Result<String> {
-    toml::to_string(table).map_err(|error| Error::Plan(format!("render toml: {error}")))
+fn render_toml(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
+    toml::to_string(table).map_err(|source| {
+        let reason = source.to_string();
+        log::error!("render '{}' as toml failed: {reason}", route.display());
+        RuntimeError::Render {
+            route: route.clone(),
+            format: StructuredFormat::Toml,
+            reason,
+        }
+    })
 }
 
 /// Renders a table to pretty JSON text.
-fn render_json(table: &Table) -> Result<String> {
-    serde_json::to_string_pretty(table)
-        .map_err(|error| Error::Plan(format!("render json: {error}")))
+fn render_json(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
+    serde_json::to_string_pretty(table).map_err(|source| {
+        let reason = source.to_string();
+        log::error!("render '{}' as json failed: {reason}", route.display());
+        RuntimeError::Render {
+            route: route.clone(),
+            format: StructuredFormat::Json,
+            reason,
+        }
+    })
 }
 
 /// Renders a table to YAML text.
-fn render_yaml(table: &Table) -> Result<String> {
-    noyalib::to_string(table).map_err(|error| Error::Plan(format!("render yaml: {error}")))
+fn render_yaml(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
+    noyalib::to_string(table).map_err(|source| {
+        let reason = source.to_string();
+        log::error!("render '{}' as yaml failed: {reason}", route.display());
+        RuntimeError::Render {
+            route: route.clone(),
+            format: StructuredFormat::Yaml,
+            reason,
+        }
+    })
 }
 
 /// Renders rc data to shell text with trailing newline.

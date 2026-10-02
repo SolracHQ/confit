@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use confit_driver as driver;
-use confit_model::error::{Error, Result};
+
+use crate::error::{CliError, Result};
 
 /// Outcome of one hook subprocess run.
 ///
@@ -28,21 +29,13 @@ pub struct HookRun {
 /// scripted outcomes from the thread-local registry instead,
 /// so no test ever spawns a subprocess by accident.
 ///
-/// # Arguments
-///
-/// * `argv` - the resolved binary and arguments in order.
-/// * `path_dirs` - the PATH extension dirs for the subprocess alone.
-/// * `timeout_secs` - the run cap in seconds.
-///
-/// # Returns
-///
-/// The exit code and captured bytes.
-///
 /// # Errors
 ///
-/// Spawn and wait failures surface as plan errors. Timeouts
-/// surface as their own plan error. Unscripted argv fails
-/// naming the argv under test.
+/// - [`CliError::EmptyArgv`] for empty argv.
+/// - [`CliError::Spawn`] for spawn failures.
+/// - [`CliError::Wait`] for wait failures.
+/// - [`CliError::Timeout`] for timed-out runs.
+/// - [`CliError::Output`] for output join failures.
 pub fn run(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<HookRun> {
     #[cfg(test)]
     {
@@ -57,7 +50,7 @@ pub fn run(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<
 #[cfg(not(test))]
 fn spawn(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<HookRun> {
     let Some((program, args)) = argv.split_first() else {
-        return Err(Error::Plan("hook argv reads empty".to_string()));
+        return Err(CliError::EmptyArgv);
     };
     let path = extended_path(path_dirs);
     let mut child = Command::new(program)
@@ -66,7 +59,10 @@ fn spawn(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<Ho
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| Error::Plan(format!("hook '{}' cannot spawn: {error}", argv.join(" "))))?;
+        .map_err(|error| CliError::Spawn {
+            argv: argv.join(" "),
+            message: error.to_string(),
+        })?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let out_drain = std::thread::spawn(move || drain_pipe(stdout));
@@ -74,8 +70,9 @@ fn spawn(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<Ho
     let start = std::time::Instant::now();
     let limit = std::time::Duration::from_secs(timeout_secs);
     loop {
-        let done = child.try_wait().map_err(|error| {
-            Error::Plan(format!("hook '{}' cannot wait: {error}", argv.join(" ")))
+        let done = child.try_wait().map_err(|error| CliError::Wait {
+            argv: argv.join(" "),
+            message: error.to_string(),
         })?;
         match done {
             Some(status) => {
@@ -88,10 +85,10 @@ fn spawn(argv: &[String], path_dirs: &[PathBuf], timeout_secs: u64) -> Result<Ho
                 if start.elapsed() >= limit {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(Error::Plan(format!(
-                        "hook '{}' timed out after {timeout_secs}s",
-                        argv.join(" ")
-                    )));
+                    return Err(CliError::Timeout {
+                        argv: argv.join(" "),
+                        timeout_secs,
+                    });
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -117,10 +114,9 @@ fn drain_pipe<T: std::io::Read>(pipe: Option<T>) -> Vec<u8> {
 fn join_drain(handle: std::thread::JoinHandle<Vec<u8>>, argv: &[String]) -> Result<Vec<u8>> {
     match handle.join() {
         Ok(bytes) => Ok(bytes),
-        Err(_) => Err(Error::Plan(format!(
-            "hook '{}' cannot read output",
-            argv.join(" ")
-        ))),
+        Err(_) => Err(CliError::Output {
+            argv: argv.join(" "),
+        }),
     }
 }
 
@@ -139,27 +135,18 @@ fn extended_path(dirs: &[PathBuf]) -> std::ffi::OsString {
 
 /// Appends one hook header and captured bytes to the run log.
 ///
-/// Missing log files start fresh. Backend write failures
-/// surface as io errors.
-///
-/// # Arguments
-///
-/// * `log` - the log file under appending.
-/// * `header` - the hook identity line landing first.
-/// * `output` - the captured bytes landing after the header.
-///
-/// # Returns
-///
-/// Unit once the bytes land.
+/// Missing log files start fresh.
 ///
 /// # Errors
 ///
-/// Read and write failures surface as io errors.
+/// - [`CliError::Read`] for failed log reads.
+/// - [`CliError::Write`] with [`CliError::WriteUnknown`]
+///   for failed log writes.
 pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
     let mut bytes = match driver::fs::read(log) {
         Ok(held) => held,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(Error::Plan(error.to_string())),
+        Err(error) => return Err(CliError::from_read_io(log, error)),
     };
     bytes.extend_from_slice(header.as_bytes());
     bytes.extend_from_slice(b"\n");
@@ -167,7 +154,7 @@ pub fn append_hook_log(log: &Path, header: &str, output: &[u8]) -> Result<()> {
     if !output.ends_with(b"\n") {
         bytes.extend_from_slice(b"\n");
     }
-    driver::fs::write(log, &bytes).map_err(|error| Error::Plan(error.to_string()))?;
+    driver::fs::write(log, &bytes).map_err(|error| CliError::from_write_io(log, error))?;
     Ok(())
 }
 
@@ -184,7 +171,7 @@ pub(crate) mod registry {
     use std::collections::VecDeque;
     use std::path::PathBuf;
 
-    use confit_model::error::Result;
+    use crate::error::Result;
 
     use super::HookRun;
 

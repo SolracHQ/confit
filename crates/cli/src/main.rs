@@ -8,14 +8,7 @@ use confit_store::{StoreRoots, Stores};
 
 fn main() {
     if let Err(error) = run() {
-        match error {
-            confit_model::error::Error::Plan(message) => {
-                eprintln!("confit: plan error: {message}");
-            }
-            other => {
-                eprintln!("confit: {other}");
-            }
-        }
+        eprintln!("confit: {}", error.terminal());
         std::process::exit(1);
     }
 }
@@ -25,7 +18,7 @@ fn main() {
 /// Collision lines land in the log file. The path prints after
 /// the summary. Drift notes lead with success, so exit stays 0
 /// while drift exists.
-fn run() -> confit_model::error::Result<()> {
+fn run() -> confit_cli::error::Result<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);
     if let Some(path) = cli.log_file.as_mut() {
@@ -38,10 +31,12 @@ fn run() -> confit_model::error::Result<()> {
     let dispatch = fern::Dispatch::new()
         .format(|out, message, _record| out.finish(format_args!("{message}")))
         .level(cli.log_level)
-        .chain(
-            fern::log_file(&log_path)
-                .map_err(|error| confit_model::error::Error::Plan(format!("log file: {error}")))?,
-        );
+        .chain(fern::log_file(&log_path).map_err(|error| {
+            confit_cli::error::CliError::Unknown {
+                context: "log file".to_owned(),
+                message: error.to_string(),
+            }
+        })?);
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
     match &cli.command {
@@ -59,7 +54,7 @@ fn run() -> confit_model::error::Result<()> {
 fn run_plan(
     args: &confit_cli::cli::PlanArgs,
     log_path: &std::path::Path,
-) -> confit_model::error::Result<()> {
+) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let sender = live.sink();
     let stores = Stores::new(StoreRoots::standard(), sender.clone());
@@ -98,7 +93,7 @@ fn run_plan(
 fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
-) -> confit_model::error::Result<()> {
+) -> confit_cli::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
     let sender = live.sink();
@@ -137,7 +132,7 @@ fn run_apply(
 }
 
 /// Runs export writing a bundle file or printing its manifest.
-fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_model::error::Result<()> {
+fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let stores = Stores::new(StoreRoots::standard(), live.sink());
     let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
@@ -150,7 +145,7 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_model::error::Result
 }
 
 /// Runs delete dropping one named slot and orphan blobs.
-fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_model::error::Result<()> {
+fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let stores = Stores::new(StoreRoots::standard(), live.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
@@ -159,7 +154,7 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_model::error::Result
 }
 
 /// Runs init with project scaffolding on host seams.
-fn run_init(args: &confit_cli::cli::InitArgs) -> confit_model::error::Result<()> {
+fn run_init(args: &confit_cli::cli::InitArgs) -> confit_cli::error::Result<()> {
     let report = confit_cli::actions::init::InitRunner { args }.execute()?;
     anstream::println!(
         "init: {} ({} files)",

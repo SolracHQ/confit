@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::faults::AccessFault;
 
 /// Archive failure shapes.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ArchiveError {
     /// Failed read holding the source path with the fault.
     #[error("cannot read '{path}': {fault}", path = path.display())]
@@ -76,18 +76,14 @@ pub enum ArchiveError {
 impl ArchiveError {
     /// Maps one io failure at the archive path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Read {
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Read {
                 path: path.to_path_buf(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::Read {
+            None => Self::Read {
                 path: path.to_path_buf(),
                 fault: AccessFault::Unknown { message },
             },
@@ -96,18 +92,14 @@ impl ArchiveError {
 
     /// Maps one spill io failure at the archive path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Write {
                 path: path.to_path_buf(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::WriteUnknown {
+            None => Self::WriteUnknown {
                 path: path.to_path_buf(),
                 message,
             },

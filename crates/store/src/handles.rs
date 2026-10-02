@@ -5,8 +5,11 @@
 use std::path::{Path, PathBuf};
 
 use confit_model::document::BlobRef;
-use confit_model::error::{Error, Result};
 use confit_model::sha::Sha;
+
+use crate::archive::error::ArchiveError;
+use crate::fetch::error::FetchError;
+use crate::resources::error::ResourceError;
 
 /// Canonical identity for a trusted source.
 ///
@@ -98,19 +101,25 @@ impl FetchHandle {
     ///
     /// # Errors
     ///
-    /// - plan errors for empty cache paths.
+    /// - [`FetchError::Read`] for empty cache paths.
     ///
     pub(crate) fn new(
         cache_path: impl Into<PathBuf>,
         sha256: Sha,
         origin: impl Into<String>,
-    ) -> Result<Self> {
+    ) -> crate::fetch::error::Result<Self> {
         let cache_path = cache_path.into();
-        check_present(&cache_path, "fetch cache path")?;
+        let origin = origin.into();
+        if cache_path.as_os_str().is_empty() {
+            return Err(FetchError::Read {
+                url: origin,
+                fault: crate::faults::AccessFault::Missing,
+            });
+        }
         Ok(Self {
             cache_path,
             sha256,
-            origin: origin.into(),
+            origin,
         })
     }
 
@@ -136,16 +145,16 @@ impl ResourceHandle {
     ///
     /// # Errors
     ///
-    /// - plan errors for paths outside the exec root.
+    /// - [`ResourceError::Escape`] for paths outside the exec root.
     ///
-    pub(crate) fn new(exec_root: &Path, path: impl Into<PathBuf>, sha256: Sha) -> Result<Self> {
+    pub(crate) fn new(
+        exec_root: &Path,
+        path: impl Into<PathBuf>,
+        sha256: Sha,
+    ) -> crate::resources::error::Result<Self> {
         let path = path.into();
         if !path.starts_with(exec_root) {
-            return Err(Error::Plan(format!(
-                "resource path '{}' escapes exec root '{}'",
-                path.display(),
-                exec_root.display()
-            )));
+            return Err(ResourceError::Escape { path });
         }
         Ok(Self { path, sha256 })
     }
@@ -153,9 +162,8 @@ impl ResourceHandle {
 
 impl BlobHandle {
     /// Builds a blob handle from sealed content and stored hashes.
-    ///
-    pub(crate) fn new(sha256: Sha, stored: Sha) -> Result<Self> {
-        Ok(Self { sha256, stored })
+    pub(crate) fn new(sha256: Sha, stored: Sha) -> Self {
+        Self { sha256, stored }
     }
 
     /// Reads the content hash.
@@ -195,11 +203,16 @@ impl ArchiveHandle {
     ///
     /// # Errors
     ///
-    /// - plan errors for empty source paths.
+    /// - [`ArchiveError::NotArchive`] for empty source paths.
     ///
-    pub(crate) fn new(source_path: impl Into<PathBuf>, source_sha256: Sha) -> Result<Self> {
+    pub(crate) fn new(
+        source_path: impl Into<PathBuf>,
+        source_sha256: Sha,
+    ) -> crate::archive::error::Result<Self> {
         let source_path = source_path.into();
-        check_present(&source_path, "archive source path")?;
+        if source_path.as_os_str().is_empty() {
+            return Err(ArchiveError::NotArchive { path: source_path });
+        }
         Ok(Self {
             source_path,
             source_sha256,
@@ -214,17 +227,10 @@ impl ArchiveHandle {
     }
 }
 
-/// Rejects empty paths.
-fn check_present(path: &Path, label: &str) -> Result<()> {
-    if path.as_os_str().is_empty() {
-        return Err(Error::Plan(format!("{label} is empty")));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_model::error::Error;
 
     fn fixture_sha() -> Sha {
         Sha::hash(b"confit handle fixture")
@@ -260,7 +266,10 @@ mod tests {
             Ok(_) => panic!("empty cache path passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
+        assert!(matches!(
+            error,
+            crate::fetch::error::FetchError::Read { .. }
+        ));
     }
 
     #[test]
@@ -277,7 +286,10 @@ mod tests {
             Ok(_) => panic!("escape passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Plan(_)));
+        assert!(matches!(
+            error,
+            crate::resources::error::ResourceError::Escape { .. }
+        ));
     }
 
     #[test]
@@ -291,7 +303,7 @@ mod tests {
 
     #[test]
     fn blob_handle_builds_from_valid_sha() {
-        let handle = BlobHandle::new(fixture_sha(), fixture_sha()).unwrap();
+        let handle = BlobHandle::new(fixture_sha(), fixture_sha());
         assert_eq!(handle.sha(), &fixture_sha());
     }
 
@@ -308,7 +320,7 @@ mod tests {
 
     #[test]
     fn blob_handle_converts_to_manifest_ref() {
-        let handle = BlobHandle::new(fixture_sha(), fixture_sha()).unwrap();
+        let handle = BlobHandle::new(fixture_sha(), fixture_sha());
         let blob = handle.to_ref();
         assert_eq!(blob.sha(), &fixture_sha());
         assert_eq!(blob.stored(), &fixture_sha());

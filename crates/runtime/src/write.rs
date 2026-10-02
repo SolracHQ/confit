@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use confit_model::document::{Data, Document};
-use confit_model::error::{Error, Result};
 use confit_model::progress::Event;
 use confit_model::routes::Route;
 
 use crate::Applier;
+use crate::error::{Result, RuntimeError};
 
 impl Applier {
     /// Writes every document to its resolved destination.
@@ -18,7 +18,13 @@ impl Applier {
     ///
     /// # Errors
     ///
-    /// Render, command, and io failures surface as plan or io errors.
+    /// - [`RuntimeError::Write`] for write faults.
+    /// - [`RuntimeError::WriteUnknown`] for unmapped
+    ///   write failures.
+    /// - [`RuntimeError::MissingBlob`] for dangling tree
+    ///   blob hashes.
+    /// - [`RuntimeError::Refusal`] with [`RuntimeError::Render`]
+    ///   through rendering.
     pub fn write_documents(
         &self,
         documents: &[Document],
@@ -39,10 +45,7 @@ impl Applier {
                 if let Some(mode) = document.mode()
                     && let Err(error) = self.disk.set_mode(&expanded, mode)
                 {
-                    return Err(Error::Plan(format!(
-                        "cannot set mode '{}': {error}",
-                        expanded.display()
-                    )));
+                    return Err(RuntimeError::from_write_io(&expanded, error));
                 }
                 self.emit_written(&document.destination);
                 written += count;
@@ -50,19 +53,13 @@ impl Applier {
             }
             if let Data::Opaque { blob, .. } = &document.data {
                 if let Err(error) = self.disk.clear_link(&expanded) {
-                    return Err(Error::Plan(format!(
-                        "cannot remove link '{}': {error}",
-                        expanded.display()
-                    )));
+                    return Err(RuntimeError::from_write_io(&expanded, error));
                 }
                 self.disk.write_blob(&expanded, blob, blobs.as_ref())?;
                 if let Some(mode) = document.mode()
                     && let Err(error) = self.disk.set_mode(&expanded, mode)
                 {
-                    return Err(Error::Plan(format!(
-                        "cannot set mode '{}': {error}",
-                        expanded.display()
-                    )));
+                    return Err(RuntimeError::from_write_io(&expanded, error));
                 }
                 self.emit_written(&document.destination);
                 written += 1;
@@ -72,36 +69,25 @@ impl Applier {
                 Data::Link { target } => self
                     .disk
                     .write_link(&expanded, Path::new(target))
-                    .map_err(|error| Error::Plan(error.to_string())),
+                    .map_err(|error| RuntimeError::from_write_io(&expanded, error)),
                 Data::Text { .. } | Data::Structured { .. } | Data::Rc(_) => {
                     if let Err(error) = self.disk.clear_link(&expanded) {
-                        return Err(Error::Plan(format!(
-                            "cannot remove link '{}': {error}",
-                            expanded.display()
-                        )));
+                        return Err(RuntimeError::from_write_io(&expanded, error));
                     }
                     let bytes = self.render_document(document)?;
                     self.disk
                         .write_bytes(&expanded, &bytes)
-                        .map_err(|error| Error::Plan(error.to_string()))
+                        .map_err(|error| RuntimeError::from_write_io(&expanded, error))
                 }
                 Data::Tree { .. } | Data::Opaque { .. } => {
                     continue;
                 }
             };
-            if let Err(error) = outcome {
-                return Err(Error::Plan(format!(
-                    "cannot write '{}': {error}",
-                    expanded.display()
-                )));
-            }
+            outcome?;
             if let Some(mode) = document.mode()
                 && let Err(error) = self.disk.set_mode(&expanded, mode)
             {
-                return Err(Error::Plan(format!(
-                    "cannot set mode '{}': {error}",
-                    expanded.display()
-                )));
+                return Err(RuntimeError::from_write_io(&expanded, error));
             }
             self.emit_written(&document.destination);
             written += 1;

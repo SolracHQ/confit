@@ -5,11 +5,13 @@ use std::path::Path;
 
 use confit_driver as driver;
 use confit_model::document::{BlobRef, Data, Document, ManifestMember};
-use confit_model::error::{Error, Result};
 use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
+use confit_store::blob::error::BlobError;
+use confit_store::faults::AccessFault;
 
 use crate::Applier;
+use crate::error::{Result, RuntimeError};
 
 /// Disk reads and writes behind one applier run.
 ///
@@ -25,10 +27,10 @@ pub struct HostDisk;
 pub enum Live {
     /// Missing destination awaiting creation.
     Absent,
-    /// Failing read carrying the raw failure detail.
+    /// Failing read carrying its fault cause.
     Unreadable {
-        /// Holds the raw failure detail from the read.
-        reason: String,
+        /// Holds the fault cause behind the failed read.
+        fault: AccessFault,
     },
     /// Content reader and permission bits for the destination.
     Present {
@@ -45,10 +47,10 @@ pub enum Live {
 /// relative path. Missing members stay out, so absence
 /// reads as a map miss.
 pub enum LiveMember {
-    /// Failing read carrying the raw failure detail.
+    /// Failing read carrying its fault cause.
     Unreadable {
-        /// Holds the raw failure detail from the read.
-        reason: String,
+        /// Holds the fault cause behind the failed read.
+        fault: AccessFault,
     },
     /// Content reader and permission bits for the member.
     Present {
@@ -108,12 +110,27 @@ impl HostDisk {
     }
 
     /// Streams one blob to its destination through the blob pool.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::MissingBlob`] for dangling hashes.
+    /// - [`RuntimeError::Write`] for unwritable destinations.
+    /// - [`RuntimeError::WriteUnknown`] for unmapped
+    ///   destination failures.
     pub fn write_blob(&self, dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
-        copy_blob(dest, blob, blobs)
-            .map_err(|error| Error::Plan(format!("cannot write '{}': {error}", dest.display())))
+        copy_blob(dest, dest, blob, blobs)
     }
 
     /// Writes one tree destination member by member.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::MissingBlob`] for dangling member
+    ///   hashes naming the destination with the member.
+    /// - [`RuntimeError::Write`] for unwritable members
+    ///   and mode failures.
+    /// - [`RuntimeError::WriteUnknown`] for unmapped
+    ///   member failures.
     pub fn write_tree(
         &self,
         dest: &Path,
@@ -122,22 +139,9 @@ impl HostDisk {
     ) -> Result<usize> {
         for member in members {
             let path = dest.join(&member.relative);
-            copy_blob(&path, &member.blob, blobs).map_err(|error| match error {
-                Error::Plan(_) => Error::Plan(format!(
-                    "cannot write '{}': missing blob '{}' for '{}'",
-                    dest.display(),
-                    member.blob.sha(),
-                    path.display()
-                )),
-                transient => Error::Plan(transient.to_string()),
-            })?;
-            driver::fs::set_mode(&path, member.mode).map_err(|error| {
-                Error::Plan(format!(
-                    "cannot write '{}': cannot set mode '{}': {error}",
-                    dest.display(),
-                    path.display()
-                ))
-            })?;
+            copy_blob(dest, &path, &member.blob, blobs)?;
+            driver::fs::set_mode(&path, member.mode)
+                .map_err(|error| RuntimeError::from_write_io(&path, error))?;
         }
         Ok(1)
     }
@@ -198,7 +202,7 @@ fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
                 },
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Live::Absent,
                 Err(error) => Live::Unreadable {
-                    reason: error.to_string(),
+                    fault: live_fault(error),
                 },
             },
         };
@@ -210,7 +214,7 @@ fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Live::Absent,
         Err(error) => Live::Unreadable {
-            reason: error.to_string(),
+            fault: live_fault(error),
         },
     }
 }
@@ -266,12 +270,14 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
                     },
                 );
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
             Err(error) => {
                 out.insert(
                     name.to_string(),
                     LiveMember::Unreadable {
-                        reason: error.to_string(),
+                        fault: live_fault(error),
                     },
                 );
             }
@@ -340,24 +346,94 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
 ///
 /// # Errors
 ///
-/// Dangling hashes fail as plan errors naming the hash.
-/// Unreadable sources and unwritable destinations fail as
-/// plan or io errors.
-fn copy_blob(dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
+/// - [`RuntimeError::MissingBlob`] for dangling hashes.
+/// - [`RuntimeError::Write`] for unwritable destinations.
+/// - [`RuntimeError::WriteUnknown`] for unmapped
+///   destination failures.
+fn copy_blob(dest: &Path, target: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
     use std::io::Write as _;
 
     let handle = blobs
         .resolve(blob)
-        .map_err(|error| Error::Plan(error.to_string()))?;
+        .map_err(|error| map_pool(error, dest, target))?;
     let mut reader = blobs
         .open(&handle)
-        .map_err(|error| Error::Plan(error.to_string()))?;
-    ensure_parent(dest).map_err(|error| Error::Plan(error.to_string()))?;
-    let mut out = driver::fs::create(dest).map_err(|error| Error::Plan(error.to_string()))?;
-    std::io::copy(&mut reader, &mut out).map_err(|error| Error::Plan(error.to_string()))?;
+        .map_err(|error| map_pool(error, dest, target))?;
+    ensure_parent(target).map_err(|error| RuntimeError::from_write_io(target, error))?;
+    let mut out =
+        driver::fs::create(target).map_err(|error| RuntimeError::from_write_io(target, error))?;
+    std::io::copy(&mut reader, &mut out)
+        .map_err(|error| RuntimeError::from_write_io(target, error))?;
     out.flush()
-        .map_err(|error| Error::Plan(error.to_string()))?;
+        .map_err(|error| RuntimeError::from_write_io(target, error))?;
     Ok(())
+}
+
+/// Maps one pool failure at the destination into runtime language.
+fn map_pool(error: BlobError, dest: &Path, target: &Path) -> RuntimeError {
+    match error {
+        BlobError::Read {
+            sha,
+            fault: AccessFault::Missing,
+        } => {
+            log::error!("missing blob '{}' for '{}'", sha.hex(), target.display());
+            RuntimeError::MissingBlob {
+                dest: dest.to_path_buf(),
+                sha,
+                member: target.to_path_buf(),
+            }
+        }
+        BlobError::Read {
+            fault: AccessFault::Unknown { message },
+            ..
+        } => {
+            log::error!("pool read failed: {message}");
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message,
+            }
+        }
+        BlobError::Read { fault, .. } => RuntimeError::Write {
+            path: target.to_path_buf(),
+            fault,
+        },
+        BlobError::Write { fault, .. } => RuntimeError::Write {
+            path: target.to_path_buf(),
+            fault,
+        },
+        BlobError::WriteUnknown { message, .. } => {
+            log::error!("pool write failed: {message}");
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message,
+            }
+        }
+        BlobError::Corrupt { sha } => {
+            log::error!("corrupt blob '{}'", sha.hex());
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message: format!("blob '{}' fails verification", sha.hex()),
+            }
+        }
+        BlobError::Compress => {
+            log::error!("cannot compress blob for '{}'", target.display());
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message: "cannot compress blob".to_owned(),
+            }
+        }
+    }
+}
+
+/// Interprets one live read failure into its fault cause.
+fn live_fault(error: std::io::Error) -> AccessFault {
+    let kind = error.kind();
+    let message = error.to_string();
+    log::error!("live read failed: {message}");
+    match AccessFault::interpret(kind) {
+        Some(fault) => fault,
+        None => AccessFault::Unknown { message },
+    }
 }
 
 #[cfg(test)]
@@ -389,7 +465,9 @@ mod live_tests {
         match disk.live_doc(&text_doc(&dir.path().join("absent.txt"))) {
             Live::Absent => {}
             Live::Present { .. } => panic!("never-written path reads present"),
-            Live::Unreadable { reason } => panic!("never-written path reads unreadable: {reason}"),
+            Live::Unreadable { fault } => {
+                panic!("never-written path reads unreadable: {fault}")
+            }
         }
     }
 
@@ -407,7 +485,9 @@ mod live_tests {
                 assert_eq!(mode, Some(0o755), "live mode rides beside the reader");
             }
             Live::Absent => panic!("written path reads absent"),
-            Live::Unreadable { reason } => panic!("written path reads unreadable: {reason}"),
+            Live::Unreadable { fault } => {
+                panic!("written path reads unreadable: {fault}")
+            }
         }
     }
 
@@ -419,9 +499,9 @@ mod live_tests {
         driver::fs::create_dir_all(&path).unwrap();
         let disk = HostDisk;
         match disk.live_doc(&text_doc(&path)) {
-            Live::Unreadable { reason } => assert!(
-                !reason.is_empty(),
-                "unreadable carries the raw failure detail"
+            Live::Unreadable { fault } => assert!(
+                !fault.cause().is_empty(),
+                "unreadable carries the fault cause"
             ),
             Live::Absent => panic!("directory path reads absent"),
             Live::Present { .. } => panic!("directory path reads present"),
@@ -447,8 +527,8 @@ mod live_tests {
             Some(LiveMember::Present { reader, .. }) => {
                 assert_eq!(drain(reader).unwrap(), b"member bytes".to_vec());
             }
-            Some(LiveMember::Unreadable { reason }) => {
-                panic!("written member reads unreadable: {reason}");
+            Some(LiveMember::Unreadable { fault }) => {
+                panic!("written member reads unreadable: {fault}");
             }
             None => panic!("written member reads as map miss"),
         }

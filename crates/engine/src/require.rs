@@ -6,7 +6,8 @@ use std::path::{Component, Path, PathBuf};
 
 use mlua::{Function, Lua, Table, Value};
 
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope};
+use confit_store::resources::error::ResourceError;
 
 /// Registry key holding scoped require results by file.
 const REQUIRE_CACHE_KEY: &str = "confit.require_cache";
@@ -57,10 +58,12 @@ impl Requirer {
             let request = match request {
                 Value::String(text) => text.to_string_lossy(),
                 _ => {
-                    return Err(plan_error(format!(
-                        "{}.require: field 'module' must be a string",
-                        owner.scope
-                    )));
+                    return Err(EngineError::Field {
+                        scope: Scope::Require { scope: owner.scope },
+                        field: FieldRef::name("module"),
+                        want: "must be a string",
+                    }
+                    .into());
                 }
             };
             owner.require(lua, &request)
@@ -69,7 +72,6 @@ impl Requirer {
 
     /// Resolves one scoped require request into a cached value.
     fn require(&self, lua: &Lua, request: &str) -> mlua::Result<Value> {
-        let caller = format!("{}.require", self.scope);
         let file = self.resolve(request)?;
         let cache: Table = lua.named_registry_value(REQUIRE_CACHE_KEY)?;
         let slot = file.display().to_string();
@@ -79,7 +81,7 @@ impl Requirer {
             return Ok(value);
         }
         let source = std::fs::read_to_string(&file)
-            .map_err(|error| plan_error(format!("{caller}: cannot read '{request}': {error}")))?;
+            .map_err(|error| EngineError::from(ResourceError::from_io(&file, error)))?;
         let parent = file
             .parent()
             .map(Path::to_path_buf)
@@ -105,16 +107,24 @@ impl Requirer {
     /// Both sides normalize lexically, so roots holding `..`
     /// segments compare correctly.
     fn resolve(&self, request: &str) -> mlua::Result<PathBuf> {
-        let caller = format!("{}.require", self.scope);
+        let scope = Scope::Require { scope: self.scope };
         if request.is_empty() {
-            return Err(plan_error(format!(
-                "{caller}: field 'module' must not be empty"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("module"),
+                want: "must not be empty",
+            }
+            .into());
         }
         let mut stack: Vec<String> = Vec::new();
         for part in request.split('.') {
             if part.is_empty() {
-                return Err(plan_error(format!("{caller}: bad module '{request}'")));
+                return Err(EngineError::UnknownKind {
+                    scope: scope.clone(),
+                    what: "module",
+                    name: request.to_owned(),
+                }
+                .into());
             }
             stack.push(part.to_string());
         }
@@ -123,13 +133,17 @@ impl Requirer {
             base.push(part);
         }
         base.set_extension("lua");
-        let normalized = Self::normalize(&base)
-            .ok_or_else(|| plan_error(format!("{caller}: module '{request}' escapes its root")))?;
+        let normalized = Self::normalize(&base).ok_or_else(|| EngineError::Escape {
+            scope: scope.clone(),
+            request: request.to_owned(),
+        })?;
         let root = Self::normalize(&self.folder).unwrap_or_else(|| self.folder.clone());
         if !normalized.starts_with(&root) {
-            return Err(plan_error(format!(
-                "{caller}: module '{request}' escapes its root"
-            )));
+            return Err(EngineError::Escape {
+                scope,
+                request: request.to_owned(),
+            }
+            .into());
         }
         Ok(normalized)
     }

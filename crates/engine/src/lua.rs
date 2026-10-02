@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use mlua::{Function, Lua, Table, Value};
 use serde_json::Value as Json;
 
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope};
 
 /// Lua table shape and conversion helpers.
 ///
@@ -16,7 +16,7 @@ pub(crate) trait TableExt {
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the field.
+    /// * `scope` - scope naming the field under converting.
     ///
     /// # Returns
     ///
@@ -24,9 +24,9 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Recursive tables fail as plan errors. Non-string keys fail as plan errors.
+    /// - [`EngineError::Shape`] for recursive tables and non-string keys.
     ///
-    fn to_json(&self, ctx: &str) -> mlua::Result<Json>;
+    fn to_json(&self, scope: &Scope) -> mlua::Result<Json>;
 
     /// Reports the dense-array shape predicate used by conversion.
     ///
@@ -39,7 +39,7 @@ pub(crate) trait TableExt {
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -48,15 +48,15 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Missing and non-string fields fail as plan errors.
+    /// - [`EngineError::Field`] for missing and non-string fields.
     ///
-    fn req_str(&self, ctx: &str, field: &str) -> mlua::Result<String>;
+    fn req_str(&self, scope: &Scope, field: &str) -> mlua::Result<String>;
 
     /// Reads one named table field from a table.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -65,15 +65,15 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Missing and non-table fields fail as plan errors.
+    /// - [`EngineError::Field`] for missing and non-table fields.
     ///
-    fn req_table(&self, ctx: &str, field: &str) -> mlua::Result<Table>;
+    fn req_table(&self, scope: &Scope, field: &str) -> mlua::Result<Table>;
 
     /// Reads the table itself into a string-keyed object.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name naming the table.
     ///
     /// # Returns
@@ -82,9 +82,9 @@ pub(crate) trait TableExt {
     ///
     /// # Errors
     ///
-    /// Recursive tables fail as plan errors. Non-object shapes fail as plan errors.
+    /// - [`EngineError::Shape`] for recursive tables and non-object shapes.
     ///
-    fn req_object(&self, ctx: &str, field: &str) -> mlua::Result<BTreeMap<String, Json>>;
+    fn req_object(&self, scope: &Scope, field: &str) -> mlua::Result<BTreeMap<String, Json>>;
 }
 
 /// Lua value conversion helpers.
@@ -94,7 +94,7 @@ pub(crate) trait ValueExt {
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the field.
+    /// * `scope` - scope naming the field under converting.
     ///
     /// # Returns
     ///
@@ -102,15 +102,15 @@ pub(crate) trait ValueExt {
     ///
     /// # Errors
     ///
-    /// Recursive tables fail as plan errors. Non-data values fail as plan errors.
+    /// - [`EngineError::Shape`] for recursive tables and non-data values.
     ///
-    fn to_json(self, ctx: &str) -> mlua::Result<Json>;
+    fn to_json(self, scope: &Scope) -> mlua::Result<Json>;
 
     /// Reads one string value with a uniform shape error.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -119,15 +119,15 @@ pub(crate) trait ValueExt {
     ///
     /// # Errors
     ///
-    /// Non-string values fail as plan errors.
+    /// - [`EngineError::Field`] for non-string values.
     ///
-    fn req_str(self, ctx: &str, field: &str) -> mlua::Result<String>;
+    fn req_str(self, scope: &Scope, field: &str) -> mlua::Result<String>;
 
     /// Reads one table value with a uniform shape error.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -136,15 +136,15 @@ pub(crate) trait ValueExt {
     ///
     /// # Errors
     ///
-    /// Non-table values fail as plan errors.
+    /// - [`EngineError::Field`] for non-table values.
     ///
-    fn req_table(self, ctx: &str, field: &str) -> mlua::Result<Table>;
+    fn req_table(self, scope: &Scope, field: &str) -> mlua::Result<Table>;
 
     /// Reads one function value with a uniform shape error.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -153,15 +153,15 @@ pub(crate) trait ValueExt {
     ///
     /// # Errors
     ///
-    /// Non-function values fail as plan errors.
+    /// - [`EngineError::Field`] for non-function values.
     ///
-    fn req_func(self, ctx: &str, field: &str) -> mlua::Result<Function>;
+    fn req_func(self, scope: &Scope, field: &str) -> mlua::Result<Function>;
 
     /// Reads one integer value with a uniform shape error.
     ///
     /// # Arguments
     ///
-    /// * `ctx` - error prefix naming the constructor.
+    /// * `scope` - scope naming the constructor under reading.
     /// * `field` - field name under reading.
     ///
     /// # Returns
@@ -170,9 +170,9 @@ pub(crate) trait ValueExt {
     ///
     /// # Errors
     ///
-    /// Non-integer values fail as plan errors.
+    /// - [`EngineError::Field`] for non-integer values.
     ///
-    fn req_int(self, ctx: &str, field: &str) -> mlua::Result<i64>;
+    fn req_int(self, scope: &Scope, field: &str) -> mlua::Result<i64>;
 
     /// Tests one value for string contents.
     ///
@@ -219,7 +219,7 @@ pub(crate) trait JsonExt {
     /// # Arguments
     ///
     /// * `lua` - state owning new strings and tables.
-    /// * `ctx` - error prefix naming the caller.
+    /// * `scope` - scope naming the caller under converting.
     ///
     /// # Returns
     ///
@@ -227,17 +227,21 @@ pub(crate) trait JsonExt {
     ///
     /// # Errors
     ///
-    /// Non-finite numbers fail as plan errors.
+    /// - [`EngineError::Detail`] for non-finite numbers.
     ///
-    fn to_lua(&self, lua: &Lua, ctx: &str) -> mlua::Result<Value>;
+    fn to_lua(&self, lua: &Lua, scope: &Scope) -> mlua::Result<Value>;
 }
 
 impl TableExt for Table {
-    fn to_json(&self, ctx: &str) -> mlua::Result<Json> {
+    fn to_json(&self, scope: &Scope) -> mlua::Result<Json> {
         if holds_cycle(&Value::Table(self.clone())) {
-            return Err(plan_error(format!("{ctx} holds a recursive table")));
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "holds a recursive table",
+            }
+            .into());
         }
-        table_to_json_inner(self, ctx)
+        table_to_json_inner(self, scope)
     }
 
     fn is_array(&self) -> bool {
@@ -251,70 +255,87 @@ impl TableExt for Table {
         dense_order(&entries).is_some()
     }
 
-    fn req_str(&self, ctx: &str, field: &str) -> mlua::Result<String> {
+    fn req_str(&self, scope: &Scope, field: &str) -> mlua::Result<String> {
         let value: Value = self.get(field)?;
-        value.req_str(ctx, field)
+        value.req_str(scope, field)
     }
 
-    fn req_table(&self, ctx: &str, field: &str) -> mlua::Result<Table> {
+    fn req_table(&self, scope: &Scope, field: &str) -> mlua::Result<Table> {
         let value: Value = self.get(field)?;
-        value.req_table(ctx, field)
+        value.req_table(scope, field)
     }
 
-    fn req_object(&self, ctx: &str, field: &str) -> mlua::Result<BTreeMap<String, Json>> {
-        let json = self
-            .to_json(&format!("{ctx} field '{field}'"))
-            .map_err(|error| plan_error(format!("{ctx}: {error}")))?;
+    fn req_object(&self, scope: &Scope, field: &str) -> mlua::Result<BTreeMap<String, Json>> {
+        let json = self.to_json(&scope.slot(FieldRef::name(field)))?;
         match json {
             Json::Object(map) => Ok(map.into_iter().collect()),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a table with string keys"
-            ))),
+            _ => Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name(field),
+                want: "must be a table with string keys",
+            }
+            .into()),
         }
     }
 }
 
 impl ValueExt for Value {
-    fn to_json(self, ctx: &str) -> mlua::Result<Json> {
+    fn to_json(self, scope: &Scope) -> mlua::Result<Json> {
         if holds_cycle(&self) {
-            return Err(plan_error(format!("{ctx} holds a recursive table")));
+            return Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "holds a recursive table",
+            }
+            .into());
         }
-        lua_to_json_inner(self, ctx)
+        lua_to_json_inner(self, scope)
     }
 
-    fn req_str(self, ctx: &str, field: &str) -> mlua::Result<String> {
+    fn req_str(self, scope: &Scope, field: &str) -> mlua::Result<String> {
         match self {
             Value::String(text) => Ok(text.to_string_lossy()),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a string"
-            ))),
+            _ => Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name(field),
+                want: "must be a string",
+            }
+            .into()),
         }
     }
 
-    fn req_table(self, ctx: &str, field: &str) -> mlua::Result<Table> {
+    fn req_table(self, scope: &Scope, field: &str) -> mlua::Result<Table> {
         match self {
             Value::Table(table) => Ok(table),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a table"
-            ))),
+            _ => Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name(field),
+                want: "must be a table",
+            }
+            .into()),
         }
     }
 
-    fn req_func(self, ctx: &str, field: &str) -> mlua::Result<Function> {
+    fn req_func(self, scope: &Scope, field: &str) -> mlua::Result<Function> {
         match self {
             Value::Function(func) => Ok(func),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be a function"
-            ))),
+            _ => Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name(field),
+                want: "must be a function",
+            }
+            .into()),
         }
     }
 
-    fn req_int(self, ctx: &str, field: &str) -> mlua::Result<i64> {
+    fn req_int(self, scope: &Scope, field: &str) -> mlua::Result<i64> {
         match self {
             Value::Integer(index) => Ok(index),
-            _ => Err(plan_error(format!(
-                "{ctx}: field '{field}' must be an integer"
-            ))),
+            _ => Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name(field),
+                want: "must be an integer",
+            }
+            .into()),
         }
     }
 
@@ -341,7 +362,7 @@ impl ValueExt for Value {
 }
 
 impl JsonExt for Json {
-    fn to_lua(&self, lua: &Lua, ctx: &str) -> mlua::Result<Value> {
+    fn to_lua(&self, lua: &Lua, scope: &Scope) -> mlua::Result<Value> {
         match self {
             Json::Null => Ok(Value::Nil),
             Json::Bool(flag) => Ok(Value::Boolean(*flag)),
@@ -351,21 +372,25 @@ impl JsonExt for Json {
                 } else if let Some(float) = number.as_f64() {
                     Ok(Value::Number(float))
                 } else {
-                    Err(plan_error(format!("{ctx}: value must be a finite number")))
+                    Err(EngineError::Detail {
+                        scope: scope.clone(),
+                        want: "value must be a finite number",
+                    }
+                    .into())
                 }
             }
             Json::String(text) => Ok(Value::String(lua.create_string(text.as_str())?)),
             Json::Array(items) => {
                 let table = lua.create_table()?;
                 for (position, item) in items.iter().enumerate() {
-                    table.set((position + 1) as i64, item.to_lua(lua, ctx)?)?;
+                    table.set((position + 1) as i64, item.to_lua(lua, scope)?)?;
                 }
                 Ok(Value::Table(table))
             }
             Json::Object(map) => {
                 let table = lua.create_table()?;
                 for (key, item) in map {
-                    table.set(key.as_str(), item.to_lua(lua, ctx)?)?;
+                    table.set(key.as_str(), item.to_lua(lua, scope)?)?;
                 }
                 Ok(Value::Table(table))
             }
@@ -374,27 +399,41 @@ impl JsonExt for Json {
 }
 
 /// Converts one Lua value into JSON without a cycle precheck.
-fn lua_to_json_inner(value: Value, ctx: &str) -> mlua::Result<Json> {
+fn lua_to_json_inner(value: Value, scope: &Scope) -> mlua::Result<Json> {
     match value {
         Value::Nil => Ok(Json::Null),
         Value::Boolean(flag) => Ok(Json::Bool(flag)),
         Value::Integer(number) => Ok(Json::Number(number.into())),
         Value::Number(number) => match serde_json::Number::from_f64(number) {
             Some(parsed) => Ok(Json::Number(parsed)),
-            None => Err(plan_error(format!("{ctx} must be a finite number"))),
+            None => Err(EngineError::Shape {
+                scope: scope.clone(),
+                want: "must be a finite number",
+            }
+            .into()),
         },
         Value::String(text) => Ok(Json::String(text.to_string_lossy())),
-        Value::Table(table) => table_to_json_inner(&table, ctx),
-        Value::Function(_) => Err(plan_error(format!(
-            "{ctx} must be data-only (function not allowed)"
-        ))),
-        Value::UserData(_) | Value::LightUserData(_) => Err(plan_error(format!(
-            "{ctx} must be data-only (userdata not allowed)"
-        ))),
-        Value::Thread(_) => Err(plan_error(format!(
-            "{ctx} must be data-only (thread not allowed)"
-        ))),
-        Value::Error(_) | Value::Other(_) => Err(plan_error(format!("{ctx} must be data-only"))),
+        Value::Table(table) => table_to_json_inner(&table, scope),
+        Value::Function(_) => Err(EngineError::Shape {
+            scope: scope.clone(),
+            want: "must be data-only (function not allowed)",
+        }
+        .into()),
+        Value::UserData(_) | Value::LightUserData(_) => Err(EngineError::Shape {
+            scope: scope.clone(),
+            want: "must be data-only (userdata not allowed)",
+        }
+        .into()),
+        Value::Thread(_) => Err(EngineError::Shape {
+            scope: scope.clone(),
+            want: "must be data-only (thread not allowed)",
+        }
+        .into()),
+        Value::Error(_) | Value::Other(_) => Err(EngineError::Shape {
+            scope: scope.clone(),
+            want: "must be data-only",
+        }
+        .into()),
     }
 }
 
@@ -429,7 +468,7 @@ fn dense_order(entries: &[(Value, Value)]) -> Option<Vec<usize>> {
 }
 
 /// Converts one Lua table into JSON without a cycle precheck.
-fn table_to_json_inner(table: &Table, ctx: &str) -> mlua::Result<Json> {
+fn table_to_json_inner(table: &Table, scope: &Scope) -> mlua::Result<Json> {
     let mut entries: Vec<(Value, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         entries.push(pair?);
@@ -438,10 +477,7 @@ fn table_to_json_inner(table: &Table, ctx: &str) -> mlua::Result<Json> {
         let mut items = Vec::with_capacity(order.len());
         for (slot, position) in order.iter().enumerate() {
             let (_, value) = &entries[*position];
-            items.push(lua_to_json_inner(
-                value.clone(),
-                &format!("{ctx}[{}]", slot + 1),
-            )?);
+            items.push(lua_to_json_inner(value.clone(), &scope.entry(slot + 1))?);
         }
         return Ok(Json::Array(items));
     }
@@ -450,13 +486,17 @@ fn table_to_json_inner(table: &Table, ctx: &str) -> mlua::Result<Json> {
         let name = match key {
             Value::String(text) => text.to_string_lossy(),
             _ => {
-                return Err(plan_error(format!(
-                    "{ctx} must be a table with string keys"
-                )));
+                return Err(EngineError::Shape {
+                    scope: scope.clone(),
+                    want: "must be a table with string keys",
+                }
+                .into());
             }
         };
-        let child = format!("{ctx}.{name}");
-        map.insert(name, lua_to_json_inner(value.clone(), &child)?);
+        map.insert(
+            name.clone(),
+            lua_to_json_inner(value.clone(), &scope.key(&name))?,
+        );
     }
     Ok(Json::Object(map))
 }
@@ -526,9 +566,18 @@ pub(crate) fn read_marker(table: &Table, key: &str) -> Option<String> {
 }
 
 /// Renders one JSON value in canonical string form.
-pub(crate) fn json_text(value: &Json, ctx: &str) -> mlua::Result<String> {
-    serde_json::to_string(value)
-        .map_err(|error| plan_error(format!("{ctx}: value failed to render: {error}")))
+///
+/// # Errors
+///
+/// - [`EngineError::RenderDetail`] for serializer failures.
+pub(crate) fn json_text(value: &Json, scope: &Scope) -> mlua::Result<String> {
+    serde_json::to_string(value).map_err(|error| {
+        EngineError::RenderDetail {
+            scope: scope.clone(),
+            reason: error.to_string(),
+        }
+        .into()
+    })
 }
 
 #[cfg(test)]
@@ -553,7 +602,7 @@ mod tests {
         if table.set("run", callback).is_err() {
             panic!("entry stores");
         }
-        let error = match table.to_json("ctx") {
+        let error = match table.to_json(&Scope::method("ctx")) {
             Ok(_) => panic!("function passes"),
             Err(error) => error,
         };
@@ -634,7 +683,7 @@ mod tests {
             panic!("second ref stores");
         }
         assert!(!holds_cycle(&Value::Table(base.clone())));
-        let json = match base.to_json("ctx") {
+        let json = match base.to_json(&Scope::method("ctx")) {
             Ok(json) => json,
             Err(error) => panic!("shared converts: {error}"),
         };
@@ -642,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_table_fails_conversion_as_plan_error() {
+    fn recursive_table_fails_conversion_as_shape_error() {
         let lua = state();
         let table = match lua.create_table() {
             Ok(table) => table,
@@ -651,7 +700,7 @@ mod tests {
         if table.set("self", table.clone()).is_err() {
             panic!("entry stores");
         }
-        let error = match table.to_json("ctx") {
+        let error = match table.to_json(&Scope::method("ctx")) {
             Ok(_) => panic!("cycle passes"),
             Err(error) => error,
         };

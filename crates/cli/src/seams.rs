@@ -6,9 +6,10 @@ use std::io::BufRead;
 use std::path::Path;
 
 use confit_model::document::DocumentStatus;
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_store::Stores;
+
+use crate::error::{CliError, Result};
 
 use confit_model::progress::{Event, ProgressSender};
 
@@ -68,7 +69,7 @@ impl Sinks {
     ///
     /// # Errors
     ///
-    /// Reader failures surface as io errors.
+    /// - [`CliError::Unknown`] for prompt failures.
     ///
     /// # Examples
     ///
@@ -84,13 +85,19 @@ impl Sinks {
         if let Some(control) = self.suspend.clone() {
             return control
                 .ask("\nApply these changes? Type 'yes' to continue: ")
-                .map_err(|error| Error::Plan(error.to_string()));
+                .map_err(|error| CliError::Unknown {
+                    context: "prompt".to_owned(),
+                    message: error.to_string(),
+                });
         }
         log::debug!("prompt waiting for answer");
         let mut answer = String::new();
         let reads = input
             .read_line(&mut answer)
-            .map_err(|error| Error::Plan(error.to_string()))?;
+            .map_err(|error| CliError::Unknown {
+                context: "prompt".to_owned(),
+                message: error.to_string(),
+            })?;
         log::debug!("prompt read {reads} bytes");
         Ok(answer.trim() == "yes")
     }
@@ -153,6 +160,7 @@ pub fn evaluate_shared(
             progress,
         },
     )
+    .map_err(CliError::from)
 }
 
 /// Logs finished documents with lifecycle status.

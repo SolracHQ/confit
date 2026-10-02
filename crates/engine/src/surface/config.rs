@@ -9,7 +9,7 @@ use super::document::Declared;
 use super::document::convert::convert_document;
 use super::hook::convert_hook;
 use super::patch::LuaPatch;
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope};
 use crate::lua::{ValueExt, read_marker};
 use crate::model::{ConfigData, RequireDecl, StoredPatch};
 
@@ -41,64 +41,58 @@ impl ConfigBuilder {
 
     /// Records one document table in the contribution.
     ///
-    /// # Arguments
-    ///
-    /// * `value` - candidate document table value.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the declaration lands in the contribution.
-    ///
     /// # Errors
     ///
-    /// Non-document values fail as plan errors. Rc entries fail as plan errors.
-    /// Repeated rc bases fail as plan errors.
+    /// - [`EngineError::Field`] for non-document values.
     ///
     pub(crate) fn add_document(&mut self, value: Value) -> mlua::Result<()> {
         let name = self.data.name.clone();
-        let ctx = format!("config '{name}': field 'add_document'");
+        let scope = Scope::config(&name);
+        let field = FieldRef::name("add_document");
+        let method = scope.slot(field.clone());
         let Some(table) = value.opt_table() else {
-            return Err(plan_error(format!(
-                "config '{name}': field 'add_document' must be a confit.document value"
-            )));
+            return Err(EngineError::Field {
+                scope,
+                field,
+                want: "must be a confit.document value",
+            }
+            .into());
         };
         let marker = read_marker(&table, "__kind");
         let Some(kind) = marker.as_deref() else {
-            return Err(plan_error(format!(
-                "config '{name}': field 'add_document' must be a confit.document value"
-            )));
+            return Err(EngineError::Field {
+                scope,
+                field,
+                want: "must be a confit.document value",
+            }
+            .into());
         };
         if kind == "rc-entry" {
-            return Err(plan_error(format!(
-                "config '{name}': field 'add_document' must be a confit.document value (got rc entry)"
-            )));
+            return Err(EngineError::Field {
+                scope,
+                field,
+                want: "must be a confit.document value (got rc entry)",
+            }
+            .into());
         }
-        push_declared(&mut self.data, &table, &ctx)
+        push_declared(&mut self.data, &table, &method)
     }
 
     /// Records one patch handle in the contribution.
     ///
-    /// # Arguments
-    ///
-    /// * `value` - candidate patch userdata value.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the handle lands in the contribution.
-    ///
     /// # Errors
     ///
-    /// Non-patch values fail as plan errors.
+    /// - [`EngineError::Field`] for non-patch values.
     ///
     pub(crate) fn add_patch(&mut self, value: Value) -> mlua::Result<()> {
         let name = self.data.name.clone();
-        let domain = || {
-            plan_error(format!(
-                "config '{name}': field 'add_patch' must be a confit.patch value"
-            ))
+        let domain = || EngineError::Field {
+            scope: Scope::config(&name),
+            field: FieldRef::name("add_patch"),
+            want: "must be a confit.patch value",
         };
         let Some(handle) = value.as_userdata() else {
-            return Err(domain());
+            return Err(domain().into());
         };
         let owned = handle.borrow::<LuaPatch>().map_err(|_| domain())?.clone();
         self.data.patches.push(StoredPatch {
@@ -113,70 +107,76 @@ impl ConfigBuilder {
     }
     /// Records one hook table in the contribution.
     ///
-    /// # Arguments
-    ///
-    /// * `value` - candidate hook table value.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the hook lands in the contribution.
-    ///
     /// # Errors
     ///
-    /// Non-hook values fail as plan errors.
+    /// - [`EngineError::Field`] for non-hook values.
     ///
     pub(crate) fn add_hook(&mut self, value: Value) -> mlua::Result<()> {
         let name = self.data.name.clone();
-        let ctx = format!("config '{name}': field 'add_hook'");
+        let scope = Scope::config(&name);
+        let field = FieldRef::name("add_hook");
+        let method = scope.slot(field.clone());
         let Some(table) = value.opt_table() else {
-            return Err(plan_error(format!(
-                "config '{name}': field 'add_hook' must be a confit.hook value"
-            )));
+            return Err(EngineError::Field {
+                scope,
+                field,
+                want: "must be a confit.hook value",
+            }
+            .into());
         };
         if read_marker(&table, "__kind").as_deref() != Some("hook") {
-            return Err(plan_error(format!(
-                "config '{name}': field 'add_hook' must be a confit.hook value"
-            )));
+            return Err(EngineError::Field {
+                scope,
+                field,
+                want: "must be a confit.hook value",
+            }
+            .into());
         }
-        let hook = convert_hook(&table, &ctx)?;
+        let hook = convert_hook(&table, &method)?;
         self.data.hooks.push(hook);
         Ok(())
     }
     /// Records one required sibling config in the contribution.
     ///
-    /// # Arguments
-    ///
-    /// * `args` - positional `(name, hint?)` values from Lua.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the require edge lands in the contribution.
-    ///
     /// # Errors
     ///
-    /// Non-string names fail as plan errors. Empty names fail as plan errors.
-    /// Non-string hints fail as plan errors. Unknown extra args fail as plan errors.
+    /// - [`EngineError::Arity`] for wrong arity.
+    /// - [`EngineError::Field`] for misshaped names and hints.
     ///
     pub(crate) fn require(&mut self, args: MultiValue) -> mlua::Result<()> {
         let name = self.data.name.clone();
-        let ctx = format!("config '{name}': field 'require'");
+        let scope = Scope::config(&name).slot(FieldRef::name("require"));
         let collected: Vec<Value> = args.into_iter().collect();
         let (name_value, hint_value) = match collected.as_slice() {
             [first] => (first.clone(), Value::Nil),
             [first, second] => (first.clone(), second.clone()),
             _ => {
-                return Err(plan_error(format!("{ctx} expects (name, hint?)")));
+                return Err(EngineError::Arity {
+                    scope: scope.clone(),
+                    want: "(name, hint?)",
+                }
+                .into());
             }
         };
-        let target = name_value.req_str(&ctx, "name")?;
+        let target = name_value.req_str(&scope, "name")?;
         if target.is_empty() {
-            return Err(plan_error(format!("{ctx}: field 'name' must not be empty")));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("name"),
+                want: "must not be empty",
+            }
+            .into());
         }
         let hint = match hint_value {
             Value::Nil => None,
             Value::String(text) => Some(text.to_string_lossy()),
             _ => {
-                return Err(plan_error(format!("{ctx}: field 'hint' must be a string")));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("hint"),
+                    want: "must be a string",
+                }
+                .into());
             }
         };
         self.data.requires.push(RequireDecl { target, hint });
@@ -196,8 +196,12 @@ impl UserData for ConfigBuilder {
 }
 
 /// Pushes one document table into the contribution.
-fn push_declared(data: &mut ConfigData, table: &Table, ctx: &str) -> mlua::Result<()> {
-    match convert_document(table, ctx)? {
+///
+/// # Errors
+///
+/// - [`EngineError::Shape`] for repeated rc bases.
+fn push_declared(data: &mut ConfigData, table: &Table, scope: &Scope) -> mlua::Result<()> {
+    match convert_document(table, scope)? {
         Declared::Structured(decl) => data.structured.push(decl),
         Declared::Text(decl) => data.texts.push(decl),
         Declared::Link(decl) => data.links.push(decl),
@@ -205,9 +209,11 @@ fn push_declared(data: &mut ConfigData, table: &Table, ctx: &str) -> mlua::Resul
         Declared::Tree(decl) => data.trees.push(decl),
         Declared::Rc(entries) => {
             if data.rc_base.is_some() {
-                return Err(plan_error(format!(
-                    "{ctx} declares the rc base more than once"
-                )));
+                return Err(EngineError::Shape {
+                    scope: scope.clone(),
+                    want: "declares the rc base more than once",
+                }
+                .into());
             }
             data.rc_base = Some(entries);
         }
@@ -224,13 +230,22 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Builds one config userdata value.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-string names.
+/// - [`EngineError::Defined`] for repeated names.
 fn config_callback(lua: &Lua, name: Value) -> mlua::Result<AnyUserData> {
-    let name = name.req_str("confit.config", "name")?;
+    let name = name.req_str(&Scope::method("confit.config"), "name")?;
     claim_name(lua, &name)?;
     lua.create_userdata(ConfigBuilder::new(name))
 }
 
 /// Claims one config name in the per-evaluation set.
+///
+/// # Errors
+///
+/// - [`EngineError::Defined`] for repeated names.
 fn claim_name(lua: &Lua, name: &str) -> mlua::Result<()> {
     let seen: Table = match lua.named_registry_value(SEEN_KEY) {
         Ok(table) => table,
@@ -245,7 +260,8 @@ fn claim_name(lua: &Lua, name: &str) -> mlua::Result<()> {
         seen.set(name, true)?;
         return Ok(());
     }
-    Err(plan_error(format!(
-        "confit.config: config '{name}' is already defined"
-    )))
+    Err(EngineError::Defined {
+        name: name.to_owned(),
+    }
+    .into())
 }

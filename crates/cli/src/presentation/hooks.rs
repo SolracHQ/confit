@@ -4,13 +4,14 @@
 
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
-use confit_model::error::Result;
 use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_runtime::Checks;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use crate::error::{CliError, Result};
 
 use crate::presentation::summary::Sigil;
 
@@ -168,7 +169,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// Unresolvable binaries fail as plan errors naming the hook.
+/// - [`CliError::Resolve`] for unresolvable binaries.
 fn decide<'a>(
     hook: &'a Hook,
     checks: &Checks,
@@ -198,10 +199,10 @@ fn decide<'a>(
     }
     let Some(binary) = resolve_hook(hook, checks) else {
         let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-        return Err(confit_model::error::Error::Plan(format!(
-            "hook '{}' cannot resolve '{head}'",
-            Arg::join(&hook.argv)
-        )));
+        return Err(CliError::Resolve {
+            argv: Arg::join(&hook.argv),
+            head,
+        });
     };
     Ok(EvaluatedHook {
         hook,
@@ -228,7 +229,7 @@ pub fn resolve_hook(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
 ///
 /// # Errors
 ///
-/// Unresolvable binaries fail as plan errors naming the hook.
+/// - [`CliError::Resolve`] for unresolvable binaries.
 pub fn evaluate_hooks<'a>(
     manifest: &'a Manifest,
     checks: &Checks,
@@ -861,10 +862,11 @@ mod tests {
         };
         match hook_preview(&manifest, &checks, &BTreeSet::new()) {
             Ok(_) => panic!("missing binary passes"),
-            Err(error) => assert_eq!(
-                error.to_string(),
-                "hook 'absent install' cannot resolve 'absent'"
-            ),
+            Err(CliError::Resolve { argv, head }) => {
+                assert_eq!(argv, "absent install");
+                assert_eq!(head, "absent");
+            }
+            Err(error) => panic!("wrong miss variant: {error}"),
         }
     }
 }

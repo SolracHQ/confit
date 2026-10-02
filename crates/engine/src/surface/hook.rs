@@ -7,7 +7,7 @@ use mlua::{Function, Lua, Table, Value};
 use super::confit_table;
 use super::handles::LuaRoute;
 use super::runtime::{check_condition_json, condition_from_json};
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope, find_engine};
 use crate::lua::{TableExt, ValueExt, set_marker};
 use confit_model::arg::Arg;
 
@@ -21,28 +21,43 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Builds one hook declaration table from argv and opts.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped argv and options.
+/// - [`EngineError::OptUnknown`] for unknown option fields.
+/// - [`EngineError::Duration`] for bad timeouts.
 fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
     const CTOR: &str = "confit.hook.run";
+    let scope = Scope::method(CTOR);
     let (argv_value, opts_value) = args;
-    let argv = read_slots(&argv_value, CTOR, "argv")?;
+    let argv = read_slots(&argv_value, &scope, "argv")?;
     if argv.is_empty() {
-        return Err(plan_error(format!(
-            "{CTOR}: field 'argv' must be a dense non-empty string-or-route array"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("argv"),
+            want: "must be a dense non-empty string-or-route array",
+        }
+        .into());
     }
     let opts = match opts_value {
         Value::Nil => lua.create_table()?,
         Value::Table(table) => table,
         _ => {
-            return Err(plan_error(format!("{CTOR}: field 'opts' must be a table")));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("opts"),
+                want: "must be a table",
+            }
+            .into());
         }
     };
-    check_opts_keys(&opts, CTOR)?;
-    let path = read_path(&opts, CTOR)?;
-    let requires = read_requires(lua, &opts, CTOR)?;
-    let when = read_when(lua, &opts, CTOR)?;
-    let checks = read_checks(&opts, CTOR)?;
-    let timeout_secs = read_timeout(&opts, CTOR)?;
+    check_opts_keys(&opts, &scope)?;
+    let path = read_path(&opts, &scope)?;
+    let requires = read_requires(lua, &opts, &scope)?;
+    let when = read_when(lua, &opts, &scope)?;
+    let checks = read_checks(&opts, &scope)?;
+    let timeout_secs = read_timeout(&opts, &scope)?;
     let table = lua.create_table()?;
     write_slots(lua, &table, "argv", &argv)?;
     if !path.is_empty() {
@@ -69,29 +84,46 @@ fn run_impl(lua: &Lua, args: (Value, Value)) -> mlua::Result<Table> {
 /// Reads one dense string-or-route array value into slots.
 ///
 /// Strings run verbatim. Route userdata carries the destination
-/// route. Anything else fails as a plan error naming the field.
-pub(crate) fn read_slots(value: &Value, ctor: &str, field: &str) -> mlua::Result<Vec<Arg>> {
-    const DENSE: &str = "must be a dense string-or-route array";
+/// route.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-dense arrays.
+pub(crate) fn read_slots(value: &Value, scope: &Scope, field: &str) -> mlua::Result<Vec<Arg>> {
+    let field = FieldRef::name(field);
     let table = match value.clone() {
         Value::Table(table) => table,
         _ => {
-            return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a dense string-or-route array",
+            }
+            .into());
         }
     };
     let mut indexed: Vec<(i64, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         let (key, item) = pair?;
         let Some(index) = key.as_integer() else {
-            return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a dense string-or-route array",
+            }
+            .into());
         };
         indexed.push((index, item));
     }
     indexed.sort_by_key(|(index, _)| *index);
     for (position, (index, _)) in indexed.iter().enumerate() {
         if *index != position as i64 + 1 {
-            return Err(plan_error(format!(
-                "{ctor}: field '{field}' must be a dense string-or-route array starting at 1"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a dense string-or-route array starting at 1",
+            }
+            .into());
         }
     }
     let mut out = Vec::with_capacity(indexed.len());
@@ -106,7 +138,12 @@ pub(crate) fn read_slots(value: &Value, ctor: &str, field: &str) -> mlua::Result
             out.push(Arg::Route(route.core().clone()));
             continue;
         }
-        return Err(plan_error(format!("{ctor}: field '{field}' {DENSE}")));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a dense string-or-route array",
+        }
+        .into());
     }
     Ok(out)
 }
@@ -135,150 +172,203 @@ pub(crate) fn write_slots(
 }
 
 /// Rejects unknown keys on the hook opts table.
-fn check_opts_keys(opts: &Table, ctor: &str) -> mlua::Result<()> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-string keys.
+/// - [`EngineError::OptUnknown`] for unknown fields.
+fn check_opts_keys(opts: &Table, scope: &Scope) -> mlua::Result<()> {
     const KNOWN: [&str; 5] = ["path", "requires", "when", "checks", "timeout"];
+    let field = FieldRef::name("opts");
     for pair in opts.pairs::<Value, Value>() {
         let (key, _) = pair?;
         let Some(name) = key.opt_str() else {
-            return Err(plan_error(format!(
-                "{ctor}: field 'opts' holds a non-string key"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "holds a non-string key",
+            }
+            .into());
         };
         if !KNOWN.contains(&name.as_str()) {
-            return Err(plan_error(format!(
-                "{ctor}: field 'opts' unknown field '{name}'"
-            )));
+            return Err(EngineError::OptUnknown {
+                scope: scope.clone(),
+                field,
+                name,
+            }
+            .into());
         }
     }
     Ok(())
 }
 
 /// Reads the path extension dirs, defaulting to empty.
-fn read_path(opts: &Table, ctor: &str) -> mlua::Result<Vec<Arg>> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped path values.
+fn read_path(opts: &Table, scope: &Scope) -> mlua::Result<Vec<Arg>> {
     let value: Value = opts.get("path")?;
     if value.is_nil() {
         return Ok(Vec::new());
     }
-    read_slots(&value, ctor, "path")
+    read_slots(&value, scope, "path")
 }
 
 /// Reads the capability gate, defaulting to none.
-fn read_requires(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped gates.
+fn read_requires(lua: &Lua, opts: &Table, scope: &Scope) -> mlua::Result<Option<Table>> {
+    let field = FieldRef::name("requires");
     let value: Value = opts.get("requires")?;
     if value.is_nil() {
         return Ok(None);
     }
     if let Some(func) = value.clone().opt_func() {
-        return call_gate_function(lua, ctor, "requires", &func).map(Some);
+        return call_gate_function(lua, scope, field, &func).map(Some);
     }
     let Some(table) = value.opt_table() else {
-        return Err(plan_error(format!(
-            "{ctor}: field 'requires' must be a condition table"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a condition table",
+        }
+        .into());
     };
-    let json = table
-        .to_json(&format!("{ctor}: field 'requires'"))
-        .map_err(|error| plan_error(format!("{ctor}: field 'requires' {error}")))?;
-    check_condition_json(&json, &format!("{ctor}: field 'requires'"))
-        .map_err(|detail| plan_error(format!("{ctor}: field 'requires' {detail}")))?;
+    let nested = scope.slot(field);
+    let json = table.to_json(&nested)?;
+    check_condition_json(&json, &nested)?;
     Ok(Some(table))
 }
 
 /// Reads the run gate, defaulting to none.
-fn read_when(lua: &Lua, opts: &Table, ctor: &str) -> mlua::Result<Option<Table>> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped gates.
+fn read_when(lua: &Lua, opts: &Table, scope: &Scope) -> mlua::Result<Option<Table>> {
+    let field = FieldRef::name("when");
     let value: Value = opts.get("when")?;
     if value.is_nil() {
         return Ok(None);
     }
     if let Some(func) = value.clone().opt_func() {
-        return call_gate_function(lua, ctor, "when", &func).map(Some);
+        return call_gate_function(lua, scope, field, &func).map(Some);
     }
     let Some(table) = value.opt_table() else {
-        return Err(plan_error(format!(
-            "{ctor}: field 'when' must be a condition table"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a condition table",
+        }
+        .into());
     };
-    let json = table
-        .to_json(&format!("{ctor}: field 'when'"))
-        .map_err(|error| plan_error(format!("{ctor}: field 'when' {error}")))?;
-    check_condition_json(&json, &format!("{ctor}: field 'when'"))
-        .map_err(|detail| plan_error(format!("{ctor}: field 'when' {detail}")))?;
+    let nested = scope.slot(field);
+    let json = table.to_json(&nested)?;
+    check_condition_json(&json, &nested)?;
     Ok(Some(table))
 }
 
 /// Calls one gate builder function with the runtime namespace.
-fn call_gate_function(lua: &Lua, ctor: &str, field: &str, func: &Function) -> mlua::Result<Table> {
-    let missing = || {
-        plan_error(format!(
-            "{ctor}: field '{field}' needs the confit.runtime table"
-        ))
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for missing runtime tables.
+/// - [`EngineError::GateFailed`] for failing gate calls.
+fn call_gate_function(
+    lua: &Lua,
+    scope: &Scope,
+    field: FieldRef,
+    func: &Function,
+) -> mlua::Result<Table> {
+    let missing = || EngineError::Field {
+        scope: scope.clone(),
+        field: field.clone(),
+        want: "needs the confit.runtime table",
     };
     let confit: Value = lua.globals().get("confit")?;
-    let confit = confit.req_table(ctor, field).map_err(|_| missing())?;
+    let confit = confit
+        .req_table(scope, &field.to_string())
+        .map_err(|_| missing())?;
     let runtime: Value = confit.get("runtime")?;
-    let runtime = runtime.req_table(ctor, field).map_err(|_| missing())?;
+    let runtime = runtime
+        .req_table(scope, &field.to_string())
+        .map_err(|_| missing())?;
     let table = match func.call::<Table>(runtime) {
         Ok(table) => table,
         Err(error) => {
-            if crate::error::find_plan(&error).is_some() {
+            if find_engine(&error).is_some() {
                 return Err(error);
             }
-            return Err(plan_error(format!(
-                "{ctor}: field '{field}' failed: {error}"
-            )));
+            return Err(EngineError::GateFailed {
+                scope: scope.clone(),
+                field,
+                reason: error.to_string(),
+            }
+            .into());
         }
     };
-    let json = table
-        .to_json(&format!("{ctor}: field '{field}'"))
-        .map_err(|error| plan_error(format!("{ctor}: field '{field}' {error}")))?;
-    check_condition_json(&json, &format!("{ctor}: field '{field}'"))
-        .map_err(|detail| plan_error(format!("{ctor}: field '{field}' {detail}")))?;
+    let nested = scope.slot(field);
+    let json = table.to_json(&nested)?;
+    check_condition_json(&json, &nested)?;
     Ok(table)
 }
 
 /// Reads the proof conditions, defaulting to empty.
-fn read_checks(opts: &Table, ctor: &str) -> mlua::Result<Vec<Table>> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for sparse lists and
+///   misshaped members.
+fn read_checks(opts: &Table, scope: &Scope) -> mlua::Result<Vec<Table>> {
     let value: Value = opts.get("checks")?;
     if value.is_nil() {
         return Ok(Vec::new());
     }
+    let field = FieldRef::name("checks");
     let Some(table) = value.opt_table() else {
-        return Err(plan_error(format!(
-            "{ctor}: field 'checks' must be a dense condition array"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field,
+            want: "must be a dense condition array",
+        }
+        .into());
     };
-    let dense = || {
-        plan_error(format!(
-            "{ctor}: field 'checks' must be a dense condition array starting at 1"
-        ))
+    let dense = || EngineError::Field {
+        scope: scope.clone(),
+        field: FieldRef::name("checks"),
+        want: "must be a dense condition array starting at 1",
     };
     let mut indexed: Vec<(i64, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         let (key, item) = pair?;
         let Some(index) = key.as_integer() else {
-            return Err(dense());
+            return Err(dense().into());
         };
         indexed.push((index, item));
     }
     indexed.sort_by_key(|(index, _)| *index);
     for (position, (index, _)) in indexed.iter().enumerate() {
         if *index != position as i64 + 1 {
-            return Err(dense());
+            return Err(dense().into());
         }
     }
     let mut out = Vec::with_capacity(indexed.len());
     for (index, item) in indexed {
-        let field = format!("checks[{index}]");
+        let field = FieldRef::index("checks", index as usize);
         let Some(cond) = item.opt_table() else {
-            return Err(plan_error(format!(
-                "{ctor}: field '{field}' must be a condition table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field,
+                want: "must be a condition table",
+            }
+            .into());
         };
-        let json = cond
-            .to_json(&format!("{ctor}: field '{field}'"))
-            .map_err(|error| plan_error(format!("{ctor}: field '{field}' {error}")))?;
-        check_condition_json(&json, &format!("{ctor}: field '{field}'"))
-            .map_err(|detail| plan_error(format!("{ctor}: field '{field}' {detail}")))?;
+        let nested = scope.slot(field);
+        let json = cond.to_json(&nested)?;
+        check_condition_json(&json, &nested)?;
         out.push(cond);
     }
     Ok(out)
@@ -290,10 +380,15 @@ fn read_checks(opts: &Table, ctor: &str) -> mlua::Result<Vec<Table>> {
 ///
 /// # Errors
 ///
-/// Empty, garbage, and wrong order fail with the text quoted.
-fn parse_duration(text: &str) -> Result<u64, String> {
+/// - [`EngineError::Duration`] for empty, garbage, and
+///   wrong-order text quoting the text.
+fn parse_duration(text: &str, scope: &Scope) -> Result<u64, EngineError> {
+    let invalid = || EngineError::Duration {
+        scope: scope.clone(),
+        text: text.to_owned(),
+    };
     if text.is_empty() {
-        return Err(format!("invalid duration '{text}'"));
+        return Err(invalid());
     }
     let mut total: u64 = 0;
     let mut rank: u8 = 4;
@@ -306,11 +401,11 @@ fn parse_duration(text: &str) -> Result<u64, String> {
                 .trim_start_matches(|byte: char| byte.is_ascii_digit())
                 .len();
         if digits == 0 {
-            return Err(format!("invalid duration '{text}'"));
+            return Err(invalid());
         }
         let amount: u64 = match rest[..digits].parse() {
             Ok(amount) => amount,
-            Err(_) => return Err(format!("invalid duration '{text}'")),
+            Err(_) => return Err(invalid()),
         };
         rest = &rest[digits..];
         let (unit_rank, unit_bit, factor) = match rest.chars().next() {
@@ -321,7 +416,7 @@ fn parse_duration(text: &str) -> Result<u64, String> {
         };
         if unit_rank == 0 {
             if consumed_any || !rest.is_empty() {
-                return Err(format!("invalid duration '{text}'"));
+                return Err(invalid());
             }
             total = amount;
             consumed_any = true;
@@ -329,17 +424,17 @@ fn parse_duration(text: &str) -> Result<u64, String> {
             continue;
         }
         if unit_rank >= rank || seen & unit_bit != 0 {
-            return Err(format!("invalid duration '{text}'"));
+            return Err(invalid());
         }
         rank = unit_rank;
         seen |= unit_bit;
         let part = match amount.checked_mul(factor) {
             Some(part) => part,
-            None => return Err(format!("invalid duration '{text}'")),
+            None => return Err(invalid()),
         };
         total = match total.checked_add(part) {
             Some(total) => total,
-            None => return Err(format!("invalid duration '{text}'")),
+            None => return Err(invalid()),
         };
         rest = &rest[1..];
         consumed_any = true;
@@ -347,76 +442,89 @@ fn parse_duration(text: &str) -> Result<u64, String> {
     if consumed_any {
         Ok(total)
     } else {
-        Err(format!("invalid duration '{text}'"))
+        Err(invalid())
     }
 }
 
 /// Reads the timeout in seconds, defaulting to ten minutes.
-fn read_timeout(opts: &Table, ctor: &str) -> mlua::Result<u64> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-string timeouts.
+/// - [`EngineError::Duration`] for bad duration text.
+fn read_timeout(opts: &Table, scope: &Scope) -> mlua::Result<u64> {
     const DEFAULT: &str = "10m";
     let value: Value = opts.get("timeout")?;
     if value.is_nil() {
-        return match parse_duration(DEFAULT) {
-            Ok(secs) => Ok(secs),
-            Err(error) => Err(plan_error(format!("{ctor}: {error}"))),
-        };
+        return Ok(parse_duration(DEFAULT, scope)?);
     }
     let Some(text) = value.opt_str() else {
-        return Err(plan_error(format!(
-            "{ctor}: field 'timeout' must be a duration string"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("timeout"),
+            want: "must be a duration string",
+        }
+        .into());
     };
-    parse_duration(&text).map_err(|error| plan_error(format!("{ctor}: field 'timeout' {error}")))
+    Ok(parse_duration(&text, scope)?)
 }
 
 /// Converts one hook declaration table into core data.
-pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_model::hook::Hook> {
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped hook fields.
+pub(crate) fn convert_hook(table: &Table, scope: &Scope) -> mlua::Result<confit_model::hook::Hook> {
     use confit_model::hook::Hook;
 
     let argv_value: Value = table.get("argv")?;
     let argv = match argv_value.is_nil() {
         true => Vec::new(),
-        false => read_slots(&argv_value, ctx, "argv")?,
+        false => read_slots(&argv_value, scope, "argv")?,
     };
     if argv.is_empty() {
-        return Err(plan_error(format!(
-            "{ctx}: field 'argv' must be a dense non-empty string-or-route array"
-        )));
+        return Err(EngineError::Field {
+            scope: scope.clone(),
+            field: FieldRef::name("argv"),
+            want: "must be a dense non-empty string-or-route array",
+        }
+        .into());
     }
     let path_value: Value = table.get("path")?;
     let path = match path_value.is_nil() {
         true => Vec::new(),
-        false => read_slots(&path_value, ctx, "path")?,
+        false => read_slots(&path_value, scope, "path")?,
     };
     let requires = match table.get::<Value>("requires")? {
         Value::Nil => None,
         Value::Table(guard) => {
-            let json = guard
-                .to_json(&format!("{ctx}: field 'requires'"))
-                .map_err(|error| plan_error(format!("{ctx}: field 'requires' {error}")))?;
-            Some(condition_from_json(
-                &json,
-                &format!("{ctx}: field 'requires'"),
-            )?)
+            let nested = scope.slot(FieldRef::name("requires"));
+            let json = guard.to_json(&nested)?;
+            Some(condition_from_json(&json, &nested)?)
         }
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'requires' must be a condition table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("requires"),
+                want: "must be a condition table",
+            }
+            .into());
         }
     };
     let when = match table.get::<Value>("when")? {
         Value::Nil => None,
         Value::Table(guard) => {
-            let json = guard
-                .to_json(&format!("{ctx}: field 'when'"))
-                .map_err(|error| plan_error(format!("{ctx}: field 'when' {error}")))?;
-            Some(condition_from_json(&json, &format!("{ctx}: field 'when'"))?)
+            let nested = scope.slot(FieldRef::name("when"));
+            let json = guard.to_json(&nested)?;
+            Some(condition_from_json(&json, &nested)?)
         }
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'when' must be a condition table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("when"),
+                want: "must be a condition table",
+            }
+            .into());
         }
     };
     let mut checks = Vec::new();
@@ -427,49 +535,59 @@ pub(crate) fn convert_hook(table: &Table, ctx: &str) -> mlua::Result<confit_mode
             for pair in list.pairs::<Value, Value>() {
                 let (key, item) = pair?;
                 let Some(index) = key.as_integer() else {
-                    return Err(plan_error(format!(
-                        "{ctx}: field 'checks' must be a dense condition array"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::name("checks"),
+                        want: "must be a dense condition array",
+                    }
+                    .into());
                 };
                 indexed.push((index, item));
             }
             indexed.sort_by_key(|(index, _)| *index);
             for (position, (index, _)) in indexed.iter().enumerate() {
                 if *index != position as i64 + 1 {
-                    return Err(plan_error(format!(
-                        "{ctx}: field 'checks' must be a dense condition array"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field: FieldRef::name("checks"),
+                        want: "must be a dense condition array",
+                    }
+                    .into());
                 }
             }
             for (index, item) in indexed {
+                let field = FieldRef::index("checks", index as usize);
                 let Some(cond) = item.opt_table() else {
-                    return Err(plan_error(format!(
-                        "{ctx}: field 'checks[{index}]' must be a condition table"
-                    )));
+                    return Err(EngineError::Field {
+                        scope: scope.clone(),
+                        field,
+                        want: "must be a condition table",
+                    }
+                    .into());
                 };
-                let json = cond
-                    .to_json(&format!("{ctx}: field 'checks[{index}]'"))
-                    .map_err(|error| {
-                        plan_error(format!("{ctx}: field 'checks[{index}]' {error}"))
-                    })?;
-                checks.push(condition_from_json(
-                    &json,
-                    &format!("{ctx}: field 'checks[{index}]'"),
-                )?);
+                let nested = scope.slot(field);
+                let json = cond.to_json(&nested)?;
+                checks.push(condition_from_json(&json, &nested)?);
             }
         }
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'checks' must be a dense condition array"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("checks"),
+                want: "must be a dense condition array",
+            }
+            .into());
         }
     }
     let timeout_secs = match table.get::<Value>("timeout_secs")? {
         Value::Integer(secs) if secs >= 0 => secs as u64,
         _ => {
-            return Err(plan_error(format!(
-                "{ctx}: field 'timeout_secs' must be an integer"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("timeout_secs"),
+                want: "must be an integer",
+            }
+            .into());
         }
     };
     Ok(Hook {
@@ -488,6 +606,7 @@ mod tests {
 
     #[test]
     fn duration_parser_cases() {
+        let scope = Scope::method("test");
         let cases = vec![
             ("90", 90),
             ("0", 0),
@@ -498,7 +617,7 @@ mod tests {
             ("1h30m", 5_400),
         ];
         for (text, want) in cases {
-            match parse_duration(text) {
+            match parse_duration(text, &scope) {
                 Ok(got) => assert_eq!(got, want, "duration {text:?}"),
                 Err(error) => panic!("duration {text:?} parses: {error}"),
             }
@@ -507,15 +626,19 @@ mod tests {
 
     #[test]
     fn duration_parser_failures_quote_text() {
+        let scope = Scope::method("test");
         for text in [
             "", "nope", "h", "10x", "10s1h", "1m1h", "1h1h", "1h30", " 10m", "10m ",
         ] {
-            match parse_duration(text) {
+            match parse_duration(text, &scope) {
                 Ok(got) => panic!("duration {text:?} passes with {got}"),
-                Err(error) => assert!(
-                    error.contains(text) && error.contains('\''),
-                    "failure quotes text: {error}"
-                ),
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains(text) && message.contains('\''),
+                        "failure quotes text: {message}"
+                    );
+                }
             }
         }
     }

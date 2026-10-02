@@ -10,6 +10,7 @@ use confit_model::sha::Sha;
 
 use crate::Applier;
 use crate::disk::{Live, LiveMember, drain};
+use confit_store::faults::AccessFault;
 
 impl Applier {
     /// Reports manual edits between recorded documents and disk.
@@ -32,9 +33,9 @@ impl Applier {
                 Live::Absent => out.push(Drift::Missing {
                     path: document.destination.clone(),
                 }),
-                Live::Unreadable { reason } => out.push(Drift::Unreadable {
+                Live::Unreadable { fault } => out.push(Drift::Unreadable {
                     path: document.destination.clone(),
-                    reason,
+                    reason: unreadable_reason(&fault),
                 }),
                 Live::Present { mut reader, mode } => {
                     if !matches!(&document.data, Data::Opaque { .. }) {
@@ -115,9 +116,9 @@ impl Applier {
             let member_path = destination.join(&member.relative);
             match disk.get(&member.relative) {
                 None => out.push(Drift::Missing { path: member_path }),
-                Some(LiveMember::Unreadable { reason }) => out.push(Drift::Unreadable {
+                Some(LiveMember::Unreadable { fault }) => out.push(Drift::Unreadable {
                     path: member_path,
-                    reason: reason.clone(),
+                    reason: unreadable_reason(fault),
                 }),
                 Some(LiveMember::Present { mode, .. }) => {
                     let seen_mode = *mode;
@@ -204,6 +205,14 @@ fn opaque_content_drift(
         key: key.to_string(),
         old: Some(serde_json::Value::String(old.to_string())),
         new: Some(serde_json::Value::String(new.to_string())),
+    }
+}
+
+/// Names one unreadable fault for drift lines.
+fn unreadable_reason(fault: &AccessFault) -> String {
+    match fault {
+        AccessFault::Unknown { .. } => "unknown failure, see log".to_owned(),
+        known => known.cause().to_owned(),
     }
 }
 

@@ -8,7 +8,7 @@ use mlua::{Lua, Table, Value};
 use serde_json::Value as Json;
 
 use super::confit_table;
-use crate::error::plan_error;
+use crate::error::{EngineError, Scope};
 use crate::lua::{TableExt, ValueExt, holds_cycle};
 
 /// Installs the utils namespace on a state.
@@ -34,12 +34,18 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Renders one template string with a vars table.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
+/// - [`EngineError::NestScope`] for template failures.
 fn render_impl(args: (Value, Value)) -> mlua::Result<String> {
     const CALLER: &str = "confit.utils.render";
+    let scope = Scope::method(CALLER);
     let (template_value, vars_value) = args;
-    let template = template_value.req_str(CALLER, "template")?;
-    let vars = vars_value.req_table(CALLER, "vars")?;
-    TextRender::render(CALLER, template, vars)
+    let template = template_value.req_str(&scope, "template")?;
+    let vars = vars_value.req_table(&scope, "vars")?;
+    TextRender::render(&scope, template, vars)
 }
 
 /// Template renderer holding domain validation.
@@ -48,35 +54,34 @@ struct TextRender;
 impl TextRender {
     /// Renders one template string with a vars table.
     ///
-    /// # Arguments
-    ///
-    /// * `caller` - error prefix naming the constructor.
-    /// * `template` - template string under rendering.
-    /// * `vars` - vars table holding string-keyed facts.
-    ///
-    /// # Returns
-    ///
-    /// Rendered text.
-    ///
     /// # Errors
     ///
-    /// Non-object vars fail as plan errors. Template failures fail as plan errors.
+    /// - [`EngineError::NestScope`] for template failures.
     ///
-    fn render(caller: &str, template: String, vars: Table) -> mlua::Result<String> {
-        let facts = vars.req_object(caller, "vars")?;
-        render(&template, &facts, "confit.utils.render: ")
+    fn render(scope: &Scope, template: String, vars: Table) -> mlua::Result<String> {
+        let facts = vars.req_object(scope, "vars")?;
+        render(&template, &facts, scope)
     }
 }
 
 /// Renders one template string with JSON facts.
+///
+/// # Errors
+///
+/// - [`EngineError::NestScope`] for template failures.
 pub(crate) fn render(
     template: &str,
     facts: &BTreeMap<String, Json>,
-    prefix: &str,
+    scope: &Scope,
 ) -> mlua::Result<String> {
     let env = minijinja::Environment::new();
-    env.render_str(template, facts)
-        .map_err(|error| plan_error(format!("{prefix}{error}")))
+    env.render_str(template, facts).map_err(|error| {
+        EngineError::NestScope {
+            scope: scope.clone(),
+            reason: error.to_string(),
+        }
+        .into()
+    })
 }
 
 #[cfg(test)]

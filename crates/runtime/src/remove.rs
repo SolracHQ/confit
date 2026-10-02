@@ -3,18 +3,20 @@
 use std::collections::BTreeSet;
 
 use confit_model::document::Document;
-use confit_model::error::{Error, Result};
 use confit_model::progress::Event;
 use confit_model::routes::Route;
 
 use crate::Applier;
+use crate::error::{Result, RuntimeError};
 
 impl Applier {
     /// Removes recorded destinations absent from desired documents.
     ///
     /// # Errors
     ///
-    /// Removal failures surface as io errors.
+    /// - [`RuntimeError::Remove`] for removal faults.
+    /// - [`RuntimeError::RemoveUnknown`] for unmapped
+    ///   removal failures.
     pub fn remove_orphans(&self, recorded: &[Document], desired: &[Document]) -> Result<usize> {
         let mut removed = 0;
         for old in recorded {
@@ -31,7 +33,7 @@ impl Applier {
             if self
                 .disk
                 .remove(&expanded)
-                .map_err(|error| Error::Plan(error.to_string()))?
+                .map_err(|error| RuntimeError::from_remove_io(&expanded, error))?
             {
                 self.emit_removed(&old.destination);
                 removed += 1;
@@ -44,7 +46,9 @@ impl Applier {
     ///
     /// # Errors
     ///
-    /// Removal failures surface as io errors.
+    /// - [`RuntimeError::Remove`] for removal faults.
+    /// - [`RuntimeError::RemoveUnknown`] for unmapped
+    ///   removal failures.
     pub fn remove_tree_members(
         &self,
         recorded: &[Document],
@@ -70,7 +74,7 @@ impl Applier {
                 if self
                     .disk
                     .remove(&path)
-                    .map_err(|error| Error::Plan(error.to_string()))?
+                    .map_err(|error| RuntimeError::from_remove_io(&path, error))?
                 {
                     self.emit_removed(&old.destination.join(&member.relative));
                     removed += 1;

@@ -32,18 +32,19 @@ pub enum AccessFault {
 }
 
 impl AccessFault {
-    /// Maps one io kind into its fault.
+    /// Interprets one io kind into its fault.
     ///
-    /// Callers send the six mapped kinds alone.
-    pub fn from_kind(kind: ErrorKind) -> Self {
+    /// Mapped kinds yield their fault. All else
+    /// yields None for Unknown callers.
+    pub fn interpret(kind: ErrorKind) -> Option<Self> {
         match kind {
-            ErrorKind::NotFound => Self::Missing,
-            ErrorKind::PermissionDenied => Self::Denied,
-            ErrorKind::StorageFull => Self::StorageFull,
-            ErrorKind::ReadOnlyFilesystem => Self::ReadOnlyFilesystem,
-            ErrorKind::QuotaExceeded => Self::QuotaExceeded,
-            ErrorKind::FileTooLarge => Self::FileTooLarge,
-            _ => unreachable!("access paths send the six kinds alone"),
+            ErrorKind::NotFound => Some(Self::Missing),
+            ErrorKind::PermissionDenied => Some(Self::Denied),
+            ErrorKind::StorageFull => Some(Self::StorageFull),
+            ErrorKind::ReadOnlyFilesystem => Some(Self::ReadOnlyFilesystem),
+            ErrorKind::QuotaExceeded => Some(Self::QuotaExceeded),
+            ErrorKind::FileTooLarge => Some(Self::FileTooLarge),
+            _ => None,
         }
     }
 

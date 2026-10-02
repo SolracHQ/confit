@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::faults::AccessFault;
 
 /// Fetch failure shapes.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum FetchError {
     /// Failed download holding the url with the transport reason.
     #[error("cannot fetch '{url}': {reason}")]
@@ -75,21 +75,19 @@ pub enum FetchError {
 impl FetchError {
     /// Maps one cache io failure at the url into domain language.
     pub fn from_io(url: &str, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            std::io::ErrorKind::TimedOut => Self::Timeout {
+        if kind == std::io::ErrorKind::TimedOut {
+            return Self::Timeout {
                 url: url.to_owned(),
-            },
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Read {
+            };
+        }
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Read {
                 url: url.to_owned(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::Read {
+            None => Self::Read {
                 url: url.to_owned(),
                 fault: AccessFault::Unknown { message },
             },
@@ -98,18 +96,14 @@ impl FetchError {
 
     /// Maps one cache write io failure at the url into domain language.
     pub fn from_write_io(url: &str, error: std::io::Error) -> Self {
+        let kind = error.kind();
         let message = error.to_string();
-        match error.kind() {
-            kind @ (std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::StorageFull
-            | std::io::ErrorKind::ReadOnlyFilesystem
-            | std::io::ErrorKind::QuotaExceeded
-            | std::io::ErrorKind::FileTooLarge) => Self::Write {
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::Write {
                 url: url.to_owned(),
-                fault: AccessFault::from_kind(kind),
+                fault,
             },
-            _ => Self::WriteUnknown {
+            None => Self::WriteUnknown {
                 url: url.to_owned(),
                 message,
             },

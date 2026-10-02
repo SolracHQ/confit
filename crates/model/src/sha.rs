@@ -110,6 +110,19 @@ impl Sha {
     pub fn label(&self, len: u64) -> String {
         format!("sha256:{self} ({len} bytes)")
     }
+
+    /// Reads the short hash prefix for terminal lines.
+    ///
+    /// Full hex rides the log alone while terminal
+    /// lines carry twelve characters.
+    pub fn short(&self) -> String {
+        self.hex()[..12].to_owned()
+    }
+
+    /// Reads the short hash and size label for terminal lines.
+    pub fn label_short(&self, len: u64) -> String {
+        format!("sha256:{} ({len} bytes)", self.short())
+    }
 }
 
 impl Serialize for Sha {

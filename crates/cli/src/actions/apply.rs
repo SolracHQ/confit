@@ -9,12 +9,13 @@ use std::path::PathBuf;
 use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_runtime::Applier;
 use confit_runtime::Checks;
 use confit_store::Stores;
+
+use crate::error::{CliError, Result};
 
 use crate::cli::ApplyArgs;
 use crate::hooks::{self, append_hook_log};
@@ -123,8 +124,11 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Evaluation and manifest load failures surface as plan
-    /// or io errors.
+    /// - [`CliError::Slot`] for slot reads.
+    /// - [`CliError::Bundle`] for bundle reads.
+    /// - [`CliError::Model`] for manifest builds.
+    /// - [`CliError::Engine`] for evaluation failures.
+    /// - [`CliError::NoProfile`] for absent profiles.
     ///
     /// # Examples
     ///
@@ -163,10 +167,7 @@ impl<'a> ApplyRunner<'a> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
         if raw.starts_with('@') || raw.starts_with('%') {
-            let (slot_manifest, _) = stores
-                .slots()
-                .resolve(Some(raw))
-                .map_err(|error| Error::Plan(error.to_string()))?;
+            let (slot_manifest, _) = stores.slots().resolve(Some(raw))?;
             return Self::from_slot(
                 slot_manifest,
                 args.force,
@@ -182,16 +183,8 @@ impl<'a> ApplyRunner<'a> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
             sinks.emit_reading_plan(positional);
-            let file_manifest = timed("apply plan load", || {
-                stores
-                    .bundles()
-                    .read(positional)
-                    .map_err(|error| Error::Plan(error.to_string()))
-            })?;
-            let previous = stores
-                .slots()
-                .load()
-                .map_err(|error| Error::Plan(error.to_string()))?;
+            let file_manifest = timed("apply plan load", || stores.bundles().read(positional))?;
+            let previous = stores.slots().load()?;
             return Ok(Self {
                 manifest: file_manifest,
                 previous,
@@ -206,10 +199,9 @@ impl<'a> ApplyRunner<'a> {
             });
         }
         if !driver::fs::exists(positional) {
-            return Err(Error::Plan(format!(
-                "apply reads no profile '{}'",
-                positional.display()
-            )));
+            return Err(CliError::NoProfile {
+                path: positional.to_path_buf(),
+            });
         }
         let evaluation = evaluate_shared(
             &args.shared,
@@ -217,12 +209,8 @@ impl<'a> ApplyRunner<'a> {
             Some(sinks.progress.clone()),
             &stores,
         )?;
-        let previous = stores
-            .slots()
-            .load()
-            .map_err(|error| Error::Plan(error.to_string()))?;
-        let manifest = Manifest::build(evaluation.documents, evaluation.hooks)
-            .map_err(|error| Error::Plan(error.to_string()))?;
+        let previous = stores.slots().load()?;
+        let manifest = Manifest::build(evaluation.documents, evaluation.hooks)?;
         Ok(Self {
             manifest,
             previous,
@@ -247,10 +235,7 @@ impl<'a> ApplyRunner<'a> {
         sinks: Sinks,
         log_file: Option<PathBuf>,
     ) -> Result<Self> {
-        let previous = stores
-            .slots()
-            .load()
-            .map_err(|error| Error::Plan(error.to_string()))?;
+        let previous = stores.slots().load()?;
         Ok(Self {
             manifest: slot_manifest,
             previous,
@@ -335,8 +320,12 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Build, prompt, and write failures surface as plan or
-    /// io errors. A non-`yes` answer aborts as a plan error.
+    /// - [`CliError::Aborted`] for non-`yes` answers.
+    /// - [`CliError::Unknown`] for prompt failures.
+    /// - [`CliError::Runtime`] for destination writes and removals.
+    /// - [`CliError::Slot`] for state stores.
+    /// - [`CliError::Blob`] for blob resolves with persists and prunes.
+    /// - [`CliError::Resolve`] for unresolvable hooks.
     pub fn execute(mut self) -> Result<ApplyReport> {
         self.sinks.emit_hashing();
         let built = std::mem::replace(&mut self.manifest, Manifest::empty());
@@ -366,9 +355,7 @@ impl<'a> ApplyRunner<'a> {
         let text = report.render();
         self.sinks.print_line(text);
         if !self.force && !self.sinks.confirm(self.input)? {
-            return Err(Error::Plan(
-                "apply aborted: answer reads no 'yes'".to_string(),
-            ));
+            return Err(CliError::Aborted);
         }
         let fresh = self.applier.drift(reference, order);
         if fresh != baseline {
@@ -376,9 +363,7 @@ impl<'a> ApplyRunner<'a> {
                 self.sinks.print_line(line);
             }
             if !self.sinks.confirm(self.input)? {
-                return Err(Error::Plan(
-                    "apply aborted: answer reads no 'yes'".to_string(),
-                ));
+                return Err(CliError::Aborted);
             }
         }
         let written = self
@@ -392,30 +377,15 @@ impl<'a> ApplyRunner<'a> {
                 .applier
                 .remove_tree_members(&self.previous.documents, &built.documents)?;
         self.sinks.emit_writing_manifest(built.documents.len());
-        let _ = self
-            .stores
-            .slots()
-            .store(&built)
-            .map_err(|error| Error::Plan(error.to_string()))?;
+        let _ = self.stores.slots().store(&built)?;
         let mut handles = Vec::new();
         for document in &built.documents {
             for blob in document.data.blob_refs() {
-                handles.push(
-                    self.stores
-                        .blobs()
-                        .resolve(blob)
-                        .map_err(|error| Error::Plan(error.to_string()))?,
-                );
+                handles.push(self.stores.blobs().resolve(blob)?);
             }
         }
-        self.stores
-            .blobs()
-            .persist(&handles)
-            .map_err(|error| Error::Plan(error.to_string()))?;
-        self.stores
-            .blobs()
-            .prune()
-            .map_err(|error| Error::Plan(error.to_string()))?;
+        self.stores.blobs().persist(&handles)?;
+        self.stores.blobs().prune()?;
         self.run_hooks(&built)?;
         Ok(ApplyReport { written, removed })
     }
@@ -451,8 +421,9 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Unresolvable binaries, nonzero codes, and unmet
-    /// post-checks fail as plan errors.
+    /// - [`CliError::Resolve`] for unresolvable binaries.
+    /// - [`CliError::HookFailed`] for nonzero codes.
+    /// - [`CliError::HookChecks`] for unmet post-checks.
     fn spawn_hook(
         &mut self,
         hook: &confit_model::hook::Hook,
@@ -462,7 +433,10 @@ impl<'a> ApplyRunner<'a> {
         let argv_text = Arg::join(&hook.argv);
         let binary = resolve_hook(hook, &self.checks).ok_or_else(|| {
             let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-            Error::Plan(format!("hook '{argv_text}' cannot resolve '{head}'"))
+            CliError::Resolve {
+                argv: argv_text.clone(),
+                head,
+            }
         })?;
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for slot in hook.argv.iter().skip(1) {
@@ -484,10 +458,10 @@ impl<'a> ApplyRunner<'a> {
             append_hook_log(&log, &line, &outcome.output)?;
         }
         if outcome.code != 0 {
-            return Err(Error::Plan(format!(
-                "hook '{argv_text}' failed with code {}",
-                outcome.code
-            )));
+            return Err(CliError::HookFailed {
+                argv: argv_text.clone(),
+                code: outcome.code,
+            });
         }
         self.verify_post_checks(hook)?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
@@ -520,7 +494,7 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Unmet post-checks fail as plan errors naming the hook.
+    /// - [`CliError::HookChecks`] for unmet post-checks.
     fn verify_post_checks(&self, hook: &confit_model::hook::Hook) -> Result<()> {
         if hook.checks.is_empty() {
             return Ok(());
@@ -535,14 +509,10 @@ impl<'a> ApplyRunner<'a> {
         if failed.is_empty() {
             return Ok(());
         }
-        log::warn!(
-            "hook '{argv_text}' failed checks after run: {}",
-            failed.join(", ")
-        );
-        Err(Error::Plan(format!(
-            "hook '{argv_text}' failed checks after run: {}",
-            failed.join(", ")
-        )))
+        Err(CliError::HookChecks {
+            argv: argv_text,
+            failed: failed.join(", "),
+        })
     }
 }
 

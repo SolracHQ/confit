@@ -55,9 +55,7 @@ impl Resources {
             }
         };
         let sha = Sha::read(&mut file).map_err(|failure| ResourceError::from_io(path, failure))?;
-        ResourceHandle::new(exec_root, path.to_path_buf(), sha).map_err(|_| ResourceError::Escape {
-            path: path.to_path_buf(),
-        })
+        ResourceHandle::new(exec_root, path.to_path_buf(), sha)
     }
 
     /// Reads one trusted file as text.
@@ -98,7 +96,6 @@ impl Resources {
             return Err(ResourceError::Escape { path: joined });
         }
         ResourceHandle::new(dir, joined.clone(), sha)
-            .map_err(|_| ResourceError::Escape { path: joined })
     }
 
     /// Streams one handle for reading.

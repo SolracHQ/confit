@@ -9,7 +9,7 @@ use std::rc::Rc;
 use mlua::{Function, Lua, MultiValue, Table, UserData, Value};
 use serde_json::Value as Json;
 
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, PathFault, Scope};
 use crate::level::Level;
 use crate::lua::{JsonExt, ValueExt, read_marker};
 use crate::model::StoredPatch;
@@ -94,7 +94,8 @@ impl Executor<'_> {
     ///
     /// # Errors
     ///
-    /// Callback failures fail as Lua errors. Bad wrapper calls fail as plan errors.
+    /// Callback failures fail as Lua errors. Bad wrapper
+    /// calls fail as typed engine errors.
     ///
     pub(crate) fn execute(
         &self,
@@ -113,14 +114,17 @@ impl Executor<'_> {
             let handle = match &area {
                 Area::Rc => self.lua.create_userdata(RcPatch {
                     live,
-                    ctx: "confit.patch.rc".to_string(),
+                    scope: Scope::method("confit.patch.rc"),
                 })?,
                 Area::Structured { format } => {
-                    let ctx = format!("confit.patch.structured('{}')", patch.target);
+                    let scope = Scope::Call {
+                        method: "confit.patch.structured",
+                        target: patch.target.clone(),
+                    };
                     self.lua.create_userdata(StructuredPatch {
                         live,
                         format: format.clone(),
-                        ctx,
+                        scope,
                     })?
                 }
             };
@@ -147,21 +151,11 @@ impl Executor<'_> {
 
     /// Inserts one rc entry JSON with first-writer wins.
     ///
-    /// # Arguments
-    ///
-    /// * `doc` - live rc document holding section lists.
-    /// * `json` - entry JSON under inserting.
-    /// * `section` - section name holding the list.
-    /// * `owner` - contributing config name.
-    /// * `owners` - shared winners mutated in place.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the entry lands or yields to the recorded winner.
-    ///
     /// # Errors
     ///
-    /// Entry slot failures fail as plan errors. Table shape failures fail as Lua errors.
+    /// - [`EngineError::RcEntry`] for bad rc entries.
+    ///
+    /// Table shape failures fail as Lua errors.
     ///
     pub(crate) fn rc_insert(
         &self,
@@ -170,11 +164,11 @@ impl Executor<'_> {
         section: &str,
         owner: &str,
         owners: &Rc<RefCell<OwnerMap>>,
-        ctx: &str,
+        scope: &Scope,
     ) -> mlua::Result<()> {
-        let slot = match entry_slot(json, section, ctx)? {
+        let slot = match entry_slot(json, section, scope)? {
             None => {
-                let lua_value = json.to_lua(self.lua, ctx)?;
+                let lua_value = json.to_lua(self.lua, scope)?;
                 let list: Table = doc.get(section)?;
                 let next = (list.raw_len() + 1) as i64;
                 list.set(next, lua_value)?;
@@ -195,7 +189,7 @@ impl Executor<'_> {
             }
             owned.insert(key, owner.to_string());
         }
-        let lua_value = json.to_lua(self.lua, ctx)?;
+        let lua_value = json.to_lua(self.lua, scope)?;
         let list: Table = doc.get(section)?;
         let next = (list.raw_len() + 1) as i64;
         list.set(next, lua_value)?;
@@ -211,54 +205,61 @@ impl Executor<'_> {
 pub(crate) struct LiveTable<'a> {
     lua: &'a Lua,
     table: Table,
-    ctx: String,
+    scope: Scope,
 }
 
 impl<'a> LiveTable<'a> {
     /// Builds a live view over one table.
-    ///
-    /// # Arguments
-    ///
-    /// * `lua` - state creating child tables.
-    /// * `table` - live table under navigation.
-    /// * `ctx` - error prefix naming the patch caller.
-    ///
-    /// # Returns
-    ///
-    /// View borrowing the state and owning the table handle.
-    ///
-    fn new(lua: &'a Lua, table: Table, ctx: &str) -> Self {
+    fn new(lua: &'a Lua, table: Table, scope: &Scope) -> Self {
         Self {
             lua,
             table,
-            ctx: ctx.to_string(),
+            scope: scope.clone(),
         }
+    }
+
+    /// Builds the blocked write error for one path.
+    fn blocked(&self, full: &str) -> mlua::Error {
+        EngineError::Blocked {
+            scope: self.scope.clone(),
+            path: full.to_owned(),
+        }
+        .into()
+    }
+
+    /// Builds the empty path error for one path.
+    fn empty(&self, full: &str) -> mlua::Error {
+        EngineError::BadPath {
+            scope: self.scope.clone(),
+            path: full.to_owned(),
+            fault: PathFault::Empty,
+        }
+        .into()
+    }
+
+    /// Builds the out-of-bounds error for one path and verb.
+    fn bounds(&self, op: &'static str, full: &str) -> mlua::Error {
+        EngineError::Bounds {
+            scope: self.scope.clone(),
+            op,
+            path: full.to_owned(),
+        }
+        .into()
     }
 
     /// Descends into one intermediate segment over live tables.
     ///
-    /// # Arguments
-    ///
-    /// * `current` - table value holding the segment.
-    /// * `segment` - key and optional list index.
-    /// * `full` - dotted path naming the write.
-    ///
-    /// # Returns
-    ///
-    /// Child table for the segment, created when missing.
-    ///
     /// # Errors
     ///
-    /// Blocked shapes fail as plan errors. Index gaps fill with fresh tables.
+    /// - [`EngineError::Blocked`] for blocked shapes.
+    ///
+    /// Index gaps fill with fresh tables.
     ///
     fn live_child(&self, current: &Value, segment: &Segment, full: &str) -> mlua::Result<Table> {
         let map = match current {
             Value::Table(map) => map.clone(),
             _ => {
-                return Err(plan_error(format!(
-                    "{}: cannot write '{full}': '{full}' is blocked",
-                    self.ctx
-                )));
+                return Err(self.blocked(full));
             }
         };
         match segment.index {
@@ -269,10 +270,7 @@ impl<'a> LiveTable<'a> {
                     Ok(child)
                 }
                 Value::Table(child) => Ok(child),
-                _ => Err(plan_error(format!(
-                    "{}: cannot write '{full}': '{full}' is blocked",
-                    self.ctx
-                ))),
+                _ => Err(self.blocked(full)),
             },
             Some(index) => {
                 let list = match map.get::<Value>(segment.key.as_str())? {
@@ -283,10 +281,7 @@ impl<'a> LiveTable<'a> {
                     }
                     Value::Table(existing) => existing,
                     _ => {
-                        return Err(plan_error(format!(
-                            "{}: cannot write '{full}': '{full}' is blocked",
-                            self.ctx
-                        )));
+                        return Err(self.blocked(full));
                     }
                 };
                 self.child_at_index(&list, index, full)
@@ -296,19 +291,9 @@ impl<'a> LiveTable<'a> {
 
     /// Reads or creates the child table at one list index.
     ///
-    /// # Arguments
-    ///
-    /// * `list` - parent list table.
-    /// * `index` - zero based position.
-    /// * `full` - dotted path naming the write.
-    ///
-    /// # Returns
-    ///
-    /// Child table at the index, created when missing.
-    ///
     /// # Errors
     ///
-    /// Blocked leaves fail as plan errors.
+    /// - [`EngineError::Blocked`] for blocked leaves.
     ///
     fn child_at_index(&self, list: &Table, index: usize, full: &str) -> mlua::Result<Table> {
         let lua_index = (index + 1) as i64;
@@ -335,27 +320,15 @@ impl<'a> LiveTable<'a> {
                 list.set(lua_index, child.clone())?;
                 Ok(child)
             }
-            _ => Err(plan_error(format!(
-                "{}: cannot write '{full}': '{full}' is blocked",
-                self.ctx
-            ))),
+            _ => Err(self.blocked(full)),
         }
     }
 
     /// Navigates to the parent table for a segment prefix.
     ///
-    /// # Arguments
-    ///
-    /// * `prefix` - leading segments above the leaf.
-    /// * `full` - dotted path naming the write.
-    ///
-    /// # Returns
-    ///
-    /// Parent table holding the leaf slot.
-    ///
     /// # Errors
     ///
-    /// Blocked shapes fail as plan errors.
+    /// - [`EngineError::Blocked`] for blocked shapes.
     ///
     fn live_parent(&self, prefix: &[Segment], full: &str) -> mlua::Result<Table> {
         let mut current = Value::Table(self.table.clone());
@@ -365,10 +338,7 @@ impl<'a> LiveTable<'a> {
         }
         match current {
             Value::Table(parent) => Ok(parent),
-            _ => Err(plan_error(format!(
-                "{}: cannot write '{full}': '{full}' is blocked",
-                self.ctx
-            ))),
+            _ => Err(self.blocked(full)),
         }
     }
 
@@ -386,7 +356,7 @@ impl<'a> LiveTable<'a> {
         match value {
             Value::Nil => true,
             Value::Table(table) => {
-                if Self::new(self.lua, table.clone(), &self.ctx).table_is_empty() {
+                if !Self::new(self.lua, table.clone(), &self.scope).table_is_empty() {
                     return true;
                 }
                 let len = table.raw_len();
@@ -424,22 +394,11 @@ impl<'a> LiveTable<'a> {
 
     /// Writes one leaf into the live table with first-writer wins.
     ///
-    /// # Arguments
-    ///
-    /// * `patch` - structured handle holding owner, format, and shared winners.
-    /// * `segments` - parsed path with the leaf last.
-    /// * `full` - dotted path naming the write.
-    /// * `lua_value` - converted value under writing.
-    /// * `json` - data value seeding leaf owners.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the leaf lands or yields to the recorded winner.
-    ///
     /// # Errors
     ///
-    /// Empty paths fail as plan errors. Blocked shapes fail as plan errors.
-    /// Out of bounds indexes fail as plan errors.
+    /// - [`EngineError::BadPath`] for empty paths.
+    /// - [`EngineError::Blocked`] for blocked shapes.
+    /// - [`EngineError::Bounds`] for out-of-bounds indexes.
     ///
     fn set_live_value(
         &self,
@@ -452,10 +411,7 @@ impl<'a> LiveTable<'a> {
         let (last, prefix) = match segments.split_last() {
             Some(pair) => pair,
             None => {
-                return Err(plan_error(format!(
-                    "{}: invalid path '{full}': empty path",
-                    self.ctx
-                )));
+                return Err(self.empty(full));
             }
         };
         let parent = self.live_parent(prefix, full)?;
@@ -485,18 +441,12 @@ impl<'a> LiveTable<'a> {
                     }
                     Value::Table(existing) => existing,
                     _ => {
-                        return Err(plan_error(format!(
-                            "{}: cannot write '{full}': '{full}' is blocked",
-                            self.ctx
-                        )));
+                        return Err(self.blocked(full));
                     }
                 };
                 let lua_index = (index + 1) as i64;
                 if lua_index > list.raw_len() as i64 + 1 {
-                    return Err(plan_error(format!(
-                        "{}: cannot write '{full}': index out of bounds",
-                        self.ctx
-                    )));
+                    return Err(self.bounds("write", full));
                 }
                 list.set(lua_index, lua_value)?;
             }
@@ -519,22 +469,11 @@ impl<'a> LiveTable<'a> {
 
     /// Appends one value to a live list.
     ///
-    /// # Arguments
-    ///
-    /// * `live` - document state holding owners and the patch owner.
-    /// * `segments` - parsed path with the list last.
-    /// * `full` - dotted path naming the write.
-    /// * `lua_value` - converted value under appending.
-    /// * `json` - data value seeding leaf owners.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the value lands at the list tail.
-    ///
     /// # Errors
     ///
-    /// Empty paths fail as plan errors. Non-list leaves fail as plan errors.
-    /// Out of bounds indexes fail as plan errors.
+    /// - [`EngineError::BadPath`] for empty paths.
+    /// - [`EngineError::Bounds`] for out-of-bounds indexes.
+    /// - [`EngineError::NonList`] for non-list leaves.
     ///
     fn append_live_value(
         &self,
@@ -547,10 +486,7 @@ impl<'a> LiveTable<'a> {
         let (last, prefix) = match segments.split_last() {
             Some(pair) => pair,
             None => {
-                return Err(plan_error(format!(
-                    "{}: invalid path '{full}': empty path",
-                    self.ctx
-                )));
+                return Err(self.empty(full));
             }
         };
         let parent = self.live_parent(prefix, full)?;
@@ -592,10 +528,7 @@ impl<'a> LiveTable<'a> {
                 };
                 let lua_index = (index + 1) as i64;
                 if lua_index > list.raw_len() as i64 + 1 {
-                    return Err(plan_error(format!(
-                        "{}: cannot append '{full}': index out of bounds",
-                        self.ctx
-                    )));
+                    return Err(self.bounds("append", full));
                 }
                 if lua_index == list.raw_len() as i64 + 1 {
                     let inner = self.lua.create_table()?;
@@ -625,20 +558,12 @@ impl<'a> LiveTable<'a> {
     }
 
     /// Builds the non-list append error for one path.
-    ///
-    /// # Arguments
-    ///
-    /// * `full` - dotted path naming the write.
-    ///
-    /// # Returns
-    ///
-    /// Plan error naming the path and the non-list leaf.
-    ///
     fn non_list_error(&self, full: &str) -> mlua::Error {
-        plan_error(format!(
-            "{}: cannot append '{full}': '{full}' holds a non-list leaf",
-            self.ctx
-        ))
+        EngineError::NonList {
+            scope: self.scope.clone(),
+            path: full.to_owned(),
+        }
+        .into()
     }
 }
 
@@ -658,8 +583,8 @@ struct LiveDoc {
 struct RcPatch {
     /// Live document state under mutation.
     live: LiveDoc,
-    /// Caller prefix naming the patch constructor.
-    ctx: String,
+    /// Scope naming the patch constructor.
+    scope: Scope,
 }
 
 impl UserData for RcPatch {
@@ -673,71 +598,65 @@ impl UserData for RcPatch {
 impl RcPatch {
     /// Runs one rc `add` call.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the live table.
-    /// * `args` - section and entry values.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the entry lands or yields to the recorded winner.
-    ///
     /// # Errors
     ///
-    /// Wrong arity fails as a plan error. Bad section or entry fails as a plan error.
+    /// - [`EngineError::OpArity`] for wrong arity.
+    /// - [`EngineError::Field`] for non-string sections.
+    /// - [`EngineError::Section`] for unknown sections.
     ///
     fn call_add(&self, lua: &Lua, args: MultiValue) -> mlua::Result<()> {
         let collected: Vec<Value> = args.into_iter().collect();
         let (section_value, value_value) = match collected.as_slice() {
             [section, value] => (section.clone(), value.clone()),
             _ => {
-                return Err(plan_error(format!(
-                    "{}: 'add' expects (section, entry)",
-                    self.ctx
-                )));
+                return Err(EngineError::OpArity {
+                    scope: self.scope.clone(),
+                    op: "add".to_owned(),
+                    want: "(section, entry)",
+                }
+                .into());
             }
         };
-        let section = section_value.req_str(&self.ctx, "section")?;
+        let section = section_value.req_str(&self.scope, "section")?;
         self.rc_op(lua, &section, value_value)
     }
 
     /// Applies one rc insert from a patch callback.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the live table.
-    /// * `section` - section name holding the list.
-    /// * `value` - entry value under inserting.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the entry lands or yields to the recorded winner.
-    ///
     /// # Errors
     ///
-    /// Unknown sections fail as plan errors. Non-entry tables fail as plan errors.
+    /// - [`EngineError::Section`] for unknown sections.
+    /// - [`EngineError::Field`] for non-entry tables.
     ///
     fn rc_op(&self, lua: &Lua, section: &str, value: Value) -> mlua::Result<()> {
-        let ctx = &self.ctx;
+        let scope = &self.scope;
         if !matches!(section, "profile" | "config" | "final") {
-            return Err(plan_error(format!(
-                "{ctx}: unknown section '{section}' (expected 'profile', 'config', or 'final')"
-            )));
+            return Err(EngineError::Section {
+                scope: scope.clone(),
+                section: section.to_owned(),
+            }
+            .into());
         }
         let table = match value {
             Value::Table(table) => table,
             _ => {
-                return Err(plan_error(format!(
-                    "{ctx}: field 'value' must be an rc entry table"
-                )));
+                return Err(EngineError::Field {
+                    scope: scope.clone(),
+                    field: FieldRef::name("value"),
+                    want: "must be an rc entry table",
+                }
+                .into());
             }
         };
         if read_marker(&table, "__kind").as_deref() != Some("rc-entry") {
-            return Err(plan_error(format!(
-                "{ctx}: field 'value' must be an rc entry table"
-            )));
+            return Err(EngineError::Field {
+                scope: scope.clone(),
+                field: FieldRef::name("value"),
+                want: "must be an rc entry table",
+            }
+            .into());
         }
-        let json = translate_entry(&table, &format!("{ctx}: field 'value'"))?;
+        let json = translate_entry(&table, &scope.slot(FieldRef::name("value")))?;
         Executor {
             lua,
             progress: None,
@@ -750,7 +669,7 @@ impl RcPatch {
             section,
             &self.live.owner,
             &self.live.owners,
-            ctx,
+            scope,
         )
     }
 }
@@ -763,8 +682,8 @@ struct StructuredPatch {
     live: LiveDoc,
     /// Format name for collision lines.
     format: String,
-    /// Caller prefix naming the patch constructor.
-    ctx: String,
+    /// Scope naming the patch constructor.
+    scope: Scope,
 }
 
 impl UserData for StructuredPatch {
@@ -785,70 +704,57 @@ impl StructuredPatch {
     ///
     /// # Errors
     ///
-    /// Wrong arity fails as a plan error. Bad path fails as a plan error.
+    /// - [`EngineError::OpArity`] for wrong arity.
+    /// - [`EngineError::Field`] for non-string paths.
     ///
     fn structured_args(&self, op: &str, args: MultiValue) -> mlua::Result<(String, Value)> {
         let collected: Vec<Value> = args.into_iter().collect();
         let (path_value, value_value) = match collected.as_slice() {
             [path, value] => (path.clone(), value.clone()),
             _ => {
-                return Err(plan_error(format!(
-                    "{}: '{op}' expects (path, value)",
-                    self.ctx
-                )));
+                return Err(EngineError::OpArity {
+                    scope: self.scope.clone(),
+                    op: op.to_owned(),
+                    want: "(path, value)",
+                }
+                .into());
             }
         };
-        let path = path_value.req_str(&self.ctx, "path")?;
+        let path = path_value.req_str(&self.scope, "path")?;
         Ok((path, value_value))
     }
 
     /// Writes one structured leaf with first-writer wins.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the live table.
-    /// * `path` - dotted path naming the write.
-    /// * `value` - value under writing.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the leaf lands or yields to the recorded winner.
-    ///
     /// # Errors
     ///
-    /// Bad paths and values fail as plan errors. Blocked shapes fail as plan errors.
+    /// - [`EngineError::BadPath`] for bad paths.
+    /// - [`EngineError::Blocked`] for blocked shapes.
+    /// - [`EngineError::Bounds`] for out-of-bounds indexes.
     ///
     fn structured_set(&self, lua: &Lua, path: &str, value: Value) -> mlua::Result<()> {
-        let ctx = format!("{}: field '{path}'", self.ctx);
-        let json = value.to_json(&ctx)?;
-        let segments = parse_path(path, &ctx)?;
-        let lua_value = json.to_lua(lua, &ctx)?;
-        LiveTable::new(lua, self.live.doc.clone(), &ctx)
+        let scope = self.scope.slot(FieldRef::name(path));
+        let json = value.to_json(&scope)?;
+        let segments = parse_path(path, &scope)?;
+        let lua_value = json.to_lua(lua, &scope)?;
+        LiveTable::new(lua, self.live.doc.clone(), &scope)
             .set_live_value(self, &segments, path, lua_value, &json)
     }
 
     /// Extends one structured list.
     ///
-    /// # Arguments
-    ///
-    /// * `lua` - state owning the live table.
-    /// * `path` - dotted path naming the list.
-    /// * `value` - value under appending.
-    ///
-    /// # Returns
-    ///
-    /// Unit after the value lands at the list tail.
-    ///
     /// # Errors
     ///
-    /// Bad paths and values fail as plan errors. Non-list leaves fail as plan errors.
+    /// - [`EngineError::BadPath`] for bad paths.
+    /// - [`EngineError::Bounds`] for out-of-bounds indexes.
+    /// - [`EngineError::NonList`] for non-list leaves.
     ///
     fn structured_append(&self, lua: &Lua, path: &str, value: Value) -> mlua::Result<()> {
-        let ctx = format!("{}: field '{path}'", self.ctx);
-        let json = value.to_json(&ctx)?;
-        let segments = parse_path(path, &ctx)?;
-        let lua_value = json.to_lua(lua, &ctx)?;
-        LiveTable::new(lua, self.live.doc.clone(), &ctx)
+        let scope = self.scope.slot(FieldRef::name(path));
+        let json = value.to_json(&scope)?;
+        let segments = parse_path(path, &scope)?;
+        let lua_value = json.to_lua(lua, &scope)?;
+        LiveTable::new(lua, self.live.doc.clone(), &scope)
             .append_live_value(&self.live, &segments, path, lua_value, &json)
     }
 }

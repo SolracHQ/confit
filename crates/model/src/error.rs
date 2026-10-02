@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::document::StructuredFormat;
 
 /// Core failure shapes.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum Error {
     /// Parse failure holding the input and the wanted shape.
     #[error("invalid '{input}': want {want}")]
@@ -33,9 +33,6 @@ pub enum Error {
         /// Holds the render reason.
         reason: String,
     },
-    /// Plan failure with a human readable reason.
-    #[error("{0}")]
-    Plan(String),
 }
 
 /// Core result alias.

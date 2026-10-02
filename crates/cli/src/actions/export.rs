@@ -4,12 +4,13 @@
 
 use std::path::PathBuf;
 
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_store::Stores;
 use confit_store::handles::TrustedHandle;
 use confit_store::slot::SlotKind;
 use confit_store::slot::SlotStore;
+
+use crate::error::{CliError, Result};
 
 use crate::cli::ExportArgs;
 
@@ -78,16 +79,16 @@ impl<'a> ExportRunner<'a> {
     ///
     /// # Errors
     ///
-    /// Picker, load, and write failures surface as plan or
-    /// io errors. `-o` and `--manifest` together refuse.
+    /// - [`CliError::FlagRefuse`] for joint flags.
+    /// - [`CliError::Slot`] for slot resolves.
+    /// - [`CliError::Model`] for manifest renders.
+    /// - [`CliError::Bundle`] for bundle writes.
     pub fn execute(self) -> Result<ExportReport> {
         let args = self.args;
         let stores = self.stores;
         let sinks = self.sinks;
         if args.manifest && args.output.is_some() {
-            return Err(Error::Plan(
-                "export: '-o' plus '--manifest' refuse together, pick one".to_string(),
-            ));
+            return Err(CliError::FlagRefuse);
         }
         let slots = stores.slots();
         let (manifest, auto) = timed("export load", || {
@@ -95,9 +96,7 @@ impl<'a> ExportRunner<'a> {
         })?;
         if args.manifest {
             let text = timed("export manifest", || {
-                manifest
-                    .json()
-                    .map_err(|error| Error::Plan(error.to_string()))
+                manifest.json().map_err(CliError::from)
             })?;
             return Ok(ExportReport {
                 dest: None,
@@ -113,7 +112,7 @@ impl<'a> ExportRunner<'a> {
             stores
                 .bundles()
                 .write(&manifest, &dest)
-                .map_err(|error| Error::Plan(error.to_string()))
+                .map_err(CliError::from)
         })?;
         Ok(ExportReport {
             dest: Some(written.canonical().to_path_buf()),
@@ -138,8 +137,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// # Errors
 ///
-/// Absent slots, malformed, out-of-range picks and
-/// load failures surface as plan or io errors.
+/// - [`CliError::Slot`] for slot resolves.
 ///
 /// # Examples
 ///
@@ -153,9 +151,7 @@ impl<'a> ExportRunner<'a> {
 /// assert_eq!(dest.extension().and_then(|ext| ext.to_str()), Some("cb"));
 /// ```
 pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Manifest, PathBuf)> {
-    let (manifest, kind) = slots
-        .resolve(picker)
-        .map_err(|error| Error::Plan(error.to_string()))?;
+    let (manifest, kind) = slots.resolve(picker)?;
     let stem = match kind {
         SlotKind::Applied => APPLIED_STEM.to_string(),
         SlotKind::Named(name) => name,

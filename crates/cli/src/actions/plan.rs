@@ -5,10 +5,11 @@
 use std::path::Path;
 
 use confit_model::drift::{Drift, DriftOrder};
-use confit_model::error::{Error, Result};
 use confit_model::manifest::Manifest;
 use confit_runtime::Applier;
 use confit_store::Stores;
+
+use crate::error::{CliError, Result};
 
 use crate::cli::PlanArgs;
 
@@ -76,8 +77,10 @@ impl PlanRunner<'_> {
     ///
     /// # Errors
     ///
-    /// Evaluation, plan, build, and write failures surface
-    /// as plan or io errors.
+    /// - [`crate::error::CliError::Slot`] for slot reads and writes.
+    /// - [`crate::error::CliError::Bundle`] for bundle writes.
+    /// - [`crate::error::CliError::Model`] for manifest builds.
+    /// - [`crate::error::CliError::Engine`] for evaluation failures.
     pub fn execute(self) -> Result<PlanOutcome> {
         let evaluation = evaluate_shared(
             &self.args.shared,
@@ -88,15 +91,10 @@ impl PlanRunner<'_> {
         let documents = evaluation.documents;
         let slots = self.stores.slots();
         let first_run = slots.is_first_run();
-        let previous = slots
-            .load()
-            .map_err(|error| Error::Plan(error.to_string()))?;
+        let previous = slots.load()?;
 
         self.sinks.emit_hashing();
-        let built = timed("hash", || {
-            Manifest::build(documents, evaluation.hooks)
-                .map_err(|error| Error::Plan(error.to_string()))
-        })?;
+        let built = timed("hash", || Manifest::build(documents, evaluation.hooks))?;
         log_processed(&built, &previous);
 
         let drifts = timed("drift", || {
@@ -115,16 +113,14 @@ impl PlanRunner<'_> {
                     .to_str()
                     .and_then(|text| text.strip_prefix('@'))
                     .unwrap_or("");
-                slots
-                    .store_named(name, &built)
-                    .map_err(|error| Error::Plan(error.to_string()))
+                slots.store_named(name, &built).map_err(CliError::from)
             }
             Some(dest) => self
                 .stores
                 .bundles()
                 .write(&built, dest)
                 .map(|_| ())
-                .map_err(|error| Error::Plan(error.to_string())),
+                .map_err(CliError::from),
             None => Ok(()),
         })?;
         Ok(PlanOutcome {

@@ -121,12 +121,7 @@ impl FetchCache {
             bytes,
         });
         check_sha(url, &sha, expected_sha)?;
-        FetchHandle::new(path, sha, url).map_err(|error| FetchError::Read {
-            url: url.to_owned(),
-            fault: crate::faults::AccessFault::Unknown {
-                message: error.to_string(),
-            },
-        })
+        FetchHandle::new(path, sha, url)
     }
 
     /// Downloads one URL body into the cache through staging.

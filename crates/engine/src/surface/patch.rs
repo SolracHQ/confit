@@ -5,7 +5,7 @@
 use mlua::{Function, Lua, UserData, UserDataMethods, Value};
 
 use super::confit_table;
-use crate::error::plan_error;
+use crate::error::{EngineError, FieldRef, Scope};
 use crate::level::Level;
 use crate::lua::ValueExt;
 use confit_model::document::StructuredFormat;
@@ -57,13 +57,15 @@ impl LuaPatch {
     ///
     /// # Errors
     ///
-    /// Unknown format names fail as plan errors.
+    /// - [`EngineError::Field`] for unknown format names.
     ///
     fn structured(format_name: String, target: String, callback: Function) -> mlua::Result<Self> {
         const CTOR: &str = "confit.patch.structured";
-        const KNOWN: &str = "'json', 'toml', or 'yaml'";
-        let format = StructuredFormat::parse(&format_name)
-            .ok_or_else(|| plan_error(format!("{CTOR}: field 'format' must be one of {KNOWN}")))?;
+        let format = StructuredFormat::parse(&format_name).ok_or_else(|| EngineError::Field {
+            scope: Scope::method(CTOR),
+            field: FieldRef::name("format"),
+            want: "must be one of 'json', 'toml', or 'yaml'",
+        })?;
         Ok(Self {
             target,
             format: Some(format),
@@ -83,15 +85,21 @@ impl UserData for LuaPatch {
 }
 
 /// Parses one priority level from a Lua value.
+///
+/// # Errors
+///
+/// - [`EngineError::UnknownKind`] for unknown levels.
 fn parse_level(value: Value) -> mlua::Result<Level> {
     const CTOR: &str = "confit.patch";
-    const KNOWN: &str = "'MINOR', 'LOW', 'NORMAL', 'HIGH', or 'MAJOR'";
-    let raw = value.req_str(CTOR, "priority")?;
+    let raw = value.req_str(&Scope::method(CTOR), "priority")?;
     let name = raw.to_ascii_uppercase();
     Level::parse(&name).ok_or_else(|| {
-        plan_error(format!(
-            "{CTOR}: field 'priority' unknown level '{name}' (expected {KNOWN})"
-        ))
+        EngineError::UnknownKind {
+            scope: Scope::method(CTOR).slot(FieldRef::name("priority")),
+            what: "level",
+            name,
+        }
+        .into()
     })
 }
 
@@ -117,18 +125,27 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Builds one rc patch handle carrying the callback.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for non-function callbacks.
 fn rc_impl(callback: Value) -> mlua::Result<LuaPatch> {
     const CTOR: &str = "confit.patch.rc";
-    let callback = callback.req_func(CTOR, "callback")?;
+    let callback = callback.req_func(&Scope::method(CTOR), "callback")?;
     Ok(LuaPatch::rc(callback))
 }
 
 /// Builds one structured patch handle carrying the callback.
+///
+/// # Errors
+///
+/// - [`EngineError::Field`] for misshaped arguments.
 fn structured_impl(args: (Value, Value, Value)) -> mlua::Result<LuaPatch> {
     const CTOR: &str = "confit.patch.structured";
+    let scope = Scope::method(CTOR);
     let (format_value, path_value, callback_value) = args;
-    let format_name = format_value.req_str(CTOR, "format")?;
-    let target = super::handles::req_target_path(&path_value, CTOR, "path")?;
-    let callback = callback_value.req_func(CTOR, "callback")?;
+    let format_name = format_value.req_str(&scope, "format")?;
+    let target = super::handles::req_target_path(&path_value, &scope, "path")?;
+    let callback = callback_value.req_func(&scope, "callback")?;
     LuaPatch::structured(format_name, target, callback)
 }

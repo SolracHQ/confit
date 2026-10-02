@@ -90,7 +90,7 @@ impl ArchiveStore {
     pub fn archive(&self, source: &dyn TrustedHandle) -> Result<ArchiveHandle> {
         let path = source.canonical();
         check_compressed_source(path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha().clone()).map_err(|_| not_archive(path))
+        ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
     }
 
     /// Seals one file path as a verified archive.
@@ -104,7 +104,7 @@ impl ArchiveStore {
     pub fn seal(&self, source: &Path) -> Result<ArchiveHandle> {
         let sha = file_sha(source)?;
         check_compressed_source(source)?;
-        ArchiveHandle::new(source.to_path_buf(), sha).map_err(|_| not_archive(source))
+        ArchiveHandle::new(source.to_path_buf(), sha)
     }
 
     /// Lists member names without reading content.

@@ -7,6 +7,7 @@
 pub mod checks;
 mod disk;
 mod drift;
+pub mod error;
 mod remove;
 mod render;
 mod write;

@@ -5,7 +5,8 @@
 use std::path::PathBuf;
 
 use confit_driver as driver;
-use confit_model::error::{Error, Result};
+
+use crate::error::{CliError, Result};
 
 use crate::cli::InitArgs;
 
@@ -118,25 +119,20 @@ impl InitRunner<'_> {
     ///
     /// # Errors
     ///
-    /// Present profile or stubs fail as plan errors. Write
-    /// failures surface as io errors.
+    /// - [`CliError::Exists`] for present scaffolds.
+    /// - [`CliError::Write`] with [`CliError::WriteUnknown`]
+    ///   for scaffold writes.
     pub fn execute(self) -> Result<InitReport> {
         let profile = self.args.dir.join("profile.lua");
         let mut dests = vec![profile.clone()];
         dests.extend(STUB_FILES.iter().map(|entry| self.args.dir.join(entry.0)));
         let stubs_dir = self.args.dir.join("stubs");
         if driver::fs::exists(&stubs_dir) {
-            return Err(Error::Plan(format!(
-                "init: '{}' already exists, remove it or pick another target",
-                stubs_dir.display()
-            )));
+            return Err(CliError::Exists { path: stubs_dir });
         }
         for dest in &dests {
             if driver::fs::exists(dest) {
-                return Err(Error::Plan(format!(
-                    "init: '{}' already exists, remove it or pick another target",
-                    dest.display()
-                )));
+                return Err(CliError::Exists { path: dest.clone() });
             }
         }
         write_file(&profile, PROFILE_TEXT.as_bytes())?;
@@ -157,12 +153,14 @@ impl InitRunner<'_> {
 ///
 /// # Errors
 ///
-/// Unwritable folders and files fail as io errors.
+/// - [`CliError::Write`] with [`CliError::WriteUnknown`]
+///   for folder and file writes.
 fn write_file(dest: &std::path::Path, text: &[u8]) -> Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        driver::fs::create_dir_all(parent).map_err(|error| Error::Plan(error.to_string()))?;
+        driver::fs::create_dir_all(parent)
+            .map_err(|error| CliError::from_write_io(parent, error))?;
     }
-    driver::fs::write(dest, text).map_err(|error| Error::Plan(error.to_string()))
+    driver::fs::write(dest, text).map_err(|error| CliError::from_write_io(dest, error))
 }

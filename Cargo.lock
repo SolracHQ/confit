@@ -237,6 +237,7 @@ dependencies = [
  "serde_json",
  "tar",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -266,6 +267,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "toml",
 ]
 
@@ -293,10 +295,12 @@ dependencies = [
  "confit-model",
  "confit-store",
  "crossbeam-channel",
+ "log",
  "noyalib",
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror",
  "toml",
 ]
 

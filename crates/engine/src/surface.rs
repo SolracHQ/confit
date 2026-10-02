@@ -28,23 +28,23 @@ pub(crate) fn confit_table(lua: &Lua) -> mlua::Result<Table> {
 }
 
 /// Installs the confit global and every namespace on a session.
-pub(crate) fn install(session: &crate::eval::Session) -> confit_model::error::Result<()> {
+///
+/// # Errors
+///
+/// - [`crate::error::EngineError::Unknown`] for install-time
+///   Lua failures.
+pub(crate) fn install(session: &crate::eval::Session) -> crate::error::Result<()> {
     let lua = &session.lua;
-    let fresh = lua.create_table().map_err(plan)?;
-    lua.globals().set("confit", fresh).map_err(plan)?;
-    config::install(lua).map_err(plan)?;
-    document::install(session).map_err(plan)?;
-    handles::install(session).map_err(plan)?;
-    hook::install(lua).map_err(plan)?;
-    patch::install(lua).map_err(plan)?;
-    runtime::install(lua).map_err(plan)?;
-    paths::install(lua).map_err(plan)?;
-    utils::install(lua).map_err(plan)?;
-    plugin::install(session).map_err(plan)?;
+    let fresh = lua.create_table()?;
+    lua.globals().set("confit", fresh)?;
+    config::install(lua)?;
+    document::install(session)?;
+    handles::install(session)?;
+    hook::install(lua)?;
+    patch::install(lua)?;
+    runtime::install(lua)?;
+    paths::install(lua)?;
+    utils::install(lua)?;
+    plugin::install(session)?;
     Ok(())
-}
-
-/// Maps an install-time Lua failure onto a plan error.
-fn plan(error: mlua::Error) -> confit_model::error::Error {
-    crate::error::plan(error.to_string())
 }

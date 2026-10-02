@@ -12,7 +12,7 @@ use confit_model::hook::Hook;
 use confit_model::progress::ProgressSender;
 use confit_store::Stores;
 
-mod error;
+pub mod error;
 mod eval;
 mod exec;
 mod level;
@@ -88,8 +88,7 @@ pub struct Evaluation {
 ///
 /// # Errors
 ///
-/// Missing files fail as io errors. Bad shapes, conflicts, and
-/// unreadable graphs fail as plan errors.
+/// - [`error::EngineError`] for evaluation failures.
 ///
 /// # Examples
 ///
@@ -100,6 +99,6 @@ pub struct Evaluation {
 /// let outcome = evaluate(Path::new("/nonexistent-profile.lua"), EvalOpts::default());
 /// assert!(matches!(outcome, Err(_)));
 /// ```
-pub fn evaluate(profile: &Path, opts: EvalOpts) -> confit_model::error::Result<Evaluation> {
+pub fn evaluate(profile: &Path, opts: EvalOpts) -> error::Result<Evaluation> {
     eval::Session::run(profile, opts)
 }

@@ -98,12 +98,11 @@ impl SlotStore {
     /// # Errors
     ///
     /// - [`SlotError::Write`] for slot write faults.
-    /// - [`SlotError::WriteUnknown`] for render, clock, and other write
-    ///   failures.
+    /// - [`SlotError::WriteUnknown`] for clock and other write failures.
     pub fn store(&self, manifest: &Manifest) -> Result<PathBuf> {
-        let text = manifest.json().map_err(|error| SlotError::WriteUnknown {
+        let text = manifest.json().map_err(|error| SlotError::Manifest {
             path: self.state.clone(),
-            message: error.to_string(),
+            source: error,
         })?;
         write_text(&self.state, &text)?;
         let mut stamp = system_nanos().map_err(|error| SlotError::WriteUnknown {
@@ -192,12 +191,12 @@ impl SlotStore {
     ///
     /// - [`SlotError::BadPick`] for bad names.
     /// - [`SlotError::Write`] for slot write faults.
-    /// - [`SlotError::WriteUnknown`] for render and other write failures.
+    /// - [`SlotError::WriteUnknown`] for clock and other write failures.
     pub fn store_named(&self, name: &str, manifest: &Manifest) -> Result<()> {
         let path = self.named_slot(name)?;
-        let text = manifest.json().map_err(|error| SlotError::WriteUnknown {
+        let text = manifest.json().map_err(|error| SlotError::Manifest {
             path: path.clone(),
-            message: error.to_string(),
+            source: error,
         })?;
         write_text(&path, &text)?;
         Ok(())
