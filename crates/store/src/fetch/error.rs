@@ -11,63 +11,63 @@ pub enum FetchError {
     /// Failed download holding the url with the transport reason.
     #[error("cannot fetch '{url}': {reason}")]
     Download {
-        /// Holds the url under fetching.
+        /// The url under fetching.
         url: String,
-        /// Holds the transport reason.
+        /// The transport reason.
         reason: String,
     },
     /// Failed status holding the url with the status code.
     #[error("cannot fetch '{url}': status {code}")]
     Status {
-        /// Holds the url under fetching.
+        /// The url under fetching.
         url: String,
-        /// Holds the refusing status code.
+        /// The refusing status code.
         code: u16,
     },
     /// Timed-out fetch holding the url alone.
     #[error("cannot fetch '{url}': timeout")]
     Timeout {
-        /// Holds the url under fetching.
+        /// The url under fetching.
         url: String,
     },
     /// Failed cache read holding the url with the fault.
     #[error("cannot fetch '{url}': {fault}")]
     Read {
-        /// Holds the url under fetching.
+        /// The url under fetching.
         url: String,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Digest mismatch holding the url with want and got.
     #[error("sha256 mismatch for '{url}': want {want}, got {got}")]
     DigestMismatch {
-        /// Holds the url under checking.
+        /// The url under checking.
         url: String,
-        /// Holds the wanted digest.
+        /// The wanted digest.
         want: Sha,
-        /// Holds the seen digest.
+        /// The seen digest.
         got: Sha,
     },
     /// Unscripted url holding the url alone.
     #[error("cannot fetch '{url}': no scripted body")]
     Unscripted {
-        /// Holds the url under fetching.
+        /// The url under fetching.
         url: String,
     },
     /// Failed cache write holding the url with the fault.
     #[error("cannot fetch '{url}': {fault}")]
     Write {
-        /// Holds the url under caching.
+        /// The url under caching.
         url: String,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Unknown cache write failure holding the url with message.
     #[error("cannot fetch '{url}': {message}")]
     WriteUnknown {
-        /// Holds the url under caching.
+        /// The url under caching.
         url: String,
-        /// Holds the failure message under caching.
+        /// The failure message under caching.
         message: String,
     },
 }

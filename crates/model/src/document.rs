@@ -156,9 +156,9 @@ impl std::fmt::Display for DocumentKind {
 /// values alone.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlobRef {
-    /// Holds the content hash naming payload bytes.
+    /// The content hash naming payload bytes.
     pub sha256: Sha,
-    /// Holds the pool-bytes hash naming gzip bytes.
+    /// The pool-bytes hash naming gzip bytes.
     pub stored: Sha,
 }
 
@@ -200,49 +200,49 @@ impl BlobRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Data {
-    /// Holds structured data and its serialization format.
+    /// Structured data and its serialization format.
     Structured {
-        /// Holds the serialization format.
+        /// The serialization format.
         format: StructuredFormat,
         /// Holds the structured data table.
         data: Table,
     },
-    /// Holds plain text content.
+    /// Plain text content.
     Text {
-        /// Holds the exact file text.
+        /// The exact file text.
         content: String,
-        /// Holds unix permission bits. None applies the umask default.
+        /// Unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
-        /// Holds true while presence alone satisfies the document.
+        /// True while presence alone satisfies the document.
         #[serde(default)]
         unmanaged: bool,
     },
     /// Describes a symlink placement.
     Link {
-        /// Holds the link target.
+        /// The link target.
         target: String,
     },
-    /// Holds the rc data object.
+    /// The rc data object.
     Rc(RcData),
-    /// Holds one blob handle and its mode.
+    /// One blob handle and its mode.
     ///
     /// The unmanaged flag marks presence-only documents.
     /// Present unmanaged documents stay quiet whatever the
     /// bytes. Missing unmanaged documents read as missing.
     Opaque {
-        /// Holds the content-addressed file bytes identity.
+        /// The content-addressed file bytes identity.
         blob: BlobRef,
-        /// Holds the raw byte count of the file content.
+        /// The raw byte count of the file content.
         size: u64,
-        /// Holds unix permission bits. None applies the umask default.
+        /// Unix permission bits. None applies the umask default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
-        /// Holds true while presence alone satisfies the document.
+        /// True while presence alone satisfies the document.
         #[serde(default)]
         unmanaged: bool,
     },
-    /// Holds one managed file set under a destination folder.
+    /// One managed file set under a destination folder.
     Tree {
         /// Holds members in destination-relative order.
         members: Vec<ManifestMember>,
@@ -343,11 +343,11 @@ impl Data {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
-    /// Holds the late-bound destination route.
+    /// The late-bound destination route.
     pub destination: Route,
-    /// Holds the persisted payload.
+    /// The persisted payload.
     pub data: Data,
-    /// Holds the hex SHA-256 over rendered bytes.
+    /// The hex SHA-256 over rendered bytes.
     pub data_hash: String,
 }
 

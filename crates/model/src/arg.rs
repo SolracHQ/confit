@@ -20,9 +20,9 @@ const SAFE_CHARS: &[u8] =
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Arg {
-    /// Holds a plain string under running verbatim.
+    /// A plain string under running verbatim.
     Text(String),
-    /// Holds a destination route under apply-time resolving.
+    /// A destination route under apply-time resolving.
     Route(Route),
 }
 

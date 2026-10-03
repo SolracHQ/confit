@@ -20,7 +20,7 @@ pub const MANIFEST_VERSION: u32 = 7;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Holds the plan format version.
+    /// The plan format version.
     pub version: u32,
     /// Holds persisted documents in path order.
     pub documents: Vec<Document>,

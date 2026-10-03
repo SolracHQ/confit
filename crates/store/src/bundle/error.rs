@@ -16,47 +16,47 @@ pub enum BundleError {
     /// Failed read holding the bundle path with the fault.
     #[error("bundle '{path}': {fault}", path = path.display())]
     Read {
-        /// Holds the bundle path under reading.
+        /// The bundle path under reading.
         path: PathBuf,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Unsupported version holding the bundle path with the seen version.
     #[error("bundle version {got} reads unsupported")]
     Version {
-        /// Holds the bundle path under reading.
+        /// The bundle path under reading.
         path: PathBuf,
-        /// Holds the seen version.
+        /// The seen version.
         got: u64,
     },
     /// Missing blob holding the content hash.
     #[error("missing blob '{sha}'")]
     Missing {
-        /// Holds the content hash under reading.
+        /// The content hash under reading.
         sha: Sha,
     },
     /// Failed write holding the bundle path with the fault.
     #[error("bundle '{path}': {fault}", path = path.display())]
     Write {
-        /// Holds the bundle path under writing.
+        /// The bundle path under writing.
         path: PathBuf,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Failed manifest render holding the bundle path with the model cause.
     #[error("bundle '{path}': cannot render manifest: {source}", path = path.display())]
     Manifest {
-        /// Holds the bundle path under sealing.
+        /// The bundle path under sealing.
         path: PathBuf,
-        /// Holds the model render cause.
+        /// The model render cause.
         source: ModelError,
     },
     /// Unknown write failure holding the bundle path with message.
     #[error("bundle '{path}': {message}", path = path.display())]
     WriteUnknown {
-        /// Holds the bundle path under writing.
+        /// The bundle path under writing.
         path: PathBuf,
-        /// Holds the failure message under writing.
+        /// The failure message under writing.
         message: String,
     },
 }

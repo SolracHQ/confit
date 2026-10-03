@@ -29,14 +29,14 @@ pub enum Live {
     Absent,
     /// Failing read carrying its fault cause.
     Unreadable {
-        /// Holds the fault cause behind the failed read.
+        /// The fault cause behind the failed read.
         fault: AccessFault,
     },
     /// Content reader and permission bits for the destination.
     Present {
         /// Streams destination bytes.
         reader: Box<dyn std::io::Read>,
-        /// Holds unix permission bits, None for links.
+        /// Unix permission bits, None for links.
         mode: Option<u32>,
     },
 }
@@ -49,14 +49,14 @@ pub enum Live {
 pub enum LiveMember {
     /// Failing read carrying its fault cause.
     Unreadable {
-        /// Holds the fault cause behind the failed read.
+        /// The fault cause behind the failed read.
         fault: AccessFault,
     },
     /// Content reader and permission bits for the member.
     Present {
         /// Streams member bytes.
         reader: Box<dyn std::io::Read>,
-        /// Holds unix permission bits, None for links.
+        /// Unix permission bits, None for links.
         mode: Option<u32>,
     },
 }

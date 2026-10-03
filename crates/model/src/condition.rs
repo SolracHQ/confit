@@ -14,34 +14,34 @@ use crate::routes::Route;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
-    /// Holds equality between a shell variable and a value.
+    /// Equality between a shell variable and a value.
     EnvEq {
-        /// Holds the variable name.
+        /// The variable name.
         key: String,
-        /// Holds the expected value.
+        /// The expected value.
         value: String,
     },
-    /// Holds a set, non-empty variable assertion.
+    /// A set, non-empty variable assertion.
     EnvSet {
-        /// Holds the variable name.
+        /// The variable name.
         key: String,
     },
-    /// Holds a binary on PATH assertion.
+    /// A binary on PATH assertion.
     InPath {
-        /// Holds the binary name.
+        /// The binary name.
         name: String,
     },
-    /// Holds a path existence assertion.
+    /// A path existence assertion.
     Exists {
-        /// Holds the route under testing.
+        /// The route under testing.
         route: Route,
     },
-    /// Holds a changed document assertion.
+    /// A changed document assertion.
     ///
     /// True while `route` previews a write, drift, or absence.
     /// Hooks only.
     Changed {
-        /// Holds the document route under testing.
+        /// The document route under testing.
         route: Route,
     },
     /// Holds a conjunction of nested conditions.
@@ -52,7 +52,7 @@ pub enum Condition {
     ///
     /// Element order feeds equality.
     Any(Vec<Condition>),
-    /// Holds a negated nested condition.
+    /// A negated nested condition.
     ///
     /// Serializes as `nop`.
     #[serde(rename = "nop")]

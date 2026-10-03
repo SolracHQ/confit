@@ -12,13 +12,13 @@ pub enum CodecError {
     /// Corrupt payload holding the parse reason.
     #[error("cannot read manifest: {message}")]
     Corrupt {
-        /// Holds the parse reason.
+        /// The parse reason.
         message: String,
     },
     /// Unsupported version holding the seen version.
     #[error("manifest version {got} reads unsupported")]
     Version {
-        /// Holds the seen version.
+        /// The seen version.
         got: u64,
     },
 }

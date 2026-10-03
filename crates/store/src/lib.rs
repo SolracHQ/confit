@@ -27,7 +27,7 @@ use slot::SlotStore;
 
 /// Base folders for every write-backed capability.
 ///
-/// All three bases travel together from one construction site.
+/// All four bases travel together from one construction site.
 /// Empty paths read as unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
@@ -37,6 +37,8 @@ pub struct StoreRoots {
     pub cache_base: PathBuf,
     /// Temp base holding spills and staging folders.
     pub temp_base: PathBuf,
+    /// Project root jailing trusted file reads.
+    pub project_root: PathBuf,
 }
 
 /// Stateful write capabilities for one run.
@@ -70,8 +72,10 @@ impl StoreRoots {
     /// Config rides the `dirs` config folder under
     /// `confit`, cache rides the `dirs` cache folder
     /// under `confit`, temp rides the process temp
-    /// folder. Unset folders fall back to relative
-    /// `confit` folders.
+    /// folder, project root rides the working folder.
+    /// Unset folders fall back to relative
+    /// `confit` folders, an unavailable working
+    /// folder falls back to `.`.
     pub fn standard() -> Self {
         let config_base = dirs::config_dir()
             .map(|base| base.join("confit"))
@@ -80,10 +84,12 @@ impl StoreRoots {
             .map(|base| base.join("confit"))
             .unwrap_or_else(|| PathBuf::from("confit"));
         let temp_base = std::env::temp_dir();
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             config_base,
             cache_base,
             temp_base,
+            project_root,
         }
     }
 }

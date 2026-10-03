@@ -18,14 +18,14 @@ use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
 /// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
 pub struct PlanOutcome {
-    /// Holds the built manifest with counts.
+    /// The built manifest with counts.
     pub built: Manifest,
-    /// Holds the previous manifest backing lifecycle marks.
+    /// The previous manifest backing lifecycle marks.
     pub previous: Manifest,
     /// Holds disk edits leading the summary, desired versus
     /// disk on first runs.
     pub drift: Vec<Drift>,
-    /// Holds true while the state slot file reads absent.
+    /// True while the state slot file reads absent.
     pub first_run: bool,
 }
 
@@ -57,13 +57,13 @@ pub struct PlanOutcome {
 /// assert!(matches!(outcome, Ok(_) | Err(_)));
 /// ```
 pub struct PlanRunner<'a> {
-    /// Holds the plan flags under running.
+    /// The plan flags under running.
     pub args: &'a PlanArgs,
-    /// Holds the write capabilities for the run.
+    /// The write capabilities for the run.
     pub stores: Stores,
-    /// Holds the destination reads and writes for the run.
+    /// The destination reads and writes for the run.
     pub applier: Applier,
-    /// Holds the output senders for the run.
+    /// The output senders for the run.
     pub sinks: Sinks,
 }
 

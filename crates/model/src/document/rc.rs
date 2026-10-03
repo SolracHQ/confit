@@ -20,25 +20,25 @@ use serde::{Deserialize, Serialize};
 pub enum RcOp {
     /// Exports a plain value.
     Env {
-        /// Holds the variable name, like `EDITOR`.
+        /// The variable name, like `EDITOR`.
         name: String,
-        /// Holds the value under export.
+        /// The value under export.
         value: String,
     },
     /// Shapes a PATH like variable around its current value.
     ///
     /// The directory always prepends to the existing entries.
     Path {
-        /// Holds the variable name, like `PATH`.
+        /// The variable name, like `PATH`.
         name: String,
-        /// Holds the directory route under placement.
+        /// The directory route under placement.
         dir: Route,
     },
     /// Defines an interactive alias.
     Alias {
-        /// Holds the alias name, like `ll`.
+        /// The alias name, like `ll`.
         name: String,
-        /// Holds the alias expansion.
+        /// The alias expansion.
         expansion: String,
     },
     /// Evaluates command output through eval.
@@ -53,7 +53,7 @@ pub enum RcOp {
     },
     /// Sources a file into the shell.
     Source {
-        /// Holds the file route under sourcing.
+        /// The file route under sourcing.
         path: Route,
     },
 }
@@ -77,10 +77,10 @@ pub enum RcOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RcEntry {
-    /// Holds the operation shaping the shell line.
+    /// The operation shaping the shell line.
     #[serde(flatten)]
     pub op: RcOp,
-    /// Holds the shell session guard. None applies unconditionally.
+    /// The shell session guard. None applies unconditionally.
     pub when: Option<Condition>,
 }
 

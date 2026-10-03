@@ -1,0 +1,24 @@
+[package]
+name = "confit-engine-old"
+version = "0.8.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-model = { path = "../model" }
+confit-store = { version = "0.8.0", path = "../store" }
+crossbeam-channel.workspace = true
+log.workspace = true
+minijinja.workspace = true
+mlua = { workspace = true, features = ["lua54", "vendored"] }
+mlua-extras = { version = "=12.0.0", features = ["lua54", "macros", "vendored"] }
+noyalib.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

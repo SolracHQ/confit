@@ -79,23 +79,23 @@ pub struct ApplyReport {
 /// assert!(matches!(runner.execute(), Ok(_) | Err(_)));
 /// ```
 pub struct ApplyRunner<'a> {
-    /// Holds the desired manifest under writing and running.
+    /// The desired manifest under writing and running.
     pub manifest: Manifest,
-    /// Holds the previous manifest backing drift and counts.
+    /// The previous manifest backing drift and counts.
     pub previous: Manifest,
     /// Skips the first prompt. Drift still re-prompts.
     pub force: bool,
     /// Gains the confirmation answer, stdin on the host.
     pub input: &'a mut dyn BufRead,
-    /// Holds the write capabilities for the run.
+    /// The write capabilities for the run.
     pub stores: Stores,
-    /// Holds the destination reads and writes for the run.
+    /// The destination reads and writes for the run.
     pub applier: Applier,
-    /// Holds the output senders for the run.
+    /// The output senders for the run.
     pub sinks: Sinks,
     /// Gains hook output bytes, holding `None` for no log.
     pub log_file: Option<PathBuf>,
-    /// Holds the check facts, populated at execute start.
+    /// The check facts, populated at execute start.
     pub checks: Checks,
     /// Holds the changed routes, populated at execute start.
     pub changed: BTreeSet<Route>,

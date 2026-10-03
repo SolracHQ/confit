@@ -12,63 +12,63 @@ pub enum ArchiveError {
     /// Failed read holding the source path with the fault.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
-        /// Holds the source path under reading.
+        /// The source path under reading.
         path: PathBuf,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Non-archive bytes holding the source path.
     #[error("cannot archive '{path}': not a compressed archive", path = path.display())]
     NotArchive {
-        /// Holds the source path under sealing.
+        /// The source path under sealing.
         path: PathBuf,
     },
     /// Escaping member holding the offending member path.
     #[error("cannot unpack '{path}': member escapes", path = path.display())]
     Escape {
-        /// Holds the offending member path.
+        /// The offending member path.
         path: PathBuf,
     },
     /// Unknown member holding the archive path with the member name.
     #[error("cannot unpack '{path}': unknown member '{name}'", path = path.display())]
     UnknownMember {
-        /// Holds the archive path under unpacking.
+        /// The archive path under unpacking.
         path: PathBuf,
-        /// Holds the wanted member name.
+        /// The wanted member name.
         name: String,
     },
     /// Corrupt archive holding the source path.
     #[error("cannot unpack '{path}': corrupt archive", path = path.display())]
     CorruptedArchive {
-        /// Holds the source path under unpacking.
+        /// The source path under unpacking.
         path: PathBuf,
     },
     /// Locked archive holding the source path.
     #[error("cannot unpack '{path}': password protected", path = path.display())]
     PasswordProtectedArchive {
-        /// Holds the source path under unpacking.
+        /// The source path under unpacking.
         path: PathBuf,
     },
     /// Sealed compression holding the source path.
     #[error("cannot unpack '{path}': unsupported compression", path = path.display())]
     UnsupportedCompression {
-        /// Holds the source path under unpacking.
+        /// The source path under unpacking.
         path: PathBuf,
     },
     /// Failed write holding the archive path with the fault.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
-        /// Holds the archive path under spilling.
+        /// The archive path under spilling.
         path: PathBuf,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Unknown write failure holding the archive path with message.
     #[error("cannot write '{path}': {message}", path = path.display())]
     WriteUnknown {
-        /// Holds the archive path under spilling.
+        /// The archive path under spilling.
         path: PathBuf,
-        /// Holds the failure message under writing.
+        /// The failure message under writing.
         message: String,
     },
 }

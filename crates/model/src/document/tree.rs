@@ -13,11 +13,11 @@ use crate::manifest::Manifest;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMember {
-    /// Holds the destination-relative member path.
+    /// The destination-relative member path.
     pub relative: String,
-    /// Holds the content-addressed member bytes identity.
+    /// The content-addressed member bytes identity.
     pub blob: BlobRef,
-    /// Holds unix permission bits for the member file.
+    /// Unix permission bits for the member file.
     pub mode: u32,
 }
 

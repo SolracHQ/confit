@@ -21,32 +21,32 @@ use crate::sha::Sha;
 pub enum Drift {
     /// Structured or link leaf differs between recorded and disk.
     Key {
-        /// Holds the recorded destination route.
+        /// The recorded destination route.
         path: Route,
-        /// Holds the dotted leaf key, link uses `target`.
+        /// The dotted leaf key, link uses `target`.
         key: String,
-        /// Holds the recorded leaf value, None when the key reads absent.
+        /// The recorded leaf value, None when the key reads absent.
         old: Option<serde_json::Value>,
-        /// Holds the disk leaf value, None when the key reads absent.
+        /// The disk leaf value, None when the key reads absent.
         new: Option<serde_json::Value>,
     },
     /// Text content differs between recorded and disk.
     Hunk {
-        /// Holds the recorded destination route.
+        /// The recorded destination route.
         path: Route,
-        /// Holds the unified diff from recorded to disk.
+        /// The unified diff from recorded to disk.
         hunks: String,
     },
     /// Recorded destination reads as absent on disk.
     Missing {
-        /// Holds the recorded destination route.
+        /// The recorded destination route.
         path: Route,
     },
     /// Recorded destination fails to read on disk.
     Unreadable {
-        /// Holds the recorded destination route.
+        /// The recorded destination route.
         path: Route,
-        /// Holds the fault cause behind the failed read.
+        /// The fault cause behind the failed read.
         reason: String,
     },
 }

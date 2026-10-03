@@ -13,31 +13,31 @@ pub enum BlobError {
     /// Failed read holding the content hash with the fault.
     #[error("cannot read blob '{sha}': {fault}")]
     Read {
-        /// Holds the content hash under reading.
+        /// The content hash under reading.
         sha: Sha,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Failed write holding the destination path with the fault.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
-        /// Holds the destination path under writing.
+        /// The destination path under writing.
         path: PathBuf,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Unknown write failure holding the path with message.
     #[error("cannot write '{path}': {message}", path = path.display())]
     WriteUnknown {
-        /// Holds the destination path under writing.
+        /// The destination path under writing.
         path: PathBuf,
-        /// Holds the failure message under writing.
+        /// The failure message under writing.
         message: String,
     },
     /// Corrupt pool entry holding the content hash.
     #[error("blob '{sha}' fails verification")]
     Corrupt {
-        /// Holds the content hash under verifying.
+        /// The content hash under verifying.
         sha: Sha,
     },
     /// Failed compression holding no further detail.

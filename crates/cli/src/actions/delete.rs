@@ -10,7 +10,7 @@ use crate::error::{CliError, Result};
 /// Outcome of one delete run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteReport {
-    /// Holds the deleted slot name without the `@` sigil.
+    /// The deleted slot name without the `@` sigil.
     pub name: String,
     /// Counts pool blobs pruned as orphaned by the removal.
     pub pruned: usize,

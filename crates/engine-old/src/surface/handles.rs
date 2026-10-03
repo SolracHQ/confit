@@ -1011,7 +1011,7 @@ fn fetch_impl(
     } else {
         root.join(rel)
     };
-    match stores.resources().resource(root, &full) {
+    match stores.resources().resource(&full) {
         Ok(handle) => lua
             .create_userdata(LuaResourceHandle::new(handle, stores.clone(), None))
             .map(Value::UserData),

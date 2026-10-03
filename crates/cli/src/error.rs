@@ -38,25 +38,25 @@ pub enum CliError {
     /// Unknown failure holding its context with the message.
     #[error("cannot use {context}: {message}")]
     Unknown {
-        /// Holds the failure context.
+        /// The failure context.
         context: String,
-        /// Holds the failure message for the log alone.
+        /// The failure message for the log alone.
         message: String,
     },
     /// Failed read holding the path with the fault.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
-        /// Holds the path under reading.
+        /// The path under reading.
         path: PathBuf,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Failed write holding the path with the fault.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
-        /// Holds the path under writing.
+        /// The path under writing.
         path: PathBuf,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Unknown write failure holding the path.
@@ -65,9 +65,9 @@ pub enum CliError {
         path = path.display()
     )]
     WriteUnknown {
-        /// Holds the path under writing.
+        /// The path under writing.
         path: PathBuf,
-        /// Holds the failure message for the log alone.
+        /// The failure message for the log alone.
         message: String,
     },
     /// Empty hook argv holding nothing.
@@ -76,55 +76,55 @@ pub enum CliError {
     /// Failed hook spawn holding argv.
     #[error("hook '{argv}' cannot spawn, see log")]
     Spawn {
-        /// Holds the joined argv under spawning.
+        /// The joined argv under spawning.
         argv: String,
-        /// Holds the spawn failure message for the log alone.
+        /// The spawn failure message for the log alone.
         message: String,
     },
     /// Failed hook wait holding argv.
     #[error("hook '{argv}' cannot wait, see log")]
     Wait {
-        /// Holds the joined argv under waiting.
+        /// The joined argv under waiting.
         argv: String,
-        /// Holds the wait failure message for the log alone.
+        /// The wait failure message for the log alone.
         message: String,
     },
     /// Timed-out hook holding argv with the cap.
     #[error("hook '{argv}' timed out after {timeout_secs}s")]
     Timeout {
-        /// Holds the joined argv under running.
+        /// The joined argv under running.
         argv: String,
-        /// Holds the run cap in seconds.
+        /// The run cap in seconds.
         timeout_secs: u64,
     },
     /// Failed hook output holding argv alone.
     #[error("hook '{argv}' cannot read output")]
     Output {
-        /// Holds the joined argv under reading.
+        /// The joined argv under reading.
         argv: String,
     },
     /// Unresolvable hook holding argv with the head.
     #[error("hook '{argv}' cannot resolve '{head}': install it or extend hook path")]
     Resolve {
-        /// Holds the joined argv under resolving.
+        /// The joined argv under resolving.
         argv: String,
-        /// Holds the binary head under resolving.
+        /// The binary head under resolving.
         head: String,
     },
     /// Failed hook holding argv with the code.
     #[error("hook '{argv}' failed with code {code}")]
     HookFailed {
-        /// Holds the joined argv under running.
+        /// The joined argv under running.
         argv: String,
-        /// Holds the process exit code.
+        /// The process exit code.
         code: i32,
     },
     /// Failed hook checks holding argv with the names.
     #[error("hook '{argv}' failed checks after run: {failed}")]
     HookChecks {
-        /// Holds the joined argv under running.
+        /// The joined argv under running.
         argv: String,
-        /// Holds the unmet check names.
+        /// The unmet check names.
         failed: String,
     },
     /// Aborted apply holding nothing.
@@ -133,7 +133,7 @@ pub enum CliError {
     /// Missing profile holding the path.
     #[error("apply reads no profile '{path}'", path = path.display())]
     NoProfile {
-        /// Holds the profile path under reading.
+        /// The profile path under reading.
         path: PathBuf,
     },
     /// Present scaffold holding the path.
@@ -142,7 +142,7 @@ pub enum CliError {
         path = path.display()
     )]
     Exists {
-        /// Holds the present path under scaffolding.
+        /// The present path under scaffolding.
         path: PathBuf,
     },
     /// Bad delete name holding the input.
@@ -150,7 +150,7 @@ pub enum CliError {
         "delete: '{input}' reads unsupported, want '@name'; history and the current slot never delete"
     )]
     BadName {
-        /// Holds the delete input under parsing.
+        /// The delete input under parsing.
         input: String,
     },
     /// Refused export flags holding nothing.

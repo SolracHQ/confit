@@ -35,18 +35,18 @@ const PLANS_DIR: &str = "plans";
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotKind {
-    /// Holds the applied slot.
+    /// The applied slot.
     Applied,
-    /// Holds one named slot without the `@` sigil.
+    /// One named slot without the `@` sigil.
     Named(String),
-    /// Holds one history pick newest-first from one.
+    /// One history pick newest-first from one.
     History(usize),
 }
 
 /// One stored manifest entry for the apply-past listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEntry {
-    /// Holds the listing position used as the apply `%N` pick.
+    /// The listing position used as the apply `%N` pick.
     pub index: usize,
 }
 

@@ -24,9 +24,9 @@ const HISTORY_STEM_PREFIX: &str = "prev-";
 /// Outcome of one export run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportReport {
-    /// Holds the bundle path for file exports, `None` for manifest prints.
+    /// The bundle path for file exports, `None` for manifest prints.
     pub dest: Option<PathBuf>,
-    /// Holds pretty manifest JSON for manifest prints, `None` for file exports.
+    /// Pretty manifest JSON for manifest prints, `None` for file exports.
     pub manifest: Option<String>,
 }
 
@@ -46,11 +46,11 @@ pub struct ExportReport {
 /// assert!(matches!(report, Ok(_) | Err(_)));
 /// ```
 pub struct ExportRunner<'a> {
-    /// Holds the export flags under running.
+    /// The export flags under running.
     pub args: &'a ExportArgs,
-    /// Holds the write capabilities for the run.
+    /// The write capabilities for the run.
     pub stores: Stores,
-    /// Holds the output senders for the run.
+    /// The output senders for the run.
     pub sinks: Sinks,
 }
 

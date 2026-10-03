@@ -32,6 +32,10 @@ test-down:
 test-nuke:
   ./scripts/test-nuke.sh
 
+# Regenerate committed stubs from the live surface.
+stubs:
+  ./scripts/stubs.sh
+
 # Plan the basic_tool fixture (host smoke; writes only ./target).
 plan-example:
   cargo run -- plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool -o ./target/plan-example.json

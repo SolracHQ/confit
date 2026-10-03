@@ -103,7 +103,7 @@ impl Session {
         crate::surface::install(&session)?;
         let resources = session.stores.resources();
         let absolute = absolutize(profile)?;
-        let handle = resources.resource(&session.root, &absolute)?;
+        let handle = resources.resource(&absolute)?;
         let source = resources.read_text(&handle)?;
         let scope = Scope::profile(profile);
         let returned: Value = session

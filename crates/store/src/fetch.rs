@@ -885,6 +885,7 @@ mod tests {
             config_base: dir.path().join("config"),
             cache_base: dir.path().join("cache"),
             temp_base: dir.path().join("temp"),
+            project_root: dir.path().join("project"),
         };
         let store = {
             let (sender, _) = crossbeam_channel::unbounded();

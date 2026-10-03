@@ -12,15 +12,15 @@ pub enum ResourceError {
     /// Failed read holding the resource path with the fault.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
-        /// Holds the resource path under reading.
+        /// The resource path under reading.
         path: PathBuf,
-        /// Holds the read fault cause.
+        /// The read fault cause.
         fault: AccessFault,
     },
     /// Escaping path holding the offending path.
     #[error("resource path '{path}' escapes exec root", path = path.display())]
     Escape {
-        /// Holds the offending resource path.
+        /// The offending resource path.
         path: PathBuf,
     },
 }

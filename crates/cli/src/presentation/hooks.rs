@@ -37,9 +37,9 @@ pub enum PreviewOutcome {
 /// facts. Rendering reads argv and the outcome alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluatedHook<'a> {
-    /// Holds the hook under preview.
+    /// The hook under preview.
     pub hook: &'a Hook,
-    /// Holds the gate or binary behind its line.
+    /// The gate or binary behind its line.
     pub outcome: PreviewOutcome,
 }
 

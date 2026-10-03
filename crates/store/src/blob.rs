@@ -438,6 +438,7 @@ mod tests {
             config_base: dir.join("config"),
             cache_base: dir.join("cache"),
             temp_base: dir.join("temp"),
+            project_root: dir.join("project"),
         }
     }
 

@@ -23,14 +23,14 @@ pub struct Hook {
     pub argv: Vec<Arg>,
     /// Holds the PATH extension dirs for the subprocess alone.
     pub path: Vec<Arg>,
-    /// Holds the capability gate. None runs where capable.
+    /// The capability gate. None runs where capable.
     #[serde(default)]
     pub requires: Option<Condition>,
-    /// Holds the need gate. None runs unconditionally.
+    /// The need gate. None runs unconditionally.
     pub when: Option<Condition>,
     /// Holds the proof conditions, AND by list.
     pub checks: Vec<Condition>,
-    /// Holds the run cap in seconds.
+    /// The run cap in seconds.
     pub timeout_secs: u64,
 }
 
@@ -40,9 +40,9 @@ pub struct Hook {
 /// selects the rendered gate line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateSlot {
-    /// Holds the capability gate.
+    /// The capability gate.
     Requires,
-    /// Holds the need gate.
+    /// The need gate.
     When,
 }
 
@@ -52,11 +52,11 @@ pub enum GateSlot {
 /// gates never build this shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateChange {
-    /// Holds the slot under diffing.
+    /// The slot under diffing.
     pub slot: GateSlot,
-    /// Holds the recorded gate. None reads absent.
+    /// The recorded gate. None reads absent.
     pub before: Option<Condition>,
-    /// Holds the desired gate. None reads absent.
+    /// The desired gate. None reads absent.
     pub after: Option<Condition>,
 }
 
@@ -65,9 +65,9 @@ pub struct GateChange {
 /// Equal caps never build this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeoutChange {
-    /// Holds the recorded cap in seconds.
+    /// The recorded cap in seconds.
     pub before: u64,
-    /// Holds the desired cap in seconds.
+    /// The desired cap in seconds.
     pub after: u64,
 }
 
@@ -83,7 +83,7 @@ pub struct HookModification {
     pub added_checks: Vec<Condition>,
     /// Holds the recorded checks missing from desired order.
     pub removed_checks: Vec<Condition>,
-    /// Holds the timeout edit. None reads unchanged.
+    /// The timeout edit. None reads unchanged.
     pub timeout: Option<TimeoutChange>,
 }
 
@@ -110,9 +110,9 @@ pub enum HookChange {
 /// facts. Rendering reads the pair alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookLifecycle<'a> {
-    /// Holds the hook under display.
+    /// The hook under display.
     pub hook: &'a Hook,
-    /// Holds the lifecycle change behind its lines.
+    /// The lifecycle change behind its lines.
     pub change: HookChange,
 }
 

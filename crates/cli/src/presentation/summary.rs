@@ -210,15 +210,15 @@ impl HookCounts {
 /// ```
 #[derive(Debug)]
 pub struct Summary<'a> {
-    /// Holds the built manifest under display.
+    /// The built manifest under display.
     pub built: &'a Manifest,
-    /// Holds the previous manifest for lifecycle marks.
+    /// The previous manifest for lifecycle marks.
     pub previous: &'a Manifest,
     /// Holds the manifest versus disk edits leading the text.
     pub drift: &'a [Drift],
-    /// Holds true while the state slot reads absent.
+    /// True while the state slot reads absent.
     pub first_run: bool,
-    /// Holds the hook display data for the hooks section.
+    /// The hook display data for the hooks section.
     pub hooks: Hooks<'a>,
 }
 

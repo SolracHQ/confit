@@ -9,7 +9,7 @@ use std::path::{Component, Path};
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
-use crate::handles::{ResourceHandle, TrustedHandle};
+use crate::handles::{FetchHandle, ResourceHandle, TrustedHandle};
 use confit_driver as driver;
 use error::{ResourceError, Result};
 
@@ -18,11 +18,11 @@ const DEFAULT_SPILL_MODE: u32 = 0o644;
 
 /// Trusted project files behind exec-rooted handles.
 ///
-/// Birth checks containment under the exec root once;
+/// Birth checks containment under the project root once;
 /// downstream code trusts the handle type without rechecking.
 #[derive(Debug, Clone)]
 pub struct Resources {
-    /// Holds the store roots backing construction.
+    /// The store roots backing construction.
     pub roots: StoreRoots,
 }
 
@@ -42,7 +42,8 @@ impl Resources {
     ///
     /// - [`ResourceError::Escape`] for escaping files.
     /// - [`ResourceError::Read`] for failed file reads.
-    pub fn resource(&self, exec_root: &Path, path: &Path) -> Result<ResourceHandle> {
+    pub fn resource(&self, path: &Path) -> Result<ResourceHandle> {
+        let exec_root = &self.roots.project_root;
         if !path.starts_with(exec_root) {
             return Err(ResourceError::Escape {
                 path: path.to_path_buf(),
@@ -65,6 +66,28 @@ impl Resources {
     /// - [`ResourceError::Read`] for failed file reads.
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         read_text(handle.canonical())
+    }
+
+    /// Births a resource handle over one fetched body.
+    ///
+    /// Birth checks containment under the cache base once,
+    /// downstream code trusts the handle type without rechecking.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceError::Escape`] for bodies outside the cache base.
+    pub fn fetched(&self, handle: &FetchHandle) -> Result<ResourceHandle> {
+        let path = handle.canonical();
+        if !path.starts_with(&self.roots.cache_base) {
+            return Err(ResourceError::Escape {
+                path: path.to_path_buf(),
+            });
+        }
+        ResourceHandle::new(
+            &self.roots.cache_base,
+            path.to_path_buf(),
+            handle.sha().clone(),
+        )
     }
 
     /// Births a spill handle for one staged file.
@@ -147,20 +170,23 @@ mod tests {
     use crate::faults::AccessFault;
     use confit_driver::fs::TestGuard;
 
-    fn test_store() -> Resources {
-        Resources::new(&StoreRoots::default())
+    fn test_store(root: &Path) -> Resources {
+        Resources::new(&StoreRoots {
+            project_root: root.to_path_buf(),
+            ..Default::default()
+        })
     }
 
     #[test]
     fn resource_births_handle_and_reads_text() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let store = test_store();
         let root = dir.path().join("project");
         let path = root.join("profile.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, b"return {}").unwrap();
-        match store.resource(&root, &path) {
+        let store = test_store(&root);
+        match store.resource(&path) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha(), &Sha::hash(b"return {}"));
@@ -177,12 +203,12 @@ mod tests {
     fn resource_refuses_escape_plus_exec_root_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let store = test_store();
         let root = dir.path().join("project");
         let outside = dir.path().join("outside.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&outside, b"return {}").unwrap();
-        match store.resource(&root, &outside) {
+        let store = test_store(&root);
+        match store.resource(&outside) {
             Ok(_) => panic!("escaping resource passes"),
             Err(ResourceError::Escape { path }) => {
                 assert_eq!(path, outside, "escape names the path")
@@ -192,8 +218,8 @@ mod tests {
         let nested = root.join("sub").join("note.lua");
         driver::fs::create_dir_all(nested.parent().unwrap()).unwrap();
         driver::fs::write(&nested, b"hi").unwrap();
-        let other_root = dir.path().join("other");
-        match store.resource(&other_root, &nested) {
+        let foreign = test_store(&dir.path().join("other"));
+        match foreign.resource(&nested) {
             Ok(_) => panic!("foreign root passes"),
             Err(ResourceError::Escape { .. }) => {}
             Err(error) => panic!("wrong foreign variant: {error}"),
@@ -204,11 +230,11 @@ mod tests {
     fn resource_names_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let store = test_store();
         let root = dir.path().join("project");
+        let store = test_store(&root);
         let missing = root.join("absent.lua");
         driver::fs::create_dir_all(&root).unwrap();
-        match store.resource(&root, &missing) {
+        match store.resource(&missing) {
             Ok(_) => panic!("absent resource passes"),
             Err(error) => {
                 let text = error.to_string();
@@ -225,12 +251,12 @@ mod tests {
     fn read_text_refuses_invalid_text() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
-        let store = test_store();
         let root = dir.path().join("project");
+        let store = test_store(&root);
         let path = root.join("binary.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, &[0xFF, 0xFE, b'x']).unwrap();
-        match store.resource(&root, &path) {
+        match store.resource(&path) {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
                 Err(ResourceError::Read { path: found, fault }) => {
@@ -326,12 +352,12 @@ mod tests {
     fn open_reports_read_denied() {
         let dir = tempfile::tempdir().unwrap();
         let guard = TestGuard::install();
-        let store = test_store();
         let root = dir.path().join("project");
+        let store = test_store(&root);
         let path = root.join("profile.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, b"return {}").unwrap();
-        let handle = match store.resource(&root, &path) {
+        let handle = match store.resource(&path) {
             Ok(handle) => handle,
             Err(error) => panic!("resource births: {error}"),
         };

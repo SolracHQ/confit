@@ -17,7 +17,7 @@ use crate::error::{CliError, Result};
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookRun {
-    /// Holds the process exit code.
+    /// The process exit code.
     pub code: i32,
     /// Holds captured stdout and stderr bytes in order.
     pub output: Vec<u8>,
@@ -182,7 +182,7 @@ pub(crate) mod registry {
         pub argv: Vec<String>,
         /// Holds the PATH extension dirs under the run.
         pub path_dirs: Vec<PathBuf>,
-        /// Holds the run cap in seconds under the run.
+        /// The run cap in seconds under the run.
         pub timeout_secs: u64,
     }
 

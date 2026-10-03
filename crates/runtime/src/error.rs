@@ -35,9 +35,9 @@ pub enum RuntimeError {
     /// Failed write holding the destination path with the fault.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
-        /// Holds the destination path under writing.
+        /// The destination path under writing.
         path: PathBuf,
-        /// Holds the write fault cause.
+        /// The write fault cause.
         fault: AccessFault,
     },
     /// Unknown write failure holding the destination.
@@ -46,17 +46,17 @@ pub enum RuntimeError {
         path = path.display()
     )]
     WriteUnknown {
-        /// Holds the destination path under writing.
+        /// The destination path under writing.
         path: PathBuf,
-        /// Holds the failure message for the log alone.
+        /// The failure message for the log alone.
         message: String,
     },
     /// Failed removal holding the destination with the fault.
     #[error("cannot remove '{path}': {fault}", path = path.display())]
     Remove {
-        /// Holds the destination path under removing.
+        /// The destination path under removing.
         path: PathBuf,
-        /// Holds the removal fault cause.
+        /// The removal fault cause.
         fault: AccessFault,
     },
     /// Unknown removal failure holding the path.
@@ -65,9 +65,9 @@ pub enum RuntimeError {
         path = path.display()
     )]
     RemoveUnknown {
-        /// Holds the destination path under removing.
+        /// The destination path under removing.
         path: PathBuf,
-        /// Holds the failure message for the log alone.
+        /// The failure message for the log alone.
         message: String,
     },
     /// Failed render holding the route with format.
@@ -76,11 +76,11 @@ pub enum RuntimeError {
         route = route.display()
     )]
     Render {
-        /// Holds the destination route under rendering.
+        /// The destination route under rendering.
         route: Route,
-        /// Holds the format under rendering.
+        /// The format under rendering.
         format: StructuredFormat,
-        /// Holds the serializer reason for the log alone.
+        /// The serializer reason for the log alone.
         reason: String,
     },
     /// Render refusal holding the route with the shape.
@@ -89,9 +89,9 @@ pub enum RuntimeError {
         route = route.display()
     )]
     Refusal {
-        /// Holds the destination route under rendering.
+        /// The destination route under rendering.
         route: Route,
-        /// Holds the refused payload shape.
+        /// The refused payload shape.
         shape: RefusalShape,
     },
     /// Missing blob holding the destination with the hash and member.
@@ -102,11 +102,11 @@ pub enum RuntimeError {
         short = sha.short()
     )]
     MissingBlob {
-        /// Holds the tree destination under writing.
+        /// The tree destination under writing.
         dest: PathBuf,
-        /// Holds the missing content hash.
+        /// The missing content hash.
         sha: Sha,
-        /// Holds the member path under writing.
+        /// The member path under writing.
         member: PathBuf,
     },
 }

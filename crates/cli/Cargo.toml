@@ -15,7 +15,7 @@ anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
 confit-runtime = { path = "../runtime" }
 confit-model = { path = "../model" }
-confit-engine = { path = "../engine" }
+confit-engine = { package = "confit-engine-old", path = "../engine-old" }
 confit-store = { path = "../store" }
 crossbeam-channel.workspace = true
 diffy.workspace = true

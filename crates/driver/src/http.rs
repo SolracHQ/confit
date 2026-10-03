@@ -16,7 +16,7 @@ use std::io;
 pub enum HttpError {
     /// Refused status holding the status code.
     Status {
-        /// Holds the refusing status code.
+        /// The refusing status code.
         code: u16,
     },
     /// Timed-out request holding nothing.

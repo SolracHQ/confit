@@ -26,7 +26,7 @@ pub enum AccessFault {
     FileTooLarge,
     /// Unmapped failure carrying raw text.
     Unknown {
-        /// Holds the raw failure text.
+        /// The raw failure text.
         message: String,
     },
 }

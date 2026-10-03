@@ -19,64 +19,36 @@ const PROFILE_TEXT: &str = include_str!("../../resources/profile.lua");
 
 /// Stub files shipped inside the binary, keyed by target-relative path.
 ///
-/// Namespace stubs land in a stubs dir beside the profile. Plugin
+/// Module stubs land in a stubs dir beside the profile. Plugin
 /// stubs mirror the plugin load layout beside their plugin names.
 const STUB_FILES: &[(&str, &str)] = &[
     (
-        "stubs/confit.d.lua",
-        include_str!("../../../../stubs/confit.d.lua"),
+        "stubs/confit.path.d.lua",
+        include_str!("../../../../stubs/confit.path.d.lua"),
     ),
     (
-        "stubs/namespaces/config.d.lua",
-        include_str!("../../../../stubs/namespaces/config.d.lua"),
+        "stubs/confit.resource.d.lua",
+        include_str!("../../../../stubs/confit.resource.d.lua"),
     ),
     (
-        "stubs/namespaces/document.d.lua",
-        include_str!("../../../../stubs/namespaces/document.d.lua"),
-    ),
-    (
-        "stubs/namespaces/hook.d.lua",
-        include_str!("../../../../stubs/namespaces/hook.d.lua"),
-    ),
-    (
-        "stubs/namespaces/patch.d.lua",
-        include_str!("../../../../stubs/namespaces/patch.d.lua"),
-    ),
-    (
-        "stubs/namespaces/paths.d.lua",
-        include_str!("../../../../stubs/namespaces/paths.d.lua"),
-    ),
-    (
-        "stubs/namespaces/plugin.d.lua",
-        include_str!("../../../../stubs/namespaces/plugin.d.lua"),
-    ),
-    (
-        "stubs/namespaces/resources.d.lua",
-        include_str!("../../../../stubs/namespaces/resources.d.lua"),
-    ),
-    (
-        "stubs/namespaces/runtime.d.lua",
-        include_str!("../../../../stubs/namespaces/runtime.d.lua"),
-    ),
-    (
-        "stubs/namespaces/utils.d.lua",
-        include_str!("../../../../stubs/namespaces/utils.d.lua"),
+        "stubs/confit.version.d.lua",
+        include_str!("../../../../stubs/confit.version.d.lua"),
     ),
     (
         "plugins/solrachq/mise/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/mise/plugin.d.lua"),
+        include_str!("../../../engine-old/plugins/solrachq/mise/plugin.d.lua"),
     ),
     (
         "plugins/solrachq/nerd_fonts/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/nerd_fonts/plugin.d.lua"),
+        include_str!("../../../engine-old/plugins/solrachq/nerd_fonts/plugin.d.lua"),
     ),
     (
         "plugins/solrachq/merge/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/merge/plugin.d.lua"),
+        include_str!("../../../engine-old/plugins/solrachq/merge/plugin.d.lua"),
     ),
     (
         "plugins/solrachq/template/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/template/plugin.d.lua"),
+        include_str!("../../../engine-old/plugins/solrachq/template/plugin.d.lua"),
     ),
 ];
 
@@ -84,7 +56,7 @@ const STUB_FILES: &[(&str, &str)] = &[
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
-    /// Holds the scaffolded profile path.
+    /// The scaffolded profile path.
     pub profile: PathBuf,
     /// Counts files written, profile, and stubs.
     pub written: usize,
@@ -104,7 +76,7 @@ pub struct InitReport {
 /// assert_eq!(report.profile, PathBuf::from("demo/profile.lua"));
 /// ```
 pub struct InitRunner<'a> {
-    /// Holds the init flags under running.
+    /// The init flags under running.
     pub args: &'a InitArgs,
 }
 
