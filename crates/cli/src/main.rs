@@ -1,8 +1,8 @@
 use clap::Parser;
 
-use confit_cli::cli::{Cli, Command};
+use confit_cli::cli::{Cli, Command, resolve_root};
 use confit_cli::presentation::spinner::Live;
-use confit_cli::seams::Sinks;
+use confit_cli::sinks::Sinks;
 use confit_runtime::Applier;
 use confit_store::{StoreRoots, Stores};
 
@@ -54,7 +54,9 @@ fn run_plan(
 ) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let sender = live.sink();
-    let stores = Stores::new(StoreRoots::standard(), sender.clone());
+    let mut roots = StoreRoots::standard();
+    roots.project_root = resolve_root(&args.shared.root, Some(&args.profile));
+    let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
         print: live.print_handle(),
@@ -94,7 +96,9 @@ fn run_apply(
     let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
     let sender = live.sink();
-    let stores = Stores::new(StoreRoots::standard(), sender.clone());
+    let mut roots = StoreRoots::standard();
+    roots.project_root = resolve_root(&args.shared.root, Some(&args.source));
+    let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
         print: live.print_handle(),

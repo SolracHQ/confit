@@ -12,7 +12,7 @@ use crate::error::{CliError, Result};
 
 use crate::cli::PlanArgs;
 
-use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
+use crate::sinks::{Sinks, log_processed, timed};
 
 /// Outcome of one profile run with its previous manifest.
 #[derive(Debug)]
@@ -53,12 +53,9 @@ impl PlanRunner<'_> {
     /// - [`crate::error::CliError::Model`] for manifest builds.
     /// - [`crate::error::CliError::Engine`] for evaluation failures.
     pub fn execute(self) -> Result<PlanOutcome> {
-        let evaluation = evaluate_shared(
-            &self.args.shared,
-            &self.args.profile,
-            Some(self.sinks.progress.clone()),
-            &self.stores,
-        )?;
+        let evaluation = confit_engine::Engine::new(self.stores.clone())
+            .evaluate(&self.args.profile)
+            .map_err(CliError::from)?;
         let documents = evaluation.documents;
         let slots = self.stores.slots();
         let first_run = slots.is_first_run();

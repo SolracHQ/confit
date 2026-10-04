@@ -221,7 +221,7 @@ dependencies = [
  "anstream",
  "clap",
  "confit-driver",
- "confit-engine-old",
+ "confit-engine",
  "confit-model",
  "confit-runtime",
  "confit-store",

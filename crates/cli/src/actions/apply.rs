@@ -22,7 +22,7 @@ use crate::presentation::drift::drift_lines;
 use crate::presentation::hooks::{describe_condition, evaluate_hooks, resolve_hook};
 use crate::presentation::summary::{Hooks, Summary};
 
-use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
+use crate::sinks::{Sinks, log_processed, timed};
 
 use confit_model::progress::Event;
 
@@ -119,12 +119,9 @@ impl<'a> ApplyRunner<'a> {
                 path: positional.to_path_buf(),
             });
         }
-        let evaluation = evaluate_shared(
-            &args.shared,
-            positional,
-            Some(sinks.progress.clone()),
-            &stores,
-        )?;
+        let evaluation = confit_engine::Engine::new(stores.clone())
+            .evaluate(positional)
+            .map_err(CliError::from)?;
         let previous = stores.slots().load()?;
         let manifest = Manifest::build(evaluation.documents, evaluation.hooks)?;
         Ok(Self {

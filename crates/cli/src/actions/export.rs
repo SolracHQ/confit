@@ -13,7 +13,7 @@ use crate::error::{CliError, Result};
 
 use crate::cli::ExportArgs;
 
-use crate::seams::{Sinks, timed};
+use crate::sinks::{Sinks, timed};
 
 /// Auto-name stem for exports of the applied slot.
 const APPLIED_STEM: &str = "applied";

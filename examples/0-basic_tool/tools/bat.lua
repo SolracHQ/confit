@@ -1,7 +1,6 @@
-local mise = confit.plugin.solrachq.mise
+local mise = require("plugins/mise")
 
-local bat = mise.package({
+return mise.package({
 	name = "bat",
 	aliases = { cat = "bat" },
 })
-return bat

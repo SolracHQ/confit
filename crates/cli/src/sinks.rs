@@ -5,13 +5,11 @@ use std::path::Path;
 
 use confit_model::document::DocumentStatus;
 use confit_model::manifest::Manifest;
-use confit_store::Stores;
 
 use crate::error::{CliError, Result};
 
 use confit_model::progress::{Event, ProgressSender};
 
-use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 
 /// Output senders for one command run.
@@ -97,28 +95,6 @@ pub fn timed<T>(label: &str, step: impl FnOnce() -> T) -> T {
     let out = step();
     log::debug!("{label} took {}ms", start.elapsed().as_millis());
     out
-}
-
-/// Evaluates one profile through the engine with shared flags.
-pub fn evaluate_shared(
-    shared: &SharedArgs,
-    profile: &Path,
-    progress: Option<ProgressSender>,
-    stores: &Stores,
-) -> Result<confit_engine::Evaluation> {
-    let root = resolve_root(&shared.root, Some(profile));
-    let plugins = resolve_plugins(&root, &shared.plugins);
-    confit_engine::evaluate(
-        profile,
-        confit_engine::EvalOpts {
-            root,
-            plugins,
-            re_fetch: shared.re_fetch,
-            stores: Some(stores.clone()),
-            progress,
-        },
-    )
-    .map_err(CliError::from)
 }
 
 /// Logs finished documents with lifecycle status.
