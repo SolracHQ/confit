@@ -8,9 +8,39 @@ use serde_json::Value as Json;
 
 use crate::level::Level;
 use confit_model::document::StructuredFormat;
+use confit_model::error::Error as ModelError;
 use confit_model::hook::Hook;
-use confit_model::routes::Route;
+use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::BlobHandle;
+
+/// Parses one legacy `base:relative` display into its route.
+///
+/// Parked old displays only; new code holds structured routes.
+pub(crate) fn parse_display(text: &str) -> Result<Route, ModelError> {
+    let Some((base_name, relative)) = text.split_once(':') else {
+        return Err(ModelError::Parse {
+            input: text.to_owned(),
+            want: "'base:relative' like 'home:.bashrc'".to_owned(),
+        });
+    };
+    let base = match base_name {
+        "home" => RouteBase::Home,
+        "config" => RouteBase::Config,
+        "data" => RouteBase::Data,
+        "cache" => RouteBase::Cache,
+        "literal" => RouteBase::Literal,
+        _ => {
+            return Err(ModelError::Parse {
+                input: text.to_owned(),
+                want: "known base 'home', 'config', 'data', 'cache', or 'literal'".to_owned(),
+            });
+        }
+    };
+    Route::new(base, relative).map_err(|_| ModelError::Parse {
+        input: text.to_owned(),
+        want: "'base:relative' like 'home:.bashrc'".to_owned(),
+    })
+}
 
 /// Declared structured document from profile and configs.
 #[derive(Debug, Clone)]

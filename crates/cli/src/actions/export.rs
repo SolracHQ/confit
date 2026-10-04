@@ -1,5 +1,4 @@
 //! Export run
-//!
 //! Slot picker into bundle files or manifest prints.
 
 use std::path::PathBuf;
@@ -31,20 +30,6 @@ pub struct ExportReport {
 }
 
 /// One export run from flags to a bundle file or manifest print.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::export::ExportRunner;
-/// use confit_cli::cli::ExportArgs;
-/// use confit_store::{StoreRoots, Stores};
-///
-/// let args = ExportArgs { picker: None, output: None, manifest: true };
-/// let (sender, _) = crossbeam_channel::unbounded();
-/// let stores = Stores::new(StoreRoots::standard(), sender);
-/// let report = ExportRunner { args: &args, stores, sinks: Default::default() }.execute();
-/// assert!(matches!(report, Ok(_) | Err(_)));
-/// ```
 pub struct ExportRunner<'a> {
     /// The export flags under running.
     pub args: &'a ExportArgs,
@@ -55,7 +40,7 @@ pub struct ExportRunner<'a> {
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Reads flags and runs the full export flow.
+    /// Runs the full export flow from flags.
     pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Result<ExportReport> {
         Self {
             args,
@@ -65,17 +50,14 @@ impl<'a> ExportRunner<'a> {
         .execute()
     }
 
-    /// Resolves the picker, then writes the bundle file or
-    /// renders pretty manifest JSON.
+    /// Resolves the picker, then writes the bundle file or renders pretty
+    /// manifest JSON.
     ///
-    /// The destination rides `-o` as a literal file path and
-    /// gains `.cb` unless present. Omitted destinations derive
-    /// from the slot. Bundle output prints the path downstream,
-    /// never streams bytes.
+    /// The report carries the bundle path for file exports, else the
+    /// manifest text.
     ///
-    /// # Returns
-    ///
-    /// The bundle path for file exports, else the manifest text.
+    /// - The `-o` destination reads as a literal file path.
+    /// - Omitted destinations derive from the slot.
     ///
     /// # Errors
     ///
@@ -123,33 +105,9 @@ impl<'a> ExportRunner<'a> {
 
 /// Resolves one picker to its live manifest and auto bundle name.
 ///
-/// Slot errors carry the export command name.
-///
-/// # Arguments
-///
-/// * `picker` - the raw picker value under resolving.
-/// * `slots` - the slot store under reading.
-///
-/// # Returns
-///
-/// The live manifest holding blob refs and the slot-derived
-/// bundle destination carrying `.cb`.
-///
 /// # Errors
 ///
 /// - [`CliError::Slot`] for slot resolves.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::export::resolve_slot_bundle;
-/// use confit_store::slot::SlotStore;
-/// use confit_store::StoreRoots;
-///
-/// let slots = SlotStore::new(&StoreRoots::standard());
-/// let (manifest, dest) = resolve_slot_bundle(None, &slots).unwrap();
-/// assert_eq!(dest.extension().and_then(|ext| ext.to_str()), Some("cb"));
-/// ```
 pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Manifest, PathBuf)> {
     let (manifest, kind) = slots.resolve(picker)?;
     let stem = match kind {

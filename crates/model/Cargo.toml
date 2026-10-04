@@ -11,6 +11,7 @@ crossbeam-channel.workspace = true
 diffy.workspace = true
 dirs.workspace = true
 noyalib.workspace = true
+schemars = "1.2.2"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -1,5 +1,4 @@
 //! Error
-//!
 //! Failure vocabulary for destination deeds.
 
 use std::path::{Path, PathBuf};
@@ -11,7 +10,7 @@ use thiserror::Error;
 
 use confit_store::faults::AccessFault;
 
-/// Refused payload shape behind one render refusal.
+/// Refused payload shape for one render refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalShape {
     /// Opaque bytes riding the blob store.

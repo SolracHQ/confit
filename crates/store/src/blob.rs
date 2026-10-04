@@ -1,6 +1,4 @@
-//! Blob
-//!
-//! Content-addressed blob pool behind stored hashes.
+//! Content-addressed blob pool.
 
 pub mod error;
 
@@ -27,11 +25,6 @@ const BLOBS_DIR: &str = "blobs";
 const BLOB_GZIP_LEVEL: u32 = 6;
 
 /// Content-addressed blob pool.
-///
-/// Plan cache files ride `{cache}/blobs/{stored}` as gzip bytes.
-/// Named pool files ride `{config}/blobs/{stored}` as gzip bytes.
-/// Spill verbs write into the cache. The pool fills
-/// through persist alone at apply end.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
     roots: StoreRoots,
@@ -49,10 +42,6 @@ struct VerifiedBlobReader {
 }
 
 /// Blob spill source shapes.
-///
-/// One verb spills every shape; the shape names the trust.
-/// Raw bytes hash directly. Trusted files carry the sealed
-/// content hash instead.
 pub enum BlobSource<'a> {
     /// Raw bytes under hashing.
     Bytes(&'a [u8]),
@@ -62,9 +51,6 @@ pub enum BlobSource<'a> {
 
 impl BlobStore {
     /// Builds a file-backed blob pool under the config base.
-    ///
-    /// Roots arrive explicit from store construction.
-    /// The sender carries compression facts.
     pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
         Self {
             roots: roots.clone(),
@@ -75,14 +61,6 @@ impl BlobStore {
     }
 
     /// Resolves one manifest ref into its handle.
-    ///
-    /// # Arguments
-    ///
-    /// * `blob` - the manifest ref under resolving.
-    ///
-    /// # Returns
-    ///
-    /// The handle sealing both hashes.
     ///
     /// # Errors
     ///
@@ -100,10 +78,6 @@ impl BlobStore {
 
     /// Opens a raw byte stream for one handle.
     ///
-    /// Reads ride the stored hash from the cache with
-    /// fallback to the pool; bytes verify against
-    /// the content hash mid-stream.
-    ///
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed blob reads.
@@ -120,12 +94,6 @@ impl BlobStore {
     }
 
     /// Spills bytes into the cache sealing both identities.
-    ///
-    /// Staging keys on the content hash since the stored name
-    /// arrives only after bytes land, so the first phase stages
-    /// by hand and the close renames straight into place. Same
-    /// stored names hold same bytes, so the rename needs no
-    /// present-wins race.
     ///
     /// # Errors
     ///
@@ -180,9 +148,7 @@ impl BlobStore {
         Ok(handle)
     }
 
-    /// Reports whether one stored hash reads present.
-    ///
-    /// Presence covers the cache and the pool.
+    /// Reports whether one stored hash reads present in the cache or pool.
     fn present(&self, stored: &Sha) -> bool {
         driver::fs::exists(&self.cache.join(stored.hex()))
             || driver::fs::exists(&self.pool.join(stored.hex()))
@@ -190,7 +156,7 @@ impl BlobStore {
 
     /// Lands already-compressed bytes from a trusted member into the cache.
     ///
-    /// Presence wins and proof rides lazy at open.
+    /// - Present entries skip.
     ///
     /// # Errors
     ///
@@ -209,10 +175,6 @@ impl BlobStore {
 
     /// Opens raw stored bytes with their encoded length.
     ///
-    /// Reads ride the stored hash from the cache with
-    /// fallback to the pool. Bytes stay encoded for
-    /// verbatim egress.
-    ///
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed blob reads.
@@ -227,9 +189,6 @@ impl BlobStore {
     }
 
     /// Reads the raw byte count for one handle.
-    ///
-    /// The count reads from the cache with fallback
-    /// to the pool.
     ///
     /// # Errors
     ///
@@ -257,8 +216,7 @@ impl BlobStore {
 
     /// Persists cache blobs into the shared pool.
     ///
-    /// The cache copy cleans best effort once the pool holds
-    /// the bytes, and a cache file vanishing mid-run skips.
+    /// - Vanished cache files skip.
     ///
     /// # Errors
     ///
@@ -294,7 +252,7 @@ impl BlobStore {
 
     /// Derives the live file for one handle.
     ///
-    /// The cache wins while present.
+    /// - The cache wins while present.
     fn live_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.stored().hex());
         if driver::fs::exists(&cached) {
@@ -306,9 +264,7 @@ impl BlobStore {
 
     /// Drops cache and pool files outside what slot records.
     ///
-    /// The sweep protects what slot records, read through one
-    /// slot view built from the same roots, and the removal
-    /// count covers both homes.
+    /// The removal count covers both homes.
     ///
     /// # Errors
     ///
@@ -329,7 +285,7 @@ impl BlobStore {
 
 /// Moves one cache file into its pool staging file.
 ///
-/// A cross-device rename falls back to a verbatim copy.
+/// - A cross-device rename falls back to an exact copy.
 ///
 /// # Errors
 ///
@@ -387,7 +343,7 @@ impl std::io::Read for VerifiedBlobReader {
 
 /// Drops files in one blob home outside the keep set.
 ///
-/// Missing folders read as zero removals.
+/// - Missing folders read as zero removals.
 ///
 /// # Errors
 ///
@@ -414,7 +370,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
 
 /// Reports whether one blob home file names a hash inside the keep set.
 ///
-/// Names failing hash parsing read outside the set.
+/// - Names failing hash parsing read outside the set.
 fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())

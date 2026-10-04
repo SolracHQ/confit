@@ -1,7 +1,4 @@
-//! Tar framing over caller streams with io errors.
-//!
-//! Names with bodies ride caller streams, so
-//! stores own seals with errors.
+//! Tar framing.
 
 use std::io;
 use std::io::Read as _;
@@ -20,10 +17,7 @@ const TAR_MAGIC: &[u8] = b"ustar";
 /// One tar block feeding the format probe.
 const TAR_BLOCK: u64 = 512;
 
-/// One tar read member over a caller reader.
-///
-/// Bodies stream without staging, so walk
-/// output stays lean.
+/// One tar read member.
 pub struct Member<'a> {
     /// Container name with forward slashes.
     pub name: String,
@@ -31,10 +25,7 @@ pub struct Member<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// One tar build member over a caller reader.
-///
-/// Length with mode feed entry headers, so
-/// built containers carry exact framing.
+/// One tar build member.
 pub struct BuildMember<'a> {
     /// Container name with forward slashes.
     pub name: String,
@@ -48,18 +39,16 @@ pub struct BuildMember<'a> {
 
 /// Reports whether one head window holds tar or gzip bytes.
 ///
-/// Gzip magic and tar magic answer true, short
-/// and plain heads answer false.
+/// Gzip magic and tar magic return true, short and plain heads return false.
 pub fn handles(head: &[u8]) -> bool {
     is_gzip(head) || is_tar(head)
 }
 
 /// Lists file member names from a tar stream.
 ///
-/// Gzip bytes decode first: tar members list named
-/// while one bare member lists under the fallback.
-/// Folders with non-files and empty names skip, the
-/// fallback stays ignored on named members.
+/// Gzip bytes decode first. One bare member lists under the fallback.
+///
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -82,12 +71,9 @@ pub fn list_names(reader: impl io::Read, fallback: &str) -> io::Result<Vec<Strin
 
 /// Walks file members from a tar stream.
 ///
-/// Gzip bytes decode first: tar members walk named
-/// while one bare member walks under the fallback.
-/// Folders with non-files and empty names skip. The
-/// visitor owns each body reader and reads it to end
-/// before return. The fallback stays ignored on named
-/// members.
+/// Gzip bytes decode first. One bare member walks under the fallback.
+///
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -112,9 +98,7 @@ pub fn walk(
     single_walk(windowed.stream, fallback, visit)
 }
 
-/// Builds one plain tar over a caller sink.
-///
-/// Entries land in member order with exact framing.
+/// Builds one plain tar.
 ///
 /// # Errors
 ///
@@ -128,10 +112,7 @@ pub fn build_plain(sink: impl io::Write, members: Vec<BuildMember<'_>>) -> io::R
     Ok(())
 }
 
-/// Builds one gzipped tar over a caller sink.
-///
-/// Entries land in member order at the given
-/// deflate level.
+/// Builds one gzipped tar.
 ///
 /// # Errors
 ///
@@ -160,8 +141,7 @@ struct Probed<R> {
 
 /// Sniffs gzip magic off one stream chaining bytes back.
 ///
-/// Short reads chain what they hold, so plain
-/// framing still sees every byte.
+/// - Short reads chain what they hold.
 ///
 /// # Errors
 ///
@@ -194,8 +174,7 @@ fn is_tar(head: &[u8]) -> bool {
 
 /// One gunzipped window with its decoder remainder.
 ///
-/// Empty windows read tarred so empty streams walk
-/// zero members, matching plain behavior.
+/// Empty windows read tarred.
 struct Windowed<R: io::Read> {
     tarred: bool,
     stream: io::Chain<io::Cursor<Vec<u8>>, gzip::Decoder<R>>,
@@ -203,9 +182,7 @@ struct Windowed<R: io::Read> {
 
 /// Decodes one tar block window chaining bytes back.
 ///
-/// The window decides tar against single without
-/// holding the stream. Short reads end the window,
-/// so truncated decodes route on what they hold.
+/// - Short reads end the window.
 ///
 /// # Errors
 ///
@@ -235,9 +212,6 @@ fn single_names(fallback: &str) -> io::Result<Vec<String>> {
 
 /// Walks one nameless single under its fallback.
 ///
-/// The visitor owns the body reader and reads
-/// it to end before return.
-///
 /// # Errors
 ///
 /// - Visitor failures fail as io errors.
@@ -259,8 +233,7 @@ fn single_walk<'a, R: io::Read + 'a>(
 
 /// Lists file member names from a plain tar stream.
 ///
-/// Folders with non-files and empty names
-/// skip, skipped bytes drain to a sink.
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -282,9 +255,7 @@ fn plain_names(reader: impl io::Read) -> io::Result<Vec<String>> {
 
 /// Walks file members from a plain tar stream.
 ///
-/// Folders with non-files and empty names
-/// skip. The visitor owns each body reader
-/// and reads it to end before return.
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -311,10 +282,9 @@ fn plain_walk(
     Ok(())
 }
 
-/// Reads one file name for a tar entry.
+/// Collects one file name from a tar entry.
 ///
-/// Folders with non-files and empty names
-/// skip as absent.
+/// - Folders with non-files and empty names skip as absent.
 ///
 /// # Errors
 ///
@@ -393,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn handles_answers_gzip_plus_tar_magic() {
+    fn handles_returns_gzip_plus_tar_magic() {
         assert!(handles(&gzip_bytes(b"x")[..4]));
         assert!(handles(&plain_bytes(&[("a.txt", b"alpha")])));
         assert!(!handles(b"plain text"));

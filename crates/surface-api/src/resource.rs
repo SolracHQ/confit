@@ -1,7 +1,4 @@
-//! Resource
-//!
-//! Resource files sealed under the project root. Sealing jails to
-//! the root, missing files answer nil with reason, escapes raise.
+//! Resource files opened from the project root.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -14,103 +11,106 @@ use confit_store::{Stores, resources::Resources};
 use confit_surface_face::module::{Module, VerbDecl};
 
 use crate::error::ApiError;
-use crate::handles::ResourceHandle;
+use crate::handles::Handle;
 use crate::paths::split_checked;
 
-/// Builds the resource function with its face, sealing files under
-/// the project root.
-pub fn build(lua: &Lua, stores: &Stores, root: &Path) -> mlua::Result<(Value, DefinitionBuilder)> {
-    let mut module = Module::start(lua, "Sealed resource files behind exec-rooted handles.")?;
-    module.register::<ResourceHandle>();
+/// Builds the resource function with its face, opening files under the project
+/// root.
+pub fn build(
+    lua: &Lua,
+    stores: &Stores,
+    project: &Path,
+) -> mlua::Result<(Value, DefinitionBuilder)> {
+    let mut module = Module::start(lua, "Resource files opened from the project root.")?;
+    module.register::<Handle>();
     let stores = stores.clone();
-    let root = root.to_path_buf();
-    module.verb::<String, (Option<ResourceHandle>, Option<String>), _>(
+    let project = project.to_path_buf();
+    module.verb::<String, (Option<Handle>, Option<String>), _>(
         lua,
         VerbDecl {
             name: "resource",
-            doc: "Seals one resource-relative file into its handle.",
-            params: &[("path", "Resource-relative file path.")],
+            documentation: "Opens one project-relative file into its handle.",
+            params: &[("path", "Project-relative file path.")],
             rets: &[
                 "The resource handle, else nil.",
                 "The failure reason, else nil.",
             ],
         },
-        move |_, value| resource_impl(&stores, &root, value),
+        move |_, value| resource_impl(&stores, &project, value),
     )?;
     let (table, face) = module.finish();
     Ok((Value::Function(table.get("resource")?), face))
 }
 
-/// Seals one resource-relative file into its resource handle.
+/// Opens one project-relative file into its resource handle.
 ///
-/// Relative strings pass, escapes raise, missing files answer
-/// nil with reason.
+/// Missing files return nil with reason.
 ///
 /// # Errors
 ///
 /// - [`ApiError::Mismatch`] for non-string inputs.
 /// - [`ApiError::Escape`] for escaping paths.
-/// - [`ApiError::Seal`] for seal failures.
+/// - [`ApiError::Open`] for open failures.
 fn resource_impl(
     stores: &Stores,
-    root: &Path,
-    rel: String,
-) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
+    project: &Path,
+    relative: String,
+) -> mlua::Result<(Option<Handle>, Option<String>)> {
     const CALLER: &str = "confit.resource";
-    let parts = split_checked(&rel, false).map_err(|fault| ApiError::Escape {
+    let parts = split_checked(&relative, false).map_err(|fault| ApiError::Escape {
         caller: CALLER.to_owned(),
-        input: rel.clone(),
+        input: relative.clone(),
         reason: fault.reason().to_owned(),
     })?;
-    let full = join_root(root, &parts);
-    if !under_root(root, &full) {
+    let full = join_project(project, &parts);
+    if !under_project(project, &full) {
         return Err(ApiError::Escape {
             caller: CALLER.to_owned(),
-            input: rel.clone(),
-            reason: format!("'{rel}' escapes its root"),
+            input: relative.clone(),
+            reason: format!("'{relative}' escapes the project"),
         }
         .into());
     }
-    match seal(&stores.resources(), &full) {
-        Ok(handle) => Ok((Some(ResourceHandle::new(handle, stores.clone())), None)),
-        Err(SealOutcome::Soft { reason }) => Ok((None, Some(reason))),
-        Err(SealOutcome::Raise(error)) => Err(ApiError::Seal(error).into()),
+    match open(&stores.resources(), &full) {
+        Ok(handle) => Ok((Some(Handle::new(handle, stores.clone())), None)),
+        Err(OpenOutcome::Soft { reason }) => Ok((None, Some(reason))),
+        Err(OpenOutcome::Raise(error)) => Err(ApiError::Open(error).into()),
     }
 }
 
-enum SealOutcome {
+enum OpenOutcome {
     Soft { reason: String },
     Raise(ResourceError),
 }
 
-/// Seals one joined file.
+/// Opens one joined file.
 ///
-/// Escapes raise, missing files answer nil with reason.
-fn seal(resources: &Resources, full: &Path) -> std::result::Result<StoreResource, SealOutcome> {
+/// Escapes raise and missing files read soft with reason.
+fn open(resources: &Resources, full: &Path) -> std::result::Result<StoreResource, OpenOutcome> {
     match resources.resource(full) {
         Ok(handle) => Ok(handle),
-        Err(error @ ResourceError::Escape { .. }) => Err(SealOutcome::Raise(error)),
-        Err(error) => Err(SealOutcome::Soft {
+        Err(error @ ResourceError::Escape { .. }) => Err(OpenOutcome::Raise(error)),
+        Err(error) => Err(OpenOutcome::Soft {
             reason: error.to_string(),
         }),
     }
 }
 
-fn join_root(root: &Path, parts: &[String]) -> PathBuf {
-    let mut full = root.to_path_buf();
+fn join_project(project: &Path, parts: &[String]) -> PathBuf {
+    let mut full = project.to_path_buf();
     for part in parts {
         full.push(part);
     }
     full
 }
 
-fn under_root(root: &Path, full: &Path) -> bool {
-    normalize(full).starts_with(normalize(root))
+fn under_project(project: &Path, full: &Path) -> bool {
+    normalize(full).starts_with(normalize(project))
 }
 
 /// Normalizes one path lexically.
 ///
-/// Current-dir steps drop.
+/// - Current-dir steps drop.
 pub fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -159,18 +159,18 @@ mod tests {
     }
 
     fn project_root(dir: &Path) -> PathBuf {
-        let root = dir.join("project");
-        confit_driver::fs::create_dir_all(&root).unwrap();
-        root
+        let project = dir.join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
+        project
     }
 
     #[test]
-    fn seals_files_reading_text_with_hash() {
+    fn opens_files_reading_text_with_hash() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
-        let root = project_root(dir.path());
-        confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
+        let project = project_root(dir.path());
+        confit_driver::fs::write(&project.join("note.txt"), b"hello").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(resource("note.txt"))
@@ -178,8 +178,8 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
-            Ok(_) => panic!("project text answers a string"),
-            Err(error) => panic!("project seals its file: {error}"),
+            Ok(_) => panic!("project text returns a string"),
+            Err(error) => panic!("project opens its file: {error}"),
         }
         let source = r#"
             local handle = assert(resource("note.txt"))
@@ -189,7 +189,7 @@ mod tests {
             Ok(Value::String(found)) => {
                 assert_eq!(found.to_string_lossy(), Sha::hash(b"hello").hex())
             }
-            Ok(_) => panic!("project hash answers a string"),
+            Ok(_) => panic!("project hash returns a string"),
             Err(error) => panic!("project hashes its file: {error}"),
         }
     }
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn misses_answer_nil_with_reason() {
+    fn misses_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
@@ -235,13 +235,13 @@ mod tests {
                     "reason names the miss"
                 )
             }
-            Ok(_) => panic!("missing file answers nil with reason"),
+            Ok(_) => panic!("missing file returns nil with reason"),
             Err(error) => panic!("missing files stay soft: {error}"),
         }
     }
 
     #[test]
-    fn coerced_inputs_answer_nil_with_reason() {
+    fn coerced_inputs_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
@@ -259,7 +259,7 @@ mod tests {
                     "reason names the miss"
                 )
             }
-            Ok(_) => panic!("coerced input answers nil with reason"),
+            Ok(_) => panic!("coerced input returns nil with reason"),
             Err(error) => panic!("coerced inputs stay soft: {error}"),
         }
     }

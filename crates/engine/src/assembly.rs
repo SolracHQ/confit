@@ -1,89 +1,130 @@
 //! Assembly
-//!
-//! Owned declarations into finished documents.
+//! Validated profiles into finished documents.
 
-use confit_model::document::Document;
+mod collect;
+mod freeze;
+mod hooks;
+mod merge;
+mod patches;
 
-use confit_surface_api::Declaration;
+use std::collections::BTreeMap;
 
-use crate::error::{EngineError, Result};
+use mlua::Lua;
 
-/// Collects owned declarations into finished documents in
-/// destination display order.
+use confit_model::document::Document as ModelDocument;
+use confit_model::hook::Hook;
+use confit_store::Stores;
+use confit_surface_api::Profile;
+
+use crate::error::Result;
+
+/// Assembles validated profiles into finished documents.
+///
+/// - Lua callbacks run through the shared instance with first writes winning.
+/// - Blob handles open through shared stores with hashes filled last.
+pub struct Assembler<'a> {
+    lua: &'a Lua,
+    stores: &'a Stores,
+}
+
+impl<'a> Assembler<'a> {
+    /// Builds one assembler over live Lua with shared stores.
+    pub fn new(lua: &'a Lua, stores: &'a Stores) -> Self {
+        Self { lua, stores }
+    }
+
+    /// Reads the live Lua instance.
+    pub(super) fn lua(&self) -> &Lua {
+        self.lua
+    }
+
+    /// Reads the shared stores.
+    pub(super) fn stores(&self) -> &Stores {
+        self.stores
+    }
+
+    /// Collects one profile into documents in stable route order.
+    ///
+    /// - Patches merge in rank-descending level order over structured maps
+    ///   and rc sections with first writes winning.
+    /// - Missing targets seed empty maps and empty sections, foreign bases
+    ///   fail with format gaps.
+    ///
+    /// # Errors
+    ///
+    /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
+    /// - [`crate::error::EngineError::Defined`] for repeated config names.
+    /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
+    /// - [`crate::error::EngineError::ChangedInRc`] for rc guards holding
+    ///   hooks-only changed leaves.
+    /// - [`crate::error::EngineError::Model`] for documents failing hashes.
+    /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+    pub fn assemble(&self, profile: &Profile) -> Result<Vec<ModelDocument>> {
+        collect::check_names(profile)?;
+        let placed = collect::dedupe(profile)?;
+        let (structured, rc) = patches::split_patches(profile);
+        let mut finished = BTreeMap::new();
+        self.apply_structured(
+            &placed,
+            &patches::grouped_structured(&structured),
+            &mut finished,
+        )?;
+        self.apply_rc(&placed, &patches::grouped_rc(&rc), &mut finished)?;
+        for (destination, body) in placed {
+            if finished.contains_key(&destination) {
+                continue;
+            }
+            finished.insert(
+                destination.clone(),
+                self.placed_document(&destination, &body)?,
+            );
+        }
+        freeze::check_rc_guards(&finished)?;
+        freeze::fill_hashes(&mut finished)?;
+        Ok(finished.into_values().collect())
+    }
+
+    /// Collects one profile's hooks in first-seen order.
+    ///
+    /// # Errors
+    ///
+    /// - [`crate::error::EngineError::ChangedUnknown`] for gates naming
+    ///   unbuilt routes.
+    pub fn collect_hooks(
+        &self,
+        profile: &Profile,
+        documents: &[ModelDocument],
+    ) -> Result<Vec<Hook>> {
+        hooks::collect_hooks(profile, documents)
+    }
+}
+
+/// Collects one profile into documents in stable route order.
+///
+/// - Patches merge in rank-descending level order over structured maps and rc
+///   sections with first writes winning.
+/// - Missing targets seed empty maps and empty sections, foreign bases fail
+///   with format gaps.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Duplicate`] for repeated destinations.
-/// - [`EngineError::Model`] for documents failing hashes.
-pub fn assemble(declarations: Vec<Declaration>) -> Result<Vec<Document>> {
-    let mut seen = std::collections::BTreeMap::new();
-    for declaration in declarations {
-        let display = declaration.destination().display();
-        if seen.contains_key(&display) {
-            return Err(EngineError::Duplicate { display });
-        }
-        seen.insert(display, declaration);
-    }
-    let mut documents = Vec::with_capacity(seen.len());
-    for (_, declaration) in seen {
-        let display = declaration.destination().display();
-        let mut document = declaration.into_document();
-        document
-            .fill_hash()
-            .map_err(|error| confit_model::error::Error::Unhashable {
-                document: display,
-                reason: error.to_string(),
-            })?;
-        documents.push(document);
-    }
-    Ok(documents)
+/// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
+/// - [`crate::error::EngineError::Defined`] for repeated config names.
+/// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
+/// - [`crate::error::EngineError::ChangedInRc`] for rc guards holding
+///   hooks-only changed leaves.
+/// - [`crate::error::EngineError::Model`] for documents failing hashes.
+/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+pub fn assemble(lua: &Lua, stores: &Stores, profile: &Profile) -> Result<Vec<ModelDocument>> {
+    Assembler::new(lua, stores).assemble(profile)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use confit_model::routes::{Route, RouteBase};
-    use confit_surface_api::{Body, Declaration, TextBody};
-
-    fn declaration(relative: &str, text: &str) -> Declaration {
-        Declaration::new(
-            Route::new(RouteBase::Home, relative).unwrap(),
-            Body::Text(TextBody {
-                text: text.to_owned(),
-            }),
-        )
-    }
-
-    #[test]
-    fn duplicates_fail_naming_destination() {
-        match assemble(vec![
-            declaration(".bashrc", "one"),
-            declaration(".bashrc", "two"),
-        ]) {
-            Ok(_) => panic!("duplicate destinations pass"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("home:.bashrc"),
-                    "names the destination: {text}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn survivors_order_by_destination_display() {
-        match assemble(vec![declaration("zebra", "z"), declaration("apple", "a")]) {
-            Ok(documents) => {
-                assert_eq!(documents.len(), 2);
-                assert_eq!(documents[0].destination.display(), "home:apple");
-                assert_eq!(documents[1].destination.display(), "home:zebra");
-                assert!(
-                    !documents[0].data_hash.is_empty(),
-                    "hashes fill past the edge"
-                );
-            }
-            Err(error) => panic!("distinct destinations assemble: {error}"),
-        }
-    }
+/// Collects one profile's hooks in first-seen order.
+///
+/// # Errors
+///
+/// - [`crate::error::EngineError::ChangedUnknown`] for gates naming unbuilt
+///   routes.
+pub fn collect_hooks(profile: &Profile, documents: &[ModelDocument]) -> Result<Vec<Hook>> {
+    hooks::collect_hooks(profile, documents)
 }

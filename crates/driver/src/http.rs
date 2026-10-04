@@ -1,17 +1,9 @@
-//! HTTP downloads over caller streams with driver errors.
-//!
-//! Production downloads ride `ureq` capped at the
-//! caller limit. Tests script bodies into a
-//! thread-local registry, so no test ever touches
-//! the network by accident.
+//! HTTP downloads.
 
 use std::fmt;
 use std::io;
 
-/// HTTP failure shapes holding no url.
-///
-/// Stores add the url at the boundary, so one
-/// failure shape serves every caller.
+/// HTTP failure shapes.
 #[derive(Debug)]
 pub enum HttpError {
     /// Refused status holding the status code.
@@ -55,10 +47,6 @@ impl From<io::Error> for HttpError {
 
 /// Downloads one URL body as a readable stream.
 ///
-/// The limit caps the network reader, so oversized
-/// bodies stop early. Test builds serve the
-/// thread-local script registry instead.
-///
 /// # Errors
 ///
 /// - [Status] for refused statuses.
@@ -96,9 +84,8 @@ fn network(url: &str, limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
 
 /// Maps one ureq failure into its http error.
 ///
-/// Status with timeout and io keep their shape,
-/// the long tail rides io with its message, so the
-/// store io mapping echoes it verbatim.
+/// Status, timeout, and io keep their shape, other failures read as io with
+/// the ureq message.
 #[cfg(not(any(test, feature = "test-support")))]
 fn from_ureq(error: ureq::Error) -> HttpError {
     match error {
@@ -171,9 +158,9 @@ mod registry {
 
     /// Serves one scripted download recording the call.
     ///
-    /// Scripted failures ride io with the scripted
-    /// message. Bodies serve verbatim. Unscripted urls
-    /// fail with no body.
+    /// Scripted failures read as io with the scripted message.
+    ///
+    /// - Unscripted urls fail with no body.
     pub(super) fn download(url: &str, _limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();

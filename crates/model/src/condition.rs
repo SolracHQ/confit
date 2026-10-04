@@ -1,17 +1,13 @@
 //! Condition
-//!
 //! Shell session predicates held as data.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
 
 /// Shell session predicate held as data.
-///
-/// The plan emits entries unconditionally. Each fresh shell session
-/// evaluates the guard and skips entries lacking their binary or state.
-///
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
     /// Equality between a shell variable and a value.
@@ -38,8 +34,7 @@ pub enum Condition {
     },
     /// A changed document assertion.
     ///
-    /// True while `route` previews a write, drift, or absence.
-    /// Hooks only.
+    /// True while `route` previews a write, drift, or absence. Hooks only.
     Changed {
         /// The document route under testing.
         route: Route,
@@ -70,11 +65,6 @@ enum NaryKind {
 
 impl Condition {
     /// Reports whether one condition tree holds a changed leaf.
-    ///
-    /// # Returns
-    ///
-    /// True while any nested leaf reads `Changed`.
-    ///
     pub fn holds_changed(&self) -> bool {
         match self {
             Self::Changed { .. } => true,
@@ -88,11 +78,6 @@ impl Condition {
     }
 
     /// Collects changed destinations in tree order.
-    ///
-    /// # Arguments
-    ///
-    /// * `out` - the destination list gaining one entry per leaf.
-    ///
     pub fn collect_changed(&self, out: &mut Vec<Route>) {
         match self {
             Self::Changed { route: dest } => out.push(dest.clone()),
@@ -111,32 +96,9 @@ impl Condition {
 
     /// Returns the simplified form of one condition tree.
     ///
-    /// The output evaluates like the input with no redundant
-    /// shape left. Empty `All` reads true, empty `Any` reads
-    /// false, matching evaluation.
+    /// The form reads as an equivalent tree in idempotent normal form.
     ///
-    /// # Returns
-    ///
-    /// The equivalent tree in idempotent normal form.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::condition::Condition;
-    ///
-    /// let dup = Condition::All(vec![
-    ///     Condition::InPath { name: "git".into() },
-    ///     Condition::InPath { name: "mise".into() },
-    ///     Condition::InPath { name: "git".into() },
-    /// ]);
-    /// assert_eq!(
-    ///     dup.simplified(),
-    ///     Condition::All(vec![
-    ///         Condition::InPath { name: "git".into() },
-    ///         Condition::InPath { name: "mise".into() },
-    ///     ])
-    /// );
-    /// ```
+    /// - Empty `All` reads true and empty `Any` reads false.
     pub fn simplified(&self) -> Self {
         let mut out = self.simplify_step();
         loop {
@@ -149,10 +111,6 @@ impl Condition {
     }
 
     /// Applies one simplification pass over already simple children.
-    ///
-    /// # Returns
-    ///
-    /// The tree after one round of flattening and folding.
     fn simplify_step(&self) -> Self {
         match self {
             Self::Not(inner) => match inner.simplified() {
@@ -167,14 +125,7 @@ impl Condition {
 
     /// Simplifies one `All` or `Any` member list.
     ///
-    /// # Arguments
-    ///
-    /// * `kind` - the operator under folding.
-    /// * `items` - the member list under folding.
-    ///
-    /// # Returns
-    ///
-    /// The folded tree, collapsing singletons to their member.
+    /// - Singletons collapse to their member.
     fn nary(kind: NaryKind, items: &[Self]) -> Self {
         let mut simple: Vec<Self> = items.iter().map(Self::simplified).collect();
         let mut flat = Vec::with_capacity(simple.len());
@@ -214,14 +165,6 @@ impl Condition {
     }
 
     /// Builds the empty `All` (true) or `Any` (false) constant.
-    ///
-    /// # Arguments
-    ///
-    /// * `kind` - the operator holding the constant.
-    ///
-    /// # Returns
-    ///
-    /// The empty member list holding the constant value.
     fn nary_empty(kind: NaryKind) -> Self {
         match kind {
             NaryKind::All => Self::All(Vec::new()),
@@ -230,15 +173,6 @@ impl Condition {
     }
 
     /// Reports whether one member meets its complement in the list.
-    ///
-    /// # Arguments
-    ///
-    /// * `flat` - the flattened member list under checking.
-    /// * `member` - the member under testing.
-    ///
-    /// # Returns
-    ///
-    /// True while the negated member reads present too.
     fn cancels(flat: &[Self], member: &Self) -> bool {
         let negated = Self::Not(Box::new(member.clone()));
         flat.contains(&negated)
@@ -246,18 +180,8 @@ impl Condition {
 
     /// Reports whether one branch absorbs into a sibling member.
     ///
-    /// `All` drops an `Any` branch holding any sibling member, and
-    /// `Any` drops an `All` branch holding any sibling member.
-    ///
-    /// # Arguments
-    ///
-    /// * `flat` - the flattened member list under checking.
-    /// * `member` - the branch under testing.
-    /// * `kind` - the operator absorbing the branch.
-    ///
-    /// # Returns
-    ///
-    /// True while a sibling member reads inside the branch.
+    /// `All` drops an `Any` branch holding any sibling member, and `Any`
+    /// drops an `All` branch holding any sibling member.
     fn absorbed(flat: &[Self], member: &Self, kind: NaryKind) -> bool {
         let inner = match (kind, member) {
             (NaryKind::All, Self::Any(inner)) | (NaryKind::Any, Self::All(inner)) => inner,

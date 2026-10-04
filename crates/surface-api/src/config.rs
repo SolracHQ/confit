@@ -1,253 +1,504 @@
-//! Config
-//!
-//! Named document collectors over plain add calls.
+//! Configs
+//! Plain config decode into names with documents and patches.
 
-use mlua::{Lua, Value};
-use mlua_extras::TypedUserData;
-use mlua_extras::typed::generator::DefinitionBuilder;
-use mlua_extras::typeduserdata_impl;
+use std::collections::HashMap;
 
-use confit_surface_face::module::{Module, VerbDecl};
+use mlua::{FromLua, Lua, Table, Value};
 
-use crate::declare::{Body, Declaration, SerializableValue, StructuredBody, TextBody};
+use confit_surface_face::mismatch::received;
+
+use crate::document::Document;
 use crate::error::{ApiError, Result};
-use crate::paths::PathHandle;
+use crate::hook::decode_hook;
+use crate::patch::{Patch, decode_patch};
+use crate::paths::decode_route;
+use confit_model::hook::Hook;
+use confit_model::routes::Route;
 
-/// Claim set holding taken config names per evaluate.
-const SEEN_KEY: &str = "confit.config.names";
-
-/// Document collector threading into the profile return.
-#[derive(Debug, Clone, Default, TypedUserData)]
+/// One decoded config holding its name with documents, patches and hooks.
+#[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// The collector name.
-    #[lua(skip)]
-    name: String,
-    /// Collected declarations in add order.
-    #[lua(skip)]
-    documents: Vec<Declaration>,
+    /// The config name.
+    pub name: String,
+    /// Documents keyed by destination route.
+    pub documents: HashMap<Route, Document>,
+    /// Patches in profile return order.
+    pub patches: Vec<Patch>,
+    /// Hooks in profile return order.
+    pub hooks: Vec<Hook>,
 }
 
 impl Config {
-    /// Builds one empty collector under its name.
-    pub fn new(name: String) -> Self {
+    /// Builds one config from its name with documents, patches and hooks.
+    pub fn new(
+        name: String,
+        documents: HashMap<Route, Document>,
+        patches: Vec<Patch>,
+        hooks: Vec<Hook>,
+    ) -> Self {
         Self {
             name,
-            documents: Vec::new(),
+            documents,
+            patches,
+            hooks,
         }
     }
 
-    /// Reads the collector name.
+    /// Reads the config name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Reads the collected declarations in add order.
-    pub fn documents(&self) -> &[Declaration] {
+    /// Reads the documents keyed by destination route.
+    pub fn documents(&self) -> &HashMap<Route, Document> {
         &self.documents
     }
-}
 
-#[typeduserdata_impl]
-impl Config {
-    /// Records one document under its destination with its body.
-    fn add_document(&mut self, dest: PathHandle, body: Body) -> mlua::Result<()> {
-        self.documents
-            .push(Declaration::new(dest.route().clone(), body));
-        Ok(())
+    /// Reads the patches in profile return order.
+    pub fn patches(&self) -> &[Patch] {
+        &self.patches
+    }
+
+    /// Reads the hooks in profile return order.
+    pub fn hooks(&self) -> &[Hook] {
+        &self.hooks
     }
 }
 
-/// Builds the config function with its face, answering collectors.
-pub fn build(lua: &Lua) -> mlua::Result<(Value, DefinitionBuilder)> {
-    let mut module = Module::start(lua, "Named document collectors.")?;
-    module.register::<Config>();
-    module.register::<SerializableValue>();
-    module.register::<TextBody>();
-    module.register::<StructuredBody>();
-    module.verb::<String, Config, _>(
-        lua,
-        VerbDecl {
-            name: "config",
-            doc: "Builds one named collector.",
-            params: &[("name", "Collector name.")],
-            rets: &["The collector threading into the profile return."],
-        },
-        config_impl,
-    )?;
-    let (table, face) = module.finish();
-    Ok((Value::Function(table.get("config")?), face))
-}
-
-/// Builds one named collector.
+/// Decodes one config table into its name with documents, patches and hooks.
 ///
 /// # Errors
 ///
-/// - [`ApiError::Mismatch`] for non-string and empty names.
-/// - [`ApiError::Defined`] for repeated names.
-fn config_impl(lua: &Lua, name: String) -> mlua::Result<Config> {
-    if name.is_empty() {
-        return Err(ApiError::Mismatch {
-            slot: "name".to_owned(),
-            want: "a non-empty name".to_owned(),
-            received: "empty string".to_owned(),
-        }
-        .into());
-    }
-    claim_name(lua, &name)?;
-    Ok(Config::new(name))
-}
-
-/// Claims one config name in the per-evaluate set.
-///
-/// # Errors
-///
-/// - [`ApiError::Defined`] for repeated names.
-fn claim_name(lua: &Lua, name: &str) -> mlua::Result<()> {
-    let seen: mlua::Table = match lua.named_registry_value(SEEN_KEY) {
-        Ok(table) => table,
-        Err(_) => {
-            let table = lua.create_table()?;
-            lua.set_named_registry_value(SEEN_KEY, table.clone())?;
-            table
+/// - [`ApiError::Mismatch`] for misshaped configs, destinations and bodies.
+/// - [`ApiError::Lua`] for Lua read failures.
+pub(crate) fn decode_config(lua: &Lua, value: &Value) -> Result<Config> {
+    let table = match value {
+        Value::Table(table) => table.clone(),
+        _ => {
+            return Err(ApiError::mismatch(
+                "config",
+                "a config table",
+                received(value),
+            ));
         }
     };
-    let taken: Value = seen.get(name)?;
-    if taken.is_nil() {
-        seen.set(name, true)?;
-        return Ok(());
+    let mut name = None;
+    let mut documents_table = None;
+    let mut patches_table = None;
+    let mut hooks_table = None;
+    for pair in table.pairs::<Value, Value>() {
+        let (key, item) = pair?;
+        match key {
+            Value::String(text) => {
+                let field = text.to_string_lossy();
+                match field.as_ref() {
+                    "name" => name = Some(read_name(&item)?),
+                    "documents" => {
+                        documents_table = Some(section_table(&item, "documents")?);
+                    }
+                    "patches" => {
+                        patches_table = Some(section_table(&item, "patches")?);
+                    }
+                    "hooks" => {
+                        hooks_table = Some(section_table(&item, "hooks")?);
+                    }
+                    _ => {
+                        return Err(ApiError::mismatch(
+                            "config key",
+                            "one of 'name', 'documents', 'patches' or 'hooks'",
+                            format!("'{field}'"),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(ApiError::mismatch(
+                    "config key",
+                    "one of 'name', 'documents', 'patches' or 'hooks'",
+                    received(&key),
+                ));
+            }
+        }
     }
-    Err(ApiError::Defined {
-        name: name.to_owned(),
-    }
-    .into())
+    let Some(name) = name else {
+        return Err(ApiError::mismatch("config name", "a string name", "nil"));
+    };
+    Ok(Config {
+        name: name.clone(),
+        documents: decode_documents(lua, documents_table)?,
+        patches: decode_patches(lua, patches_table, Some(&name))?,
+        hooks: decode_hooks(lua, hooks_table)?,
+    })
 }
 
-/// Clears the config name claim set.
-pub fn reset(lua: &Lua) -> mlua::Result<()> {
-    lua.set_named_registry_value(SEEN_KEY, lua.create_table()?)?;
-    Ok(())
-}
-
-/// Reads owned declarations from one config handle.
+/// Decodes one config name into its string.
 ///
 /// # Errors
 ///
-/// - [`ApiError::Mismatch`] for handles of another shape.
-pub fn declarations_of(data: &mlua::AnyUserData) -> Result<Vec<Declaration>> {
-    data.borrow::<Config>()
-        .map(|found| found.documents().to_vec())
-        .map_err(|_| ApiError::Mismatch {
-            slot: "config".to_owned(),
-            want: "a config value".to_owned(),
-            received: "userdata".to_owned(),
-        })
+/// - [`ApiError::Mismatch`] for non-string names.
+fn read_name(value: &Value) -> Result<String> {
+    match value {
+        Value::String(found) => Ok(found.to_string_lossy()),
+        _ => Err(ApiError::mismatch(
+            "config name",
+            "a string name",
+            received(value),
+        )),
+    }
+}
+
+/// Decodes one config section table.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for non-table sections.
+fn section_table(item: &Value, field: &str) -> Result<Table> {
+    match item {
+        Value::Table(table) => Ok(table.clone()),
+        _ => Err(ApiError::mismatch(
+            format!("config {field}"),
+            "a table",
+            received(item),
+        )),
+    }
+}
+
+/// Decodes one documents map into bodies keyed by destination.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for foreign destinations and bodies.
+/// - [`ApiError::Lua`] for Lua read failures.
+pub(crate) fn decode_documents(
+    lua: &Lua,
+    table: Option<Table>,
+) -> Result<HashMap<Route, Document>> {
+    let mut documents = HashMap::new();
+    if let Some(table) = table {
+        for pair in table.pairs::<Value, Value>() {
+            let (key, item) = pair?;
+            let destination = decode_route(&key, "document destination")?;
+            let body = Document::from_lua(item, lua).map_err(crate::error::api_of)?;
+            documents.insert(destination, body);
+        }
+    }
+    Ok(documents)
+}
+
+/// Decodes one patches list into patches in order under the config owner.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for misshaped patches.
+/// - [`ApiError::Lua`] for Lua read failures.
+fn decode_patches(lua: &Lua, table: Option<Table>, owner: Option<&str>) -> Result<Vec<Patch>> {
+    let mut patches = Vec::new();
+    if let Some(table) = table {
+        let len = table.len()?;
+        for index in 1..=len {
+            let item: Value = table.get(index)?;
+            patches.push(decode_patch(lua, &item, owner)?);
+        }
+    }
+    Ok(patches)
+}
+
+/// Decodes one hooks list into hooks in order.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for misshaped hooks.
+/// - [`ApiError::Lua`] for Lua read failures.
+fn decode_hooks(lua: &Lua, table: Option<Table>) -> Result<Vec<Hook>> {
+    let mut hooks = Vec::new();
+    if let Some(table) = table {
+        let len = table.len()?;
+        for index in 1..=len {
+            let item: Value = table.get(index)?;
+            hooks.push(decode_hook(lua, &item)?);
+        }
+    }
+    Ok(hooks)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use confit_model::document::StructuredFormat;
 
-    use confit_driver::fs::TestGuard;
-    use confit_store::{StoreRoots, Stores};
-
-    fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
-        Stores::new(
-            StoreRoots {
-                config_base: dir.join("config"),
-                cache_base: dir.join("cache"),
-                temp_base: dir.join("temp"),
-                project_root: dir.to_path_buf(),
-            },
-            sender,
-        )
+    fn test_lua() -> Lua {
+        Lua::new()
     }
 
-    fn test_lua(stores: &Stores) -> Lua {
-        let lua = Lua::new();
-        let _ = lua.set_app_data(stores.clone());
-        reset(&lua).unwrap();
-        let config = crate::api::builtin(&lua, "confit.config").unwrap();
-        let path = crate::api::builtin(&lua, "confit.path").unwrap();
-        lua.globals().set("config", config).unwrap();
-        lua.globals().set("path", path).unwrap();
-        lua
+    fn config_of(lua: &Lua, source: &str) -> Value {
+        lua.load(source).call(()).unwrap()
     }
 
-    fn run(lua: &Lua, source: &str) -> mlua::Result<Value> {
-        lua.load(source).call(())
-    }
-
-    fn collected(lua: &Lua, source: &str) -> Vec<Declaration> {
-        match run(lua, source) {
-            Ok(Value::UserData(data)) => match declarations_of(&data) {
-                Ok(found) => found,
-                Err(error) => panic!("config answers declarations: {error}"),
-            },
-            Ok(_) => panic!("config answers userdata"),
-            Err(error) => panic!("collector builds: {error}"),
+    #[test]
+    fn config_decodes_documents_with_patches() {
+        let lua = test_lua();
+        let source = r#"
+            return {
+                name = "tools/bat",
+                documents = { [{ base = "home", relative = ".bashrc" }] = { text = "hi" } },
+                patches = {
+                    { target = { base = "home", relative = "config.json" }, format = "json", apply = function(d) return d end },
+                },
+            }
+        "#;
+        let value = config_of(&lua, source);
+        match decode_config(&lua, &value) {
+            Ok(decoded) => {
+                assert_eq!(decoded.documents.len(), 1);
+                let key = decoded.documents.keys().next().unwrap();
+                assert_eq!(key.display(), "home('.bashrc')");
+                assert_eq!(decoded.patches.len(), 1);
+                assert_eq!(decoded.patches[0].target().display(), "home('config.json')");
+                match &decoded.patches[0] {
+                    Patch::Structured(found) => {
+                        assert_eq!(found.format(), StructuredFormat::Json);
+                    }
+                    Patch::Rc(_) => panic!("format presence rides structured"),
+                }
+            }
+            Err(error) => panic!("config decodes: {error}"),
         }
     }
 
     #[test]
-    fn collects_documents_in_add_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
-        let stores = test_stores(dir.path());
-        let lua = test_lua(&stores);
+    fn patches_keep_list_order() {
+        let lua = test_lua();
         let source = r#"
-            local mine = config("tools/bat")
-            mine:add_document(path.home("zebra"), { text = "z" })
-            mine:add_document(path.home("apple"), { text = "a" })
-            return mine
+            return {
+                name = "tools/both",
+                patches = {
+                    { target = { base = "home", relative = "one.json" }, format = "json", apply = function(d) return d end },
+                    { target = { base = "home", relative = "first.sh" }, apply = function(d) return d end },
+                    { target = { base = "home", relative = "two.json" }, format = "json", apply = function(d) return d end },
+                    { target = { base = "home", relative = "second.sh" }, apply = function(d) return d end },
+                },
+            }
         "#;
-        let found = collected(&lua, source);
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0].destination().display(), "home:zebra");
-        assert_eq!(found[1].destination().display(), "home:apple");
+        let value = config_of(&lua, source);
+        match decode_config(&lua, &value) {
+            Ok(decoded) => {
+                assert_eq!(decoded.patches.len(), 4);
+                assert_eq!(decoded.patches[0].target().display(), "home('one.json')");
+                assert!(matches!(decoded.patches[0], Patch::Structured(_)));
+                assert_eq!(decoded.patches[1].target().display(), "home('first.sh')");
+                assert!(matches!(decoded.patches[1], Patch::Rc(_)));
+                assert_eq!(decoded.patches[2].target().display(), "home('two.json')");
+                assert!(matches!(decoded.patches[2], Patch::Structured(_)));
+                assert_eq!(decoded.patches[3].target().display(), "home('second.sh')");
+                assert!(matches!(decoded.patches[3], Patch::Rc(_)));
+            }
+            Err(error) => panic!("patches decode: {error}"),
+        }
     }
 
     #[test]
-    fn repeated_names_fail() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
-        let stores = test_stores(dir.path());
-        let lua = test_lua(&stores);
-        match run(&lua, "config(\"x\") return config(\"x\")") {
-            Ok(_) => panic!("repeated name passes"),
+    fn unknown_config_keys_fail_naming_key() {
+        let lua = test_lua();
+        let value = config_of(&lua, "return { nope = 1 }");
+        match decode_config(&lua, &value) {
+            Ok(_) => panic!("unknown config key passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("already defined"), "names the repeat: {text}");
-                assert!(text.contains("'x'"), "names the name: {text}");
+                assert!(text.contains("nope"), "names the key: {text}");
             }
         }
-        reset(&lua).unwrap();
-        match run(&lua, "return config(\"x\")") {
-            Ok(_) => {}
-            Err(error) => panic!("reset names pass again: {error}"),
+    }
+
+    #[test]
+    fn patch_owners_ride_config_names() {
+        let lua = test_lua();
+        let named = config_of(
+            &lua,
+            r#"
+            return {
+                name = "tools/bat",
+                patches = {
+                    { target = { base = "home", relative = "config.json" }, format = "json", apply = function(d) return d end },
+                    { target = { base = "home", relative = "first.sh" }, apply = function(d) return d end },
+                },
+            }
+        "#,
+        );
+        match decode_config(&lua, &named) {
+            Ok(decoded) => {
+                assert_eq!(decoded.patches.len(), 2);
+                for patch in &decoded.patches {
+                    assert_eq!(patch.owner(), Some("tools/bat"));
+                }
+            }
+            Err(error) => panic!("named config decodes: {error}"),
+        }
+        let nameless = config_of(
+            &lua,
+            r#"
+            return {
+                patches = {
+                    { target = { base = "home", relative = "config.json" }, format = "json", apply = function(d) return d end },
+                },
+            }
+        "#,
+        );
+        match decode_config(&lua, &nameless) {
+            Ok(_) => panic!("nameless config passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("config name"), "names the field: {text}");
+                assert!(text.contains("a string name"), "names the want: {text}");
+                assert!(text.contains("nil"), "names the received: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_names_fail_naming_field() {
+        let lua = test_lua();
+        for source in ["return {}", r#"return { documents = {} }"#] {
+            let value = config_of(&lua, source);
+            match decode_config(&lua, &value) {
+                Ok(_) => panic!("nameless config passes: {source}"),
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(text.contains("config name"), "names the field: {text}");
+                    assert!(text.contains("a string name"), "names the want: {text}");
+                    assert!(text.contains("nil"), "names the received: {text}");
+                }
+            }
+        }
+        let value = config_of(&lua, r#"return { name = 1 }"#);
+        match decode_config(&lua, &value) {
+            Ok(_) => panic!("numeric name passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("config name"), "names the field: {text}");
+                assert!(text.contains("number"), "names the received: {text}");
+            }
         }
     }
 
     #[test]
     fn foreign_destinations_fail_naming_want() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
-        let stores = test_stores(dir.path());
-        let lua = test_lua(&stores);
-        let source = r#"
-            local mine = config("tools/bat")
-            return mine:add_document(".bashrc", { text = "hi" })
-        "#;
-        match run(&lua, source) {
-            Ok(_) => panic!("string destination passes"),
+        let lua = test_lua();
+        let value = config_of(
+            &lua,
+            r#"return { name = "tools/test", documents = { ["oops"] = { text = "hi" } } }"#,
+        );
+        match decode_config(&lua, &value) {
+            Ok(_) => panic!("foreign destination passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(
-                    text.contains("a confit.path value"),
-                    "names the want: {text}"
-                );
-                assert!(text.contains("string"), "names the received: {text}");
+                assert!(text.contains("a route table"), "names the want: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn hooks_decode_with_defaults() {
+        let lua = test_lua();
+        let source = r#"
+            return {
+                name = "tools/hooks",
+                hooks = {
+                    { argv = { "mise", "install" } },
+                    {
+                        argv = { "mise", { base = "home", relative = "bin" } },
+                        path = { { base = "home", relative = "bin" } },
+                        requires = { in_path = { name = "git" } },
+                        when = { env_eq = { key = "TERM", value = "xterm" } },
+                        checks = { { in_path = { name = "mise" } } },
+                        timeout = "90",
+                    },
+                },
+            }
+        "#;
+        let value = config_of(&lua, source);
+        match decode_config(&lua, &value) {
+            Ok(decoded) => {
+                assert_eq!(decoded.hooks.len(), 2);
+                let bare = &decoded.hooks[0];
+                assert_eq!(bare.argv.len(), 2);
+                assert!(bare.path.is_empty(), "path defaults empty");
+                assert_eq!(bare.requires, None);
+                assert_eq!(bare.when, None);
+                assert!(bare.checks.is_empty(), "checks default empty");
+                assert_eq!(bare.timeout_secs, 600);
+                let full = &decoded.hooks[1];
+                assert_eq!(full.argv.len(), 2);
+                assert_eq!(full.path.len(), 1);
+                assert!(full.requires.is_some(), "requires decodes");
+                assert!(full.when.is_some(), "when decodes");
+                assert_eq!(full.checks.len(), 1);
+                assert_eq!(full.timeout_secs, 90);
+            }
+            Err(error) => panic!("hooks decode: {error}"),
+        }
+    }
+
+    #[test]
+    fn foreign_hook_fields_fail_naming_fields() {
+        let lua = test_lua();
+        let cases = [
+            (
+                r#"return { name = "tools/hooks", hooks = { {} } }"#,
+                "hook argv",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = 1 } } }"#,
+                "hook argv",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = {} } } }"#,
+                "hook argv",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = { 1 } } } }"#,
+                "hook argv",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = { "a" }, timeout = 1 } } }"#,
+                "hook timeout",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = { "a" }, timeout = "nope" } } }"#,
+                "hook timeout",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = { "a" }, requires = 1 } } }"#,
+                "hook requires",
+            ),
+            (
+                r#"return { name = "tools/hooks", hooks = { { argv = { "a" }, checks = 1 } } }"#,
+                "hook checks",
+            ),
+        ];
+        for (source, want) in cases {
+            let value = config_of(&lua, source);
+            match decode_config(&lua, &value) {
+                Ok(_) => panic!("foreign hook passes: {source}"),
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(text.contains(want), "names the field: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_hook_keys_fail_naming_key() {
+        let lua = test_lua();
+        let value = config_of(
+            &lua,
+            r#"return { name = "tools/hooks", hooks = { { argv = { "a" }, nope = 1 } } }"#,
+        );
+        match decode_config(&lua, &value) {
+            Ok(_) => panic!("unknown hook key passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("nope"), "names the key: {text}");
             }
         }
     }

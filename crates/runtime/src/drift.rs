@@ -15,8 +15,9 @@ use confit_store::faults::AccessFault;
 impl Applier {
     /// Reports manual edits between recorded documents and disk.
     ///
-    /// Link documents compare target text. Entries follow
-    /// recorded destination order. Content compares streaming.
+    /// Link documents compare target text.
+    ///
+    /// - Entries follow recorded destination order.
     pub fn drift(&self, manifest: &Manifest, order: DriftOrder) -> Vec<Drift> {
         let mut out = Vec::new();
         for document in &manifest.documents {
@@ -102,8 +103,7 @@ impl Applier {
 
     /// Collects drift entries for one tree destination walk.
     ///
-    /// Extra disk files stay out of the entries; hand-placed
-    /// files read untouched.
+    /// - Extra disk files stay out of the entries.
     fn tree_drift(
         &self,
         destination: &Route,
@@ -279,9 +279,10 @@ mod tests {
             found.is_empty(),
             "matching expanded bytes read as zero drift"
         );
-        assert!(
-            !driver::fs::exists(std::path::Path::new(&document.destination.display())),
-            "display alias never lands on disk"
+        assert_eq!(
+            document.destination.display(),
+            dest.to_str().unwrap(),
+            "literal display renders the bare host path"
         );
         driver::fs::remove_file(&dest).unwrap();
         let _ = driver::fs::remove_file(&dir);

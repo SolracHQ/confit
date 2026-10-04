@@ -1,6 +1,5 @@
 //! Confit cli
-//!
-//! Terminal surface over engine evaluation and core plans.
+//! Terminal surface over profile evaluation and plans.
 
 #![deny(missing_docs)]
 

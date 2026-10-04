@@ -1,7 +1,4 @@
-//! Gzip single streams over caller handles with io errors.
-//!
-//! Blob pool bytes ride these seams, so digests
-//! with footers stay home in the store.
+//! Gzip streams.
 
 use std::io;
 
@@ -9,13 +6,10 @@ use std::io;
 pub const TRAILER_LEN: u64 = 4;
 
 /// Gzip decoder reading decoded bytes on demand.
-///
-/// The reader decodes bytes as the caller pulls,
-/// so spill verbs stream without staging.
 pub struct Decoder<R: io::Read>(flate2::read::GzDecoder<R>);
 
 impl<R: io::Read> Decoder<R> {
-    /// Opens one decoder over a caller reader.
+    /// Opens one decoder.
     pub fn open(reader: R) -> Self {
         Self(flate2::read::GzDecoder::new(reader))
     }
@@ -27,14 +21,11 @@ impl<R: io::Read> io::Read for Decoder<R> {
     }
 }
 
-/// Gzip encoder compressing at a caller level.
-///
-/// Bytes compress as the caller pushes, so pool
-/// spills stream straight into staging.
+/// Gzip encoder compressing at one level.
 pub struct Encoder<W: io::Write>(flate2::write::GzEncoder<W>);
 
 impl<W: io::Write> Encoder<W> {
-    /// Opens one encoder over a caller sink.
+    /// Opens one encoder.
     pub fn open(sink: W, level: u32) -> Self {
         Self(flate2::write::GzEncoder::new(
             sink,
@@ -42,7 +33,7 @@ impl<W: io::Write> Encoder<W> {
         ))
     }
 
-    /// Finishes the stream returning the caller sink.
+    /// Finishes the stream returning the sink.
     ///
     /// # Errors
     ///

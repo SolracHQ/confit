@@ -1,6 +1,4 @@
-//! Sinks
-//!
-//! Output senders and shared helpers behind command runners.
+//! Output senders and shared helpers.
 
 use std::io::BufRead;
 use std::path::Path;
@@ -16,10 +14,7 @@ use confit_model::progress::{Event, ProgressSender};
 use crate::cli::{SharedArgs, resolve_plugins, resolve_root};
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 
-/// Output senders behind one command run.
-///
-/// Silent by default. Host runs attach live senders at the
-/// call site through the fields directly.
+/// Output senders for one command run.
 #[derive(Debug, Clone)]
 pub struct Sinks {
     /// Gains stderr lines through the renderer, holding `None` for silence.
@@ -31,7 +26,7 @@ pub struct Sinks {
 }
 
 impl Default for Sinks {
-    /// Silent sinks behind a dropped receiver.
+    /// Silent sinks.
     fn default() -> Self {
         let (sender, _) = crossbeam_channel::unbounded();
         Self {
@@ -44,10 +39,6 @@ impl Default for Sinks {
 
 impl Sinks {
     /// Sends one stderr line through the renderer while present.
-    ///
-    /// # Arguments
-    ///
-    /// * `line` - the formatted line under printing.
     pub fn print_line(&self, line: String) {
         if let Some(sender) = self.print.as_ref() {
             let _ = sender.send(line);
@@ -56,31 +47,11 @@ impl Sinks {
 
     /// Prompts for the literal `yes` confirmation.
     ///
-    /// Hosted runs ask through the suspend control with widgets
-    /// parked. Headless runs read one input line directly.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - the answer source under prompting.
-    ///
-    /// # Returns
-    ///
     /// True only for the literal `yes` answer.
     ///
     /// # Errors
     ///
     /// - [`CliError::Unknown`] for prompt failures.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use confit_cli::seams::Sinks;
-    /// use std::io::Cursor;
-    ///
-    /// let sinks = Sinks::default();
-    /// let mut input = Cursor::new("yes\n");
-    /// assert!(matches!(sinks.confirm(&mut input), Ok(true)));
-    /// ```
     pub fn confirm(&self, input: &mut dyn BufRead) -> Result<bool> {
         if let Some(control) = self.suspend.clone() {
             return control
@@ -121,19 +92,6 @@ impl Sinks {
 }
 
 /// Runs one step and logs its elapsed time at debug.
-///
-/// Rich log lines carrying per-step context stay inline at
-/// their call sites. This covers bare steps only.
-///
-/// # Arguments
-///
-/// * `label` - the step name landing in the log line.
-/// * `step` - the work under measuring.
-///
-/// # Returns
-///
-/// Whatever the step returns.
-///
 pub fn timed<T>(label: &str, step: impl FnOnce() -> T) -> T {
     let start = std::time::Instant::now();
     let out = step();

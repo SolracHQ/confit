@@ -1,10 +1,4 @@
-//! Fetch
-//!
 //! Content-addressed fetch cache for remote bytes.
-//!
-//! Bodies rest under content hashes beside a `urls` index.
-//! Tampered entries read as misses. Offline hits call no
-//! fetcher. User shas check fatal after hit-or-download.
 
 pub mod error;
 pub mod transport;
@@ -29,9 +23,6 @@ const STREAM_BUF_BYTES: usize = 8 * 1024;
 const INDEX_DIR: &str = "urls";
 
 /// File-backed fetch cache for remote bytes.
-///
-/// Bodies ride `{cache}/{content-sha}` behind a `urls` index.
-/// Downloads arrive through the download source.
 #[derive(Clone, Debug)]
 pub struct FetchCache {
     cache: PathBuf,
@@ -40,9 +31,6 @@ pub struct FetchCache {
 
 impl FetchCache {
     /// Builds one file-backed fetch cache under the cache base.
-    ///
-    /// Roots arrive explicit from store construction.
-    /// The sender carries fetch facts.
     pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
         Self {
             cache: roots.cache_base.clone(),
@@ -63,16 +51,13 @@ impl FetchCache {
     }
 
     /// Derives the staging path holding one URL download.
-    ///
-    /// Names ride the driver sequence beside the content path,
-    /// so concurrent downloads share no file.
     fn staging_path(&self, url: &str) -> PathBuf {
         driver::stage_path(&self.content_path(&Sha::hash(url.as_bytes()).hex()))
     }
 
-    /// Reads a cached handle passing the index digest check.
+    /// Finds a cached handle passing the index digest check.
     ///
-    /// Tampered entries read as misses.
+    /// - Tampered entries read as misses.
     fn lookup(&self, url: &str) -> Option<FetchHandle> {
         let stored = driver::fs::read_to_string(&self.index_path(url)).ok()?;
         let wanted = Sha::new(stored.trim().to_lowercase()).ok()?;
@@ -87,7 +72,7 @@ impl FetchCache {
 
     /// Serves one cached hit with the cached progress event.
     ///
-    /// Misses answer none so the caller downloads.
+    /// - Misses return none.
     ///
     /// # Errors
     ///
@@ -253,7 +238,7 @@ impl FetchCache {
         self.fetch_download(url, expected_sha.as_ref())
     }
 
-    /// Reads cached bytes behind one fetch handle.
+    /// Reads cached bytes for one fetch handle.
     ///
     /// # Errors
     ///
@@ -263,7 +248,7 @@ impl FetchCache {
             .map_err(|error| FetchError::from_io(handle.origin(), error))
     }
 
-    /// Opens cached bytes behind one fetch handle.
+    /// Opens cached bytes for one fetch handle.
     ///
     /// # Errors
     ///
@@ -275,9 +260,9 @@ impl FetchCache {
     }
 }
 
-/// Reads one file length without loading content.
+/// Reads one file length.
 ///
-/// Missing files read zero for event sizes alone.
+/// - Missing files read zero.
 fn file_len(path: &Path) -> usize {
     match driver::fs::metadata(path) {
         Ok(facts) => usize::try_from(facts.len()).unwrap_or(0),

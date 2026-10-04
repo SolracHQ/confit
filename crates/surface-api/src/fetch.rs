@@ -1,7 +1,4 @@
-//! Fetch
-//!
-//! Urls sealed into resource handles over the fetch cache.
-//! Dead urls answer nil with reason, pin mismatches raise.
+//! Urls opened into resource handles.
 
 use mlua::{FromLua, Lua, LuaSerdeExt, Value};
 use mlua_extras::typed::generator::DefinitionBuilder;
@@ -14,7 +11,7 @@ use confit_store::fetch::error::FetchError;
 use confit_surface_face::module::{Module, VerbDecl};
 
 use crate::error::ApiError;
-use crate::handles::ResourceHandle;
+use crate::handles::Handle;
 
 /// Fetch options holding the digest pin.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -33,17 +30,17 @@ impl FromLua for FetchOpts {
     }
 }
 
-/// Builds the fetch function with its face, sealing urls into handles.
+/// Builds the fetch function with its face, opening urls into handles.
 pub fn build(lua: &Lua, stores: &Stores) -> mlua::Result<(Value, DefinitionBuilder)> {
-    let mut module = Module::start(lua, "Sealed urls behind resource handles.")?;
-    module.register::<ResourceHandle>();
+    let mut module = Module::start(lua, "Opened urls behind resource handles.")?;
+    module.register::<Handle>();
     module.register::<FetchOpts>();
     let stores = stores.clone();
-    module.verb::<(String, Option<FetchOpts>), (Option<ResourceHandle>, Option<String>), _>(
+    module.verb::<(String, Option<FetchOpts>), (Option<Handle>, Option<String>), _>(
         lua,
         VerbDecl {
             name: "fetch",
-            doc: "Seals one url into its handle.",
+            documentation: "Opens one url into its handle.",
             params: &[
                 ("url", "The url to fetch."),
                 ("opts", "The digest pin table."),
@@ -59,44 +56,38 @@ pub fn build(lua: &Lua, stores: &Stores) -> mlua::Result<(Value, DefinitionBuild
     Ok((Value::Function(table.get("fetch")?), face))
 }
 
-/// Seals one url into its resource handle.
+/// Opens one url into its resource handle.
 ///
-/// Non-empty urls pass, dead urls answer nil with reason,
-/// pin mismatches raise.
+/// Dead urls return nil with reason and pin mismatches raise.
 ///
 /// # Errors
 ///
 /// - [`ApiError::Mismatch`] for non-string urls and misshaped pins.
 /// - [`ApiError::Fetch`] for pin mismatches.
-/// - [`ApiError::Seal`] for cache containment failures.
+/// - [`ApiError::Open`] for cache containment failures.
 fn fetch_impl(
     _lua: &Lua,
     stores: &Stores,
     raw: String,
     opts: Option<FetchOpts>,
-) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
+) -> mlua::Result<(Option<Handle>, Option<String>)> {
     if raw.is_empty() {
-        return Err(ApiError::Mismatch {
-            slot: "url".to_owned(),
-            want: "a non-empty url".to_owned(),
-            received: "empty string".to_owned(),
-        }
-        .into());
+        return Err(ApiError::mismatch("url", "a non-empty url", "empty string").into());
     }
     let wanted = pin_of(opts)?;
     match stores.fetch().fetch(&raw, wanted, false) {
         Ok(found) => {
-            let sealed = stores.resources().fetched(&found).map_err(ApiError::Seal)?;
-            Ok((Some(ResourceHandle::new(sealed, stores.clone())), None))
+            let opened = stores.resources().fetched(&found).map_err(ApiError::Open)?;
+            Ok((Some(Handle::new(opened, stores.clone())), None))
         }
         Err(error @ FetchError::DigestMismatch { .. }) => Err(ApiError::Fetch(error).into()),
         Err(error) => Ok((None, Some(error.to_string()))),
     }
 }
 
-/// Reads the digest pin from the options value.
+/// Resolves the digest pin from the options value.
 ///
-/// Missing options read none, unknown fields fail.
+/// - Missing options read none.
 ///
 /// # Errors
 ///
@@ -104,24 +95,19 @@ fn fetch_impl(
 fn pin_of(opts: Option<FetchOpts>) -> mlua::Result<Option<Sha>> {
     match opts.and_then(|found| found.sha256) {
         None => Ok(None),
-        Some(digest) => seal_pin(&digest),
+        Some(digest) => open_pin(&digest),
     }
 }
 
-/// Seals one digest pin.
+/// Opens one digest pin.
 ///
 /// # Errors
 ///
 /// - [`ApiError::Mismatch`] for non-hex digests.
-fn seal_pin(digest: &str) -> mlua::Result<Option<Sha>> {
+fn open_pin(digest: &str) -> mlua::Result<Option<Sha>> {
     match Sha::new(digest) {
         Ok(found) => Ok(Some(found)),
-        Err(_) => Err(ApiError::Mismatch {
-            slot: "sha256".to_owned(),
-            want: "a 64-char hex digest".to_owned(),
-            received: digest.to_owned(),
-        }
-        .into()),
+        Err(_) => Err(ApiError::mismatch("sha256", "a 64-char hex digest", digest).into()),
     }
 }
 
@@ -178,13 +164,13 @@ mod tests {
                 found.to_string_lossy(),
                 format!("1.2.3|{}", Sha::hash(b"1.2.3").hex())
             ),
-            Ok(_) => panic!("fetch text answers a string"),
-            Err(error) => panic!("fetch seals its url: {error}"),
+            Ok(_) => panic!("fetch text returns a string"),
+            Err(error) => panic!("fetch opens its url: {error}"),
         }
     }
 
     #[test]
-    fn dead_urls_answer_nil_with_reason() {
+    fn dead_urls_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         confit_driver::http::clear();
@@ -202,7 +188,7 @@ mod tests {
                     "reason names the url: {reason:?}"
                 )
             }
-            Ok(_) => panic!("dead url answers nil with reason"),
+            Ok(_) => panic!("dead url returns nil with reason"),
             Err(error) => panic!("dead urls stay soft: {error}"),
         }
     }
@@ -222,7 +208,7 @@ mod tests {
         );
         match run(&lua, &source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "1.2.3"),
-            Ok(_) => panic!("pinned fetch answers a string"),
+            Ok(_) => panic!("pinned fetch returns a string"),
             Err(error) => panic!("matching pins pass: {error}"),
         }
     }
@@ -267,7 +253,7 @@ mod tests {
                     "reason names the url: {reason:?}"
                 )
             }
-            Ok(_) => panic!("coerced url answers nil with reason"),
+            Ok(_) => panic!("coerced url returns nil with reason"),
             Err(error) => panic!("coerced urls stay soft: {error}"),
         }
         match run(&lua, "return fetch(\"\")") {

@@ -1,5 +1,4 @@
 //! Manifest
-//!
 //! Persisted plan model and manifest JSON.
 
 use crate::document::{BlobRef, Document, StructuredFormat};
@@ -12,11 +11,6 @@ use serde::{Deserialize, Serialize};
 pub const MANIFEST_VERSION: u32 = 7;
 
 /// Persisted plan holding metadata and blob references.
-///
-/// Binary bytes live gzipped in the shared pool under
-/// content hashes. Text, structured, rc, and link payloads
-/// stay inline. Bundles carry this shape as `manifest.json`.
-///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -31,18 +25,6 @@ pub struct Manifest {
 
 impl Manifest {
     /// Builds an empty manifest at the current version.
-    ///
-    /// Empty manifests hold the manifest version with empty
-    /// documents and hooks.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::manifest::Manifest;
-    ///
-    /// let manifest = Manifest::empty();
-    /// assert!(manifest.documents.is_empty());
-    /// ```
     pub fn empty() -> Self {
         Self {
             version: MANIFEST_VERSION,
@@ -51,33 +33,13 @@ impl Manifest {
         }
     }
 
-    /// Builds the desired manifest from documents.
+    /// Builds the desired manifest from documents with filled hashes.
     ///
-    /// Manifests hold filled hashes in destination order with
-    /// merged hooks. The caller holds one document per destination.
+    /// - Documents sort by destination display.
     ///
     /// # Errors
     ///
     /// - [`Error::Unhashable`] for documents failing hashes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{Data, Document};
-    /// use confit_model::manifest::Manifest;
-    /// use confit_model::routes::{Route, RouteBase};
-    ///
-    /// let document = Document::new(
-    ///     Route::new(RouteBase::Home, "note").unwrap(),
-    ///     Data::Text {
-    ///         content: "hi".into(),
-    ///         mode: None,
-    ///         unmanaged: false,
-    ///     },
-    /// );
-    /// let manifest = Manifest::build(vec![document], Vec::new()).unwrap();
-    /// assert_eq!(manifest.documents.len(), 1);
-    /// ```
     pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> Result<Self> {
         let mut documents = documents;
         for document in &mut documents {
@@ -105,22 +67,9 @@ impl Manifest {
 
     /// Serializes one manifest as pretty JSON.
     ///
-    /// Binary bytes leave the file as blob references into the
-    /// shared pool. Output bytes match pretty serde exactly.
-    ///
     /// # Errors
     ///
     /// - [`Error::Render`] for serializer failures.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use confit_model::manifest::Manifest;
-    ///
-    /// let manifest = Manifest::empty();
-    /// let text = manifest.json().unwrap();
-    /// assert!(text.contains("documents"));
-    /// ```
     pub fn json(&self) -> Result<String> {
         serde_json::to_string_pretty(self).map_err(|source| Error::Render {
             format: StructuredFormat::Json,

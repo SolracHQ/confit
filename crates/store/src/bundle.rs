@@ -1,6 +1,5 @@
 //! Bundle
-//!
-//! Portable bundle archives holding manifests and blobs.
+//! Portable bundle archive reads and writes.
 
 pub mod codec;
 pub mod error;
@@ -24,11 +23,6 @@ pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
 /// Portable bundle archive reads and writes.
-///
-/// Archives hold the manifest first with blob entries after.
-/// Writes source blob bytes from the pool with fallback
-/// across homes. Reads stage entries through the archive
-/// spill into the cache.
 #[derive(Debug, Clone)]
 pub struct BundleStore {
     pub(crate) archives: Arc<ArchiveStore>,
@@ -37,9 +31,7 @@ pub struct BundleStore {
 }
 
 impl BundleStore {
-    /// Builds a bundle store over shared archive and blob stores.
-    ///
-    /// All three handles arrive shared from store construction.
+    /// Builds a bundle store over shared archive, blob, and resource stores.
     pub fn new(
         archives: Arc<ArchiveStore>,
         blobs: Arc<BlobStore>,
@@ -54,10 +46,6 @@ impl BundleStore {
 }
 
 /// Ensures one bundle destination carries the bundle extension.
-///
-/// Bare paths gain the suffix, so creators always emit
-/// bundles. Slot outputs never pass here and keep their
-/// own names.
 pub fn ensure_bundle_extension(dest: &Path) -> PathBuf {
     if dest
         .extension()

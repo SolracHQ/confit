@@ -1,5 +1,4 @@
 //! Summary
-//!
 //! Stderr summary over built bundles.
 
 use std::borrow::Cow;
@@ -53,16 +52,7 @@ pub enum Sigil {
 impl Sigil {
     /// Reads the line mark for one sigil.
     ///
-    /// Headers carry no lifecycle mark, so the mark reads blank.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::presentation::summary::Sigil;
-    ///
-    /// assert_eq!(Sigil::Add.mark(), '+');
-    /// assert_eq!(Sigil::Header.mark(), ' ');
-    /// ```
+    /// Headers carry no lifecycle mark.
     pub fn mark(self) -> char {
         match self {
             Sigil::Add => '+',
@@ -73,31 +63,15 @@ impl Sigil {
     }
 }
 
-/// One terminal painter holding the color decision.
-///
-/// The tty and `NO_COLOR` check runs once under construction,
-/// never per line. Piped output stays plain.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::summary::{Painter, Sigil};
-///
-/// let painter = Painter::new();
-/// assert_eq!(painter.paint(Sigil::Add, "hi"), "hi");
-/// ```
+/// One terminal painter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Painter {
-    /// Paints while stderr runs as a terminal without `NO_COLOR`.
+    /// Paints while stderr runs as a terminal.
     color: bool,
 }
 
 impl Painter {
-    /// Reads the color decision from the terminal and the environment.
-    ///
-    /// # Returns
-    ///
-    /// The painter for one summary run.
+    /// Resolves the color decision from the terminal and the environment.
     pub fn new() -> Self {
         Self {
             color: std::env::var_os("NO_COLOR").is_none()
@@ -106,15 +80,6 @@ impl Painter {
     }
 
     /// Paints one line in the sigil style.
-    ///
-    /// # Arguments
-    ///
-    /// * `sigil` - the style selecting the line color.
-    /// * `text` - the line body under paint.
-    ///
-    /// # Returns
-    ///
-    /// The painted line ready for terminal display.
     pub fn paint(&self, sigil: Sigil, text: &str) -> String {
         if !self.color {
             return text.to_string();
@@ -130,17 +95,13 @@ impl Painter {
 }
 
 impl Default for Painter {
-    /// Reads the color decision like `new`.
+    /// Resolves the color decision like `new`.
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Hook display data for one summary run.
-///
-/// Lifecycle entries render lifecycle lines, evaluated hooks
-/// render trailing preview lines. Core owns the hooks,
-/// presentation owns every rendered line.
+/// Hook display data.
 #[derive(Debug)]
 pub struct Hooks<'a> {
     /// Holds the lifecycle entries in plan order with removals trailing.
@@ -149,10 +110,7 @@ pub struct Hooks<'a> {
     pub evaluated: &'a [EvaluatedHook<'a>],
 }
 
-/// One hook count triple for one summary run.
-///
-/// Added counts added headers, changed counts changed headers,
-/// destroyed counts removed headers. Detail lines never count.
+/// One hook count triple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HookCounts {
     /// Counts added hook headers.
@@ -165,49 +123,17 @@ pub struct HookCounts {
 
 impl HookCounts {
     /// Reports whether one triple holds no moving hooks.
-    ///
-    /// # Returns
-    ///
-    /// True while added, changed, and destroyed all read zero.
     pub fn is_empty(&self) -> bool {
         self.added == 0 && self.changed == 0 && self.destroyed == 0
     }
 
-    /// Reads the total moving hooks behind one triple.
-    ///
-    /// # Returns
-    ///
-    /// The added, changed, and destroyed counts joined.
+    /// Reads the total moving hooks.
     pub fn total(&self) -> usize {
         self.added + self.changed + self.destroyed
     }
 }
 
-/// One stderr summary over a built manifest and its previous manifest.
-///
-/// Titled sections carry sigiled headers, empty sections stay
-/// out. First runs frame drift as desired versus disk.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::summary::{Hooks, Summary};
-/// use confit_model::routes::{Route, RouteBase};
-/// use confit_model::document::{Data, Document};
-/// use confit_model::manifest::Manifest;
-///
-/// let document = Document::new(
-///     Route::new(RouteBase::Home, "note").unwrap(),
-///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-/// );
-/// let built = Manifest::build(vec![document], Vec::new()).unwrap();
-/// let previous = Manifest::empty();
-/// let report = Summary { built: &built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } };
-/// let text = report.render();
-/// assert!(text.contains("+ home:note: text"));
-/// assert!(text.contains("Documents: 1 to add, 0 to change, 0 to destroy."));
-/// assert!(!text.contains("Hooks: "));
-/// ```
+/// One stderr summary.
 #[derive(Debug)]
 pub struct Summary<'a> {
     /// The built manifest under display.
@@ -224,10 +150,6 @@ pub struct Summary<'a> {
 
 impl Summary<'_> {
     /// Renders the full stderr summary with color.
-    ///
-    /// # Returns
-    ///
-    /// The stderr summary text.
     pub fn render(&self) -> String {
         if self.first_run {
             return self.render_first_run();
@@ -258,11 +180,7 @@ impl Summary<'_> {
 
     /// Collects resource blocks for steady runs.
     ///
-    /// Skips unchanged documents.
-    ///
-    /// # Returns
-    ///
-    /// The resource block lines without the section title.
+    /// - Skips unchanged documents.
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
@@ -280,19 +198,11 @@ impl Summary<'_> {
     }
 
     /// Renders hook lifecycle lines from display data.
-    ///
-    /// # Returns
-    ///
-    /// The lifecycle lines in plan order with removals trailing.
     fn hook_lifecycle(&self) -> Vec<String> {
         lifecycle_lines(self.hooks.lifecycle)
     }
 
     /// Collects hook lines for the hooks section.
-    ///
-    /// # Returns
-    ///
-    /// The hooks section lines without the section title.
     fn hook_section(&self) -> Vec<String> {
         let mut out = self.hook_lifecycle();
         out.extend(render_evaluated(self.hooks.evaluated));
@@ -301,28 +211,7 @@ impl Summary<'_> {
 
     /// Renders the closing counts lines.
     ///
-    /// # Returns
-    ///
-    /// The documents line and the hooks line while hooks move.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_cli::presentation::summary::{Hooks, Summary};
-    /// use confit_model::document::{Data, Document};
-    /// use confit_model::routes::{Route, RouteBase};
-    /// use confit_model::manifest::Manifest;
-    ///
-    /// let first = Document::new(Route::new(RouteBase::Home, "a").unwrap(), Data::Text { content: "a".into(), mode: None, unmanaged: false});
-    /// let second = Document::new(Route::new(RouteBase::Home, "b").unwrap(), Data::Text { content: "b".into(), mode: None, unmanaged: false});
-    /// let built = Manifest::build(vec![first, second], Vec::new()).unwrap();
-    /// let previous = Manifest::empty();
-    /// let report = Summary { built: &built, previous: &previous, drift: &[], first_run: false, hooks: Hooks { lifecycle: &[], evaluated: &[] } };
-    /// assert_eq!(
-    ///     report.summary_lines(),
-    ///     vec!["Documents: 2 to add, 0 to change, 0 to destroy.".to_string()]
-    /// );
-    /// ```
+    /// The hooks line renders while hooks move.
     pub fn summary_lines(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(2);
         if self.first_run {
@@ -349,12 +238,7 @@ impl Summary<'_> {
 
     /// Counts first-run creates and overwrites.
     ///
-    /// Documents holding no drift entries render no lines and
-    /// leave the counts.
-    ///
-    /// # Returns
-    ///
-    /// The create count and the overwrite count.
+    /// - Documents holding no drift entries leave the counts.
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
@@ -373,10 +257,6 @@ impl Summary<'_> {
     }
 
     /// Renders the first-run form over desired versus disk drift.
-    ///
-    /// # Returns
-    ///
-    /// Resource blocks, hooks, and the counts line.
     fn render_first_run(&self) -> String {
         let painter = Painter::new();
         let mut lines = Vec::new();
@@ -443,7 +323,7 @@ impl Summary<'_> {
         out
     }
 
-    /// Reads the header line for one steady hunk destination.
+    /// Renders the header line for one steady hunk destination.
     fn drift_hunk_header(&self, path: &Route) -> String {
         let found = self
             .previous
@@ -519,7 +399,7 @@ fn doc_label(document: &Document) -> Cow<'_, str> {
     }
 }
 
-/// Reads the header line for one document.
+/// Renders the header line for one document.
 fn header_line(document: &Document) -> String {
     format!(
         "{}: {}",
@@ -540,7 +420,7 @@ fn status_header(document: &Document, status: DocumentStatus) -> String {
 
 /// Appends one titled section while its body holds lines.
 ///
-/// Empty bodies render no title.
+/// - Empty bodies render no title.
 fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: Vec<String>) {
     if body.is_empty() {
         return;
@@ -551,8 +431,7 @@ fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: V
 
 /// Counts lifecycle entries by change.
 ///
-/// Silent entries never count. The triple describes hook
-/// records in the bundle, never execution.
+/// - The triple describes hook records in the bundle.
 fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
     let mut counts = HookCounts {
         added: 0,
@@ -573,8 +452,8 @@ fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
 
 /// Collects one document's drift entries for first runs.
 ///
-/// Tree member entries group under their destination path.
-/// Every other entry groups under its own path.
+/// - Tree member entries group under their destination path.
+/// - Every other entry groups under its own path.
 fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Drift> {
     let dest = document.destination.display();
     let is_tree = document.data.tree_members().is_some();
@@ -600,8 +479,8 @@ fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Dri
 
 /// Reports whether one first-run group lands whole.
 ///
-/// Whole-file missing entries always land whole. Whole trees
-/// holding missing entries alone land whole.
+/// - Whole-file missing entries always land whole.
+/// - Whole trees holding missing entries alone land whole.
 fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
     if entries
         .iter()
@@ -619,10 +498,8 @@ fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
 
 /// Renders one first-run update group with disk values first.
 ///
-/// Structured, link, and opaque keys read disk to desired.
-/// Text and rc hunks render verbatim with per-line paint.
-/// Trees collapse to one changed member count.
-/// Unreadable paths name the replacement.
+/// Trees collapse to one changed member count. Unreadable paths name the
+/// replacement.
 fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift]) -> Vec<String> {
     if let Some(members) = document.data.tree_members() {
         let mut rels = BTreeSet::new();
@@ -704,7 +581,7 @@ fn paint_hunk_line(painter: &Painter, line: &str) -> String {
     }
 }
 
-/// Reads one entry's tree member rel under its destination.
+/// Renders one entry's tree member rel under its destination.
 fn member_rel(document: &Document, entry: &Drift) -> String {
     let dest = document.destination.display();
     match entry {
@@ -841,10 +718,7 @@ fn touches_opaque(first: &Document, second: &Document) -> bool {
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
 
-/// Reads the hash and size label for one opaque ref.
-///
-/// Refs carry the content hash and byte count, so the label
-/// reads from the ref without reading blob bytes.
+/// Renders the hash and size label for one opaque ref.
 fn opaque_ref_label(sha: &Sha, size: u64) -> String {
     format!("sha256:{sha} ({size} bytes)")
 }
@@ -871,11 +745,6 @@ fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_
 }
 
 /// Collects update lines with old to new values.
-///
-/// Structured, link, opaque, and tree lines read yellow
-/// under the update sigil. Opaque labels read the recorded hash
-/// and size, never blob bytes. Rc updates read as a recorded to
-/// desired text hunk with per-symbol paint.
 fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     match (&document.data, &recorded.data) {
         (Data::Structured { data: new, .. }, Data::Structured { data: old, .. }) => {
@@ -955,8 +824,6 @@ fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
 }
 
 /// Builds one recorded-to-desired unified hunk for plan updates.
-///
-/// File markers never leave this function.
 fn recorded_hunk(old: &str, new: &str) -> String {
     diffy::create_patch(old, new)
         .to_string()
@@ -970,10 +837,7 @@ fn recorded_hunk(old: &str, new: &str) -> String {
 
 /// Renders one rc update as a recorded to desired text hunk.
 ///
-/// Rc payloads render inline, so no blob map reads. Hunk lines
-/// carry per-symbol paint through the shared hunk path. Render
-/// failures fall back to desired entry bodies under the update
-/// sigil.
+/// - Render failures fall back to desired entry bodies under the update sigil.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match inline_bytes(&recorded.data) {
         Ok(bytes) => bytes,
@@ -1001,8 +865,6 @@ fn split_key(key: &str) -> (&str, &str) {
 }
 
 /// Collects structured leaf changes with old to new values.
-///
-/// Flattened leaves compare by key, so nested edits read as dotted leaf lines.
 fn structured_update_lines(painter: &Painter, new: &Table, old: &Table) -> Vec<String> {
     let mut old_flat = BTreeMap::new();
     for (key, value) in old {

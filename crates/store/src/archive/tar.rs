@@ -1,7 +1,4 @@
-//! Tar backend
-//!
-//! Streaming member listing and extraction for plain
-//! and gzipped tar archives over driver framing.
+//! Streaming tar member listing and extraction.
 
 use std::path::Path;
 
@@ -12,9 +9,8 @@ use confit_driver as driver;
 
 /// Streaming tar member listing and extraction.
 ///
-/// Driver framing sniffs gzip itself, so plain with
-/// gzipped members ride one verb. Lone singles read
-/// under the archive file name.
+/// Driver framing sniffs gzip itself. Lone singles read under the archive file
+/// name.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TarBackend;
 
@@ -44,9 +40,7 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
 
 /// Unpacks tar entries with per-entry streaming hashes.
 ///
-/// Skipped entries drain inside framing, kept
-/// entries spill under staging with hashes. Lone
-/// singles read under the archive file name.
+/// - Lone singles read under the archive file name.
 ///
 /// # Errors
 ///
@@ -88,8 +82,7 @@ fn unpack_stream(
 
 /// Derives the lone single fallback from an archive path.
 ///
-/// Tar-style names refuse singles with an empty fallback,
-/// so bare gzip under tar names fails loud as non-archives.
+/// - Tar-style names refuse singles with an empty fallback.
 fn single_fallback(source: &Path) -> String {
     if wants_tar(source) {
         String::new()

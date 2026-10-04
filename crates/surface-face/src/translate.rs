@@ -1,8 +1,5 @@
 //! Faces
-//!
-//! Schema faces for data crossing the Lua boundary. Schemars
-//! schemas walk through the translator into stub faces, so adding
-//! a field moves the stub with zero hand edits.
+//! Schema faces for data crossing the Lua boundary.
 
 use schemars::JsonSchema;
 use serde_json::Value as Json;
@@ -21,11 +18,52 @@ macro_rules! typed {
     };
 }
 
+/// Declares one sealed handle face under its type name.
+///
+/// Userdata ends schemas.
+#[macro_export]
+macro_rules! handle_schema {
+    ($target:ty) => {
+        impl ::schemars::JsonSchema for $target {
+            fn schema_name() -> ::std::borrow::Cow<'static, str> {
+                $crate::module::class_name::<$target>().into()
+            }
+            fn json_schema(_generator: &mut ::schemars::SchemaGenerator) -> ::schemars::Schema {
+                let name = $crate::module::class_name::<$target>();
+                ::schemars::Schema::new_ref(["#/$defs/", name.as_str()].concat())
+            }
+        }
+    };
+}
+
 /// Derives one stub face from the schemars schema of a data shape.
 pub fn face_of<T: JsonSchema>() -> Type {
     match serde_json::to_value(schemars::schema_for!(T)) {
-        Ok(root) => translate(&root),
+        Ok(mut root) => {
+            root_refs(&mut root, T::schema_name().as_ref());
+            translate(&root)
+        }
         Err(_) => Type::any(),
+    }
+}
+
+/// Points recursive `#` self refs at the named root definition.
+fn root_refs(node: &mut Json, name: &str) {
+    match node {
+        Json::Object(fields) => {
+            if fields.get("$ref").and_then(Json::as_str) == Some("#") {
+                fields.insert("$ref".to_owned(), Json::String(["#/$defs/", name].concat()));
+            }
+            for value in fields.values_mut() {
+                root_refs(value, name);
+            }
+        }
+        Json::Array(items) => {
+            for item in items {
+                root_refs(item, name);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -38,6 +76,9 @@ pub fn translate(node: &Json) -> Type {
         let bare = name.rsplit('/').next().unwrap_or(name);
         return Type::named(bare.to_owned());
     }
+    if let Some(name) = node.get("const").and_then(Json::as_str) {
+        return Type::literal(name.to_owned());
+    }
     if let Some(names) = node.get("enum").and_then(Json::as_array) {
         return Type::union(
             names
@@ -47,7 +88,16 @@ pub fn translate(node: &Json) -> Type {
     }
     for key in ["anyOf", "oneOf"] {
         if let Some(members) = node.get(key).and_then(Json::as_array) {
-            return Type::union(members.iter().map(translate).collect::<Vec<_>>());
+            let faces: Vec<Type> = members.iter().map(translate).collect::<Vec<_>>();
+            if let Some(extra) = sibling_fields(node, key) {
+                return Type::union(
+                    faces
+                        .into_iter()
+                        .map(|face| merge_fields(face, &extra))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            return Type::union(faces);
         }
     }
     if let Some(members) = node.get("allOf").and_then(Json::as_array)
@@ -67,7 +117,12 @@ pub fn translate(node: &Json) -> Type {
             Some(names) => Type::union(
                 names
                     .iter()
-                    .map(|name| translate_type(name.as_str().unwrap_or_default()))
+                    .map(|name| match name.as_str() {
+                        Some("array") => translate_array(node),
+                        Some("object") => translate_object(node),
+                        Some(single) => translate_type(single),
+                        None => Type::any(),
+                    })
                     .collect::<Vec<_>>(),
             ),
             None => Type::any(),
@@ -75,7 +130,7 @@ pub fn translate(node: &Json) -> Type {
     }
 }
 
-/// Answers the face for one JSON type name.
+/// Returns the face for one JSON type name.
 fn translate_type(name: &str) -> Type {
     match name {
         "string" => Type::string(),
@@ -97,10 +152,43 @@ fn translate_array(node: &Json) -> Type {
     }
 }
 
-/// Answers the JSON value face: null with scalars and tables.
+/// Collects sibling object fields beside a composition key.
+fn sibling_fields(node: &Json, composed: &str) -> Option<Vec<(Index, Type)>> {
+    let mut sibling = node.clone();
+    if let Some(object) = sibling.as_object_mut() {
+        object.remove(composed);
+        object.remove("anyOf");
+        object.remove("oneOf");
+    }
+    match translate(&sibling) {
+        Type::Table(fields) => {
+            if fields.is_empty() {
+                None
+            } else {
+                Some(fields.into_iter().collect())
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Merges sibling fields into one union member.
 ///
-/// Arrays ride tables, functions with threads and userdata never
-/// cross into JSON.
+/// - Member fields win on clashes.
+fn merge_fields(face: Type, extra: &[(Index, Type)]) -> Type {
+    match face {
+        Type::Table(mut fields) => {
+            for (key, value) in extra {
+                if !fields.contains_key(key) {
+                    fields.insert(key.clone(), value.clone());
+                }
+            }
+            Type::Table(fields)
+        }
+        _ => face,
+    }
+}
+/// Returns the JSON value face holding null with scalars and tables.
 pub fn json_value() -> Type {
     Type::union(vec![
         Type::nil(),
@@ -164,6 +252,14 @@ mod tests {
     }
 
     #[test]
+    fn translate_unions_const_members() {
+        assert_eq!(
+            translate(&json!({"const": "json"})),
+            Type::literal("json".to_owned())
+        );
+    }
+
+    #[test]
     fn translate_unions_enums_with_refs() {
         assert_eq!(
             translate(&json!({"enum": ["toml", "json"]})),
@@ -177,8 +273,24 @@ mod tests {
             Type::union(vec![Type::string(), Type::integer()])
         );
         assert_eq!(
-            translate(&json!({"$ref": "#/$defs/TextBody"})),
-            Type::named("TextBody".to_owned())
+            translate(&json!({"$ref": "#/$defs/TextDocument"})),
+            Type::named("TextDocument".to_owned())
+        );
+    }
+
+    #[test]
+    fn face_names_root_self_refs() {
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        enum Linked {
+            End,
+            More(Vec<Linked>),
+        }
+        let text = format!("{:?}", face_of::<Linked>());
+        assert!(text.contains("Linked"), "names the root: {text}");
+        assert!(
+            !text.contains("\"#\""),
+            "never leaks the root pointer: {text}"
         );
     }
 

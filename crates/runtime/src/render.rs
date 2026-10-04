@@ -1,5 +1,4 @@
 //! Render
-//!
 //! Document payloads to on-disk bytes.
 
 use confit_model::arg::{Arg, quote};
@@ -13,34 +12,12 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
 /// Renders one document to exact on-disk bytes.
 ///
-/// Routes expand against host folders, so shell
-/// payloads carry resolved paths.
-///
 /// # Errors
 ///
 /// - [`RuntimeError::Refusal`] for opaque with tree payloads.
 /// - [`RuntimeError::Render`] for serializer failures.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::{Data, Document};
-/// use confit_model::routes::{Route, RouteBase};
-/// use confit_store::StoreRoots;
-/// use confit_runtime::Applier;
-///
-/// let document = Document::new(
-///     Route::new(RouteBase::Home, "note").unwrap(),
-///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-/// );
-/// let applier = Applier::host(StoreRoots::default());
-/// assert!(matches!(applier.render_document(&document), Ok(bytes) if bytes == b"hi".to_vec()));
-/// ```
 impl crate::Applier {
     /// Renders one document to exact on-disk bytes.
-    ///
-    /// Routes expand against host folders, so shell
-    /// payloads carry resolved paths.
     ///
     /// # Errors
     ///

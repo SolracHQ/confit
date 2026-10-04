@@ -1,6 +1,4 @@
-//! Pack
-//!
-//! Bundle writes over blob reads.
+//! Bundle writes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -23,9 +21,10 @@ const BUNDLE_ENTRY_MODE: u32 = 0o644;
 impl BundleStore {
     /// Writes one portable bundle holding manifest and blobs.
     ///
-    /// Bare destinations gain the bundle extension and the
-    /// sealed handle names the written file. The manifest rides
-    /// first with blob members sorted by stored hash.
+    /// The sealed handle names the written file.
+    ///
+    /// - Destinations carry the bundle extension.
+    /// - Members ride manifest-first in stored-hash order.
     ///
     /// # Errors
     ///
@@ -58,10 +57,7 @@ impl BundleStore {
         seal_bundle(&dest, members)
     }
 
-    /// Opens one blob source under its container member name.
-    ///
-    /// Reads ride the stored hash with encoded length, so pool
-    /// bytes land in the tar untouched.
+    /// Opens one blob reader with its member name and length.
     ///
     /// # Errors
     ///
@@ -106,7 +102,7 @@ impl BundleStore {
 
 /// Lists one manifest's refs sorted by stored hash.
 ///
-/// Duplicate stored hashes keep their first ref.
+/// - Duplicate stored hashes keep their first ref.
 fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
     let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
     for blob in manifest.refs() {
@@ -117,9 +113,9 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
 
 /// Seals one staged bundle into its destination file.
 ///
-/// Member order reads as given, so callers own entry
-/// order. The sealed handle carries the finished file
-/// path and its content hash.
+/// The sealed handle carries the finished file path and its content hash.
+///
+/// - Member order reads as given.
 ///
 /// # Errors
 ///
@@ -139,7 +135,7 @@ fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Resul
     })
 }
 
-/// Hashes one finished bundle file with a stream.
+/// Hashes one finished bundle file.
 ///
 /// # Errors
 ///

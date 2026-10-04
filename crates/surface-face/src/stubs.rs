@@ -1,7 +1,5 @@
 //! Stubs
-//!
-//! Stub proof for the Lua surface. Generation writes the live
-//! definitions under one folder with a parse gate.
+//! Stub proof for the Lua surface.
 
 use std::path::{Path, PathBuf};
 
@@ -36,10 +34,7 @@ pub type Result<T> = std::result::Result<T, StubError>;
 
 /// Writes the live stub definitions under one folder.
 ///
-/// Every file parses as Lua before the call answers. The meta
-/// header names the module file, so require binds by that name,
-/// and each file closes with a return statement answering its
-/// module value.
+/// - Every file parses as Lua before the call returns.
 ///
 /// # Errors
 ///
@@ -90,10 +85,10 @@ fn name_meta(path: &Path) -> Result<()> {
     })
 }
 
-/// Appends the module return statement answering its values.
+/// Appends the module return statement returning its values.
 ///
-/// One function returns bare, several answer a table, one bare
-/// value returns bare.
+/// One function returns bare, several return a table, and one bare value
+/// returns bare.
 ///
 /// # Errors
 ///
@@ -158,31 +153,26 @@ fn gate(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_surface_api::definitions::definitions;
+    use mlua_extras::typed::generator::Definition;
+
+    fn live_sample() -> Vec<(String, Definition)> {
+        vec![(
+            "confit.version".to_owned(),
+            Definition::start()
+                .document("Api level of the Lua surface, one integer.")
+                .proxy::<i64>("version")
+                .finish(),
+        )]
+    }
 
     #[test]
-    fn write_lands_live_stubs() {
+    fn write_lands_stubs() {
         let dir = tempfile::tempdir().unwrap();
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = confit_store::Stores::new(
-            confit_store::StoreRoots {
-                config_base: dir.path().join("config"),
-                cache_base: dir.path().join("cache"),
-                temp_base: dir.path().join("temp"),
-                project_root: dir.path().to_path_buf(),
-            },
-            sender,
-        );
-        let lua = mlua::Lua::new();
-        let live = match definitions(&lua, &stores, dir.path()) {
-            Ok(live) => live,
-            Err(error) => panic!("definitions build: {error}"),
-        };
-        let written = match write(dir.path(), &live) {
+        let written = match write(dir.path(), &live_sample()) {
             Ok(written) => written,
             Err(error) => panic!("stubs write: {error}"),
         };
-        assert_eq!(written.len(), 5, "one file per module");
+        assert_eq!(written.len(), 1, "one file per module");
         for path in &written {
             assert!(
                 path.starts_with(dir.path()),

@@ -1,5 +1,4 @@
 //! Faults
-//!
 //! Shared access fault causes across stores.
 
 use std::fmt::{Display, Formatter};
@@ -7,9 +6,9 @@ use std::io::ErrorKind;
 
 /// Shared access fault cause.
 ///
-/// One cause covers every store access path. Stores pair the
-/// cause with their own context in one Read wrapper and one
-/// Write wrapper. Unmapped kinds carry their message along.
+/// One cause covers every store access path. Stores pair the cause with their
+/// own context in one Read wrapper and one Write wrapper. Unmapped kinds carry
+/// their message along.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessFault {
     /// Vanished file.
@@ -33,9 +32,6 @@ pub enum AccessFault {
 
 impl AccessFault {
     /// Interprets one io kind into its fault.
-    ///
-    /// Mapped kinds yield their fault. All else
-    /// yields None for Unknown callers.
     pub fn interpret(kind: ErrorKind) -> Option<Self> {
         match kind {
             ErrorKind::NotFound => Some(Self::Missing),
@@ -50,7 +46,6 @@ impl AccessFault {
 
     /// Names the fault cause for display shells.
     ///
-    /// The cause reads as a bare phrase for appending.
     /// Unknown faults echo their raw text.
     pub fn cause(&self) -> &str {
         match self {

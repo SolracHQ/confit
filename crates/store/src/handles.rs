@@ -1,5 +1,4 @@
 //! Handles
-//!
 //! Unforgeable identity for trusted sources and pooled bytes.
 
 use std::path::{Path, PathBuf};
@@ -12,26 +11,18 @@ use crate::fetch::error::FetchError;
 use crate::resources::error::ResourceError;
 
 /// Canonical identity for a trusted source.
-///
-/// Sources pass birth checks once; downstream code trusts the type
-/// without rechecking.
-///
 pub trait TrustedHandle {
     /// Reads the canonical source path.
-    ///
     fn canonical(&self) -> &Path;
 
     /// Reads the content hash.
-    ///
     fn sha(&self) -> &Sha;
 }
 
 /// Fetched artifact identity.
 ///
-/// Cache file path, content hash, and origin url.
-/// The path holds a non-empty shape; the fetcher proves bytes.
-/// The hash holds 64 hex characters.
-///
+/// Cache file path, content hash, and origin url. The path holds a non-empty
+/// shape the fetcher proves bytes. The hash holds 64 hex characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchHandle {
     cache_path: PathBuf,
@@ -41,10 +32,8 @@ pub struct FetchHandle {
 
 /// Exec-rooted project file identity.
 ///
-/// Rooted path and content hash.
-/// The path holds containment under the exec root.
-/// The hash holds 64 hex characters.
-///
+/// Rooted path and content hash. The path holds containment under the exec
+/// root. The hash holds 64 hex characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceHandle {
     path: PathBuf,
@@ -53,11 +42,8 @@ pub struct ResourceHandle {
 
 /// Content-addressed bytes identity.
 ///
-/// The content hash names payload bytes; the stored hash names
-/// pool bytes. Handles seal both at birth, so pool reads never
-/// re-derive identity from bytes.
-/// Both hashes hold 64 hex characters.
-///
+/// The content hash names payload bytes the stored hash names pool bytes.
+/// Handles seal both at birth. Both hashes hold 64 hex characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlobHandle {
     sha256: Sha,
@@ -66,9 +52,8 @@ pub struct BlobHandle {
 
 /// Verified compressed archive identity.
 ///
-/// Trusted source path, source hash, and compression proof.
-/// The proof exists only for sources verified as compressed archives.
-///
+/// Trusted source path, source hash, and compression proof. The proof exists
+/// only for sources verified as compressed archives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArchiveHandle {
     source_path: PathBuf,
@@ -79,7 +64,6 @@ pub struct ArchiveHandle {
 /// Compression proof for an archive handle.
 ///
 /// Only sources verified as compressed archives carry this marker.
-///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArchiveProof {
     /// Verified compressed source.
@@ -102,7 +86,6 @@ impl FetchHandle {
     /// # Errors
     ///
     /// - [`FetchError::Read`] for empty cache paths.
-    ///
     pub(crate) fn new(
         cache_path: impl Into<PathBuf>,
         sha256: Sha,
@@ -124,7 +107,6 @@ impl FetchHandle {
     }
 
     /// Reads the origin url.
-    ///
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -146,7 +128,6 @@ impl ResourceHandle {
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for paths outside the exec root.
-    ///
     pub(crate) fn new(
         exec_root: &Path,
         path: impl Into<PathBuf>,
@@ -167,19 +148,16 @@ impl BlobHandle {
     }
 
     /// Reads the content hash.
-    ///
     pub fn sha(&self) -> &Sha {
         &self.sha256
     }
 
     /// Reads the pool-bytes hash.
-    ///
     pub fn stored(&self) -> &Sha {
         &self.stored
     }
 
-    /// Reads the manifest ref carrying both hashes.
-    ///
+    /// Builds the manifest ref carrying both hashes.
     pub fn to_ref(&self) -> BlobRef {
         BlobRef::new(self.sha256.clone(), self.stored.clone())
     }
@@ -198,13 +176,9 @@ impl TrustedHandle for ArchiveHandle {
 impl ArchiveHandle {
     /// Builds an archive handle from verified source identity.
     ///
-    /// Callers copy the path and hash from a trusted source handle
-    /// after archive verification. The proof seals at birth.
-    ///
     /// # Errors
     ///
     /// - [`ArchiveError::NotArchive`] for empty source paths.
-    ///
     pub(crate) fn new(
         source_path: impl Into<PathBuf>,
         source_sha256: Sha,
@@ -221,7 +195,6 @@ impl ArchiveHandle {
     }
 
     /// Reads the compression proof.
-    ///
     pub fn proof(&self) -> ArchiveProof {
         self.proof
     }

@@ -1,5 +1,4 @@
 //! Spinner
-//!
 //! Tty-gated progress renderer and its sender.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,13 +9,11 @@ use confit_model::progress::{Event, ProgressSender};
 /// Sender for already formatted stderr lines.
 ///
 /// Lines flow toward the renderer thread for ordered printing.
-///
 pub type PrintSender = crossbeam_channel::Sender<String>;
 
 /// Parks widget painting across prompts.
 ///
 /// Clones share one draw target. Prompts run inside `suspend`.
-///
 #[derive(Debug, Clone)]
 pub struct SuspendControl {
     /// Shared target holding the spinner on terminal runs.
@@ -27,25 +24,11 @@ pub struct SuspendControl {
 
 impl SuspendControl {
     /// Runs one prompt with widgets parked.
-    ///
-    /// # Arguments
-    ///
-    /// * `run` - the prompt work under parking.
-    ///
-    /// # Returns
-    ///
-    /// Whatever the prompt returns.
     pub fn suspend<T>(&self, run: impl FnOnce() -> T) -> T {
         self.multi.suspend(run)
     }
 
     /// Asks one question with widgets parked.
-    ///
-    /// # Arguments
-    ///
-    /// * `question` - the prompt text under writing to stderr.
-    ///
-    /// # Returns
     ///
     /// True only for the literal `yes` answer.
     ///
@@ -76,10 +59,9 @@ impl SuspendControl {
 
 /// One tty-gated renderer and its senders.
 ///
-/// The thread owns the spinner and selects on facts, prints
-/// and shutdown. Prints land through `println`. Shutdown clears
-/// the single line. Finish signals shutdown, then joins the thread.
-///
+/// The thread owns the spinner and selects on facts, prints and shutdown.
+/// Prints land through `println`. Shutdown clears the single line. Finish
+/// signals shutdown, then joins the thread.
 pub struct Live {
     /// Facts under sending toward the renderer thread.
     tx: ProgressSender,
@@ -99,10 +81,6 @@ pub struct Live {
 
 impl Live {
     /// Builds one renderer hidden while stderr is not a terminal.
-    ///
-    /// # Returns
-    ///
-    /// The live renderer for one run.
     pub fn new() -> Self {
         use std::io::IsTerminal as _;
         let terminal = std::io::stderr().is_terminal();
@@ -138,17 +116,13 @@ impl Live {
     }
 
     /// Reads the sender for one run.
-    ///
-    /// The run facts sender.
     pub fn sink(&self) -> ProgressSender {
         self.tx.clone()
     }
 
     /// Reads the print sender for one run.
     ///
-    /// # Returns
-    ///
-    /// The stderr line sender, holding `None` off terminal.
+    /// Off terminal the handle reads `None`.
     pub fn print_handle(&self) -> Option<PrintSender> {
         if self.headless {
             return None;
@@ -158,9 +132,7 @@ impl Live {
 
     /// Reads the suspend control for one run.
     ///
-    /// # Returns
-    ///
-    /// The prompt parking control, holding `None` off terminal.
+    /// Off terminal the handle reads `None`.
     pub fn suspend_handle(&self) -> Option<SuspendControl> {
         if self.headless {
             return None;
@@ -170,8 +142,7 @@ impl Live {
 
     /// Clears the widget and joins the renderer once the run lands.
     ///
-    /// Shutdown signals the thread, then joins it. Repeated calls
-    /// stay quiet. A dead thread still clears the line.
+    /// - A dead thread still clears the line.
     pub fn finish(&self) {
         if self.done.swap(true, Ordering::SeqCst) {
             return;

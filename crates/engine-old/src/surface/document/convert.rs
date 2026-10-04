@@ -845,7 +845,7 @@ fn entry_route(
         section: section.to_owned(),
     };
     match inner.get(field) {
-        Some(Json::String(text)) => Route::parse(text)
+        Some(Json::String(text)) => crate::model::parse_display(text)
             .or_else(|_| Route::new(RouteBase::Literal, text.clone()).map_err(|_| invalid()))
             .map_err(mlua::Error::from),
         Some(value @ Json::Object(_)) => {

@@ -1,10 +1,4 @@
-//! Transport
-//!
 //! Boundary mapping between driver downloads and fetch errors.
-//!
-//! The driver answers bodies over streams, transport
-//! adds the url with fetch language. The body cap rides
-//! along as fetch policy passed per call.
 
 use std::io::Read;
 
@@ -29,9 +23,8 @@ pub fn download(url: &str, limit: u64) -> Result<Box<dyn Read>> {
 
 /// Maps one driver failure into its fetch error.
 ///
-/// Status with timeout and unscripted keep their
-/// shape holding the url, io folds through the io
-/// mapping with the url.
+/// Status, timeout, and unscripted keep their shape holding the url, io folds
+/// through the io mapping with the url.
 fn from_http(url: &str, error: HttpError) -> FetchError {
     match error {
         HttpError::Status { code } => FetchError::Status {

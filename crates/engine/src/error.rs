@@ -1,5 +1,4 @@
 //! Error
-//!
 //! Evaluation failure vocabulary.
 
 use thiserror::Error;
@@ -20,6 +19,36 @@ pub enum EngineError {
     Duplicate {
         /// The repeated destination display.
         display: String,
+    },
+    /// Defined-twice config holding its name.
+    #[error("config '{name}' is already defined")]
+    Defined {
+        /// The repeated config name.
+        name: String,
+    },
+    /// Changed gate holding its unknown document display.
+    #[error("hook changed gate names unknown document '{route}'")]
+    ChangedUnknown {
+        /// The unknown document display.
+        route: String,
+    },
+    /// Rc guard holding its hooks-only changed leaf.
+    #[error("document '{display}' {section} holds 'changed' (hooks only)")]
+    ChangedInRc {
+        /// The offending document display.
+        display: String,
+        /// The offending rc section name.
+        section: String,
+    },
+    /// Patched target holding its base shape with its patch format.
+    #[error("patch target '{display}' holds '{base}' under '{patch}' patches")]
+    Structured {
+        /// The patch target display.
+        display: String,
+        /// The base shape name.
+        base: String,
+        /// The patch format name.
+        patch: String,
     },
     /// File read failure.
     #[error("cannot read '{path}': {reason}")]

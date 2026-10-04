@@ -1,8 +1,5 @@
 //! Error
-//!
-//! Failure vocabulary for the surface. Programmer errors raise
-//! as structured variants, soft failures answer nil with reason
-//! at the call.
+//! Failure vocabulary for the surface.
 
 use thiserror::Error;
 
@@ -10,20 +7,14 @@ use thiserror::Error;
 #[derive(Debug, Clone, Error)]
 pub enum ApiError {
     /// Wrong-type value.
-    #[error("invalid {slot} '{received}': want {want}")]
+    #[error("invalid {field} '{received}': want {want}")]
     Mismatch {
-        /// The value slot under reading.
-        slot: String,
+        /// The value field under reading.
+        field: String,
         /// The wanted shape.
         want: String,
         /// The received type word.
         received: String,
-    },
-    /// Repeated config name.
-    #[error("config '{name}' is already defined")]
-    Defined {
-        /// The repeated collector name.
-        name: String,
     },
     /// Unknown module.
     #[error("unknown module '{name}'")]
@@ -47,15 +38,12 @@ pub enum ApiError {
         /// The escape reason.
         reason: String,
     },
-    /// Missing segments.
-    #[error("{caller} expects one path segment at least")]
-    EmptySegments {
-        /// The calling verb.
-        caller: String,
-    },
-    /// Seal failure.
+    /// Open failure.
     #[error(transparent)]
-    Seal(#[from] confit_store::resources::error::ResourceError),
+    Open(#[from] confit_store::resources::error::ResourceError),
+    /// Blob failure.
+    #[error(transparent)]
+    Blob(#[from] confit_store::blob::error::BlobError),
     /// Fetch failure.
     #[error(transparent)]
     Fetch(#[from] confit_store::fetch::error::FetchError),
@@ -67,6 +55,21 @@ pub enum ApiError {
     Lua(#[from] mlua::Error),
 }
 
+impl ApiError {
+    /// Builds one mismatch error naming its field.
+    pub fn mismatch(
+        field: impl Into<String>,
+        want: impl Into<String>,
+        received: impl Into<String>,
+    ) -> Self {
+        Self::Mismatch {
+            field: field.into(),
+            want: want.into(),
+            received: received.into(),
+        }
+    }
+}
+
 impl From<ApiError> for mlua::Error {
     fn from(error: ApiError) -> Self {
         mlua::Error::external(error)
@@ -75,3 +78,13 @@ impl From<ApiError> for mlua::Error {
 
 /// Surface result alias.
 pub type Result<T> = std::result::Result<T, ApiError>;
+
+/// Unwraps one Lua failure back into its surface shape.
+///
+/// - Foreign Lua failures ride the Lua variant.
+pub(crate) fn api_of(error: mlua::Error) -> ApiError {
+    match error.downcast_ref::<ApiError>().cloned() {
+        Some(known) => known,
+        None => ApiError::Lua(error),
+    }
+}

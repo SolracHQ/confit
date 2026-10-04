@@ -1,10 +1,4 @@
-//! Memory filesystem verbs behind `fs` paths.
-//!
-//! Every verb rides the parked backend under a test
-//! guard with `FsFile` handles from open and create
-//! and append. The backend splits reads and writes
-//! across handles, so memory handles wrap cursors
-//! flushing back on sync and drop.
+//! Memory filesystem verbs.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -23,8 +17,7 @@ thread_local! {
 
 /// RAII guard parking one memory filesystem for the thread.
 ///
-/// Install holds a fresh empty backend, drop restores the prior
-/// one so sequential tests on one thread never share entries.
+/// Install holds a fresh empty backend, drop restores the prior one.
 pub struct TestGuard {
     prior: Option<VfsPath>,
 }
@@ -42,14 +35,14 @@ impl TestGuard {
 
     /// Arms one sticky read failure for the guard life.
     ///
-    /// Open with read with read_to_string fail until drop.
+    /// - Open, read, and read_to_string fail until drop.
     pub fn fail_reads(&self, kind: io::ErrorKind) {
         READ_FAULT.with(|cell| *cell.borrow_mut() = Some(kind));
     }
 
     /// Arms one sticky write failure for the guard life.
     ///
-    /// Write with create with append fail until drop.
+    /// - Write, create, and append fail until drop.
     pub fn fail_writes(&self, kind: io::ErrorKind) {
         WRITE_FAULT.with(|cell| *cell.borrow_mut() = Some(kind));
     }
@@ -61,11 +54,7 @@ impl Drop for TestGuard {
     }
 }
 
-/// Memory seekable handle over one cursor with a backend home.
-///
-/// Reads and seeks ride the cursor, writes buffer there,
-/// length reads the cursor, sync and drop land bytes back
-/// onto the backend.
+/// Memory seekable handle.
 struct MemFile {
     cursor: io::Cursor<Vec<u8>>,
     root: VfsPath,
@@ -221,8 +210,7 @@ pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
 
 /// Reports whether one path holds any entry.
 ///
-/// Panics without an installed guard: a bool carries
-/// no failure, and silent host reads are refused.
+/// - Panics while no guard holds.
 pub fn exists(path: &Path) -> bool {
     let Some(root) = parked() else {
         panic!("confit driver: no test guard installed");
@@ -243,10 +231,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     mem_read_dir(&root, path)
 }
 
-/// Opens one file behind a seekable handle.
-///
-/// Reads ride the loaded bytes, writes buffer in the
-/// cursor until sync or drop lands them back.
+/// Opens one file.
 ///
 /// # Errors
 ///
@@ -268,9 +253,6 @@ pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 
 /// Reads the last bytes of one backend file.
 ///
-/// Short backend files fail loud with unexpected-eof.
-/// Missing files fail as not-found io errors.
-///
 /// # Errors
 ///
 /// - [NotFound] when the path holds no entry.
@@ -290,7 +272,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     Ok(bytes[bytes.len() - tail..].to_vec())
 }
 
-/// Creates one file behind a seekable handle truncating any entry.
+/// Creates one file truncating any entry.
 ///
 /// # Errors
 ///
@@ -309,10 +291,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
 
-/// Opens one file behind a seekable handle appending.
-///
-/// Present entries load first with the cursor at the
-/// end, missing entries create first.
+/// Opens one file appending.
 ///
 /// # Errors
 ///
@@ -352,10 +331,6 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 
 /// Reads one symlink target.
 ///
-/// Links never model in tests: every path reads as a
-/// plain file, so reads always fail and link policy
-/// stays pure logic.
-///
 /// # Errors
 ///
 /// - [NotFound] when the path holds any entry or none.
@@ -369,9 +344,6 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
 }
 
 /// Creates one symlink replacing any present entry.
-///
-/// Links store target bytes as a plain file, so
-/// readers see link content without link semantics.
 ///
 /// # Errors
 ///
@@ -387,9 +359,7 @@ pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
 
 /// Sets unix permission bits on one path.
 ///
-/// Bits persist beside the backend under the guard, so
-/// later reads see stored values. Present and absent
-/// paths alike succeed; absent reads still fail loud.
+/// - Present and absent paths alike succeed.
 ///
 /// # Errors
 ///
@@ -404,8 +374,7 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 
 /// Reads unix permission bits for one path.
 ///
-/// Stored bits win, present entries without stored bits
-/// read the default. Missing entries fail loud.
+/// - Stored bits win over the default.
 ///
 /// # Errors
 ///
@@ -435,16 +404,12 @@ fn parked() -> Option<VfsPath> {
     PARKED.with(|cell| cell.borrow().clone())
 }
 
-/// Reads the parked memory root failing loud without a guard.
-///
-/// Tests forgetting the guard fail here, never on the host.
+/// Reads the parked memory root failing loud.
 fn rooted() -> io::Result<VfsPath> {
     parked().ok_or_else(|| io::Error::other("confit driver: no test guard installed"))
 }
 
 /// Fails one read with the armed kind while set.
-///
-/// Sticky reads fail until the guard drops.
 fn check_read() -> io::Result<()> {
     if let Some(kind) = READ_FAULT.with(|cell| *cell.borrow()) {
         return Err(io::Error::new(kind, "confit driver: armed read fails"));
@@ -453,8 +418,6 @@ fn check_read() -> io::Result<()> {
 }
 
 /// Fails one write with the armed kind while set.
-///
-/// Sticky writes fail until the guard drops.
 fn check_write() -> io::Result<()> {
     if let Some(kind) = WRITE_FAULT.with(|cell| *cell.borrow()) {
         return Err(io::Error::new(kind, "confit driver: armed write fails"));
@@ -464,7 +427,7 @@ fn check_write() -> io::Result<()> {
 
 /// Maps one host path onto the parked memory backend.
 ///
-/// Absolute paths keep their text, relative paths root at `/`.
+/// - Absolute paths keep their text, relative paths root at `/`.
 fn to_vfs(root: &VfsPath, path: &Path) -> io::Result<VfsPath> {
     let text = path.as_os_str().to_string_lossy();
     let rooted = rooted_path(&text);

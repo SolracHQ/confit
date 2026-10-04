@@ -1,10 +1,10 @@
 //! Error
-//!
 //! Failure vocabulary for core operations.
 
 use thiserror::Error;
 
 use crate::document::StructuredFormat;
+use crate::routes::SegmentFault;
 
 /// Core failure shapes.
 #[derive(Debug, Clone, Error)]
@@ -33,8 +33,15 @@ pub enum Error {
         /// The render reason.
         reason: String,
     },
+    /// Route jail failure holding the input with its fault.
+    #[error("invalid '{input}': want valid relative segments ({fault})")]
+    Segment {
+        /// The offending relative text.
+        input: String,
+        /// The jail fault naming the offense.
+        fault: SegmentFault,
+    },
 }
 
 /// Core result alias.
-///
 pub type Result<T> = std::result::Result<T, Error>;

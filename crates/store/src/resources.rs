@@ -1,5 +1,4 @@
 //! Resources
-//!
 //! Trusted-source birth and text reads.
 
 pub mod error;
@@ -13,13 +12,10 @@ use crate::handles::{FetchHandle, ResourceHandle, TrustedHandle};
 use confit_driver as driver;
 use error::{ResourceError, Result};
 
-/// Fallback mode for spill entries without distinct bits.
+/// Fallback mode for spill entries.
 const DEFAULT_SPILL_MODE: u32 = 0o644;
 
-/// Trusted project files behind exec-rooted handles.
-///
-/// Birth checks containment under the project root once;
-/// downstream code trusts the handle type without rechecking.
+/// Trusted project files.
 #[derive(Debug, Clone)]
 pub struct Resources {
     /// The store roots backing construction.
@@ -28,8 +24,6 @@ pub struct Resources {
 
 impl Resources {
     /// Builds file-backed resources under explicit roots.
-    ///
-    /// Roots arrive explicit from store construction.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
             roots: roots.clone(),
@@ -70,9 +64,6 @@ impl Resources {
 
     /// Births a resource handle over one fetched body.
     ///
-    /// Birth checks containment under the cache base once,
-    /// downstream code trusts the handle type without rechecking.
-    ///
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for bodies outside the cache base.
@@ -91,9 +82,6 @@ impl Resources {
     }
 
     /// Births a spill handle for one staged file.
-    ///
-    /// Birth checks containment under the temp base once,
-    /// downstream code trusts the handle type without rechecking.
     ///
     /// # Errors
     ///

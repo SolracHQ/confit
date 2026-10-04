@@ -1,5 +1,4 @@
 //! Hooks
-//!
 //! Hook preview lines for plans beside documents.
 
 use confit_model::arg::Arg;
@@ -15,10 +14,7 @@ use crate::error::{CliError, Result};
 
 use crate::presentation::summary::Sigil;
 
-/// One hook preview outcome behind one evaluated line.
-///
-/// Gate text renders through condition collapse, so merged
-/// duplicate gates read once. Binaries resolve before running.
+/// One hook preview outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewOutcome {
     /// Requires gate closed with its rendered text.
@@ -31,41 +27,16 @@ pub enum PreviewOutcome {
     Run(PathBuf),
 }
 
-/// One evaluated hook pairing its hook with its preview outcome.
-///
-/// The hook borrows core data, the outcome carries presentation
-/// facts. Rendering reads argv and the outcome alone.
+/// One evaluated hook pairing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluatedHook<'a> {
     /// The hook under preview.
     pub hook: &'a Hook,
-    /// The gate or binary behind its line.
+    /// The gate or binary for its line.
     pub outcome: PreviewOutcome,
 }
 
 /// Renders one condition in compact form for warn lines.
-///
-/// Simplifies before rendering, so merged duplicate gates collapse
-/// to one branch. Compounds read infix with full parens, leaves read
-/// bare.
-///
-/// # Arguments
-///
-/// * `cond` - the condition under rendering.
-///
-/// # Returns
-///
-/// The compact gate text like `(in_path(mise) and changed(path))`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::condition::Condition;
-/// use confit_cli::presentation::hooks::describe_condition;
-///
-/// let cond = Condition::InPath { name: "mise".into() };
-/// assert!(matches!(describe_condition(&cond).as_str(), "in_path(mise)"));
-/// ```
 pub fn describe_condition(cond: &Condition) -> String {
     fn render(cond: &Condition) -> String {
         match cond {
@@ -91,33 +62,6 @@ pub fn describe_condition(cond: &Condition) -> String {
 }
 
 /// Renders plan hook lines from lifecycle diff data.
-///
-/// # Arguments
-///
-/// * `lifecycle` - the lifecycle entries in plan order with removals trailing.
-///
-/// # Returns
-///
-/// The lifecycle lines in plan order with removals trailing.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::hook::{Hook, diff_lifecycle};
-/// use confit_cli::presentation::hooks::lifecycle_lines;
-///
-/// let hook = Hook {
-///     argv: vec![confit_model::arg::Arg::Text("mise".to_string())],
-///     path: vec![],
-///     requires: None,
-///     when: None,
-///     checks: vec![],
-///     timeout_secs: 60,
-/// };
-/// let current = [hook];
-/// let lifecycle = diff_lifecycle(&current, &[]);
-/// assert_eq!(lifecycle_lines(&lifecycle), vec!["+ mise".to_string()]);
-/// ```
 pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in lifecycle {
@@ -163,9 +107,9 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     lines
 }
 
-/// Reads one hook preview outcome.
+/// Decides one hook preview outcome.
 ///
-/// Requires, when, and checks gates answer before resolving.
+/// - Requires, when, and checks gates run before resolving.
 ///
 /// # Errors
 ///
@@ -212,9 +156,10 @@ fn decide<'a>(
 
 /// Resolves one hook binary with routes expanded inline.
 ///
-/// Hook path entries search first, runtime dirs follow. Route
-/// slots expand against host folders; text runs verbatim.
-/// First existing executable wins. No hook copy.
+/// Route slots expand against host folders and text passes unchanged.
+///
+/// - Hook path entries search first, runtime dirs follow.
+/// - First existing executable wins.
 pub fn resolve_hook(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
     let head = hook
         .argv
@@ -258,14 +203,6 @@ fn render_preview(evaluated: &EvaluatedHook) -> String {
 }
 
 /// Renders one evaluated line per hook in plan order.
-///
-/// # Arguments
-///
-/// * `evaluated` - the evaluated hooks under rendering.
-///
-/// # Returns
-///
-/// The preview lines in plan order.
 pub fn render_evaluated(evaluated: &[EvaluatedHook]) -> Vec<String> {
     evaluated.iter().map(render_preview).collect()
 }
@@ -293,8 +230,8 @@ fn run_line(hook: &Hook, binary: &std::path::Path) -> String {
 
 /// Renders full gate lines for one added hook.
 ///
-/// Requires and when print once while present, checks print
-/// once per member, all marked new in slot order.
+/// - Requires and when print once while present, checks print once per member,
+///   all marked new in slot order.
 fn full_gates(hook: &Hook, out: &mut Vec<String>) {
     if let Some(gate) = hook.requires.as_ref() {
         out.push(format!(
@@ -329,9 +266,8 @@ fn gate_slot_text(slot: GateSlot) -> &'static str {
 
 /// Renders one gate change line per slot while text differs.
 ///
-/// Absent-to-present reads added, present-to-absent reads
-/// removed, changed reads old-to-new. Equal describe text
-/// never reaches this path.
+/// - Absent-to-present reads added, present-to-absent reads removed, changed
+///   reads old-to-new.
 fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
     for change in gates {
         let slot = gate_slot_text(change.slot);
@@ -357,9 +293,7 @@ fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
 
 /// Renders removed check lines before added check lines.
 ///
-/// Members arrive split by core, so rendering reads order
-/// alone. Removals print in previous order, additions print
-/// in desired order.
+/// - Removals print in previous order, additions print in desired order.
 fn render_check_changes(removed: &[Condition], added: &[Condition], out: &mut Vec<String>) {
     for check in removed {
         out.push(format!(
@@ -378,9 +312,6 @@ fn render_check_changes(removed: &[Condition], added: &[Condition], out: &mut Ve
 }
 
 /// Renders one timeout with the run cap suffix.
-///
-/// Matches the timed-out hook error shape, so `600` reads
-/// as `600s` here too.
 fn timeout_text(secs: u64) -> String {
     format!("{secs}s")
 }
@@ -474,7 +405,7 @@ mod tests {
         let merged = Condition::Any(vec![gate(), gate(), gate(), gate(), gate()]);
         assert_eq!(
             describe_condition(&merged).as_str(),
-            "(in_path(mise) and changed(literal:~/.config/mise/config.toml))"
+            "(in_path(mise) and changed(~/.config/mise/config.toml))"
         );
     }
 
@@ -566,7 +497,7 @@ mod tests {
         hook.requires = Some(changed("missing"));
         assert_eq!(
             preview_line(&hook, &checks, &touched).as_str(),
-            "warn: tool cannot run (changed(literal:missing))"
+            "warn: tool cannot run (changed(missing))"
         );
     }
 
@@ -585,7 +516,7 @@ mod tests {
         hook.requires = Some(changed("touched"));
         assert_eq!(
             preview_line(&hook, &checks, &touched).as_str(),
-            "skipped: tool (no need: changed(literal:missing))"
+            "skipped: tool (no need: changed(missing))"
         );
     }
 
@@ -642,7 +573,7 @@ mod tests {
             vec![
                 "+ mise install".to_string(),
                 "  + requires (in_path(mise))".to_string(),
-                "  + when (changed(literal:dest))".to_string(),
+                "  + when (changed(dest))".to_string(),
                 "  + checks (in_path(probe))".to_string(),
             ]
         );

@@ -1,5 +1,4 @@
 //! Render
-//!
 //! Inline payloads to portable on-disk bytes.
 
 use crate::arg::{Arg, quote};
@@ -11,9 +10,6 @@ use crate::error::{Error, Result};
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
 /// Renders inline payload bytes in portable display form.
-///
-/// Routes render as `base:relative` display text, so hashes
-/// read host-independent. Blob payloads never render here.
 ///
 /// # Errors
 ///
@@ -145,7 +141,7 @@ fn render_guard(guard: &Condition) -> String {
             format!("[ -e {candidate} ]")
         }
         // Changed never reaches shell guards: rc guards holding it fail
-        // as plan errors at build time. Render false so entries stay
+        // at assembly. Render false so entries stay
         // quiet if the invariant ever breaks.
         Condition::Changed { .. } => "false".to_string(),
         Condition::All(items) if items.is_empty() => "true".to_string(),

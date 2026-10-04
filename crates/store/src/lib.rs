@@ -1,5 +1,4 @@
 //! Store
-//!
 //! Write-backed capability roots for one run.
 
 #![deny(missing_docs)]
@@ -27,8 +26,8 @@ use slot::SlotStore;
 
 /// Base folders for every write-backed capability.
 ///
-/// All four bases travel together from one construction site.
-/// Empty paths read as unset.
+/// All four bases travel together from one construction site. Empty paths read
+/// as unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
     /// Config base holding slots and history.
@@ -42,17 +41,11 @@ pub struct StoreRoots {
 }
 
 /// Stateful write capabilities for one run.
-///
-/// One value covers every capability, built once per run.
-/// Roots stay explicit at construction. Backends run on
-/// the host or over the memory driver under a test guard:
-/// the choice rides construction surroundings, never a
-/// second constructor.
 #[derive(Clone)]
 pub struct Stores {
     /// Base folders for every write-backed capability.
     pub roots: StoreRoots,
-    /// Trusted project files behind exec-rooted handles.
+    /// Trusted project files.
     resources: Arc<Resources>,
     /// Content-addressed blob pool.
     blobs: Arc<BlobStore>,
@@ -69,13 +62,11 @@ pub struct Stores {
 impl StoreRoots {
     /// Standard host roots from environment folders.
     ///
-    /// Config rides the `dirs` config folder under
-    /// `confit`, cache rides the `dirs` cache folder
-    /// under `confit`, temp rides the process temp
-    /// folder, project root rides the working folder.
-    /// Unset folders fall back to relative
-    /// `confit` folders, an unavailable working
-    /// folder falls back to `.`.
+    /// - Config rides the `dirs` config folder under `confit`, cache rides the
+    ///   `dirs` cache folder under `confit`, temp rides the process temp
+    ///   folder, project root rides the working folder.
+    /// - Unset folders fall back to relative `confit` folders, an unavailable
+    ///   working folder falls back to `.`.
     pub fn standard() -> Self {
         let config_base = dirs::config_dir()
             .map(|base| base.join("confit"))
@@ -96,14 +87,6 @@ impl StoreRoots {
 
 impl Stores {
     /// Stores over file backends.
-    ///
-    /// Roots arrive explicit from construction. One
-    /// constructor serves runs and tests alike: under a
-    /// test guard the driver holds memory, elsewhere the
-    /// host. Downloads ride the network in production and
-    /// the script registry under test; tests script bodies
-    /// through the transport registry functions.
-    /// The sender carries blob with archive and fetch facts.
     pub fn new(roots: StoreRoots, progress: ProgressSender) -> Self {
         let resources = Arc::new(Resources::new(&roots));
         let blobs = Arc::new(BlobStore::new(&roots, progress.clone()));
@@ -123,7 +106,7 @@ impl Stores {
         }
     }
 
-    /// Reads trusted project files behind exec-rooted handles.
+    /// Reads trusted project files.
     pub fn resources(&self) -> Arc<Resources> {
         self.resources.clone()
     }

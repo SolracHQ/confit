@@ -1,9 +1,10 @@
 //! Arg
-//!
 //! Text literal or late-bound route for command arguments.
 
 use std::borrow::Cow;
 
+use schemars::JsonSchema;
+use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
@@ -13,17 +14,53 @@ const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
 /// One command argument holding text or a late-bound route.
-///
-/// Text runs verbatim. Routes resolve through the workspace
-/// at apply time and render as portable `base:relative`
-/// display in previews and manifests.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Arg {
-    /// A plain string under running verbatim.
+    /// A plain string passing unchanged.
     Text(String),
     /// A destination route under apply-time resolving.
     Route(Route),
+}
+
+impl<'de> Deserialize<'de> for Arg {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ArgVisitor)
+    }
+}
+
+struct ArgVisitor;
+
+impl<'de> Visitor<'de> for ArgVisitor {
+    type Value = Arg;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a string-or-route slot")
+    }
+
+    fn visit_str<E>(self, text: &str) -> std::result::Result<Arg, E>
+    where
+        E: de::Error,
+    {
+        Ok(Arg::Text(text.to_owned()))
+    }
+
+    fn visit_string<E>(self, text: String) -> std::result::Result<Arg, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(&text)
+    }
+
+    fn visit_map<A>(self, map: A) -> std::result::Result<Arg, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        Route::deserialize(de::value::MapAccessDeserializer::new(map)).map(Arg::Route)
+    }
 }
 
 impl Arg {
@@ -36,9 +73,6 @@ impl Arg {
     }
 
     /// Materializes one argument into a host path.
-    ///
-    /// Text runs verbatim, routes expand against host
-    /// folders.
     pub fn materialize(&self) -> std::path::PathBuf {
         match self {
             Self::Text(text) => std::path::PathBuf::from(text),
@@ -48,8 +82,7 @@ impl Arg {
 
     /// Renders argv slots as one shell-safe display line.
     ///
-    /// Slots holding shell-special text quote single, so the
-    /// line pastes back into the shown command.
+    /// - Slots holding shell-special text quote single.
     pub fn join(argv: &[Arg]) -> String {
         argv.iter()
             .map(Arg::display)
@@ -79,7 +112,7 @@ impl From<Route> for Arg {
 
 /// Shell quoting for one word.
 ///
-/// Safe text holds alphanumerics and `@%_+=:,./-` only.
+/// - Safe text holds alphanumerics and `@%_+=:,./-` only.
 pub fn quote(text: &str) -> Cow<'_, str> {
     if !text.is_empty() && text.bytes().all(|byte| SAFE_CHARS.contains(&byte)) {
         Cow::Borrowed(text)

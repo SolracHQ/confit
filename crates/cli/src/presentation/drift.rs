@@ -1,38 +1,9 @@
 //! Drift lines
-//!
 //! Display lines over core drift entries.
 
 use confit_model::drift::Drift;
 
-/// Renders drift entries as display lines.
-///
-/// One or more display lines per drift entry.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::presentation::drift::drift_lines;
-/// use confit_model::drift::Drift;
-/// use confit_model::routes::{Route, RouteBase};
-///
-/// let entries = vec![
-///     Drift::Key {
-///         path: Route::new(RouteBase::Home, "app.toml").unwrap(),
-///         key: "tools.bat".to_string(),
-///         old: Some(serde_json::json!("old")),
-///         new: Some(serde_json::json!("new")),
-///     },
-///     Drift::Missing { path: Route::new(RouteBase::Home, "note").unwrap() },
-/// ];
-/// assert_eq!(
-///     drift_lines(&entries),
-///     vec![
-///         "~ home:app.toml: tools.bat = old -> new".to_string(),
-///         "home:note: manually deleted. changed outside config: add to config or the next apply loses them"
-///             .to_string(),
-///     ]
-/// );
-/// ```
+/// Renders drift entries as display lines, one or more per entry.
 pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in entries {

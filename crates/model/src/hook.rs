@@ -1,5 +1,4 @@
 //! Hook
-//!
 //! Post-config steps riding plans beside documents.
 
 use serde::{Deserialize, Serialize};
@@ -8,14 +7,6 @@ use crate::arg::Arg;
 use crate::condition::Condition;
 
 /// One post-config step with gates and checks.
-///
-/// Argv executes directly with no shell in between. Path
-/// extends PATH for the hook subprocess alone. Requires gates
-/// the run on capability, when gates the run on need, each
-/// holding runtime conditions. Checks prove the run with
-/// the same shapes: passing checks skip the hook, failing
-/// checks run it. Timeout caps the run in seconds.
-///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {
@@ -23,10 +14,10 @@ pub struct Hook {
     pub argv: Vec<Arg>,
     /// Holds the PATH extension dirs for the subprocess alone.
     pub path: Vec<Arg>,
-    /// The capability gate. None runs where capable.
+    /// The capability gate.
     #[serde(default)]
     pub requires: Option<Condition>,
-    /// The need gate. None runs unconditionally.
+    /// The need gate.
     pub when: Option<Condition>,
     /// Holds the proof conditions, AND by list.
     pub checks: Vec<Condition>,
@@ -34,10 +25,7 @@ pub struct Hook {
     pub timeout_secs: u64,
 }
 
-/// One gate slot holding the changed gate.
-///
-/// Requires gates capability, when gates need. The slot
-/// selects the rendered gate line.
+/// One gate slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateSlot {
     /// The capability gate.
@@ -46,23 +34,18 @@ pub enum GateSlot {
     When,
 }
 
-/// One gate change holding before and after gates.
-///
-/// Either side reads `None` while absent. Equal simplified
-/// gates never build this shape.
+/// One gate change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateChange {
     /// The slot under diffing.
     pub slot: GateSlot,
-    /// The recorded gate. None reads absent.
+    /// The recorded gate.
     pub before: Option<Condition>,
-    /// The desired gate. None reads absent.
+    /// The desired gate.
     pub after: Option<Condition>,
 }
 
-/// One timeout change holding before and after caps.
-///
-/// Equal caps never build this shape.
+/// One timeout change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeoutChange {
     /// The recorded cap in seconds.
@@ -71,10 +54,7 @@ pub struct TimeoutChange {
     pub after: u64,
 }
 
-/// One hook modification holding gate, check, and timeout edits.
-///
-/// Empty gates with empty check edits and no timeout reads
-/// silent and never renders.
+/// One hook modification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookModification {
     /// Holds the changed gates in slot order.
@@ -83,15 +63,11 @@ pub struct HookModification {
     pub added_checks: Vec<Condition>,
     /// Holds the recorded checks missing from desired order.
     pub removed_checks: Vec<Condition>,
-    /// The timeout edit. None reads unchanged.
+    /// The timeout edit.
     pub timeout: Option<TimeoutChange>,
 }
 
-/// One hook change selecting the lifecycle lines.
-///
-/// Added and removed hooks render one header line. Modified
-/// hooks render one header with detail lines. Unchanged hooks
-/// render nothing.
+/// One hook change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookChange {
     /// Renders one added header with full gates.
@@ -104,24 +80,17 @@ pub enum HookChange {
     Unchanged,
 }
 
-/// One hook lifecycle pairing its hook with its change.
-///
-/// The hook borrows core data, the change carries the diff
-/// facts. Rendering reads the pair alone.
+/// One hook lifecycle pairing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookLifecycle<'a> {
     /// The hook under display.
     pub hook: &'a Hook,
-    /// The lifecycle change behind its lines.
+    /// The lifecycle change.
     pub change: HookChange,
 }
 
 impl HookModification {
     /// Reports whether one modification holds no edits.
-    ///
-    /// # Returns
-    ///
-    /// True while gates, check edits, and timeout all read empty.
     pub fn is_empty(&self) -> bool {
         self.gates.is_empty()
             && self.added_checks.is_empty()
@@ -132,10 +101,6 @@ impl HookModification {
 
 impl HookChange {
     /// Reports whether one change renders no lines.
-    ///
-    /// # Returns
-    ///
-    /// True for unchanged hooks and empty modifications.
     pub fn is_silent(&self) -> bool {
         match self {
             Self::Unchanged => true,
@@ -145,28 +110,16 @@ impl HookChange {
     }
 
     /// Reports whether one change renders an added header.
-    ///
-    /// # Returns
-    ///
-    /// True while the hook reads added.
     pub fn is_added(&self) -> bool {
         matches!(self, Self::Added)
     }
 
     /// Reports whether one change renders a removed header.
-    ///
-    /// # Returns
-    ///
-    /// True while the hook reads removed.
     pub fn is_removed(&self) -> bool {
         matches!(self, Self::Removed)
     }
 
     /// Reports whether one change renders a changed header.
-    ///
-    /// # Returns
-    ///
-    /// True while the hook reads modified with edits.
     pub fn is_modified(&self) -> bool {
         match self {
             Self::Modified(edits) => !edits.is_empty(),
@@ -177,37 +130,21 @@ impl HookChange {
 
 impl HookLifecycle<'_> {
     /// Reports whether one lifecycle renders an added header.
-    ///
-    /// # Returns
-    ///
-    /// True while the change reads added.
     pub fn is_added(&self) -> bool {
         self.change.is_added()
     }
 
     /// Reports whether one lifecycle renders a removed header.
-    ///
-    /// # Returns
-    ///
-    /// True while the change reads removed.
     pub fn is_removed(&self) -> bool {
         self.change.is_removed()
     }
 
     /// Reports whether one lifecycle renders a changed header.
-    ///
-    /// # Returns
-    ///
-    /// True while the change reads modified with edits.
     pub fn is_modified(&self) -> bool {
         self.change.is_modified()
     }
 
     /// Reports whether one lifecycle renders no lines.
-    ///
-    /// # Returns
-    ///
-    /// True while the change reads silent.
     pub fn is_silent(&self) -> bool {
         self.change.is_silent()
     }
@@ -215,18 +152,9 @@ impl HookLifecycle<'_> {
 
 /// Merges hooks sharing argv and path into one run each.
 ///
-/// First-seen order wins. Gates join across both sides, checks
-/// concatenate, timeout takes the max. Single hooks pass
-/// through untouched.
-///
-/// # Arguments
-///
-/// * `hooks` - the declared hooks in declaration order.
-///
-/// # Returns
-///
-/// The merged hooks in first-seen order.
-///
+/// - First-seen order wins.
+/// - Timeout takes the max.
+/// - Single hooks pass through untouched.
 pub fn merge_hooks(hooks: Vec<Hook>) -> Vec<Hook> {
     let mut order: Vec<(Vec<Arg>, Vec<Arg>)> = Vec::new();
     let mut merged: Vec<Hook> = Vec::new();
@@ -251,20 +179,7 @@ pub fn merge_hooks(hooks: Vec<Hook>) -> Vec<Hook> {
 
 /// Diffs desired hooks against previous hooks in render order.
 ///
-/// Current hooks lead in plan order, removals trail in
-/// previous order. Identity joins on argv and path. Gates
-/// compare by simplified form, checks compare as a bag by
-/// simplified form with duplicate counts, timeout compares by
-/// value. Equal hooks read silent.
-///
-/// # Arguments
-///
-/// * `current` - the desired hooks in plan order.
-/// * `previous` - the previous hooks backing lifecycle marks.
-///
-/// # Returns
-///
-/// The lifecycle entries in plan order with removals trailing.
+/// - Current hooks lead in plan order, removals trail in previous order.
 pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<HookLifecycle<'a>> {
     let mut out = Vec::new();
     for hook in current {
@@ -340,37 +255,22 @@ fn flatten_any(cond: Condition) -> Vec<Condition> {
     }
 }
 
-/// Reports whether two hooks share one lifecycle identity.
-///
-/// Identity joins on argv and path, so gates, checks, and
-/// timeout never split one run.
+/// Reports whether two hooks share one lifecycle identity on argv and path.
 fn same_identity(first: &Hook, second: &Hook) -> bool {
     first.argv == second.argv && first.path == second.path
 }
 
 /// Finds one recorded hook sharing identity with one desired hook.
-///
-/// # Returns
-///
-/// The recorded hook holding the same argv and path, else `None`.
 fn find_recorded<'a>(hook: &Hook, previous: &'a [Hook]) -> Option<&'a Hook> {
     previous.iter().find(|held| same_identity(held, hook))
 }
 
 /// Finds one desired hook sharing identity with one recorded hook.
-///
-/// # Returns
-///
-/// The desired hook holding the same argv and path, else `None`.
 fn find_live<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
     current.iter().find(|hook| same_identity(hook, recorded))
 }
 
-/// Reads one gate change while simplified gates differ.
-///
-/// # Returns
-///
-/// The change holding original gates, else `None` while equal.
+/// Builds one gate change while simplified gates differ.
 fn gate_change(
     slot: GateSlot,
     before: Option<&Condition>,
@@ -388,11 +288,7 @@ fn gate_change(
     })
 }
 
-/// Reads one timeout change while caps differ.
-///
-/// # Returns
-///
-/// The change holding both caps, else `None` while equal.
+/// Builds one timeout change while caps differ.
 fn timeout_change(before: u64, after: u64) -> Option<TimeoutChange> {
     if before == after {
         return None;
@@ -402,9 +298,7 @@ fn timeout_change(before: u64, after: u64) -> Option<TimeoutChange> {
 
 /// Collects removed checks in previous order.
 ///
-/// Members match as a bag by simplified form, so duplicate
-/// gates diff by count. Matched desired members consume one
-/// previous member each.
+/// - Members match as a bag by simplified form with duplicate counts.
 fn removed_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
     let mut rest: Vec<Condition> = after.iter().map(Condition::simplified).collect();
     let mut missing = Vec::new();
@@ -422,9 +316,7 @@ fn removed_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
 
 /// Collects added checks in desired order.
 ///
-/// Members match as a bag by simplified form, so duplicate
-/// gates diff by count. Matched recorded members consume one
-/// desired member each.
+/// - Members match as a bag by simplified form with duplicate counts.
 fn added_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
     let mut rest: Vec<Condition> = after.to_vec();
     let mut simple: Vec<Condition> = after.iter().map(Condition::simplified).collect();
@@ -438,15 +330,9 @@ fn added_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
     rest
 }
 
-/// Reads one hook modification across gates, checks, and timeout.
+/// Builds one hook modification across gates, checks, and timeout.
 ///
-/// Gates collect in slot order, checks split into removed
-/// then added bags, timeout holds the cap edit. Empty edits
-/// read silent.
-///
-/// # Returns
-///
-/// The modification holding every edit.
+/// - Gates collect in slot order.
 fn modify_hook(recorded: &Hook, hook: &Hook) -> HookModification {
     let mut gates = Vec::new();
     if let Some(change) = gate_change(

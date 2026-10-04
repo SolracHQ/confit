@@ -1,5 +1,4 @@
 //! Plan run
-//!
 //! Profile flags into built bundles with drift.
 
 use std::path::Path;
@@ -22,40 +21,13 @@ pub struct PlanOutcome {
     pub built: Manifest,
     /// The previous manifest backing lifecycle marks.
     pub previous: Manifest,
-    /// Holds disk edits leading the summary, desired versus
-    /// disk on first runs.
+    /// Holds disk edits leading the summary, desired versus disk on first runs.
     pub drift: Vec<Drift>,
     /// True while the state slot file reads absent.
     pub first_run: bool,
 }
 
 /// One plan run from plan flags to a built bundle.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::plan::PlanRunner;
-/// use confit_cli::cli::{PlanArgs, SharedArgs};
-/// use confit_runtime::Applier;
-/// use confit_store::{StoreRoots, Stores};
-/// use std::path::PathBuf;
-///
-/// let args = PlanArgs {
-///     profile: PathBuf::from("profile.lua"),
-///     shared: SharedArgs {
-///         root: None,
-///         plugins: None,
-///         re_fetch: false,
-///     },
-///     output: None,
-/// };
-/// let (sender, _) = crossbeam_channel::unbounded();
-/// let stores = Stores::new(StoreRoots::standard(), sender.clone());
-/// let applier = Applier::with_stores(stores.clone(), sender);
-/// let runner = PlanRunner { args: &args, stores, applier, sinks: Default::default() };
-/// let outcome = runner.execute();
-/// assert!(matches!(outcome, Ok(_) | Err(_)));
-/// ```
 pub struct PlanRunner<'a> {
     /// The plan flags under running.
     pub args: &'a PlanArgs,
@@ -68,12 +40,11 @@ pub struct PlanRunner<'a> {
 }
 
 impl PlanRunner<'_> {
-    /// Evaluates the engine, loads previous manifest, diffs drift,
-    /// builds the core bundle, and writes the payload on demand.
+    /// Evaluates the engine, loads previous manifest, diffs drift, builds the
+    /// core bundle, and writes the payload on demand.
     ///
-    /// # Returns
-    ///
-    /// The built bundle with its previous manifest and drift.
+    /// The outcome carries the built bundle with its previous manifest and
+    /// drift.
     ///
     /// # Errors
     ///
@@ -133,27 +104,6 @@ impl PlanRunner<'_> {
 }
 
 /// Reports true while one output value names a stored slot.
-///
-/// Values starting with `@` resolve under the plans folder
-/// and keep slot semantics. Explicit paths write bundles.
-///
-/// # Arguments
-///
-/// * `raw` - the output value under checking.
-///
-/// # Returns
-///
-/// True for `@` values, else false.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::plan::is_named_output;
-/// use std::path::Path;
-///
-/// assert!(matches!(is_named_output(Path::new("@work")), true));
-/// assert!(matches!(is_named_output(Path::new("plan.cb")), false));
-/// ```
 pub fn is_named_output(raw: &Path) -> bool {
     raw.to_str().is_some_and(|text| text.starts_with('@'))
 }

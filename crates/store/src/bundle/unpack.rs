@@ -1,6 +1,4 @@
-//! Unpack
-//!
-//! Bundle reads over archive extraction and blob receives.
+//! Bundle reads.
 
 use std::collections::BTreeSet;
 use std::io::Read as _;
@@ -76,7 +74,7 @@ impl BundleStore {
         decode(&raw).map_err(|error| from_codec(bundle, error))
     }
 
-    /// Receives one blob member into the cache blind.
+    /// Receives one blob member into the cache.
     ///
     /// # Errors
     ///
@@ -97,7 +95,7 @@ impl BundleStore {
     }
 }
 
-/// Validates bundle member names with verbatim policy.
+/// Validates bundle member names.
 ///
 /// # Errors
 ///
@@ -134,7 +132,7 @@ fn unknown(bundle: &Path, message: String) -> BundleError {
     }
 }
 
-/// Maps one codec failure at the bundle path into bundle language.
+/// Maps one codec failure into its bundle error.
 fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
     match error {
         CodecError::Version { got } => BundleError::Version {
@@ -145,7 +143,7 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
     }
 }
 
-/// Maps one blob failure at the bundle path into bundle language.
+/// Maps one blob failure into its bundle error.
 fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
     use crate::faults::AccessFault;
 

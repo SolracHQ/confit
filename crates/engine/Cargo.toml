@@ -8,7 +8,9 @@ confit-driver = { version = "0.8.0", path = "../driver" }
 confit-model = { version = "0.8.0", path = "../model" }
 confit-store = { version = "0.8.0", path = "../store" }
 confit-surface-api = { version = "0.9.0", path = "../surface-api" }
+log.workspace = true
 mlua = { workspace = true, features = ["lua54", "vendored"] }
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

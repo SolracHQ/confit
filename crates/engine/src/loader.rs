@@ -1,8 +1,4 @@
-//! Loader
-//!
-//! Scoped require with sandboxed chunk loading over one session.
-//! Module tables ride read-only proxies, cycles fail naming the
-//! loop, unknown names fail.
+//! Scoped require with sandboxed chunk loading.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -76,14 +72,11 @@ impl Session {
 
 /// Installs the scoped require function on the globals.
 ///
-/// The bare confit global stays nil.
-///
 /// # Errors
 ///
 /// - [`EngineError::Lua`] for failed app data and global writes.
 pub fn install(lua: &Lua) -> Result<()> {
     lua.set_app_data(Session::new());
-    confit_surface_api::config::reset(lua)?;
     let require = lua
         .create_function(|lua, name: String| run_require(lua, &name).map_err(mlua::Error::from))?;
     lua.globals().set("require", require)?;
@@ -122,7 +115,7 @@ fn read_text(path: &Path) -> Result<String> {
 
 /// Builds one sandboxed environment with audited globals and require.
 ///
-/// Unknown globals read nil.
+/// - Unknown globals read nil.
 ///
 /// # Errors
 ///
@@ -196,7 +189,7 @@ fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
 
 /// Runs one file require.
 ///
-/// Names spell root-relative files with an optional lua suffix.
+/// - Names spell root-relative files with an optional lua suffix.
 ///
 /// # Errors
 ///
@@ -234,13 +227,14 @@ fn file_require(lua: &Lua, name: &str) -> Result<Value> {
 /// - [`ApiError::Escape`] for escaping names.
 fn resolve(root: &Path, name: &str) -> Result<PathBuf> {
     const CALLER: &str = "require";
-    let rel = name.strip_suffix(".lua").unwrap_or(name);
-    let parts =
-        confit_surface_api::paths::split_checked(rel, false).map_err(|fault| ApiError::Escape {
+    let relative = name.strip_suffix(".lua").unwrap_or(name);
+    let parts = confit_surface_api::paths::split_checked(relative, false).map_err(|fault| {
+        ApiError::Escape {
             caller: CALLER.to_owned(),
             input: name.to_owned(),
             reason: fault.reason().to_owned(),
-        })?;
+        }
+    })?;
     let mut full = root.to_path_buf();
     for part in &parts {
         full.push(part);
@@ -290,7 +284,7 @@ fn load_file(lua: &Lua, path: &Path, name: &str) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] while the loader stays uninstalled.
+/// - [`EngineError::Lua`] for an uninstalled loader.
 fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> Result<T> {
     match lua.app_data_ref::<Session>() {
         Some(session) => Ok(op(&session)),
@@ -300,11 +294,11 @@ fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> Result<T> {
     }
 }
 
-/// Reads the project root from the shared stores.
+/// Resolves the project root from the shared stores.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] while the api stays uninstalled.
+/// - [`EngineError::Lua`] for an uninstalled api.
 fn stored_root(lua: &Lua) -> Result<PathBuf> {
     match lua.app_data_ref::<Stores>() {
         Some(stores) => Ok(stores.resources().roots.project_root.clone()),
@@ -436,7 +430,7 @@ mod tests {
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
-            Ok(_) => panic!("file module answers its return"),
+            Ok(_) => panic!("file module returns an integer"),
             Err(error) => panic!("file modules load: {error}"),
         }
     }
@@ -493,7 +487,7 @@ mod tests {
         let lua = test_lua(&stores);
         match run(&lua, "return confit") {
             Ok(Value::Nil) => {}
-            Ok(_) => panic!("bare confit global answers a value"),
+            Ok(_) => panic!("bare confit global stays nil"),
             Err(error) => panic!("sandbox reads the global: {error}"),
         }
     }
@@ -503,22 +497,22 @@ mod tests {
         let lua = Lua::new();
         match run(&lua, "return type(os)") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "nil"),
-            Ok(_) => panic!("unknown globals answer strings"),
+            Ok(_) => panic!("unknown globals return strings"),
             Err(error) => panic!("sandbox reads unknown globals: {error}"),
         }
     }
 
     #[test]
-    fn audited_globals_with_libraries_answer() {
+    fn audited_globals_with_libraries_return() {
         let lua = Lua::new();
         match run(&lua, "return type(pairs)") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "function"),
-            Ok(_) => panic!("audited globals answer strings"),
+            Ok(_) => panic!("audited globals return strings"),
             Err(error) => panic!("sandbox reads audited globals: {error}"),
         }
         match run(&lua, "return (\"hi\"):upper()") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "HI"),
-            Ok(_) => panic!("string libraries answer strings"),
+            Ok(_) => panic!("string libraries return strings"),
             Err(error) => panic!("sandbox reads libraries: {error}"),
         }
     }
@@ -530,12 +524,15 @@ mod tests {
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
-        match run(&lua, "local path = require(\"confit.path\") path.home = 1") {
+        match run(
+            &lua,
+            "local validate = require(\"confit.validate\") validate.document = 1",
+        ) {
             Ok(_) => panic!("proxy write passes"),
             Err(error) => {
                 let text = error.to_string();
                 assert!(text.contains("read-only"), "names the proxy: {text}");
-                assert!(text.contains("confit.path"), "names the module: {text}");
+                assert!(text.contains("confit.validate"), "names the module: {text}");
             }
         }
     }

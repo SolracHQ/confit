@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use confit_surface_api::definitions;
+use mlua::Lua;
+use mlua_extras::typed::generator::Definition;
+
+use confit_store::Stores;
 use confit_surface_face::stubs;
 
 fn main() {
@@ -34,4 +37,23 @@ fn run() -> Result<(), String> {
         println!("{}", path.display());
     }
     Ok(())
+}
+
+fn definitions(lua: &Lua, stores: &Stores, root: &Path) -> mlua::Result<Vec<(String, Definition)>> {
+    let (_, resource) = confit_surface_api::resource::build(lua, stores, root)?;
+    let (_, validate) = confit_surface_api::validate::build(lua)?;
+    let (_, fetch) = confit_surface_api::fetch::build(lua, stores)?;
+    Ok(vec![
+        ("confit.resource".to_owned(), resource.into()),
+        ("confit.validate".to_owned(), validate.into()),
+        ("confit.fetch".to_owned(), fetch.into()),
+        ("confit.version".to_owned(), version_definition()),
+    ])
+}
+
+fn version_definition() -> Definition {
+    Definition::start()
+        .document("Api level of the Lua surface, one integer.")
+        .proxy::<i64>("version")
+        .finish()
 }

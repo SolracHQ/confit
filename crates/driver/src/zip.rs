@@ -1,7 +1,4 @@
-//! Zip framing over caller streams with io errors.
-//!
-//! Names with bodies ride caller streams, so
-//! stores own seals with errors.
+//! Zip framing.
 
 use std::io;
 
@@ -13,10 +10,7 @@ const LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
 /// Zip empty archive magic.
 const EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 
-/// One zip read member over a caller reader.
-///
-/// Bodies stream without staging, so walk
-/// output stays lean.
+/// One zip read member.
 pub struct Member<'a> {
     /// Container name with forward slashes.
     pub name: String,
@@ -26,17 +20,15 @@ pub struct Member<'a> {
 
 /// Reports whether one head window holds zip bytes.
 ///
-/// Local file magic and empty archive magic answer
-/// true, short and plain heads answer false.
+/// Local file magic and empty archive magic return true, short and plain
+/// heads return false.
 pub fn valid(head: &[u8]) -> bool {
     head.starts_with(&LOCAL_MAGIC) || head.starts_with(&EMPTY_MAGIC)
 }
 
 /// Lists file member names from a zip stream.
 ///
-/// Members arrive named. Folders with non-files
-/// and empty names skip. The reader seeks since
-/// the central directory closes the stream.
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -64,11 +56,7 @@ pub fn list_names(reader: impl io::Read + io::Seek) -> Result<Vec<String>, ZipEr
 
 /// Walks file members from a zip stream.
 ///
-/// Members arrive named. Folders with non-files
-/// and empty names skip. The visitor owns each
-/// body reader and reads it to end before return.
-/// The reader seeks since entry bodies address
-/// by offset.
+/// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
@@ -137,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_answers_local_plus_empty_magic() {
+    fn valid_returns_local_plus_empty_magic() {
         assert!(valid(&zip_bytes(&[("a.txt", b"alpha")])));
         assert!(valid(&zip_bytes(&[])));
         assert!(!valid(b"plain text"));

@@ -1,5 +1,4 @@
 //! Confit core
-//!
 //! Pure document and plan types with rendering and hashing.
 
 #![deny(missing_docs)]

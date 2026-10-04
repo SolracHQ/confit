@@ -1,13 +1,10 @@
 //! Progress
-//!
 //! Log facts for one run. Every layer reports. Only the CLI renders.
 
 /// Unbounded channel sender for progress facts.
-///
 pub type ProgressSender = crossbeam_channel::Sender<Event>;
 
 /// Fact for one run step.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// Fetch started for one URL.

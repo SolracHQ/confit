@@ -1,27 +1,27 @@
-//! Module
-//!
-//! Dual-registered module verbs. One declaration installs the Lua
-//! function with recording its stub face, so neither restates the
-//! other.
+//! Module verbs.
+
+use std::borrow::Cow;
+use std::marker::PhantomData;
 
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, MaybeSend, Table, Value};
-use mlua_extras::typed::Typed;
 use mlua_extras::typed::TypedMultiValue;
 use mlua_extras::typed::generator::DefinitionBuilder;
+use mlua_extras::typed::{Type, Typed};
+use schemars::JsonSchema;
 
-/// One verb declaration holding docs with its name.
+/// One verb declaration.
 pub struct VerbDecl<'a> {
     /// The verb name.
     pub name: &'a str,
     /// The verb documentation.
-    pub doc: &'a str,
+    pub documentation: &'a str,
     /// Holds parameter names with documentation.
     pub params: &'a [(&'a str, &'a str)],
     /// Holds return documentation in order.
     pub rets: &'a [&'a str],
 }
 
-/// One module under building holding its table with its face.
+/// One module under building.
 pub struct Module {
     /// Holds the module table.
     table: Table,
@@ -31,10 +31,10 @@ pub struct Module {
 
 impl Module {
     /// Starts one module holding an empty table with a documented face.
-    pub fn start(lua: &Lua, doc: &'static str) -> mlua::Result<Self> {
+    pub fn start(lua: &Lua, documentation: &'static str) -> mlua::Result<Self> {
         Ok(Self {
             table: lua.create_table()?,
-            face: mlua_extras::typed::generator::Definition::start().document(doc),
+            face: mlua_extras::typed::generator::Definition::start().document(documentation),
         })
     }
 
@@ -44,11 +44,20 @@ impl Module {
         self.face = face;
     }
 
+    /// Registers one alias face under its name.
+    pub fn register_face(&mut self, name: impl Into<Cow<'static, str>>, face: Type) {
+        let taken = std::mem::take(&mut self.face);
+        self.face = taken.register_as(name, face);
+    }
+
+    /// Registers one schema face under its trailing type name.
+    pub fn register_schema<T: JsonSchema>(&mut self) {
+        let face = crate::translate::face_of::<T>();
+        let taken = std::mem::take(&mut self.face);
+        self.face = taken.register_as(class_name::<T>(), face);
+    }
+
     /// Declares one verb with its face.
-    ///
-    /// The generic signature drives the installed function with the
-    /// rendered face together, and the closure bound rejects drift
-    /// between them.
     ///
     /// # Errors
     ///
@@ -61,7 +70,7 @@ impl Module {
     {
         self.table.set(decl.name, lua.create_function(f)?)?;
         let mut face = std::mem::take(&mut self.face);
-        face = face.document(decl.doc);
+        face = face.document(decl.documentation);
         for (pname, pdoc) in decl.params {
             face = face.param(*pname, *pdoc);
         }
@@ -78,9 +87,74 @@ impl Module {
     }
 }
 
-/// Wraps one module table behind a read-only proxy.
+/// One named type ref returning its face from the Rust type name.
+pub struct Named<T>(PhantomData<T>);
+
+impl<T> Typed for Named<T> {
+    fn ty() -> Type {
+        Type::named(class_name::<T>())
+    }
+}
+
+/// Declares one union enum with its face over named member types.
 ///
-/// Writes fail naming the read-only table.
+/// The member list owns the enum.
+#[macro_export]
+macro_rules! union_face {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$vmeta:meta])* $variant:ident($member:ty)),* $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $($(#[$vmeta])* $variant($member)),*
+        }
+        impl ::mlua_extras::typed::Typed for $name {
+            fn ty() -> ::mlua_extras::typed::Type {
+                ::mlua_extras::typed::Type::union(vec![
+                    $($crate::module::Named::<$member>::ty()),*
+                ])
+            }
+        }
+    };
+}
+
+/// Declares one table face from named member faces.
+///
+/// Required fields return their face, optional fields union with nil. Field
+/// names stringify from the declared idents, member faces arrive as type
+/// expressions.
+#[macro_export]
+macro_rules! table_face {
+    ($target:ty, { $($kind:ident $field:ident : $face:expr),* $(,)? }) => {
+        impl ::mlua_extras::typed::Typed for $target {
+            fn ty() -> ::mlua_extras::typed::Type {
+                ::mlua_extras::typed::Type::table(vec![
+                    $($crate::table_face!(@field $kind $field : $face)),*
+                ])
+            }
+        }
+    };
+    (@field required $field:ident : $face:expr) => {
+        (
+            ::mlua_extras::typed::Index::Str(stringify!($field).into()),
+            $face,
+        )
+    };
+    (@field optional $field:ident : $face:expr) => {
+        (
+            ::mlua_extras::typed::Index::Str(stringify!($field).into()),
+            ::mlua_extras::typed::Type::union(vec![
+                $face,
+                ::mlua_extras::typed::Type::nil(),
+            ]),
+        )
+    };
+}
+
+/// Wraps one module table.
 ///
 /// # Errors
 ///

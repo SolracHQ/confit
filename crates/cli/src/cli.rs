@@ -1,22 +1,11 @@
 //! Cli
-//!
 //! Argument shapes for the terminal surface.
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// CaC: configuration as code for one user, with plan-before-apply.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::Cli;
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli, Ok(_)));
-/// ```
+/// Configuration as code for one user and plan before apply.
 #[derive(Debug, Parser)]
 #[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
 pub struct Cli {
@@ -32,16 +21,6 @@ pub struct Cli {
 }
 
 /// Available subcommands.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Plan(_))));
-/// ```
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Evaluate the profile, diff against previous state, write the output.
@@ -58,14 +37,16 @@ pub enum Command {
 
 /// Shared run flags carried by plan and apply.
 ///
-/// Profiles ride positionally: `plan` takes one, `apply`
-/// takes a source in every shape.
+/// Profiles ride positionally. `plan` takes one and `apply` takes a source in
+/// every shape.
 #[derive(Debug, Args)]
 pub struct SharedArgs {
     /// Require resolution base. Defaults to the profile parent.
     #[arg(long)]
     pub root: Option<PathBuf>,
-    /// Plugin folder shaped `{user}/{name}/plugin.lua`. Omitted means `{root}/plugins`.
+    /// Plugin folder shaped `{user}/{name}/plugin.lua`. Omitted means
+    ///
+    /// `{root}/plugins`.
     #[arg(long)]
     pub plugins: Option<PathBuf>,
     /// Forces remote downloads past the sidecar cache.
@@ -74,16 +55,6 @@ pub struct SharedArgs {
 }
 
 /// Arguments for `confit plan`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Plan(_))));
-/// ```
 #[derive(Debug, Args)]
 pub struct PlanArgs {
     /// Profile Lua file under evaluation.
@@ -98,19 +69,9 @@ pub struct PlanArgs {
 
 /// Arguments for `confit apply`.
 ///
-/// The positional sniffs its shape: `.lua` and extensionless
-/// paths read a profile, `.cb` reads a bundle file, `@name`
-/// reads a named slot, `%N` reads history newest-first from one.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "apply", "p.lua", "--force"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Apply(_))));
-/// ```
+/// The positional sniffs its shape. `.lua` and extensionless paths read a
+/// profile, `.cb` reads a bundle file, `@name` reads a named slot and `%N`
+/// reads history newest-first from one.
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
     /// Source under applying.
@@ -124,57 +85,33 @@ pub struct ApplyArgs {
 }
 
 /// Arguments for `confit init`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "init", "demo"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Init(_))));
-/// ```
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Target folder gaining the profile and stubs. Omitted means the current folder.
+    /// Target folder gaining the profile and stubs. Omitted means the current
+    ///
+    /// folder.
     #[arg(default_value = ".")]
     pub dir: PathBuf,
 }
 
 /// Arguments for `confit export`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "export", "@personal", "-o", "backup.cb"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Export(_))));
-/// ```
 #[derive(Debug, Args)]
 pub struct ExportArgs {
-    /// Slot picker: `%N` history newest-first from one, `@name` named slot. Omitted means the applied slot.
+    /// Slot picker holding `%N` history and `@name` slots. Omitted means the
+    ///
+    /// applied slot.
     pub picker: Option<String>,
-    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb` unless present.
+    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb`
+    ///
+    /// unless present.
     #[arg(short, long, conflicts_with = "manifest")]
     pub output: Option<PathBuf>,
-    /// Prints pretty manifest JSON to stdout instead of writing a bundle file.
+    /// Prints pretty manifest JSON to stdout.
     #[arg(short, long)]
     pub manifest: bool,
 }
 
 /// Arguments for `confit delete`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "delete", "@personal"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Delete(_))));
-/// ```
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
     /// Named slot under deleting, shaped `@name`.
@@ -184,14 +121,8 @@ pub struct DeleteArgs {
 /// Expands one leading `~` against the OS home folder.
 ///
 /// Bare `~` and `~/` inputs resolve against the home folder.
-/// Other inputs pass through unchanged, letting the caller fail
-/// with its own context.
 ///
-/// # Returns
-///
-/// The resolved path for bare tilde inputs with a known home, else
-/// the input unchanged.
-///
+/// - Other inputs and unknown homes pass through unchanged.
 pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
@@ -245,24 +176,7 @@ pub fn expand_command(command: &mut Command) {
 
 /// Resolves the require base, defaulting to the profile parent.
 ///
-/// # Arguments
-///
-/// * `root` - the configured override.
-/// * `profile` - the profile path owning the default parent.
-///
-/// # Returns
-///
-/// The override, else the profile parent, else the current folder.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::resolve_root;
-/// use std::path::Path;
-///
-/// let root = resolve_root(&None, Some(Path::new("/tmp/profiles/desktop.lua")));
-/// assert!(matches!(root.to_str(), Some("/tmp/profiles")));
-/// ```
+/// - The override, else the profile parent, else the current folder.
 pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -> PathBuf {
     if let Some(configured) = root {
         return configured.clone();
@@ -274,30 +188,7 @@ pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -
 
 /// Resolves the plugin folder, defaulting under the root.
 ///
-/// Configured paths win. Otherwise `{root}/plugins` applies, matching
-/// the init scaffold. Missing folders change nothing downstream; the
-/// loader skips paths holding no `plugin.lua`.
-///
-/// # Arguments
-///
-/// * `root` - the resolved require base.
-/// * `plugins` - the configured override.
-///
-/// # Returns
-///
-/// The override, else the plugins folder under the root.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::resolve_plugins;
-/// use std::path::PathBuf;
-///
-/// let folder = resolve_plugins(&PathBuf::from("project"), &None);
-/// assert!(matches!(folder.to_str(), Some("project/plugins")));
-/// let folder = resolve_plugins(&PathBuf::from("project"), &Some(PathBuf::from("elsewhere")));
-/// assert!(matches!(folder.to_str(), Some("elsewhere")));
-/// ```
+/// - Configured paths win.
 pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> PathBuf {
     plugins.clone().unwrap_or_else(|| root.join("plugins"))
 }

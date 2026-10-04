@@ -1,6 +1,4 @@
-//! Zip backend
-//!
-//! Seekable member listing and extraction for zip archives.
+//! Seekable zip member listing and extraction.
 
 use std::path::Path;
 
@@ -11,8 +9,8 @@ use confit_driver as driver;
 
 /// Seekable zip member listing and extraction.
 ///
-/// Central-directory reads serve names, entry streams
-/// spill members one at a time.
+/// Central-directory reads serve names, entry streams spill members one at a
+/// time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZipBackend;
 
@@ -81,9 +79,6 @@ fn read_unknown(source: &Path, message: String) -> ArchiveError {
     }
 }
 /// Unpacks zip entries with per-entry streaming hashes.
-///
-/// Skipped entries drain inside framing, kept
-/// entries spill under staging with hashes.
 ///
 /// # Errors
 ///

@@ -1,5 +1,4 @@
 //! Apply run
-//!
 //! Desired documents to disk writes with prompts.
 
 use std::collections::BTreeSet;
@@ -28,7 +27,6 @@ use crate::seams::{Sinks, evaluate_shared, log_processed, timed};
 use confit_model::progress::Event;
 
 /// Outcome of one successful apply run.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyReport {
     /// Counts documents written to disk.
@@ -38,46 +36,6 @@ pub struct ApplyReport {
 }
 
 /// One apply run from desired documents to disk writes.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::apply::ApplyRunner;
-/// use confit_model::document::{Data, Document};
-/// use confit_model::routes::{Route, RouteBase};
-/// use confit_model::manifest::Manifest;
-/// use confit_runtime::Applier;
-/// use confit_store::{StoreRoots, Stores};
-/// use std::io::Cursor;
-///
-/// let mut input = Cursor::new("yes\n");
-/// let (sender, _) = crossbeam_channel::unbounded();
-/// let stores = Stores::new(StoreRoots::standard(), sender.clone());
-/// let applier = Applier::with_stores(stores.clone(), sender);
-/// let manifest = match Manifest::build(
-///     vec![Document::new(
-///         Route::new(RouteBase::Home, "note").unwrap(),
-///         Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-///     )],
-///     Vec::new(),
-/// ) {
-///     Ok(manifest) => manifest,
-///     Err(error) => panic!("bundle builds: {error}"),
-/// };
-/// let runner = ApplyRunner {
-///     manifest,
-///     previous: Manifest::empty(),
-///     force: false,
-///     input: &mut input,
-///     stores,
-///     applier,
-///     sinks: Default::default(),
-///     log_file: None,
-///     checks: Default::default(),
-///     changed: Default::default(),
-/// };
-/// assert!(matches!(runner.execute(), Ok(_) | Err(_)));
-/// ```
 pub struct ApplyRunner<'a> {
     /// The desired manifest under writing and running.
     pub manifest: Manifest,
@@ -102,25 +60,10 @@ pub struct ApplyRunner<'a> {
 }
 
 impl<'a> ApplyRunner<'a> {
-    /// Reads desired documents from flags with explicit run fields.
+    /// Resolves desired documents from flags with explicit run fields.
     ///
-    /// The positional sniffs its shape: `@name` reads a named
-    /// slot, `%N` reads history newest-first from one, `.cb`
-    /// reads a bundle file, everything else evaluates as
-    /// a profile.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - the apply flags under running.
-    /// * `input` - the answer source under prompting.
-    /// * `stores` - the write capabilities for the run.
-    /// * `applier` - the destination reads and writes for the run.
-    /// * `sinks` - the output senders for the run.
-    /// * `log_file` - the hook log path, `None` for no log.
-    ///
-    /// # Returns
-    ///
-    /// The runner holding desired documents and run flags.
+    /// `@name` reads a named slot, `%N` reads history newest-first from one,
+    /// `.cb` reads a bundle file, and everything else evaluates as a profile.
     ///
     /// # Errors
     ///
@@ -129,33 +72,6 @@ impl<'a> ApplyRunner<'a> {
     /// - [`CliError::Model`] for manifest builds.
     /// - [`CliError::Engine`] for evaluation failures.
     /// - [`CliError::NoProfile`] for absent profiles.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::cli::ApplyArgs;
-    /// use confit_runtime::Applier;
-    /// use confit_store::{StoreRoots, Stores};
-    /// use std::io::Cursor;
-    /// use std::path::PathBuf;
-    ///
-    /// let args = ApplyArgs {
-    ///     source: PathBuf::from("profile.lua"),
-    ///     shared: confit_cli::cli::SharedArgs {
-    ///         root: None,
-    ///         plugins: None,
-    ///         re_fetch: false,
-    ///     },
-    ///     force: true,
-    /// };
-    /// let mut input = Cursor::new(String::new());
-    /// let (sender, _) = crossbeam_channel::unbounded();
-    /// let stores = Stores::new(StoreRoots::standard(), sender.clone());
-    /// let applier = Applier::with_stores(stores.clone(), sender);
-    /// let runner = ApplyRunner::from_args(&args, &mut input, stores, applier, Default::default(), None);
-    /// assert!(matches!(runner, Ok(_) | Err(_)));
-    /// ```
     pub fn from_args(
         args: &ApplyArgs,
         input: &'a mut dyn BufRead,
@@ -250,52 +166,14 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Reads flags and runs the full apply flow with explicit run fields.
+    /// Runs the full apply flow from flags with explicit run fields.
     ///
-    /// # Arguments
-    ///
-    /// * `args` - the apply flags under running.
-    /// * `input` - the answer source under prompting.
-    /// * `stores` - the write capabilities for the run.
-    /// * `applier` - the destination reads and writes for the run.
-    /// * `sinks` - the output senders for the run.
-    /// * `log_file` - the hook log path, `None` for no log.
-    ///
-    /// # Returns
-    ///
-    /// The write counts and the stored manifest path.
+    /// The report carries the write counts.
     ///
     /// # Errors
     ///
     /// Evaluation, prompt, and write failures surface as
     /// plan or io errors. A non-`yes` answer aborts as a plan error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use confit_cli::actions::apply::ApplyRunner;
-    /// use confit_cli::cli::ApplyArgs;
-    /// use confit_runtime::Applier;
-    /// use confit_store::{StoreRoots, Stores};
-    /// use std::io::Cursor;
-    /// use std::path::PathBuf;
-    ///
-    /// let args = ApplyArgs {
-    ///     source: PathBuf::from("profile.lua"),
-    ///     shared: confit_cli::cli::SharedArgs {
-    ///         root: None,
-    ///         plugins: None,
-    ///         re_fetch: false,
-    ///     },
-    ///     force: true,
-    /// };
-    /// let mut input = Cursor::new(String::new());
-    /// let (sender, _) = crossbeam_channel::unbounded();
-    /// let stores = Stores::new(StoreRoots::standard(), sender.clone());
-    /// let applier = Applier::with_stores(stores.clone(), sender);
-    /// let report = ApplyRunner::run(&args, &mut input, stores, applier, Default::default(), None);
-    /// assert!(matches!(report, Ok(_) | Err(_)));
-    /// ```
     pub fn run(
         args: &ApplyArgs,
         input: &'a mut dyn BufRead,
@@ -309,14 +187,12 @@ impl<'a> ApplyRunner<'a> {
 
     /// Applies desired documents with preview, prompts, and rotation.
     ///
-    /// The preview renders through presentation. Only the literal
-    /// `yes` proceeds, anything else aborts with nothing written.
-    /// A fresh snapshot before writing re-prompts on drift. Success
-    /// writes the state file and one stored manifest with rotation.
+    /// Success writes the state file and one stored manifest with rotation.
+    /// The report carries the write counts.
     ///
-    /// # Returns
-    ///
-    /// The write counts and the stored manifest path.
+    /// - Only the literal `yes` proceeds, anything else aborts with nothing
+    ///   written.
+    /// - A fresh snapshot before writing re-prompts on drift.
     ///
     /// # Errors
     ///
@@ -392,8 +268,8 @@ impl<'a> ApplyRunner<'a> {
 
     /// Runs built hooks after files, state, and history land.
     ///
-    /// Closed gates skip with a line, passing checks skip silently.
-    /// Failures abort the rest.
+    /// - Closed gates skip with a line, passing checks skip silently.
+    /// - Failures abort the rest.
     fn run_hooks(&mut self, built: &Manifest) -> Result<()> {
         let total = built.hooks.len();
         for (index, hook) in built.hooks.iter().enumerate() {
@@ -417,8 +293,6 @@ impl<'a> ApplyRunner<'a> {
         Ok(())
     }
 
-    /// Runs one open hook through the registry runner.
-    ///
     /// # Errors
     ///
     /// - [`CliError::Resolve`] for unresolvable binaries.
@@ -518,8 +392,8 @@ impl<'a> ApplyRunner<'a> {
 
 /// Computes the changed destination routes for one apply run.
 ///
-/// First runs hold every desired route. Steady runs hold plan
-/// changes and drifted destinations.
+/// - First runs hold every desired route.
+/// - Steady runs hold plan changes and drifted destinations.
 fn changed_paths(
     built: &Manifest,
     previous: &Manifest,

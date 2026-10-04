@@ -1,5 +1,4 @@
 //! Archive
-//!
 //! Member listing and extraction for compressed archives.
 
 pub mod error;
@@ -30,13 +29,9 @@ const EXTRACT_DIR: &str = "extract";
 /// Head window feeding every probe, wide enough for tar magic.
 const HEAD_LEN: u64 = 512;
 
-/// Streaming backend behind one sniffed archive shape.
-///
-/// Names list archive-relative members with forward
-/// slashes. Unpack spills decoded members under staging
-/// with per-entry hashes.
+/// Streaming archive backend.
 trait ArchiveBackend {
-    /// Lists member names without reading content.
+    /// Lists member names.
     ///
     /// # Errors
     ///
@@ -69,9 +64,6 @@ pub struct ArchiveStore {
 
 impl ArchiveStore {
     /// Builds a file-backed archive store under the temp base.
-    ///
-    /// Roots arrive explicit from store construction.
-    /// The sender carries unpack facts.
     pub fn new(roots: &StoreRoots, resources: Arc<Resources>, progress: ProgressSender) -> Self {
         Self {
             temp_base: roots.temp_base.clone(),
@@ -81,8 +73,6 @@ impl ArchiveStore {
     }
 
     /// Seals one trusted source as a verified archive.
-    ///
-    /// The proof seals at birth; downstream code trusts the type.
     ///
     /// # Errors
     ///
@@ -95,8 +85,6 @@ impl ArchiveStore {
 
     /// Seals one file path as a verified archive.
     ///
-    /// The proof seals at birth and downstream code trusts the type.
-    ///
     /// # Errors
     ///
     /// - [`ArchiveError::Read`] for failed source reads.
@@ -107,7 +95,7 @@ impl ArchiveStore {
         ArchiveHandle::new(source.to_path_buf(), sha)
     }
 
-    /// Lists member names without reading content.
+    /// Lists member names.
     ///
     /// # Errors
     ///
@@ -129,8 +117,9 @@ impl ArchiveStore {
 
     /// Unpacks one archive once into the spill folder.
     ///
-    /// Present folders skip, so repeated unpacks share bytes.
     /// Members return as born resource handles hashed at spill time.
+    ///
+    /// - Present folders skip.
     ///
     /// # Errors
     ///
@@ -177,10 +166,6 @@ impl ArchiveStore {
     }
 
     /// Unpacks one backend spill through staging into place.
-    ///
-    /// Members spill one entry at a time under staging before
-    /// the atomic rename, and a present destination wins the
-    /// rename race.
     ///
     /// # Errors
     ///
@@ -231,7 +216,7 @@ impl ArchiveStore {
 
     /// Picks one archive member by its archive-relative name.
     ///
-    /// Names read archive-relative with forward slashes.
+    /// - Names read archive-relative with forward slashes.
     ///
     /// # Errors
     ///
@@ -283,9 +268,6 @@ fn file_sha(source: &Path) -> Result<Sha> {
 
 /// Proves one source holds a compressed archive.
 ///
-/// Gzip magic, tar readability, zip magic, and zip
-/// readability under current fallback rules.
-///
 /// # Errors
 ///
 /// - [`ArchiveError::NotArchive`] for plain sources.
@@ -313,8 +295,6 @@ fn not_archive(source: &Path) -> ArchiveError {
 
 /// Builds born member handles from streamed hashes.
 ///
-/// The spill folder roots containment for every member.
-///
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for containment failures.
@@ -335,7 +315,7 @@ fn streamed_handles(
     Ok(handles)
 }
 
-/// Sniffed archive shape behind one source.
+/// Sniffed archive shape.
 enum Shape {
     /// Zip bytes under central-directory framing.
     Zip,
@@ -347,10 +327,8 @@ enum Shape {
 
 /// Sniffs one source into its backend shape.
 ///
-/// Fallback order reads zip, then tar, with name
-/// policy last: zip magic routes zip, tar or gzip
-/// magic routes tar, plain bytes route a plain tar
-/// attempt while tar names refuse bare singles.
+/// Zip magic routes zip, tar and gzip magic route tar, and plain bytes route
+/// a plain tar attempt.
 ///
 /// # Errors
 ///
@@ -379,9 +357,9 @@ fn read_head(source: &Path) -> Result<Vec<u8>> {
     Ok(head)
 }
 
-/// Reads born handles back for one present spill.
+/// Collects born handles back for one present spill.
 ///
-/// Names sort, so repeats share order with fresh unpacks.
+/// - Names sort.
 ///
 /// # Errors
 ///
@@ -417,7 +395,7 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
 
 /// Collects archive-relative member names under one spill folder.
 ///
-/// Folders skip; files read archive-relative with forward slashes.
+/// - Folders skip.
 ///
 /// # Errors
 ///

@@ -1,5 +1,4 @@
 //! Engine
-//!
 //! Lua profile evaluation into finished documents.
 
 pub mod assembly;

@@ -15,9 +15,8 @@ fn main() {
 
 /// Runs the selected subcommand to completion.
 ///
-/// Collision lines land in the log file. The path prints after
-/// the summary. Drift notes lead with success, so exit stays 0
-/// while drift exists.
+/// - The log path prints after the summary.
+/// - Drift notes lead with success.
 fn run() -> confit_cli::error::Result<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);
@@ -49,8 +48,6 @@ fn run() -> confit_cli::error::Result<()> {
 }
 
 /// Runs plan with summary output.
-///
-/// A plan run without a destination previews alone and writes nothing.
 fn run_plan(
     args: &confit_cli::cli::PlanArgs,
     log_path: &std::path::Path,

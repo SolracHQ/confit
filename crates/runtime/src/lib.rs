@@ -1,5 +1,4 @@
 //! Runtime
-//!
 //! Destination writes, removals, drift, and checks.
 
 #![deny(missing_docs)]
@@ -19,11 +18,11 @@ pub use disk::{HostDisk, Live, LiveMember};
 use confit_model::progress::ProgressSender;
 use confit_store::{StoreRoots, Stores};
 
-/// Destination applier behind live reads, writes, and drift.
+/// Destination applier.
 ///
 /// Roots arrive explicit at construction.
 pub struct Applier {
-    /// Write capabilities behind blob resolution.
+    /// Write capabilities for one run.
     pub(crate) stores: Stores,
     /// Disk reads and writes.
     pub(crate) disk: HostDisk,
@@ -33,20 +32,12 @@ pub struct Applier {
 
 impl Applier {
     /// Applier for CLI wiring.
-    ///
-    /// Roots arrive explicit from CLI wiring. File backends
-    /// serve every read and write. A dropped receiver backs
-    /// the sender while callers assert nothing.
     pub fn host(roots: StoreRoots) -> Self {
         let (sender, _) = crossbeam_channel::unbounded();
         Self::with_stores(Stores::new(roots, sender.clone()), sender)
     }
 
     /// Applier over shared stores.
-    ///
-    /// The stores arrive explicit, so callers sharing one
-    /// `Stores` keep blobs and disk behind one value.
-    /// The sender carries write facts.
     pub fn with_stores(stores: Stores, progress: ProgressSender) -> Self {
         Self {
             stores,
@@ -55,7 +46,7 @@ impl Applier {
         }
     }
 
-    /// Reads the write capabilities behind blob resolution.
+    /// Reads the write capabilities.
     pub fn stores(&self) -> &Stores {
         &self.stores
     }

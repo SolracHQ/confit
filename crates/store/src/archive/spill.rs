@@ -1,7 +1,4 @@
-//! Spill
-//!
-//! Member spilling with hashes and containment under
-//! staging folders.
+//! Member spilling with hashes and containment.
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +33,7 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 
 /// Spills one decoded member stream under staging with a hash.
 ///
-/// Parents arrive created, and bytes stream through the digest
-/// writer into the spill file in one pass.
+/// - Parents arrive created.
 ///
 /// # Errors
 ///
@@ -79,9 +75,7 @@ pub(crate) fn spill_entry(
 
 /// Rejects escaping member names before one unpack.
 ///
-/// Decoder failures pass through untouched, so the unpack
-/// fallback still decides tar-shaped names over non-tar
-/// bytes.
+/// - Decoder failures pass through untouched.
 ///
 /// # Errors
 ///

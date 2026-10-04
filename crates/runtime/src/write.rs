@@ -13,8 +13,8 @@ use crate::error::{Result, RuntimeError};
 impl Applier {
     /// Writes every document to its resolved destination.
     ///
-    /// Present unmanaged documents stay untouched while
-    /// their destination reads absent from the changed set.
+    /// - Present unmanaged documents stay untouched while their destination
+    ///   reads absent from the changed set.
     ///
     /// # Errors
     ///

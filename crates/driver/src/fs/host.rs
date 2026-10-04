@@ -1,15 +1,9 @@
-//! Host filesystem verbs behind `fs` paths.
-//!
-//! Every verb rides `std` directly with `FsFile`
-//! handles from open and create and append.
+//! Host filesystem verbs.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Host seekable handle over one `std` file.
-///
-/// Reads and seeks ride the file, length reads
-/// metadata, sync lands through `sync_all`.
+/// Host seekable handle.
 struct HostFile {
     file: std::fs::File,
 }
@@ -153,10 +147,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
-/// Opens one file behind a seekable handle.
-///
-/// Reads and seeks ride the handle, writes refuse on
-/// the read-only file.
+/// Opens one file.
 ///
 /// # Errors
 ///
@@ -190,7 +181,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Creates one file behind a seekable handle truncating any entry.
+/// Creates one file truncating any entry.
 ///
 /// # Errors
 ///
@@ -200,9 +191,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::File::create(path).map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
 }
 
-/// Opens one file behind a seekable handle appending.
-///
-/// Missing entries create first, writes land at the end.
+/// Opens one file appending.
 ///
 /// # Errors
 ///

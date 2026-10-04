@@ -1,8 +1,4 @@
 //! Filesystem verbs over host files with a memory backend under tests.
-//!
-//! Every verb rides `fs` paths with `FsFile` handles from
-//! open and create and append. Host files wrap `std` files,
-//! memory files wrap cursors flushing back on sync and drop.
 
 use std::io;
 
@@ -54,16 +50,11 @@ impl FileMeta {
 
 /// Seekable file handle shared by host and memory backends.
 ///
-/// Handles answer reads and writes and seeks over one
-/// cursor. Length reports committed bytes, sync lands
-/// buffered bytes onto the backend.
+/// Handles serve reads and writes and seeks over one cursor. Length reports
+/// committed bytes, sync lands buffered bytes onto the backend.
 #[allow(clippy::len_without_is_empty)]
 pub trait FsFile: io::Read + io::Write + io::Seek {
     /// Reads the committed byte length of one file.
-    ///
-    /// Handles ride open files so missing never fires.
-    /// Memory reads never fail, host faults surface OS
-    /// kinds.
     ///
     /// # Errors
     ///
@@ -71,9 +62,6 @@ pub trait FsFile: io::Read + io::Write + io::Seek {
     fn len(&self) -> io::Result<u64>;
 
     /// Lands buffered bytes onto the backend.
-    ///
-    /// Missing memory homes fail, host faults surface
-    /// OS kinds.
     ///
     /// # Errors
     ///

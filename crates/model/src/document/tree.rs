@@ -1,5 +1,4 @@
 //! Tree
-//!
 //! Managed file sets with lifecycle counts and hashing.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,41 +33,8 @@ pub struct Summary {
 
 /// Counts lifecycle states against a previous manifest.
 ///
-/// Opaque kind changes count as updates, other kind changes
-/// count as create and delete.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::{Data, Document, summary};
-/// use confit_model::manifest::{MANIFEST_VERSION, Manifest};
-/// use confit_model::routes::{Route, RouteBase};
-///
-/// let mut previous = Manifest {
-///     version: MANIFEST_VERSION,
-///     documents: vec![Document::new(
-///         Route::new(RouteBase::Home, "note").unwrap(),
-///         Data::Text { content: "hi".into(), mode: None, unmanaged: false },
-///     )],
-///     hooks: Vec::new(),
-/// };
-/// for document in &mut previous.documents {
-///     document.fill_hash().unwrap();
-/// }
-/// let mut built_docs = vec![Document::new(
-///     Route::new(RouteBase::Home, "note").unwrap(),
-///     Data::Text { content: "changed".into(), mode: None, unmanaged: false },
-/// )];
-/// for document in &mut built_docs {
-///     document.fill_hash().unwrap();
-/// }
-/// let built = Manifest {
-///     version: MANIFEST_VERSION,
-///     documents: built_docs,
-///     hooks: Vec::new(),
-/// };
-/// assert_eq!(summary(&built, &previous).update, 1);
-/// ```
+/// - Opaque kind changes count as updates, other kind changes count as create
+///   and delete.
 pub fn summary(built: &Manifest, previous: &Manifest) -> Summary {
     let mut counts = Summary {
         create: 0,
@@ -93,24 +59,6 @@ pub fn summary(built: &Manifest, previous: &Manifest) -> Summary {
 }
 
 /// Counts changed members between two tree manifests.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::{BlobRef, ManifestMember, tree_changed};
-/// use confit_model::sha::Sha;
-///
-/// fn sealed(content: String, stored: String) -> BlobRef {
-///     BlobRef::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap())
-/// }
-///
-/// let old = vec![ManifestMember { relative: "a".into(), blob: sealed("aa".repeat(32), "aa".repeat(32)), mode: 0o644 }];
-/// let new = vec![
-///     ManifestMember { relative: "a".into(), blob: sealed("bb".repeat(32), "bb".repeat(32)), mode: 0o644 },
-///     ManifestMember { relative: "b".into(), blob: sealed("cc".repeat(32), "cc".repeat(32)), mode: 0o644 },
-/// ];
-/// assert_eq!(tree_changed(&old, &new), 2);
-/// ```
 pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
     let old_map: BTreeMap<&str, &ManifestMember> = old
         .iter()

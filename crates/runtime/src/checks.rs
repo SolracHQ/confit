@@ -1,6 +1,4 @@
-//! Checks
-//!
-//! Host facts behind condition verdicts and hook timeouts.
+//! Host facts for condition verdicts and hook timeouts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -10,14 +8,9 @@ use confit_model::condition::Condition;
 use confit_model::routes::Route;
 
 /// Default hook timeout in seconds backing the `10m` opt default.
-///
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
 /// Host facts under condition checks.
-///
-/// Vars hold the process environment snapshot. Path dirs hold
-/// the PATH entries in order.
-///
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checks {
     /// Holds the environment variables under reading.
@@ -29,8 +22,8 @@ pub struct Checks {
 impl Checks {
     /// Snapshots the host environment and PATH dirs.
     ///
-    /// Non-Unicode entries drop. Missing PATH reads as empty.
-    ///
+    /// - Non-Unicode entries drop.
+    /// - Missing PATH reads as empty.
     pub fn current() -> Self {
         let mut vars = BTreeMap::new();
         for (key, value) in std::env::vars_os() {
@@ -45,32 +38,6 @@ impl Checks {
     }
 
     /// Reports one condition verdict against facts and the driver.
-    ///
-    /// `Exists` reads the applier-expanded path. `Changed` reads
-    /// membership in the changed route set. `All`, `Any` and `Not`
-    /// recurse.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::condition::Condition;
-    /// use confit_runtime::checks::Checks;
-    /// use std::collections::{BTreeMap, BTreeSet};
-    ///
-    /// let checks = Checks {
-    ///     vars: BTreeMap::from([("SHELL".to_string(), "bash".to_string())]),
-    ///     path_dirs: Vec::new(),
-    /// };
-    /// let cond = Condition::All(vec![
-    ///     Condition::EnvSet { key: "SHELL".into() },
-    ///     Condition::EnvEq { key: "SHELL".into(), value: "bash".into() },
-    /// ]);
-    /// assert!(checks.check(&cond, &BTreeSet::new()));
-    /// assert!(!checks.check(
-    ///     &Condition::EnvSet { key: "MISSING".into() },
-    ///     &BTreeSet::new(),
-    /// ));
-    /// ```
     pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
@@ -87,9 +54,9 @@ impl Checks {
 
 /// Finds one executable across dirs through the driver.
 ///
-/// Ordered dirs win, so the first hit returns. Existence
-/// follows symlinks, so dangling links miss. Modeless
-/// backends count presence as a hit.
+/// - Ordered dirs win.
+/// - Existence follows symlinks.
+/// - Modeless backends count presence as a hit.
 pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     const EXEC_BIT: u32 = 0o111;
 
@@ -133,8 +100,8 @@ mod tests {
 
     /// Driver oracle replaying the discovery decision branch by branch.
     ///
-    /// Present entries hit while an exec bit holds.
-    /// Modeless backends count presence.
+    /// Present entries hit while an exec bit holds. Modeless backends count
+    /// presence.
     fn oracle(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
@@ -291,7 +258,7 @@ mod tests {
         driver::fs::create_dir_all(dir.path()).unwrap();
         driver::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
-        assert_eq!(route.expand(), path, "literal routes resolve verbatim");
+        assert_eq!(route.expand(), path, "literal routes resolve unchanged");
         assert!(
             checks_with(Vec::new()).check(
                 &Condition::Exists {

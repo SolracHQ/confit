@@ -1,9 +1,5 @@
 //! Drift
-//!
 //! Comparison results between recorded manifests and disk.
-//!
-//! Drift entries carry data alone. Drift execution rides
-//! the store verb module over workspace and blob reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,12 +7,7 @@ use crate::document::{Document, StructuredFormat, Table};
 use crate::routes::Route;
 use crate::sha::Sha;
 
-/// Manual edit behind one recorded destination.
-///
-/// Old holds recorded content. New holds disk content.
-/// Missing sides read as None, so an explicit null value
-/// stays distinct from an absent key.
-///
+/// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Drift {
     /// Structured or link leaf differs between recorded and disk.
@@ -25,9 +16,9 @@ pub enum Drift {
         path: Route,
         /// The dotted leaf key, link uses `target`.
         key: String,
-        /// The recorded leaf value, None when the key reads absent.
+        /// The recorded leaf value.
         old: Option<serde_json::Value>,
-        /// The disk leaf value, None when the key reads absent.
+        /// The disk leaf value.
         new: Option<serde_json::Value>,
     },
     /// Text content differs between recorded and disk.
@@ -46,15 +37,13 @@ pub enum Drift {
     Unreadable {
         /// The recorded destination route.
         path: Route,
-        /// The fault cause behind the failed read.
+        /// The fault cause for the failed read.
         reason: String,
     },
 }
 
 impl Drift {
     /// Reads the drift destination.
-    ///
-    /// The recorded route for key, hunk, missing, and unreadable entries.
     pub fn path(&self) -> &Route {
         match self {
             Self::Key { path, .. }
@@ -65,10 +54,7 @@ impl Drift {
     }
 }
 
-/// One drift side order selecting old/new assignment.
-///
-/// RecordedFirst keeps recorded bytes as old, disk as new.
-/// DiskFirst keeps disk bytes as old, recorded as new.
+/// One drift side order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriftOrder {
     /// Recorded bytes read as old, disk as new.
@@ -80,8 +66,7 @@ pub enum DriftOrder {
 impl Document {
     /// Collects drift entries for one present disk path.
     ///
-    /// Unmanaged documents stay quiet. Present text with
-    /// matching bytes stays quiet.
+    /// - Unmanaged documents stay quiet.
     pub fn disk_drift(
         &self,
         recorded: &[u8],
@@ -201,8 +186,6 @@ impl Document {
 }
 
 /// Builds render-ready hunk content from first text to second text.
-///
-/// File markers never leave this function.
 fn content_hunk(first: &str, second: &str) -> String {
     diffy::create_patch(first, second)
         .to_string()
@@ -274,7 +257,7 @@ fn flatten_table(table: &Table, prefix: &str, out: &mut BTreeMap<String, serde_j
 
 /// Flattens one value into dotted leaf entries.
 ///
-/// Array positions echo from 1, so printed keys match typed paths.
+/// - Array positions echo from 1.
 fn flatten_value(
     key: &str,
     value: &serde_json::Value,

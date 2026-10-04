@@ -1,21 +1,18 @@
 //! Routes
-//!
 //! Late-bound destination routes.
 
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
+use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// Destination base for a route.
-///
-/// Home, config, data, and cache resolve on the applying host.
-/// Literal carries a host-specific path verbatim.
-/// Nothing resolves here; resolution is apply-time business.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// Portable standard folders enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
 pub enum RouteBase {
     /// User home folder.
     Home,
@@ -29,24 +26,220 @@ pub enum RouteBase {
     Literal,
 }
 
-/// Late-bound destination route.
-///
-/// Base and relative path.
-/// The path holds a non-empty shape only.
-/// Parents, permissions, and platform validity resolve at apply time.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// Portable route over standard folders.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 pub struct Route {
     base: RouteBase,
     relative: PathBuf,
 }
 
+/// One jailed segment offense.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentFault {
+    /// Empty segment string.
+    Empty,
+    /// Absolute root where relatives belong.
+    Absolute,
+    /// Parent step climbing out.
+    Parent,
+    /// Drive prefix naming a foreign host.
+    Drive,
+    /// Backslash separator from another platform.
+    Backslash,
+    /// Empty component from doubled or trailing slashes.
+    EmptyComponent,
+}
+
+impl SegmentFault {
+    /// Reads the jail reason for the fault.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::Empty => "holds no path",
+            Self::Absolute => "must stay relative",
+            Self::Parent => "parent steps escape",
+            Self::Drive => "drive prefixes escape",
+            Self::Backslash => "backslashes escape",
+            Self::EmptyComponent => "empty components escape",
+        }
+    }
+}
+
+impl std::fmt::Display for SegmentFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+
+/// Splits one segment string into checked components.
+///
+/// # Errors
+///
+/// - [`SegmentFault`] for every escaping or empty shape.
+pub fn split_checked(
+    raw: &str,
+    absolute_ok: bool,
+) -> std::result::Result<Vec<String>, SegmentFault> {
+    if raw.contains('\\') {
+        return Err(SegmentFault::Backslash);
+    }
+    if raw.len() >= 2 && raw.as_bytes()[0].is_ascii_alphabetic() && raw.as_bytes()[1] == b':' {
+        return Err(SegmentFault::Drive);
+    }
+    let absolute = raw.starts_with('/');
+    if absolute && !absolute_ok {
+        return Err(SegmentFault::Absolute);
+    }
+    let mut parts = Vec::new();
+    for component in raw.trim_start_matches('/').split('/') {
+        if component.is_empty() {
+            return Err(SegmentFault::EmptyComponent);
+        }
+        if component == ".." {
+            return Err(SegmentFault::Parent);
+        }
+        parts.push(component.to_owned());
+    }
+    if parts.is_empty() {
+        return Err(SegmentFault::Empty);
+    }
+    Ok(parts)
+}
+
+impl<'de> Deserialize<'de> for RouteBase {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(BaseVisitor)
+    }
+}
+
+struct BaseVisitor;
+
+impl Visitor<'_> for BaseVisitor {
+    type Value = RouteBase;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("known base 'home', 'config', 'data', 'cache', or 'literal'")
+    }
+
+    fn visit_str<E>(self, name: &str) -> std::result::Result<RouteBase, E>
+    where
+        E: de::Error,
+    {
+        match name {
+            "home" => Ok(RouteBase::Home),
+            "config" => Ok(RouteBase::Config),
+            "data" => Ok(RouteBase::Data),
+            "cache" => Ok(RouteBase::Cache),
+            "literal" => Ok(RouteBase::Literal),
+            _ => Err(E::custom(
+                [
+                    "unknown base '",
+                    name,
+                    "': want known base 'home', 'config', 'data', 'cache', or 'literal'",
+                ]
+                .concat(),
+            )),
+        }
+    }
+
+    fn visit_string<E>(self, name: String) -> std::result::Result<RouteBase, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(&name)
+    }
+}
+
+impl<'de> Deserialize<'de> for Route {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(RouteVisitor)
+    }
+}
+
+struct RouteVisitor;
+
+impl<'de> Visitor<'de> for RouteVisitor {
+    type Value = Route;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a route table")
+    }
+
+    fn visit_str<E>(self, text: &str) -> std::result::Result<Route, E>
+    where
+        E: de::Error,
+    {
+        Err(E::invalid_type(de::Unexpected::Str(text), &self))
+    }
+
+    fn visit_string<E>(self, text: String) -> std::result::Result<Route, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(&text)
+    }
+
+    fn visit_map<A>(self, mut access: A) -> std::result::Result<Route, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut base = None;
+        let mut relative = None;
+        while let Some(key) = access.next_key::<String>()? {
+            match key.as_str() {
+                "base" => {
+                    if base.is_some() {
+                        return Err(de::Error::duplicate_field("base"));
+                    }
+                    base = Some(access.next_value::<RouteBase>()?);
+                }
+                "relative" => {
+                    if relative.is_some() {
+                        return Err(de::Error::duplicate_field("relative"));
+                    }
+                    relative = Some(access.next_value::<String>()?);
+                }
+                _ => return Err(de::Error::unknown_field(&key, &["base", "relative"])),
+            }
+        }
+        let base = base.ok_or_else(|| de::Error::missing_field("base"))?;
+        let relative: String = relative.ok_or_else(|| de::Error::missing_field("relative"))?;
+        check_relative(base, &relative).map_err(de::Error::custom)
+    }
+}
+
+/// Builds one route from its base with its raw relative text.
+///
+/// # Errors
+///
+/// - [`Error::Segment`] for escaping or empty shapes.
+/// - [`Error::Parse`] for empty paths.
+fn check_relative(base: RouteBase, relative: &str) -> Result<Route> {
+    let absolute_ok = base == RouteBase::Literal;
+    match split_checked(relative, absolute_ok) {
+        Ok(parts) => {
+            let joined = parts.join("/");
+            let shaped = if absolute_ok && relative.starts_with('/') {
+                format!("/{joined}")
+            } else {
+                joined
+            };
+            Route::new(base, shaped)
+        }
+        Err(fault) => Err(Error::Segment {
+            input: relative.to_owned(),
+            fault,
+        }),
+    }
+}
+
 impl RouteBase {
     /// Reads the lowercase base name.
-    ///
-    /// # Returns
-    ///
-    /// The base name for route display and log lines.
-    ///
     pub fn name(&self) -> &'static str {
         match self {
             Self::Home => "home",
@@ -77,9 +270,7 @@ impl Route {
 
     /// Joins one member segment onto the route.
     ///
-    /// Empty segments keep the route unchanged, so joined
-    /// member paths never fail.
-    ///
+    /// - Empty segments keep the route unchanged.
     pub fn join(&self, segment: &str) -> Self {
         if segment.is_empty() {
             return self.clone();
@@ -90,72 +281,31 @@ impl Route {
         }
     }
 
-    /// Renders the portable route display.
+    /// Renders the portable route display in sugar call form.
     ///
-    /// # Returns
-    ///
-    /// The `base:relative` text for plan keys and drift lines.
-    ///
+    /// - Named bases render as `base('relative')`.
+    /// - Literal renders its bare path.
     pub fn display(&self) -> String {
-        format!("{}:{}", self.base.name(), self.relative.display())
-    }
-
-    /// Parses one portable route display.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - the `base:relative` text under parsing.
-    ///
-    /// # Returns
-    ///
-    /// The route for known bases with a non-empty relative path.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Parse`] for unknown bases, missing separators, and empty paths.
-    ///
-    pub fn parse(text: &str) -> Result<Self> {
-        let Some((base_name, relative)) = text.split_once(':') else {
-            return Err(Error::Parse {
-                input: text.to_owned(),
-                want: "'base:relative' like 'home:.bashrc'".to_owned(),
-            });
-        };
-        let base = match base_name {
-            "home" => RouteBase::Home,
-            "config" => RouteBase::Config,
-            "data" => RouteBase::Data,
-            "cache" => RouteBase::Cache,
-            "literal" => RouteBase::Literal,
-            _ => {
-                return Err(Error::Parse {
-                    input: text.to_owned(),
-                    want: "known base 'home', 'config', 'data', 'cache', or 'literal'".to_owned(),
-                });
-            }
-        };
-        Self::new(base, relative).map_err(|_| Error::Parse {
-            input: text.to_owned(),
-            want: "'base:relative' like 'home:.bashrc'".to_owned(),
-        })
+        match self.base {
+            RouteBase::Literal => self.relative.display().to_string(),
+            _ => format!("{}('{}')", self.base.name(), self.relative.display()),
+        }
     }
 
     /// Reads the destination base.
-    ///
     pub fn base(&self) -> RouteBase {
         self.base
     }
 
     /// Reads the relative path.
-    ///
     pub fn relative(&self) -> &Path {
         &self.relative
     }
 
     /// Expands one destination route to its host path.
     ///
-    /// Literal carries its path verbatim. Unset homes pass
-    /// the relative path through intact.
+    /// - Literal carries its path unchanged.
+    /// - Unset homes pass the relative path through intact.
     pub fn expand(&self) -> PathBuf {
         match self.base {
             RouteBase::Literal => self.relative.clone(),
@@ -228,10 +378,32 @@ mod tests {
     }
 
     #[test]
-    fn expand_carries_literal_verbatim() {
+    fn expand_carries_literal_unchanged() {
         for path in ["/opt/confit/tool", "relative/tool"] {
             let route = Route::new(RouteBase::Literal, path).unwrap();
             assert_eq!(route.expand(), Path::new(path));
+        }
+    }
+
+    #[test]
+    fn display_renders_sugar_calls_with_bare_literals() {
+        let home = Route::new(RouteBase::Home, ".bashrc").unwrap();
+        assert_eq!(home.display(), "home('.bashrc')");
+        let config = Route::new(RouteBase::Config, "a/b").unwrap();
+        assert_eq!(config.display(), "config('a/b')");
+        let literal = Route::new(RouteBase::Literal, "/opt/x").unwrap();
+        assert_eq!(literal.display(), "/opt/x");
+    }
+
+    #[test]
+    fn decode_keeps_literal_leading_slashes() {
+        let value = serde_json::json!({ "base": "literal", "relative": "/opt/x" });
+        match serde_json::from_value::<Route>(value) {
+            Ok(route) => {
+                assert_eq!(route.relative(), Path::new("/opt/x"));
+                assert_eq!(route.display(), "/opt/x");
+            }
+            Err(error) => panic!("literal slash decodes: {error}"),
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Disk backend behind live reads, writes, and removals.
+//! Disk reads with writes and removals.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -13,63 +13,52 @@ use confit_store::faults::AccessFault;
 use crate::Applier;
 use crate::error::{Result, RuntimeError};
 
-/// Disk reads and writes behind one applier run.
-///
-/// Every call rides the driver: host paths in production,
-/// memory under a test guard. Routes expand against host
-/// folders in both cases, so isolation rides the guard.
+/// Disk reads and writes.
 pub struct HostDisk;
 
-/// Live disk state behind one document destination.
-///
-/// Readers stream content without loading whole files.
-/// Modes ride beside readers for permission comparison.
+/// Live disk state.
 pub enum Live {
     /// Missing destination awaiting creation.
     Absent,
     /// Failing read carrying its fault cause.
     Unreadable {
-        /// The fault cause behind the failed read.
+        /// The fault cause for the failed read.
         fault: AccessFault,
     },
     /// Content reader and permission bits for the destination.
     Present {
         /// Streams destination bytes.
         reader: Box<dyn std::io::Read>,
-        /// Unix permission bits, None for links.
+        /// Unix permission bits.
         mode: Option<u32>,
     },
 }
 
-/// Live disk state behind one tree member.
-///
-/// Present and unreadable members enter the map keyed by
-/// relative path. Missing members stay out, so absence
-/// reads as a map miss.
+/// Live tree member state.
 pub enum LiveMember {
     /// Failing read carrying its fault cause.
     Unreadable {
-        /// The fault cause behind the failed read.
+        /// The fault cause for the failed read.
         fault: AccessFault,
     },
     /// Content reader and permission bits for the member.
     Present {
         /// Streams member bytes.
         reader: Box<dyn std::io::Read>,
-        /// Unix permission bits, None for links.
+        /// Unix permission bits.
         mode: Option<u32>,
     },
 }
 
 impl HostDisk {
-    /// Reads one document destination through its kind-aware reader.
+    /// Opens one document destination through its kind-aware reader.
     pub fn live_doc(&self, document: &Document) -> Live {
         let expanded = document.destination.expand();
         let is_link = matches!(document.data, Data::Link { .. });
         live_doc_host(&expanded, is_link)
     }
 
-    /// Reads one tree destination into relative member readers.
+    /// Opens one tree destination into relative member readers.
     pub fn live_tree(&self, document: &Document) -> BTreeMap<String, LiveMember> {
         let dir = document.destination.expand();
         live_tree_host(&dir)
@@ -98,7 +87,7 @@ impl HostDisk {
         driver::fs::exists(path)
     }
 
-    /// Seeds one file behind a resolved path for memory runs.
+    /// Seeds one file at a resolved path for memory runs.
     pub fn insert(&self, path: &Path, bytes: &[u8]) {
         let _ = self.write_bytes(path, bytes);
     }
@@ -175,13 +164,13 @@ impl HostDisk {
 }
 
 impl Applier {
-    /// Seeds one file behind a resolved path for memory runs.
+    /// Seeds one file at a resolved path for memory runs.
     pub fn insert(&self, path: &Path, bytes: &[u8]) {
         self.disk.insert(path, bytes);
     }
 }
 
-/// Reads one host document destination through its kind-aware reader.
+/// Opens one host document destination through its kind-aware reader.
 fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
     let target = match driver::fs::read_link(expanded) {
         Ok(link) => join_link_target(expanded, &link),
@@ -219,7 +208,7 @@ fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
     }
 }
 
-/// Reads one host tree destination into relative member readers.
+/// Opens one host tree destination into relative member readers.
 fn live_tree_host(dir: &Path) -> BTreeMap<String, LiveMember> {
     let mut out = BTreeMap::new();
     walk_tree(dir, dir, &mut out);
@@ -228,7 +217,7 @@ fn live_tree_host(dir: &Path) -> BTreeMap<String, LiveMember> {
 
 /// Walks one folder into relative member readers.
 ///
-/// Missing folders read empty.
+/// - Missing folders read empty.
 fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
     let children = match driver::fs::read_dir(dir) {
         Ok(children) => children,
@@ -285,10 +274,10 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
     }
 }
 
-/// Joins a link target against the link parent without touching disk.
+/// Joins a link target against the link parent.
 ///
-/// Relative targets resolve beside the link. Parent segments pop
-/// lexically, staying put past the root.
+/// - Relative targets resolve beside the link.
+/// - Parent segments pop lexically, staying put past the root.
 fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
     if target.is_absolute() {
         return target.to_path_buf();
@@ -310,8 +299,6 @@ fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
 }
 
 /// Reads unix permission bits for one path.
-///
-/// Links read as None.
 fn file_mode(path: &Path) -> Option<u32> {
     if driver::fs::read_link(path).is_ok() {
         return None;
@@ -328,7 +315,7 @@ pub(crate) fn drain(reader: &mut dyn std::io::Read) -> std::io::Result<Vec<u8>> 
 
 /// Creates the parent folder for one destination path.
 ///
-/// Empty parents skip.
+/// - Empty parents skip.
 ///
 /// # Errors
 ///

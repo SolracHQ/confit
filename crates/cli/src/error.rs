@@ -1,5 +1,4 @@
 //! Error
-//!
 //! Failure vocabulary for command actions.
 
 use std::path::{Path, PathBuf};
@@ -281,6 +280,9 @@ fn transport_model(error: &ModelError) -> String {
     match error {
         ModelError::Parse { input, want } => {
             format!("invalid '{input}': want {want}")
+        }
+        ModelError::Segment { input, fault } => {
+            format!("invalid '{input}': want valid relative segments ({fault})")
         }
         ModelError::Render { format, reason } => {
             log::error!("model render as {format} failed: {reason}");

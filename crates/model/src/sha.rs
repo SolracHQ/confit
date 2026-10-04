@@ -1,5 +1,4 @@
 //! Sha
-//!
 //! Sealed content hashes.
 
 use serde::{Deserialize, Serialize};
@@ -17,10 +16,6 @@ const SHA_HEX_LEN: usize = 64;
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 
 /// Sealed SHA-256 digest.
-///
-/// Raw 32-byte digest with hex at the edge.
-///
-/// Birth checks the shape once; readers trust the type without rechecking.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Sha {
     inner: [u8; SHA_BYTE_LEN],
@@ -32,7 +27,6 @@ impl Sha {
     /// # Errors
     ///
     /// - [`Error::Parse`] for malformed hashes.
-    ///
     pub fn new(sha: impl Into<String>) -> Result<Self> {
         let sha = sha.into();
         check_sha_hex(&sha)?;
@@ -47,7 +41,6 @@ impl Sha {
     }
 
     /// Hashes bytes into a sealed digest.
-    ///
     pub fn hash(bytes: &[u8]) -> Self {
         let digest = sha2::Sha256::digest(bytes);
         Self {
@@ -56,7 +49,6 @@ impl Sha {
     }
 
     /// Seals a streaming hash.
-    ///
     pub fn finish(hasher: sha2::Sha256) -> Self {
         Self {
             inner: hasher.finalize().into(),
@@ -68,7 +60,6 @@ impl Sha {
     /// # Errors
     ///
     /// Stream read failures surface as io errors.
-    ///
     pub fn read_with_size(stream: &mut impl std::io::Read) -> std::io::Result<(Self, u64)> {
         let mut hasher = sha2::Sha256::new();
         let mut chunk = [0u8; READ_CHUNK_BYTES];
@@ -89,13 +80,11 @@ impl Sha {
     /// # Errors
     ///
     /// Stream read failures surface as io errors.
-    ///
     pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
         Ok(Self::read_with_size(stream)?.0)
     }
 
-    /// Reads the hex digest.
-    ///
+    /// Renders the hex digest.
     pub fn hex(&self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(SHA_HEX_LEN);
@@ -106,20 +95,17 @@ impl Sha {
         out
     }
 
-    /// Reads the hash and size label.
+    /// Renders the hash and size label.
     pub fn label(&self, len: u64) -> String {
         format!("sha256:{self} ({len} bytes)")
     }
 
-    /// Reads the short hash prefix for terminal lines.
-    ///
-    /// Full hex rides the log alone while terminal
-    /// lines carry twelve characters.
+    /// Renders the short hash prefix for terminal lines.
     pub fn short(&self) -> String {
         self.hex()[..12].to_owned()
     }
 
-    /// Reads the short hash and size label for terminal lines.
+    /// Renders the short hash and size label for terminal lines.
     pub fn label_short(&self, len: u64) -> String {
         format!("sha256:{} ({len} bytes)", self.short())
     }
@@ -151,9 +137,6 @@ impl std::fmt::Display for Sha {
 }
 
 /// Writer hashing every byte passing through.
-///
-/// Spills write and hash in one pass, so the digest
-/// arrives without reading the file back.
 pub struct ShaWriter<W> {
     inner: W,
     hasher: sha2::Sha256,
@@ -168,7 +151,7 @@ impl<W: std::io::Write> ShaWriter<W> {
         }
     }
 
-    /// Seals the running hash over every byte written so far.
+    /// Seals the running hash over every byte written.
     pub fn digest(self) -> Sha {
         Sha::finish(self.hasher)
     }
@@ -186,7 +169,7 @@ impl<W: std::io::Write> std::io::Write for ShaWriter<W> {
     }
 }
 
-/// Reads one hex character value.
+/// Decodes one hex character into its value.
 fn hex_value(byte: u8, sha: &str) -> Result<u8> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),

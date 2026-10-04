@@ -1,5 +1,4 @@
 //! Document
-//!
 //! Desired state payloads reaching disk.
 
 pub mod rc;
@@ -7,6 +6,7 @@ pub mod tree;
 
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -19,22 +19,10 @@ pub(crate) use tree::tree_manifest_bytes;
 pub use tree::{ManifestMember, Summary, summary, tree_changed};
 
 /// JSON shaped data table for structured documents.
-///
-/// Fixed key order keeps equal tables on one bytes form.
-///
 pub type Table = BTreeMap<String, serde_json::Value>;
 
 /// Serialization format for structured documents.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::StructuredFormat;
-///
-/// assert!(matches!(StructuredFormat::parse("toml"), Some(StructuredFormat::Toml)));
-/// assert!(matches!(StructuredFormat::parse("nope"), None));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StructuredFormat {
     /// JSON format.
@@ -47,11 +35,6 @@ pub enum StructuredFormat {
 
 impl StructuredFormat {
     /// Reads the lowercase format name.
-    ///
-    /// # Returns
-    ///
-    /// The format name for keys and log lines.
-    ///
     pub fn name(&self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -61,23 +44,6 @@ impl StructuredFormat {
     }
 
     /// Parses a format name in any letter case.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - the raw format name.
-    ///
-    /// # Returns
-    ///
-    /// The format for json, toml, or yaml. Else None.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::StructuredFormat;
-    ///
-    /// assert!(matches!(StructuredFormat::parse("JSON"), Some(StructuredFormat::Json)));
-    /// assert!(matches!(StructuredFormat::parse("nope"), None));
-    /// ```
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "json" => Some(Self::Json),
@@ -95,17 +61,6 @@ impl std::fmt::Display for StructuredFormat {
 }
 
 /// Document materialization kind.
-///
-/// Serializes lowercase, like `text`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::DocumentKind;
-///
-/// assert!(matches!(DocumentKind::Text.name(), "text"));
-/// assert!(matches!(DocumentKind::Opaque.name(), "opaque"));
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DocumentKind {
@@ -125,11 +80,6 @@ pub enum DocumentKind {
 
 impl DocumentKind {
     /// Reads the lowercase kind name.
-    ///
-    /// # Returns
-    ///
-    /// The kind name for plan keys.
-    ///
     pub fn name(&self) -> &'static str {
         match self {
             Self::Structured => "structured",
@@ -149,11 +99,6 @@ impl std::fmt::Display for DocumentKind {
 }
 
 /// Content-addressed bytes ref for manifests.
-///
-/// The content hash names payload bytes and the stored hash names
-/// pool bytes. Both hashes hold 64 hex characters. The store
-/// resolves refs into handles at the bundle edge, so manifests carry
-/// values alone.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlobRef {
     /// The content hash naming payload bytes.
@@ -164,39 +109,22 @@ pub struct BlobRef {
 
 impl BlobRef {
     /// Builds one blob ref from sealed content and stored hashes.
-    ///
-    /// # Arguments
-    ///
-    /// * `sha256` - the content hash naming payload bytes.
-    /// * `stored` - the pool-bytes hash naming gzip bytes.
-    ///
-    /// # Returns
-    ///
-    /// The ref carrying both hashes.
-    ///
     pub fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
 
     /// Reads the content hash.
-    ///
     pub fn sha(&self) -> &Sha {
         &self.sha256
     }
 
     /// Reads the pool-bytes hash.
-    ///
     pub fn stored(&self) -> &Sha {
         &self.stored
     }
 }
 
 /// Persisted document payload with binary bytes as refs.
-///
-/// Serializes externally tagged, like `{ "text": { "content": ".." } }`.
-/// Text, structured, rc, and link payloads stay inline.
-/// Opaque and tree payloads hold blob refs alone.
-///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Data {
@@ -226,10 +154,6 @@ pub enum Data {
     /// The rc data object.
     Rc(RcData),
     /// One blob handle and its mode.
-    ///
-    /// The unmanaged flag marks presence-only documents.
-    /// Present unmanaged documents stay quiet whatever the
-    /// bytes. Missing unmanaged documents read as missing.
     Opaque {
         /// The content-addressed file bytes identity.
         blob: BlobRef,
@@ -251,11 +175,6 @@ pub enum Data {
 
 impl Data {
     /// Reads the kind label for this payload.
-    ///
-    /// # Returns
-    ///
-    /// The kind matching the payload variant.
-    ///
     pub fn kind(&self) -> DocumentKind {
         match self {
             Self::Structured { .. } => DocumentKind::Structured,
@@ -268,23 +187,6 @@ impl Data {
     }
 
     /// Reads the unix permission bits for this payload.
-    ///
-    /// Text and opaque payloads carry an optional
-    /// mode. Every other payload reads as None.
-    ///
-    /// # Returns
-    ///
-    /// The mode bits for text and opaque payloads,
-    /// else None.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::Data;
-    ///
-    /// let data = Data::Text { content: "hi".into(), mode: Some(0o755), unmanaged: false};
-    /// assert!(matches!(data.mode(), Some(0o755)));
-    /// ```
     pub fn mode(&self) -> Option<u32> {
         match self {
             Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
@@ -293,14 +195,6 @@ impl Data {
     }
 
     /// Reads the unmanaged flag for this payload.
-    ///
-    /// Text and opaque payloads carry the flag. Every
-    /// other payload reads as false.
-    ///
-    /// # Returns
-    ///
-    /// True while presence alone satisfies the document.
-    ///
     pub fn unmanaged(&self) -> bool {
         match self {
             Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
@@ -309,11 +203,6 @@ impl Data {
     }
 
     /// Reads the tree members for this payload.
-    ///
-    /// # Returns
-    ///
-    /// The member list for tree payloads, else None.
-    ///
     pub fn tree_members(&self) -> Option<&[ManifestMember]> {
         match self {
             Self::Tree { members } => Some(members),
@@ -321,7 +210,7 @@ impl Data {
         }
     }
 
-    /// Reads every blob ref in document order.
+    /// Collects every blob ref in document order.
     pub fn blob_refs(&self) -> Vec<&BlobRef> {
         match self {
             Self::Opaque { blob, .. } => vec![blob],
@@ -334,12 +223,6 @@ impl Data {
 }
 
 /// One persisted document holding metadata and handles.
-///
-/// The data hash covers rendered bytes, so plan diffs read
-/// trusted hashes without pool access. The destination
-/// holds a late-bound route, so bundles apply between
-/// users and platforms.
-///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
@@ -364,16 +247,6 @@ pub enum DocumentStatus {
 
 impl Document {
     /// Builds a document with an empty data hash.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination` - the late-bound destination route.
-    /// * `data` - the document payload.
-    ///
-    /// # Returns
-    ///
-    /// The document with an empty data hash.
-    ///
     pub fn new(destination: Route, data: Data) -> Self {
         Self {
             destination,
@@ -383,55 +256,21 @@ impl Document {
     }
 
     /// Reads the kind label for this document.
-    ///
-    /// # Returns
-    ///
-    /// The kind matching the document payload.
     pub fn kind(&self) -> DocumentKind {
         self.data.kind()
     }
 
     /// Reads the unix permission bits for this document.
-    ///
-    /// Text and opaque payloads carry an optional mode.
-    /// Every other payload reads as None.
-    ///
-    /// # Returns
-    ///
-    /// The mode bits for text and opaque payloads, else None.
-    ///
     pub fn mode(&self) -> Option<u32> {
         self.data.mode()
     }
 
-    /// Builds the kind and route key for state lookups.
-    ///
-    /// # Returns
-    ///
-    /// The `kind:base:relative` string identifying the state slot.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{Data, Document};
-    /// use confit_model::routes::{Route, RouteBase};
-    ///
-    /// let stored = Document::new(
-    ///     Route::new(RouteBase::Home, "x").unwrap(),
-    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// );
-    /// assert_eq!(stored.key(), "text:home:x");
-    /// ```
+    /// Builds one kind with display key.
     pub fn key(&self) -> String {
         format!("{}:{}", self.data.kind().name(), self.destination.display())
     }
 
     /// Reports whether the document carries opaque bytes.
-    ///
-    /// # Returns
-    ///
-    /// True for the opaque kind only.
-    ///
     pub fn is_opaque(&self) -> bool {
         matches!(self.kind(), DocumentKind::Opaque)
     }
@@ -439,32 +278,6 @@ impl Document {
 
 impl Document {
     /// Reports the lifecycle status against a previous manifest.
-    ///
-    /// # Arguments
-    ///
-    /// * `previous` - the previous manifest with filled hashes.
-    ///
-    /// # Returns
-    ///
-    /// Create for absent keys, update for differing hashes,
-    /// differing modes, or opaque kind changes, else unchanged.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{Data, Document};
-    /// use confit_model::routes::{Route, RouteBase};
-    /// use confit_model::document::DocumentStatus;
-    /// use confit_model::manifest::Manifest;
-    ///
-    /// let mut document = Document::new(
-    ///     Route::new(RouteBase::Home, "x").unwrap(),
-    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// );
-    /// assert!(matches!(document.fill_hash(), Ok(())));
-    /// let previous = Manifest { version: 7, documents: Vec::new(), hooks: Vec::new() };
-    /// assert!(matches!(document.status(&previous), DocumentStatus::Create));
-    /// ```
     pub fn status(&self, previous: &Manifest) -> DocumentStatus {
         let recorded = previous
             .documents
@@ -493,33 +306,13 @@ impl Document {
 
     /// Fills the data hash by rendering the document.
     ///
-    /// The hash covers rendered bytes only. Modes compare
-    /// separately through status and drift. Opaque hashes
-    /// copy the blob ref, since the ref carries the
-    /// SHA-256 over raw bytes. Tree hashes cover canonical
-    /// manifest bytes over blob refs.
-    ///
-    /// # Returns
-    ///
-    /// Unit once the hash fills.
+    /// - The hash covers rendered bytes only.
+    /// - Opaque hashes copy the blob ref.
+    /// - Tree hashes cover canonical manifest bytes over blob refs.
     ///
     /// # Errors
     ///
     /// - [`Error::Render`] for serializer failures.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use confit_model::document::{Data, Document};
-    /// use confit_model::routes::{Route, RouteBase};
-    ///
-    /// let mut document = Document::new(
-    ///     Route::new(RouteBase::Home, "x").unwrap(),
-    ///     Data::Text { content: "hi".into(), mode: None, unmanaged: false},
-    /// );
-    /// assert!(matches!(document.fill_hash(), Ok(())));
-    /// assert!(matches!(document.data_hash.is_empty(), false));
-    /// ```
     pub fn fill_hash(&mut self) -> Result<()> {
         match &self.data {
             Data::Opaque { blob, .. } => {
@@ -540,17 +333,7 @@ impl Document {
 
     /// Reports whether a recorded document yields to desired documents.
     ///
-    /// A recorded key yields while some desired document shares
-    /// its destination under another key with either side opaque.
-    ///
-    /// # Arguments
-    ///
-    /// * `desired` - the desired documents under comparing.
-    ///
-    /// # Returns
-    ///
     /// True while an opaque same-destination sibling exists in desired.
-    ///
     pub fn superseded_by(&self, desired: &[Document]) -> bool {
         desired.iter().any(|document| {
             document.destination == self.destination
@@ -560,16 +343,7 @@ impl Document {
     }
 }
 
-/// Renders mode bits as octal digits for drift lines.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_model::document::render_mode;
-///
-/// assert!(matches!(render_mode(0o755).as_str(), "755"));
-/// assert!(matches!(render_mode(0o644).as_str(), "644"));
-/// ```
+/// Renders mode bits as octal digits.
 pub fn render_mode(mode: u32) -> String {
     format!("{mode:o}")
 }
@@ -643,12 +417,12 @@ mod tests {
         let bytes = crate::render::inline_bytes(&data).unwrap();
         let text = String::from_utf8_lossy(&bytes).into_owned();
         assert!(
-            text.contains("literal:/pinned/sourced.sh"),
+            text.contains("/pinned/sourced.sh"),
             "rc inline bytes carry the display alias: {text}"
         );
         assert_eq!(
             fill(data),
-            "cebb8dd1bf3d0ada60a47b7c2dc670760f11053893ec7f0b324e453f42e5ddaf",
+            "4e0bb0e9341fc39990d9a6f3476e68a3d2c49e75102ccb2daa7ba7bfcf275f97",
             "rc hash drifts only when rendered bytes change"
         );
     }

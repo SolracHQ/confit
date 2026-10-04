@@ -705,10 +705,11 @@ impl Session {
             let mut refs = items.clone();
             Executor::sort_patches(&mut refs);
             let format = created_format(display, &refs)?;
-            let destination = Route::parse(display).map_err(|error| EngineError::NestScope {
-                scope: scope.clone(),
-                reason: error.to_string(),
-            })?;
+            let destination =
+                crate::model::parse_display(display).map_err(|error| EngineError::NestScope {
+                    scope: scope.clone(),
+                    reason: error.to_string(),
+                })?;
             let document =
                 run_structured_doc(&self.lua, &exec, &destination, format, None, &refs, scope)?;
             out.insert(display.clone(), document);
@@ -961,10 +962,11 @@ fn assemble_text_link(
                 second: second.clone(),
             });
         }
-        let destination = Route::parse(display).map_err(|error| EngineError::NestScope {
-            scope: scope.clone(),
-            reason: error.to_string(),
-        })?;
+        let destination =
+            crate::model::parse_display(display).map_err(|error| EngineError::NestScope {
+                scope: scope.clone(),
+                reason: error.to_string(),
+            })?;
         out.push(Document::new(destination, data.clone()));
     }
     Ok((out, blobs))
@@ -1151,7 +1153,7 @@ fn shell_route(shell: &str) -> confit_model::error::Result<Route> {
 fn shell_path(shell: &str) -> String {
     match shell_route(shell) {
         Ok(route) => route.display(),
-        Err(_) => format!("home:.{shell}rc"),
+        Err(_) => format!("home('.{shell}rc')"),
     }
 }
 

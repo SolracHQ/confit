@@ -1,5 +1,4 @@
 //! Mismatch rendering
-//!
 //! Lua type words naming the received shape.
 
 use mlua::Value;

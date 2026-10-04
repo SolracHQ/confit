@@ -1,5 +1,4 @@
 //! Init run
-//!
 //! Project scaffolding from embedded resources.
 
 use std::path::PathBuf;
@@ -12,23 +11,23 @@ use crate::cli::InitArgs;
 
 /// Starter profile text written by init.
 ///
-/// Ships from `resources/profile.lua` beside the crate. One shell
-/// config holds one alias patch to config and one eval patch
-/// to final. Comments guide first use.
+/// Ships from `resources/profile.lua` beside the crate. One shell config holds
+/// one alias patch to config and one eval patch to final. Comments guide first
+/// use.
 const PROFILE_TEXT: &str = include_str!("../../resources/profile.lua");
 
 /// Stub files shipped inside the binary, keyed by target-relative path.
 ///
-/// Module stubs land in a stubs dir beside the profile. Plugin
-/// stubs mirror the plugin load layout beside their plugin names.
+/// Module stubs land in a stubs dir beside the profile. Plugin stubs mirror the
+/// plugin load layout beside their plugin names.
 const STUB_FILES: &[(&str, &str)] = &[
-    (
-        "stubs/confit.path.d.lua",
-        include_str!("../../../../stubs/confit.path.d.lua"),
-    ),
     (
         "stubs/confit.resource.d.lua",
         include_str!("../../../../stubs/confit.resource.d.lua"),
+    ),
+    (
+        "stubs/confit.validate.d.lua",
+        include_str!("../../../../stubs/confit.validate.d.lua"),
     ),
     (
         "stubs/confit.version.d.lua",
@@ -53,7 +52,6 @@ const STUB_FILES: &[(&str, &str)] = &[
 ];
 
 /// Outcome of one init run.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
     /// The scaffolded profile path.
@@ -63,31 +61,19 @@ pub struct InitReport {
 }
 
 /// One init run from flags on the host driver.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::init::InitRunner;
-/// use confit_cli::cli::InitArgs;
-/// use std::path::PathBuf;
-///
-/// let args = InitArgs { dir: PathBuf::from("demo") };
-/// let report = InitRunner { args: &args }.execute().unwrap();
-/// assert_eq!(report.profile, PathBuf::from("demo/profile.lua"));
-/// ```
 pub struct InitRunner<'a> {
     /// The init flags under running.
     pub args: &'a InitArgs,
 }
 
 impl InitRunner<'_> {
-    /// Writes one profile holding one rc document and editor
-    /// stubs copied from the binary. Present profile or stubs abort
-    /// with nothing written.
+    /// Writes one profile holding one rc document and editor stubs copied from
+    /// the binary.
     ///
-    /// # Returns
+    /// The report carries the scaffolded profile path and the written file
+    /// count.
     ///
-    /// The scaffolded profile path and the written file count.
+    /// - Present profile or stubs abort with nothing written.
     ///
     /// # Errors
     ///
@@ -119,9 +105,6 @@ impl InitRunner<'_> {
 }
 
 /// Writes one scaffold file creating parent folders first.
-///
-/// The old seam created parents inside `write`; the driver
-/// does not, so init names the step explicitly.
 ///
 /// # Errors
 ///

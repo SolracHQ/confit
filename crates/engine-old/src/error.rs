@@ -344,6 +344,14 @@ pub enum EngineError {
         /// The repeated config name.
         name: String,
     },
+    /// Expanded-path collision holding both route displays.
+    #[error("documents '{first}' and '{second}' expand to one host path")]
+    Overlap {
+        /// The first route display.
+        first: String,
+        /// The second route display.
+        second: String,
+    },
     /// Blocked write holding its scope with the path.
     #[error("{scope}: cannot write '{path}': '{path}' is blocked")]
     Blocked {

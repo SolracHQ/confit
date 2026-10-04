@@ -1,5 +1,4 @@
-//! Atomic file writes and verbatim streaming copies
-//! over unique staging names.
+//! Atomic file writes and exact streaming copies over unique staging names.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,20 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Staging suffix for sibling scratch files.
 const STAGING_SUFFIX: &str = ".part";
 
-/// Streaming chunk for verbatim copies.
+/// Streaming chunk for exact copies.
 const COPY_CHUNK: usize = 8192;
 
 /// Sequence feeding unique staging names per process.
 static STAGING_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Derives the sibling scratch path for one destination.
-///
-/// Names carry process and sequence, so concurrent
-/// writers share no file.
-///
-/// # Errors
-///
-/// Staging derivation never fails.
 pub fn stage_path(dest: &Path) -> PathBuf {
     let seq = STAGING_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut staging = dest.as_os_str().to_owned();
@@ -30,10 +22,10 @@ pub fn stage_path(dest: &Path) -> PathBuf {
 
 /// Writes one file atomically through a sibling rename.
 ///
-/// Parent folders build first. Closure failure removes
-/// staging and reports the closure error. A rename
-/// failure with a present destination reports success
-/// with the winner standing, matching the unpack race.
+/// - Parent folders build first.
+/// - Closure failure removes staging and reports the closure error.
+/// - A rename failure with a present destination reports success with the
+///   winner standing.
 ///
 /// # Errors
 ///
@@ -66,10 +58,7 @@ pub fn atomic_write(
     }
 }
 
-/// Streams one reader into one writer verbatim.
-///
-/// Hashing stays in store wrappers; this verb moves
-/// bytes alone and reports the count.
+/// Streams one reader into one writer exactly.
 ///
 /// # Errors
 ///
@@ -134,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_stream_moves_bytes_verbatim() {
+    fn copy_stream_moves_bytes_exact() {
         let payload: Vec<u8> = (0..20_000u32).map(|n| (n % 251) as u8).collect();
         let mut out = Vec::new();
         let wrote = copy_stream(Cursor::new(&payload), &mut out).unwrap();
