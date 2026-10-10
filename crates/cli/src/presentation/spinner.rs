@@ -11,26 +11,26 @@ use confit_model::progress::{Event, ProgressSender};
 /// Lines flow toward the renderer thread for ordered printing.
 pub type PrintSender = crossbeam_channel::Sender<String>;
 
-/// Parks widget painting across prompts.
+/// Widget pause control for prompts.
 ///
 /// Clones share one draw target. Prompts run inside `suspend`.
 #[derive(Debug, Clone)]
 pub struct SuspendControl {
-    /// Shared target holding the spinner on terminal runs.
+    /// Shared draw target for terminal runs.
     multi: indicatif::MultiProgress,
-    /// Spinner bar under driving.
+    /// Spinner bar driver.
     spinner: indicatif::ProgressBar,
 }
 
 impl SuspendControl {
-    /// Runs one prompt with widgets parked.
+    /// Run one prompt with widgets parked.
     pub fn suspend<T>(&self, run: impl FnOnce() -> T) -> T {
         self.multi.suspend(run)
     }
 
-    /// Asks one question with widgets parked.
+    /// Ask one question with widgets parked.
     ///
-    /// True only for the literal `yes` answer.
+    /// The answer is true only for the literal `yes`.
     ///
     /// # Errors
     ///
@@ -51,7 +51,7 @@ impl SuspendControl {
         })
     }
 
-    /// Clears the widget.
+    /// Clear the widget.
     fn clear(&self) {
         self.spinner.finish_and_clear();
     }
@@ -59,28 +59,27 @@ impl SuspendControl {
 
 /// One tty-gated renderer and its senders.
 ///
-/// The thread owns the spinner and selects on facts, prints and shutdown.
-/// Prints land through `println`. Shutdown clears the single line. Finish
-/// signals shutdown, then joins the thread.
+/// Thread-owned spinner over facts, prints, and shutdown.
+/// Print lines through `println`. Single-line shutdown clear with thread join on finish.
 pub struct Live {
-    /// Facts under sending toward the renderer thread.
+    /// Fact sender for the renderer thread.
     tx: ProgressSender,
-    /// Lines under sending toward the renderer thread.
+    /// Line sender for the renderer thread.
     print_tx: Option<PrintSender>,
-    /// Shutdown signal under sending at finish.
+    /// Shutdown signal at finish.
     shutdown: crossbeam_channel::Sender<()>,
-    /// Renderer thread under joining at finish.
+    /// Renderer thread join at finish.
     thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// Widget control under sharing with prompts.
+    /// Widget control shared with prompts.
     control: Option<SuspendControl>,
-    /// Sink gate holding true while stderr is not a terminal.
+    /// Headless sink flag for runs without a stderr terminal.
     headless: bool,
-    /// Finish gate holding true after the first finish.
+    /// Repeat finish block after the first.
     done: AtomicBool,
 }
 
 impl Live {
-    /// Builds one renderer hidden while stderr is not a terminal.
+    /// Build one renderer, hidden without a stderr terminal.
     pub fn new() -> Self {
         use std::io::IsTerminal as _;
         let terminal = std::io::stderr().is_terminal();
@@ -115,14 +114,12 @@ impl Live {
         }
     }
 
-    /// Reads the sender for one run.
+    /// Return the sender for one run.
     pub fn sink(&self) -> ProgressSender {
         self.tx.clone()
     }
 
-    /// Reads the print sender for one run.
-    ///
-    /// Off terminal the handle reads `None`.
+    /// Return the print sender for one run.
     pub fn print_handle(&self) -> Option<PrintSender> {
         if self.headless {
             return None;
@@ -130,9 +127,7 @@ impl Live {
         self.print_tx.clone()
     }
 
-    /// Reads the suspend control for one run.
-    ///
-    /// Off terminal the handle reads `None`.
+    /// Return the suspend control for one run.
     pub fn suspend_handle(&self) -> Option<SuspendControl> {
         if self.headless {
             return None;
@@ -140,9 +135,9 @@ impl Live {
         self.control.clone()
     }
 
-    /// Clears the widget and joins the renderer once the run lands.
+    /// Clear the widget and join the renderer at run end.
     ///
-    /// - A dead thread still clears the line.
+    /// - Cleared line with a dead thread.
     pub fn finish(&self) {
         if self.done.swap(true, Ordering::SeqCst) {
             return;
@@ -160,7 +155,7 @@ impl Live {
         }
     }
 
-    /// Builds the spinner style with a fallback default.
+    /// Build the spinner style with a fallback default.
     fn spinner_style() -> indicatif::ProgressStyle {
         match indicatif::ProgressStyle::with_template("{spinner:.green} {msg}") {
             Ok(style) => style.tick_chars("|/-\\ "),
@@ -170,26 +165,24 @@ impl Live {
 }
 
 impl Default for Live {
-    /// Builds one renderer like `new`.
+    /// Build one renderer like `new`.
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Loops on facts and prints until shutdown or close, then clears the widget.
+/// Loop on facts and prints until shutdown or close, then clear the widget.
 fn run(
     rx: crossbeam_channel::Receiver<Event>,
     prints: crossbeam_channel::Receiver<String>,
     shutdown: crossbeam_channel::Receiver<()>,
     spinner: indicatif::ProgressBar,
 ) {
-    let mut writes = 0_usize;
-    let mut removes = 0_usize;
     loop {
         crossbeam_channel::select! {
             recv(rx) -> fact => {
                 match fact {
-                    Ok(event) => render(&spinner, event, &mut writes, &mut removes),
+                    Ok(event) => render(&spinner, event),
                     Err(_) => break,
                 }
             }
@@ -205,49 +198,47 @@ fn run(
     spinner.finish_and_clear();
 }
 
-/// Maps one run fact onto the spinner message.
-fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize, removes: &mut usize) {
+/// Map one run fact onto the spinner message.
+fn render(spinner: &indicatif::ProgressBar, event: Event) {
     match event {
         Event::FetchStarted { url } => {
             spinner.set_message(format!("collecting artifacts: {url}"));
         }
+        Event::FetchProgress {
+            url,
+            bytes_so_far,
+            total,
+        } => match total {
+            Some(known) => spinner.set_message(format!(
+                "collecting artifacts: {url} ({} of {})",
+                human_bytes(bytes_so_far),
+                human_bytes(known)
+            )),
+            None => spinner.set_message(format!(
+                "collecting artifacts: {url} ({})",
+                human_bytes(bytes_so_far)
+            )),
+        },
         Event::FetchCached { url, bytes } => {
             spinner.set_message(format!(
-                "collecting artifacts: {url} ({bytes} bytes, cached)"
+                "collecting artifacts: {url} ({} cached)",
+                human_bytes(bytes_as_u64(bytes))
             ));
         }
         Event::FetchDownloaded { url, bytes } => {
-            spinner.set_message(format!("collecting artifacts: {url} ({bytes} bytes)"));
+            spinner.set_message(format!(
+                "collecting artifacts: {url} ({})",
+                human_bytes(bytes_as_u64(bytes))
+            ));
         }
-        Event::Unpacked {
-            archive,
-            kept,
-            total,
-        } => {
-            spinner.set_message(format!("collecting artifacts: {archive} ({kept}/{total})"));
+        Event::Unpacked { archive, total } => {
+            spinner.set_message(format!("collecting artifacts: {archive} ({total} members)"));
         }
-        Event::PatchApplied { done, total, .. } => {
-            spinner.set_message(format!("patching artifacts ({done}/{total})"));
+        Event::DocumentWritten { path, done, total } => {
+            spinner.set_message(format!("writing {done}/{total}: {path}"));
         }
-        Event::PatchesStarted { .. } => {
-            spinner.set_message("patching artifacts");
-        }
-        Event::Hashing => {
-            spinner.set_message("hashing");
-        }
-        Event::ReadingPlan { path } => {
-            spinner.set_message(format!("reading plan: {path}"));
-        }
-        Event::WritingManifest { documents } => {
-            spinner.set_message(format!("writing manifest for {documents} documents"));
-        }
-        Event::DocumentWritten { path } => {
-            *writes += 1;
-            spinner.set_message(format!("writing {writes}: {path}"));
-        }
-        Event::DocumentRemoved { path } => {
-            *removes += 1;
-            spinner.set_message(format!("removing {removes}: {path}"));
+        Event::DocumentRemoved { path, done, total } => {
+            spinner.set_message(format!("removing {done}/{total}: {path}"));
         }
         Event::HookRunning {
             position,
@@ -256,10 +247,7 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize, re
         } => {
             spinner.set_message(format!("hook {position} of {total}: {argv}"));
         }
-        Event::CompressStarted { .. } => {
-            spinner.set_message("compressing blobs");
-        }
-        Event::BlobCompressed { done, total, .. } => {
+        Event::BlobCompressed { done, total } => {
             spinner.set_message(format!("compressing blobs ({done}/{total})"));
         }
         Event::Promoting { blobs } => {
@@ -267,4 +255,25 @@ fn render(spinner: &indicatif::ProgressBar, event: Event, writes: &mut usize, re
         }
     }
     spinner.tick();
+}
+
+/// Render one byte count in human form.
+fn human_bytes(bytes: u64) -> String {
+    const STEP: f64 = 1024.0;
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut scaled = bytes as f64;
+    let mut unit = 0;
+    while scaled >= STEP && unit + 1 < UNITS.len() {
+        scaled /= STEP;
+        unit += 1;
+    }
+    format!("{scaled:.1} {}", UNITS[unit])
+}
+
+/// Convert one byte count into u64.
+fn bytes_as_u64(bytes: usize) -> u64 {
+    u64::try_from(bytes).unwrap_or(u64::MAX)
 }

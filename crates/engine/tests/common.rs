@@ -1,4 +1,4 @@
-//! Shared builders for engine integration tests.
+//! Share builders for engine integration tests.
 
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used)]
@@ -478,9 +478,7 @@ pub const HOOKS_THROUGH: &str = r#"
             }
         "#;
 
-/// Builds one text document pair under the home base.
-///
-/// - Routes land under the home base with the given relative path.
+/// Build one text document pair under the home base.
 pub fn placed_text(relative: &str, text: &str) -> (Route, Document) {
     (
         Route::new(RouteBase::Home, relative).unwrap(),
@@ -492,9 +490,7 @@ pub fn placed_text(relative: &str, text: &str) -> (Route, Document) {
     )
 }
 
-/// Builds one rc document pair with profile entries.
-///
-/// - Routes land under the home base with the given relative path.
+/// Build one rc document pair with profile entries.
 pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> (Route, Document) {
     (
         Route::new(RouteBase::Home, relative).unwrap(),
@@ -506,9 +502,7 @@ pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> (Route, Document) {
     )
 }
 
-/// Builds one seeded json document pair.
-///
-/// - Routes land under the home base with the given relative path.
+/// Build one seeded json document pair.
 pub fn placed_structured(relative: &str) -> (Route, Document) {
     let base = StructuredDocument {
         format: StructuredFormat::Json,
@@ -525,16 +519,13 @@ pub fn placed_structured(relative: &str) -> (Route, Document) {
     )
 }
 
-/// Builds isolated stores over one fresh tempdir.
-///
-/// - Roots fan out under the tempdir with config, cache, temp, and project slots.
+/// Build isolated stores over one fresh tempdir.
 pub fn test_stores() -> (tempfile::TempDir, Stores) {
     let dir = tempfile::tempdir().unwrap();
     let (sender, _) = crossbeam_channel::unbounded();
     let stores = Stores::new(
         confit_store::StoreRoots {
             config_base: dir.path().join("config"),
-            cache_base: dir.path().join("cache"),
             temp_base: dir.path().join("temp"),
             project_root: dir.path().join("project"),
         },
@@ -543,9 +534,7 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
     (dir, stores)
 }
 
-/// Builds one opaque document pair backed by a project blob.
-///
-/// - Blobs land under the project root with fixed two-byte content.
+/// Build one opaque document pair backed by a project blob.
 pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Document) {
     let root = stores.resources().roots.project_root.clone();
     confit_driver::fs::create_dir_all(&root).unwrap();
@@ -562,9 +551,7 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Document) {
     )
 }
 
-/// Builds one profile holding documents with patches.
-///
-/// - Configs hold one named config with the given bodies and patches.
+/// Build one profile.
 pub fn profile_of(documents: Vec<(Route, Document)>, patches: Vec<Patch>) -> Profile {
     Profile::new(
         Vec::new(),
@@ -578,9 +565,7 @@ pub fn profile_of(documents: Vec<(Route, Document)>, patches: Vec<Patch>) -> Pro
     )
 }
 
-/// Builds one env rc entry with its name and value.
-///
-/// - Entries carry no gate with the env op holding both strings.
+/// Build one env rc entry with its name and value.
 pub fn rc_entry(name: &str, value: &str) -> RcEntry {
     RcEntry {
         op: RcOp::Env {
@@ -591,9 +576,7 @@ pub fn rc_entry(name: &str, value: &str) -> RcEntry {
     }
 }
 
-/// Builds one structured patch over its Lua callback source.
-///
-/// - Targets land under the home base with the given format and level.
+/// Build one structured patch over its Lua callback source.
 pub fn structured_patch_of(
     lua: &Lua,
     relative: &str,
@@ -611,9 +594,7 @@ pub fn structured_patch_of(
     )
 }
 
-/// Builds one rc patch over its Lua callback source.
-///
-/// - Targets land under the home base with the given level.
+/// Build one rc patch over its Lua callback source.
 pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
     RcPatch::new(
@@ -624,9 +605,7 @@ pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> 
     )
 }
 
-/// Collects profile slot names from one finished rc document.
-///
-/// - Names ride the profile section in entry order.
+/// Collect profile slot names from one finished rc document.
 pub fn rc_names(document: &ModelDocument) -> Vec<String> {
     match &document.data {
         Data::Rc(found) => found
@@ -638,9 +617,7 @@ pub fn rc_names(document: &ModelDocument) -> Vec<String> {
     }
 }
 
-/// Collects one env value from the profile section by name.
-///
-/// - Lookups scan profile entries for the first matching env name.
+/// Collect one env value from the profile section by name.
 pub fn rc_value(document: &ModelDocument, name: &str) -> Option<String> {
     match &document.data {
         Data::Rc(found) => found.profile.iter().find_map(|entry| match &entry.op {
@@ -651,9 +628,7 @@ pub fn rc_value(document: &ModelDocument, name: &str) -> Option<String> {
     }
 }
 
-/// Builds one hook with argv words and a timeout.
-///
-/// - Hooks carry no gates or checks with the timeout in seconds.
+/// Build one hook with argv words and a timeout.
 pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
     Hook {
         argv: argv
@@ -668,22 +643,17 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
     }
 }
 
-/// Builds one profile holding configs without documents.
-///
-/// - Profiles carry no top-level documents with configs in order.
+/// Build one profile.
 pub fn profile_with_hooks(configs: Vec<Config>) -> Profile {
     Profile::new(Vec::new(), configs, HashMap::new())
 }
 
-/// Builds one engine over isolated stores under the given dir.
-///
-/// - Roots fan out under the dir with config, cache, temp, and project slots.
+/// Build one engine over isolated stores under the given dir.
 pub fn test_engine(dir: &Path) -> Engine {
     let (sender, _) = crossbeam_channel::unbounded();
     let stores = Stores::new(
         StoreRoots {
             config_base: dir.join("config"),
-            cache_base: dir.join("cache"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
         },
@@ -692,18 +662,14 @@ pub fn test_engine(dir: &Path) -> Engine {
     Engine::new(stores)
 }
 
-/// Creates the project root under the given dir.
-///
-/// - Roots land one level below the dir with the project name.
+/// Create the project root under the given dir.
 pub fn project_root(dir: &Path) -> PathBuf {
     let root = dir.join("project");
     confit_driver::fs::create_dir_all(&root).unwrap();
     root
 }
 
-/// Writes one Lua profile file under the project root.
-///
-/// - Profiles land beside project files with the profile name.
+/// Write one Lua profile file under the project root.
 pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     let root = project_root(dir);
     let profile = root.join("profile.lua");
@@ -711,9 +677,7 @@ pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     (root, profile)
 }
 
-/// Collects text content from one finished document.
-///
-/// - Documents hold text payloads with content borrowed out.
+/// Collect text content from one finished document.
 pub fn text_of(document: &ModelDocument) -> &str {
     match &document.data {
         Data::Text { content, .. } => content,

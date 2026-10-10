@@ -1,4 +1,4 @@
-//! Bundle writes.
+//! Bundle output.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -19,12 +19,12 @@ use crate::handles::ArchiveHandle;
 const BUNDLE_ENTRY_MODE: u32 = 0o644;
 
 impl BundleStore {
-    /// Writes one portable bundle holding manifest and blobs.
+    /// Write one portable bundle with the manifest and the blobs.
     ///
-    /// The sealed handle names the written file.
+    /// The sealed handle shows the written file.
     ///
     /// - Destinations carry the bundle extension.
-    /// - Members ride manifest-first in stored-hash order.
+    /// - Members sort manifest-first in stored-hash order.
     ///
     /// # Errors
     ///
@@ -57,7 +57,7 @@ impl BundleStore {
         seal_bundle(&dest, members)
     }
 
-    /// Opens one blob reader with its member name and length.
+    /// Open one blob reader with its member name and length.
     ///
     /// # Errors
     ///
@@ -100,7 +100,7 @@ impl BundleStore {
     }
 }
 
-/// Lists one manifest's refs sorted by stored hash.
+/// List one manifest's refs sorted by stored hash.
 ///
 /// - Duplicate stored hashes keep their first ref.
 fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
@@ -111,11 +111,11 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
     unique.into_values().collect()
 }
 
-/// Seals one staged bundle into its destination file.
+/// Seal one staged bundle into its destination file.
 ///
 /// The sealed handle carries the finished file path and its content hash.
 ///
-/// - Member order reads as given.
+/// - Member order is as given.
 ///
 /// # Errors
 ///
@@ -135,7 +135,7 @@ fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Resul
     })
 }
 
-/// Hashes one finished bundle file.
+/// Hash one finished bundle file.
 ///
 /// # Errors
 ///
@@ -157,13 +157,11 @@ mod tests {
     use crate::StoreRoots;
     use crate::archive::ArchiveStore;
     use crate::blob::{BlobSource, BlobStore};
-    use crate::handles::TrustedHandle;
     use confit_driver::{self as driver, fs::TestGuard};
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
-            cache_base: dir.join("cache"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
         }
@@ -247,8 +245,8 @@ mod tests {
             Err(error) => panic!("manifest writes: {error}"),
         };
         let names = entry_names(written.canonical());
-        assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
-        assert_eq!(names.len(), 2, "the cache blob rides along");
+        assert_eq!(names[0], BUNDLE_MANIFEST, "the manifest comes first");
+        assert_eq!(names.len(), 2, "the cache blob is included");
     }
 
     #[test]
@@ -289,7 +287,7 @@ mod tests {
             expected.push(body);
         }
         expected.sort();
-        assert_eq!(bodies, expected, "streamed blobs ride intact");
+        assert_eq!(bodies, expected, "streamed blobs stay intact");
     }
 
     #[test]
@@ -311,7 +309,7 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("persist lands: {error}"),
         }
-        let cached = match driver::fs::read_dir(&roots.cache_base.join("blobs")) {
+        let cached = match driver::fs::read_dir(&roots.temp_base.join("blobs")) {
             Ok(cached) => cached,
             Err(error) => panic!("cache lists: {error}"),
         };
@@ -324,8 +322,8 @@ mod tests {
             Err(error) => panic!("manifest writes: {error}"),
         };
         let names = entry_names(written.canonical());
-        assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
-        assert_eq!(names.len(), 2, "the pool blob rides along");
+        assert_eq!(names[0], BUNDLE_MANIFEST, "the manifest comes first");
+        assert_eq!(names.len(), 2, "the pool blob is included");
     }
 
     #[test]

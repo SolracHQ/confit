@@ -7,23 +7,23 @@ use confit_driver as driver;
 use confit_model::condition::Condition;
 use confit_model::routes::Route;
 
-/// Default hook timeout in seconds backing the `10m` opt default.
+/// Default hook timeout in seconds for the `10m` opt default.
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
 /// Host facts under condition checks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checks {
-    /// Holds the environment variables under reading.
+    /// Environment variables under reading.
     pub vars: BTreeMap<String, String>,
-    /// Holds the PATH directories in search order.
+    /// PATH directories in search order.
     pub path_dirs: Vec<PathBuf>,
 }
 
 impl Checks {
-    /// Snapshots the host environment and PATH dirs.
+    /// Snapshot the host environment and PATH dirs.
     ///
     /// - Non-Unicode entries drop.
-    /// - Missing PATH reads as empty.
+    /// - Missing PATH is empty.
     pub fn current() -> Self {
         let mut vars = BTreeMap::new();
         for (key, value) in std::env::vars_os() {
@@ -37,7 +37,7 @@ impl Checks {
         Self { vars, path_dirs }
     }
 
-    /// Reports one condition verdict against facts and the driver.
+    /// Report whether one condition holds against facts and the driver.
     pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
@@ -52,17 +52,17 @@ impl Checks {
     }
 }
 
-/// Finds one executable across dirs through the driver.
+/// Find one executable across dirs through the driver.
 ///
 /// - Ordered dirs win.
-/// - Existence follows symlinks.
+/// - Symlinked entries count as present.
 /// - Modeless backends count presence as a hit.
 pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     const EXEC_BIT: u32 = 0o111;
 
     for dir in dirs {
         let candidate = dir.join(name);
-        if !driver::fs::exists(&candidate) {
+        if driver::fs::is_missing(&candidate) {
             continue;
         }
         match driver::fs::mode(&candidate) {
@@ -98,10 +98,7 @@ mod tests {
         driver::fs::set_mode(path, mode).unwrap();
     }
 
-    /// Driver oracle replaying the discovery decision branch by branch.
-    ///
-    /// Present entries hit while an exec bit holds. Modeless backends count
-    /// presence.
+    /// Driver oracle for the discovery decision.
     fn oracle(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
@@ -199,7 +196,7 @@ mod tests {
         assert_eq!(
             find_executable("link_dead", &dirs),
             None,
-            "dangling link reads as missing"
+            "dangling link is missing"
         );
     }
 

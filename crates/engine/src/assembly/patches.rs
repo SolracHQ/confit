@@ -1,5 +1,5 @@
 //! Split patch lists.
-//! Structured with rc patches grouped under target routes.
+//! Group structured with rc patches under target routes.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -10,7 +10,7 @@ use confit_surface_api::{Document, Patch, Profile, RcDocument, RcPatch, Structur
 
 use crate::error::{EngineError, Result};
 
-/// Splits one profile's patches into structured and rc lists in return order.
+/// Split one profile's patches into structured and rc lists in return order.
 pub(super) fn split_patches(profile: &Profile) -> (Vec<StructuredPatch>, Vec<RcPatch>) {
     let mut structured = Vec::new();
     let mut rc = Vec::new();
@@ -25,10 +25,10 @@ pub(super) fn split_patches(profile: &Profile) -> (Vec<StructuredPatch>, Vec<RcP
     (structured, rc)
 }
 
-/// Groups structured patches under target routes in rank-descending level
+/// Group structured patches under target routes in rank-descending level
 /// order.
 ///
-/// - Declaration order rides the input vecs, the stable sort keeps it for
+/// - Declaration order follows the input vecs, and the stable sort keeps it for
 ///   equal levels.
 pub(super) fn grouped_structured(
     patches: &[StructuredPatch],
@@ -46,9 +46,9 @@ pub(super) fn grouped_structured(
     grouped
 }
 
-/// Groups rc patches under target routes in rank-descending level order.
+/// Group rc patches under target routes in rank-descending level order.
 ///
-/// - Declaration order rides the input vecs, the stable sort keeps it for
+/// - Declaration order follows the input vecs, and the stable sort keeps it for
 ///   equal levels.
 pub(super) fn grouped_rc(patches: &[RcPatch]) -> BTreeMap<Route, Vec<&RcPatch>> {
     let mut grouped: BTreeMap<Route, Vec<&RcPatch>> = BTreeMap::new();
@@ -64,7 +64,7 @@ pub(super) fn grouped_rc(patches: &[RcPatch]) -> BTreeMap<Route, Vec<&RcPatch>> 
     grouped
 }
 
-/// Builds one structured patch base with its destination and live data.
+/// Build one structured patch base with its destination and live data.
 ///
 /// - Missing targets seed empty maps.
 ///
@@ -86,7 +86,7 @@ pub(super) fn structured_base_of(
     }
 }
 
-/// Builds one declared structured patch base with its destination and live data.
+/// Build one declared structured patch base with its destination and live data.
 ///
 /// # Errors
 ///
@@ -116,7 +116,7 @@ fn structured_declared_base(
     }
 }
 
-/// Builds one seeded structured patch base under its patch target.
+/// Build one seeded structured patch base under its patch target.
 ///
 /// - Missing targets seed empty maps.
 ///
@@ -137,7 +137,7 @@ fn structured_seeded_base(
     Ok((first.target().clone(), format, Table::new()))
 }
 
-/// Builds one rc patch base with its destination and live sections.
+/// Build one rc patch base with its destination and live sections.
 ///
 /// - Missing targets seed empty sections.
 ///
@@ -159,7 +159,7 @@ pub(super) fn rc_base_of(
     }
 }
 
-/// Builds one patch gap error over its base with patch names.
+/// Build one patch gap error over its base with patch names.
 fn gap(display: &str, base: &str, patch: &str) -> EngineError {
     EngineError::Structured {
         display: display.to_owned(),

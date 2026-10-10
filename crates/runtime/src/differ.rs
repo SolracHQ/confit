@@ -1,4 +1,5 @@
-//! Drift between recorded documents and disk readers.
+//! Differ
+//! Recorded manifests against disk readers.
 
 use std::collections::BTreeMap;
 
@@ -7,13 +8,20 @@ use confit_model::drift::{Drift, DriftOrder};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_model::sha::Sha;
-
-use crate::Applier;
-use crate::disk::{Live, LiveMember, drain};
+use confit_store::Stores;
 use confit_store::faults::AccessFault;
 
-impl Applier {
-    /// Reports manual edits between recorded documents and disk.
+use crate::disk::{Live, LiveMember, live_doc, live_tree, open_member};
+use crate::render::render_document;
+
+/// Recorded against disk drift reader.
+pub struct Differ {
+    /// Read capabilities for one run.
+    pub stores: Stores,
+}
+
+impl Differ {
+    /// Report manual edits between recorded documents and disk.
     ///
     /// Link documents compare target text.
     ///
@@ -25,12 +33,12 @@ impl Applier {
                 out.extend(self.tree_drift(
                     &document.destination,
                     members,
-                    &self.disk.live_tree(document),
+                    &live_tree(document),
                     order,
                 ));
                 continue;
             }
-            match self.disk.live_doc(document) {
+            match live_doc(document) {
                 Live::Absent => out.push(Drift::Missing {
                     path: document.destination.clone(),
                 }),
@@ -40,12 +48,13 @@ impl Applier {
                 }),
                 Live::Present { mut reader, mode } => {
                     if !matches!(&document.data, Data::Opaque { .. }) {
-                        let Some(recorded_bytes) = self.render_document(document).ok() else {
+                        let Some(recorded_bytes) = render_document(document).ok() else {
                             continue;
                         };
-                        let Ok(disk_bytes) = drain(&mut reader) else {
+                        let mut disk_bytes = Vec::new();
+                        if reader.read_to_end(&mut disk_bytes).is_err() {
                             continue;
-                        };
+                        }
                         out.extend(document.disk_drift(&recorded_bytes, &disk_bytes, mode, order));
                         continue;
                     }
@@ -58,7 +67,7 @@ impl Applier {
                             Ok(len) => blob.sha().label(len),
                             Err(_) => continue,
                         };
-                        let disk_label = match self.disk_label(document) {
+                        let disk_label = match Self::disk_label(document) {
                             Some(label) => label,
                             None => continue,
                         };
@@ -101,7 +110,7 @@ impl Applier {
         out
     }
 
-    /// Collects drift entries for one tree destination walk.
+    /// Collect drift entries for one tree destination walk.
     ///
     /// - Extra disk files stay out of the entries.
     fn tree_drift(
@@ -130,7 +139,7 @@ impl Applier {
                         Ok(len) => member.blob.sha().label(len),
                         Err(_) => continue,
                     };
-                    let Some(disk_label) = self.tree_member_label(destination, &member.relative)
+                    let Some(disk_label) = Self::tree_member_label(destination, &member.relative)
                     else {
                         continue;
                     };
@@ -169,9 +178,9 @@ impl Applier {
         out
     }
 
-    /// Labels one disk document with its content hash and byte count.
-    fn disk_label(&self, document: &Document) -> Option<String> {
-        match self.disk.live_doc(document) {
+    /// Label one disk document with its content hash and byte count.
+    fn disk_label(document: &Document) -> Option<String> {
+        match live_doc(document) {
             Live::Present { mut reader, .. } => {
                 let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
                 Some(sha.label(len))
@@ -180,15 +189,15 @@ impl Applier {
         }
     }
 
-    /// Labels one tree member path with its content hash and byte count.
-    fn tree_member_label(&self, destination: &Route, relative: &str) -> Option<String> {
-        let mut reader = self.disk.open_member(destination, relative)?;
+    /// Label one tree member path with its content hash and byte count.
+    fn tree_member_label(destination: &Route, relative: &str) -> Option<String> {
+        let mut reader = open_member(destination, relative)?;
         let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
         Some(sha.label(len))
     }
 }
 
-/// Builds one opaque content key from two labels.
+/// Build one opaque content key from two labels.
 fn opaque_content_drift(
     path: &Route,
     key: &str,
@@ -208,7 +217,7 @@ fn opaque_content_drift(
     }
 }
 
-/// Names one unreadable fault for drift lines.
+/// Show one unreadable fault for drift lines.
 fn unreadable_reason(fault: &AccessFault) -> String {
     match fault {
         AccessFault::Unknown { .. } => "unknown failure, see log".to_owned(),
@@ -257,8 +266,7 @@ mod tests {
                 Vec::new(),
             )),
         );
-        let applier = Applier::host(confit_store::StoreRoots::default());
-        let recorded = applier.render_document(&document).unwrap();
+        let recorded = render_document(&document).unwrap();
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),
@@ -274,11 +282,12 @@ mod tests {
             documents: vec![document.clone()],
             hooks: Vec::new(),
         };
-        let found = applier.drift(&manifest, DriftOrder::RecordedFirst);
-        assert!(
-            found.is_empty(),
-            "matching expanded bytes read as zero drift"
-        );
+        let (sender, _) = crossbeam_channel::unbounded();
+        let differ = Differ {
+            stores: confit_store::Stores::new(confit_store::StoreRoots::default(), sender),
+        };
+        let found = differ.drift(&manifest, DriftOrder::RecordedFirst);
+        assert!(found.is_empty(), "matching expanded bytes are zero drift");
         assert_eq!(
             document.destination.display(),
             dest.to_str().unwrap(),

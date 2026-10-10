@@ -1,10 +1,10 @@
----@module "plugins/sugar"
+---@module "plugins._.sugar"
 
--- Route table naming its base with its relative path.
+-- The route table shows its base and its relative path.
 ---@alias SugarRoute { base: string, relative: string }
 
--- Route builders. Each builder returns one
--- route table naming its base with its relative path.
+-- Route builders create route tables. Each builder returns one
+-- route table. The table shows its base and its relative path.
 local sugar = {}
 
 local function route(base, relative)

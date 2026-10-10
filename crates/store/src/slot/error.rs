@@ -10,7 +10,7 @@ use crate::faults::AccessFault;
 /// Slot failure shapes.
 #[derive(Debug, Error)]
 pub enum SlotError {
-    /// Failed read holding the slot path with the fault.
+    /// Failed read.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
         /// The slot path under reading.
@@ -18,27 +18,27 @@ pub enum SlotError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Corrupt state holding the path.
+    /// Corrupt state.
     #[error("cannot read '{path}': corrupt state", path = path.display())]
     Corrupt {
         /// The slot path under reading.
         path: PathBuf,
     },
-    /// Unsupported version holding the path with the seen version.
-    #[error("state version {got} reads unsupported")]
+    /// Unsupported version.
+    #[error("state version {got} is unsupported")]
     Version {
         /// The slot path under reading.
         path: PathBuf,
         /// The seen version.
         got: u64,
     },
-    /// Bad pick holding the picker input.
+    /// Bad pick.
     #[error("bad slot pick '{input}'")]
     BadPick {
         /// The picker input under resolving.
         input: String,
     },
-    /// Failed write holding the slot path with the fault.
+    /// Failed write.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
         /// The slot path under writing.
@@ -46,7 +46,7 @@ pub enum SlotError {
         /// The write fault cause.
         fault: AccessFault,
     },
-    /// Failed manifest render holding the slot path with the model cause.
+    /// Failed manifest render.
     #[error("cannot write '{path}': cannot render manifest: {source}", path = path.display())]
     Manifest {
         /// The slot path under storing.
@@ -54,7 +54,7 @@ pub enum SlotError {
         /// The model render cause.
         source: ModelError,
     },
-    /// Unknown write failure holding the slot path with message.
+    /// Unknown write failure.
     #[error("cannot write '{path}': {message}", path = path.display())]
     WriteUnknown {
         /// The slot path under writing.
@@ -65,7 +65,7 @@ pub enum SlotError {
 }
 
 impl SlotError {
-    /// Maps one io failure at the slot path into domain language.
+    /// Map one io failure at the slot path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -81,7 +81,7 @@ impl SlotError {
         }
     }
 
-    /// Maps one write io failure at the slot path into domain language.
+    /// Map one write io failure at the slot path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();

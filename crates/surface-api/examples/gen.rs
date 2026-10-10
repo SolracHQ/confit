@@ -24,7 +24,6 @@ fn run() -> Result<(), String> {
     let stores = confit_store::Stores::new(
         confit_store::StoreRoots {
             config_base: scratch.path().join("config"),
-            cache_base: scratch.path().join("cache"),
             temp_base: scratch.path().join("temp"),
             project_root: scratch.path().to_path_buf(),
         },

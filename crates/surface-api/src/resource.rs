@@ -11,10 +11,10 @@ use confit_store::{Stores, resources::Resources};
 use confit_surface_face::module::{Module, VerbDecl};
 
 use crate::error::ApiError;
-use crate::handles::Handle;
+use crate::handles::{Archive, Handle};
 use crate::paths::split_checked;
 
-/// Builds the resource function with its face, opening files under the project
+/// Build the resource function with its face for files under the project
 /// root.
 pub fn build(
     lua: &Lua,
@@ -23,6 +23,7 @@ pub fn build(
 ) -> mlua::Result<(Value, DefinitionBuilder)> {
     let mut module = Module::start(lua, "Resource files opened from the project root.")?;
     module.register::<Handle>();
+    module.register::<Archive>();
     let stores = stores.clone();
     let project = project.to_path_buf();
     module.verb::<String, (Option<Handle>, Option<String>), _>(
@@ -42,9 +43,9 @@ pub fn build(
     Ok((Value::Function(table.get("resource")?), face))
 }
 
-/// Opens one project-relative file into its resource handle.
+/// Open one project-relative file into its resource handle.
 ///
-/// Missing files return nil with reason.
+/// Missing files take nil with reason.
 ///
 /// # Errors
 ///
@@ -67,7 +68,7 @@ fn resource_impl(
         return Err(ApiError::Escape {
             caller: CALLER.to_owned(),
             input: relative.clone(),
-            reason: format!("'{relative}' escapes the project"),
+            reason: format!("'{relative}' is outside the project root"),
         }
         .into());
     }
@@ -83,9 +84,9 @@ enum OpenOutcome {
     Raise(ResourceError),
 }
 
-/// Opens one joined file.
+/// Open one joined file.
 ///
-/// Escapes raise and missing files read soft with reason.
+/// Escapes raise and missing files take soft failure with reason.
 fn open(resources: &Resources, full: &Path) -> std::result::Result<StoreResource, OpenOutcome> {
     match resources.resource(full) {
         Ok(handle) => Ok(handle),
@@ -108,7 +109,7 @@ fn under_project(project: &Path, full: &Path) -> bool {
     normalize(full).starts_with(normalize(project))
 }
 
-/// Normalizes one path lexically.
+/// Normalize one path lexically.
 ///
 /// - Current-dir steps drop.
 pub fn normalize(path: &Path) -> PathBuf {
@@ -138,7 +139,6 @@ mod tests {
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
-                cache_base: dir.join("cache"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
@@ -202,7 +202,7 @@ mod tests {
         project_root(dir.path());
         let lua = test_lua(&stores);
         for (segment, reason) in [
-            ("../outside", "escape"),
+            ("../outside", "outside"),
             ("/etc/passwd", "must stay relative"),
         ] {
             let source = format!("return resource({segment:?})");
@@ -210,7 +210,7 @@ mod tests {
                 Ok(_) => panic!("escaping project read passes: {segment}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(reason), "names the jail: {text}");
+                    assert!(text.contains(reason), "the text shows the boundary: {text}");
                 }
             }
         }
@@ -232,7 +232,7 @@ mod tests {
             Ok(Value::String(reason)) => {
                 assert!(
                     !reason.to_string_lossy().is_empty(),
-                    "reason names the miss"
+                    "reason shows the miss"
                 )
             }
             Ok(_) => panic!("missing file returns nil with reason"),
@@ -256,11 +256,182 @@ mod tests {
             Ok(Value::String(reason)) => {
                 assert!(
                     !reason.to_string_lossy().is_empty(),
-                    "reason names the miss"
+                    "reason shows the miss"
                 )
             }
             Ok(_) => panic!("coerced input returns nil with reason"),
             Err(error) => panic!("coerced inputs stay soft: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_toml_ignoring_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(
+            &project.join("payload.txt"),
+            b"title = \"starship\"\n[settings]\nenabled = true\n",
+        )
+        .unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("payload.txt"))
+            local found, reason = handle:load()
+            assert(reason == nil, reason)
+            assert(found.title == "starship")
+            return found.settings.enabled
+        "#;
+        match run(&lua, source) {
+            Ok(Value::Boolean(found)) => assert!(found),
+            Ok(_) => panic!("toml load returns its table"),
+            Err(error) => panic!("toml loads: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_json_ignoring_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(
+            &project.join("payload.toml"),
+            br#"{"name": "starship", "enabled": true}"#,
+        )
+        .unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("payload.toml"))
+            local found, reason = handle:load()
+            assert(reason == nil, reason)
+            assert(found.name == "starship")
+            return found.enabled
+        "#;
+        match run(&lua, source) {
+            Ok(Value::Boolean(found)) => assert!(found),
+            Ok(_) => panic!("json load returns its table"),
+            Err(error) => panic!("json loads: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_yaml_ignoring_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(
+            &project.join("payload.json"),
+            b"name: starship\nenabled: true\n",
+        )
+        .unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("payload.json"))
+            local found, reason = handle:load()
+            assert(reason == nil, reason)
+            assert(found.name == "starship")
+            return found.enabled
+        "#;
+        match run(&lua, source) {
+            Ok(Value::Boolean(found)) => assert!(found),
+            Ok(_) => panic!("yaml load returns its table"),
+            Err(error) => panic!("yaml loads: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_ini_ignoring_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(
+            &project.join("payload.yaml"),
+            b"[server]\nhost = localhost\nport = 8080\n",
+        )
+        .unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("payload.yaml"))
+            local found, reason = handle:load()
+            assert(reason == nil, reason)
+            assert(found.server.host == "localhost")
+            return found.server.port
+        "#;
+        match run(&lua, source) {
+            Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "8080"),
+            Ok(_) => panic!("ini load returns its table"),
+            Err(error) => panic!("ini loads: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_unknown_kind_naming_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(&project.join("mystery.bin"), b"\x89PNG\r\n\x1a\nbinary").unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("mystery.bin"))
+            local found, reason = handle:load()
+            assert(found == nil)
+            return reason
+        "#;
+        match run(&lua, source) {
+            Ok(Value::String(reason)) => {
+                let text = reason.to_string_lossy();
+                assert!(
+                    text.contains("mystery.bin"),
+                    "the text shows the file: {text}"
+                );
+                assert!(
+                    text.contains("Portable Network Graphics"),
+                    "the text shows the kind: {text}"
+                );
+            }
+            Ok(_) => panic!("unknown kind returns nil with reason"),
+            Err(error) => panic!("unknown kinds stay soft: {error}"),
+        }
+    }
+
+    #[test]
+    fn loads_missing_files_as_text_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = project_root(dir.path());
+        confit_driver::fs::write(&project.join("gone.toml"), b"title = \"gone\"\n").unwrap();
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle = assert(resource("gone.toml"))
+            return handle
+        "#;
+        let handle = match run(&lua, source) {
+            Ok(Value::UserData(found)) => found,
+            Ok(_) => panic!("project opens its file"),
+            Err(error) => panic!("project opens its file: {error}"),
+        };
+        lua.globals().set("saved", handle).unwrap();
+        confit_driver::fs::remove_file(&project.join("gone.toml")).unwrap();
+        let source = r#"
+            local found, reason = saved:load()
+            assert(found == nil)
+            local _, text_reason = saved:text()
+            assert(reason == text_reason)
+            return reason
+        "#;
+        match run(&lua, source) {
+            Ok(Value::String(reason)) => {
+                let text = reason.to_string_lossy();
+                assert!(text.contains("missing file"), "keeps the miss: {text}");
+            }
+            Ok(_) => panic!("deleted load returns nil with reason"),
+            Err(error) => panic!("deleted loads stay soft: {error}"),
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Filesystem verbs over host files with a memory backend under tests.
 
 use std::io;
+use std::path::Path;
 
 #[cfg(not(any(test, feature = "test-support")))]
 mod host;
@@ -13,8 +14,6 @@ mod mem;
 pub use mem::*;
 
 /// Filesystem facts for one path.
-///
-/// Length holds content bytes, zero for folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMeta {
     len: u64,
@@ -22,27 +21,27 @@ pub struct FileMeta {
 }
 
 impl FileMeta {
-    /// Builds facts from a byte length and the folder flag.
+    /// Build facts from a byte length and the folder flag.
     pub fn new(len: u64, is_dir: bool) -> Self {
         Self { len, is_dir }
     }
 
-    /// Byte length of one file, zero for folders.
+    /// Return the byte length of one file, zero for folders.
     pub fn len(&self) -> u64 {
         self.len
     }
 
-    /// Whether the length holds no bytes.
+    /// Report whether the length is empty.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Whether the path holds a folder.
+    /// Report whether the path is a folder.
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
 
-    /// Whether the path holds a plain file.
+    /// Report whether the path is a plain file.
     pub fn is_file(&self) -> bool {
         !self.is_dir
     }
@@ -54,14 +53,14 @@ impl FileMeta {
 /// committed bytes, sync lands buffered bytes onto the backend.
 #[allow(clippy::len_without_is_empty)]
 pub trait FsFile: io::Read + io::Write + io::Seek {
-    /// Reads the committed byte length of one file.
+    /// Return the committed byte length of one file.
     ///
     /// # Errors
     ///
     /// - [Other] when host metadata faults.
     fn len(&self) -> io::Result<u64>;
 
-    /// Lands buffered bytes onto the backend.
+    /// Land buffered bytes onto the backend.
     ///
     /// # Errors
     ///
@@ -79,6 +78,82 @@ impl FsFile for Box<dyn FsFile> {
     fn sync(&mut self) -> io::Result<()> {
         (**self).sync()
     }
+}
+
+/// Report whether one path holds a folder.
+pub fn is_dir(path: &Path) -> bool {
+    metadata(path).is_ok_and(|facts| facts.is_dir())
+}
+
+/// Report whether one path holds a plain file.
+pub fn is_file(path: &Path) -> bool {
+    metadata(path).is_ok_and(|facts| facts.is_file())
+}
+
+/// Report whether one path holds a symlink.
+pub fn is_link(path: &Path) -> bool {
+    read_link(path).is_ok()
+}
+
+/// Report whether one path holds no entry.
+pub fn is_missing(path: &Path) -> bool {
+    !exists(path)
+}
+
+/// Build the parent folder for one file path.
+///
+/// - Empty and parentless paths skip.
+///
+/// # Errors
+///
+/// - Parent build failures fail as io errors.
+pub fn create_parent(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+/// Remove one symlink without touching other entries.
+///
+/// - Links remove, other entries stay.
+///
+/// # Errors
+///
+/// - Link check and removal failures fail as io errors.
+pub fn remove_link(path: &Path) -> io::Result<()> {
+    if read_link(path).is_ok() {
+        remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Read one symlink target as bytes.
+///
+/// # Errors
+///
+/// - [NotFound] when the path holds no entry.
+/// - [PermissionDenied] when the path refuses reads.
+/// - [InvalidInput] when the path holds no link.
+pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    Ok(read_link(path)?.as_os_str().as_encoded_bytes().to_vec())
+}
+
+/// Set unix permission bits for one optional mode.
+///
+/// - Absent modes skip.
+///
+/// # Errors
+///
+/// - [NotFound] when the path holds no entry.
+/// - [PermissionDenied] when the path refuses writes.
+pub fn set_mode_if_present(path: &Path, mode: Option<u32>) -> io::Result<()> {
+    if let Some(bits) = mode {
+        set_mode(path, bits)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -179,7 +254,7 @@ mod tests {
             outcome.is_err(),
             "missing guard fails loud, never silent host write"
         );
-        assert!(read(&probe).is_err(), "missing guard reads loud");
+        assert!(read(&probe).is_err(), "missing guard fails loud");
         assert!(!probe.exists(), "failed host write leaves no host entry");
     }
 
@@ -268,16 +343,16 @@ mod tests {
         assert_eq!(
             mode(&file).unwrap(),
             0o644,
-            "present entries without stored bits read the default"
+            "present entries without stored bits use the default"
         );
         set_mode(&file, 0o755).unwrap();
         assert_eq!(
             mode(&file).unwrap(),
             0o755,
-            "guarded mode reads the stored bits"
+            "guarded mode is the stored bits"
         );
         let missing = dir.path().join("mode").join("absent.bin");
-        assert!(mode(&missing).is_err(), "absent mode reads fail loud");
+        assert!(mode(&missing).is_err(), "absent mode fails loud");
         assert!(
             set_mode(&missing, 0o644).is_ok(),
             "guarded set always succeeds"
@@ -291,10 +366,10 @@ mod tests {
         let file = dir.path().join("seeded.bin");
         create_dir_all(file.parent().unwrap()).unwrap();
         write(&file, b"seed").unwrap();
-        assert!(exists(&file), "guarded write reads back present");
+        assert!(exists(&file), "guarded write is present");
         assert!(
             !exists(&dir.path().join("absent.bin")),
-            "never-written path reads absent"
+            "never-written path is absent"
         );
         assert!(
             !file.exists(),

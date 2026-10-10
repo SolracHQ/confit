@@ -14,7 +14,7 @@ use confit_model::progress::{Event, ProgressSender};
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
-use crate::handles::{ArchiveHandle, ResourceHandle, TrustedHandle};
+use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
 use crate::resources::error::ResourceError;
 use confit_driver::{self as driver};
@@ -26,12 +26,12 @@ use zip::ZipBackend;
 /// Unpack folder name under the temp base.
 const EXTRACT_DIR: &str = "extract";
 
-/// Head window feeding every probe, wide enough for tar magic.
+/// Head window for every probe, wide enough for tar magic.
 const HEAD_LEN: u64 = 512;
 
-/// Streaming archive backend.
+/// Archive backend.
 trait ArchiveBackend {
-    /// Lists member names.
+    /// List member names.
     ///
     /// # Errors
     ///
@@ -41,7 +41,7 @@ trait ArchiveBackend {
     /// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
     fn names(&self, source: &Path) -> Result<Vec<String>>;
 
-    /// Spills decoded members under staging with hashes.
+    /// Spill decoded members under staging with hashes.
     ///
     /// # Errors
     ///
@@ -54,7 +54,7 @@ trait ArchiveBackend {
 
 /// File-backed archive member listing and extraction.
 ///
-/// Members read archive-relative with forward slashes.
+/// Members are archive-relative with forward slashes.
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     temp_base: PathBuf,
@@ -63,7 +63,7 @@ pub struct ArchiveStore {
 }
 
 impl ArchiveStore {
-    /// Builds a file-backed archive store under the temp base.
+    /// Build a file-backed archive store under the temp base.
     pub fn new(roots: &StoreRoots, resources: Arc<Resources>, progress: ProgressSender) -> Self {
         Self {
             temp_base: roots.temp_base.clone(),
@@ -72,18 +72,18 @@ impl ArchiveStore {
         }
     }
 
-    /// Seals one trusted source as a verified archive.
+    /// Seal one trusted source as a verified archive.
     ///
     /// # Errors
     ///
     /// - [`ArchiveError::NotArchive`] for non-archives.
-    pub fn archive(&self, source: &dyn TrustedHandle) -> Result<ArchiveHandle> {
+    pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
         let path = source.canonical();
         check_compressed_source(path)?;
         ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
     }
 
-    /// Seals one file path as a verified archive.
+    /// Seal one file path as a verified archive.
     ///
     /// # Errors
     ///
@@ -95,7 +95,7 @@ impl ArchiveStore {
         ArchiveHandle::new(source.to_path_buf(), sha)
     }
 
-    /// Lists member names.
+    /// List member names.
     ///
     /// # Errors
     ///
@@ -115,7 +115,7 @@ impl ArchiveStore {
         }
     }
 
-    /// Unpacks one archive once into the spill folder.
+    /// Unpack one archive once into the spill folder.
     ///
     /// Members return as born resource handles hashed at spill time.
     ///
@@ -133,7 +133,7 @@ impl ArchiveStore {
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
         let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
-        if driver::fs::metadata(&dest).is_ok_and(|facts| facts.is_dir()) {
+        if driver::fs::is_dir(&dest) {
             return spilled_handles(&dest, source, &self.resources);
         }
         match sniff(source)? {
@@ -165,7 +165,7 @@ impl ArchiveStore {
         }
     }
 
-    /// Unpacks one backend spill through staging into place.
+    /// Unpack one backend spill through staging into place.
     ///
     /// # Errors
     ///
@@ -197,11 +197,10 @@ impl ArchiveStore {
             Ok(()) => {
                 let handles =
                     streamed_handles(dest, built.unwrap_or_default().as_slice(), &self.resources)?;
-                let count = handles.len();
+                let total = handles.len();
                 let _ = self.progress.send(Event::Unpacked {
                     archive: source.display().to_string(),
-                    kept: count,
-                    total: count,
+                    total,
                 });
                 Ok(handles)
             }
@@ -214,9 +213,9 @@ impl ArchiveStore {
         }
     }
 
-    /// Picks one archive member by its archive-relative name.
+    /// Pick one archive member by its archive-relative name.
     ///
-    /// - Names read archive-relative with forward slashes.
+    /// - Names are archive-relative with forward slashes.
     ///
     /// # Errors
     ///
@@ -235,7 +234,7 @@ impl ArchiveStore {
     }
 }
 
-/// Spills one backend's members under a fresh staging folder.
+/// Spill one backend's members under a fresh staging folder.
 ///
 /// # Errors
 ///
@@ -255,7 +254,7 @@ fn spill_members(
     backend.unpack(source, staging)
 }
 
-/// Hashes one source file with a stream.
+/// Hash one source file with a stream.
 ///
 /// # Errors
 ///
@@ -266,7 +265,7 @@ fn file_sha(source: &Path) -> Result<Sha> {
     Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
 }
 
-/// Proves one source holds a compressed archive.
+/// Prove one source holds a compressed archive.
 ///
 /// # Errors
 ///
@@ -286,14 +285,14 @@ fn check_compressed_source(source: &Path) -> Result<()> {
     }
 }
 
-/// Builds one non-archive error holding the source path.
+/// Build one non-archive error with the source path.
 fn not_archive(source: &Path) -> ArchiveError {
     ArchiveError::NotArchive {
         path: source.to_path_buf(),
     }
 }
 
-/// Builds born member handles from streamed hashes.
+/// Build born member handles from streamed hashes.
 ///
 /// # Errors
 ///
@@ -321,11 +320,11 @@ enum Shape {
     Zip,
     /// Tar or gzip bytes under tar framing.
     Tar,
-    /// Plain bytes attempting tar and failing loud.
+    /// Plain bytes for one tar attempt.
     Plain,
 }
 
-/// Sniffs one source into its backend shape.
+/// Sniff one source into its backend shape.
 ///
 /// Zip magic routes zip, tar and gzip magic route tar, and plain bytes route
 /// a plain tar attempt.
@@ -344,7 +343,7 @@ fn sniff(source: &Path) -> Result<Shape> {
     }
 }
 
-/// Reads the head window feeding every probe.
+/// Read the head window for every probe.
 ///
 /// # Errors
 ///
@@ -357,7 +356,7 @@ fn read_head(source: &Path) -> Result<Vec<u8>> {
     Ok(head)
 }
 
-/// Collects born handles back for one present spill.
+/// Collect born handles back for one present spill.
 ///
 /// - Names sort.
 ///
@@ -382,7 +381,7 @@ fn spilled_handles(
     Ok(handles)
 }
 
-/// Hashes one spilled member file with a stream.
+/// Hash one spilled member file with a stream.
 ///
 /// # Errors
 ///
@@ -393,7 +392,7 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
     Sha::read(&mut file).map_err(|error| spill_read_error(error, source, name))
 }
 
-/// Collects archive-relative member names under one spill folder.
+/// Collect archive-relative member names under one spill folder.
 ///
 /// - Folders skip.
 ///
@@ -409,17 +408,11 @@ fn collect_spill_names(
     let entries =
         driver::fs::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
     for path in entries {
-        if driver::fs::metadata(&path)
-            .map(|facts| facts.is_dir())
-            .unwrap_or(false)
-        {
+        if driver::fs::is_dir(&path) {
             collect_spill_names(&path, root, names, source)?;
             continue;
         }
-        if driver::fs::metadata(&path)
-            .map(|facts| facts.is_file())
-            .unwrap_or(false)
-        {
+        if driver::fs::is_file(&path) {
             let relative = path
                 .strip_prefix(root)
                 .map_err(|error| ArchiveError::Read {
@@ -434,7 +427,7 @@ fn collect_spill_names(
     Ok(())
 }
 
-/// Maps one spilled member read failure into domain language.
+/// Map one spilled member read failure into domain language.
 fn spill_read_error(error: std::io::Error, source: &Path, name: &str) -> ArchiveError {
     match error.kind() {
         std::io::ErrorKind::NotFound => ArchiveError::UnknownMember {
@@ -449,7 +442,7 @@ fn spill_read_error(error: std::io::Error, source: &Path, name: &str) -> Archive
     }
 }
 
-/// Maps one resource birth failure into archive language.
+/// Map one resource birth failure into archive language.
 fn from_resource(error: ResourceError) -> ArchiveError {
     match error {
         ResourceError::Escape { path } => ArchiveError::Escape { path },
@@ -457,7 +450,7 @@ fn from_resource(error: ResourceError) -> ArchiveError {
     }
 }
 
-/// Reports true while a name wants tar members.
+/// Report whether a name wants tar members.
 fn wants_tar(archive: &Path) -> bool {
     let lower = archive.as_os_str().to_string_lossy().to_lowercase();
     lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar")
@@ -547,21 +540,10 @@ mod tests {
         path
     }
 
-    struct TestSource(PathBuf, Sha);
-
-    impl TrustedHandle for TestSource {
-        fn canonical(&self) -> &Path {
-            &self.0
-        }
-
-        fn sha(&self) -> &Sha {
-            &self.1
-        }
-    }
-
     fn born_archive(store: &ArchiveStore, dir: &Path, name: &str, bytes: &[u8]) -> ArchiveHandle {
         let path = write_archive(dir, name, bytes);
-        match store.archive(&TestSource(path, Sha::hash(bytes))) {
+        let source = ResourceHandle::new(dir, path, Sha::hash(bytes)).unwrap();
+        match store.archive(&source) {
             Ok(handle) => handle,
             Err(error) => panic!("source seals: {error}"),
         }
@@ -585,7 +567,8 @@ mod tests {
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
-        match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
+        let source = ResourceHandle::new(dir.path(), path.clone(), Sha::hash(&raw)).unwrap();
+        match store.archive(&source) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha(), &Sha::hash(&raw));
@@ -601,19 +584,23 @@ mod tests {
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let path = write_archive(dir.path(), "note.txt", b"plain text");
-        match store.archive(&TestSource(path.clone(), Sha::hash(b"plain text"))) {
+        let source =
+            ResourceHandle::new(dir.path(), path.clone(), Sha::hash(b"plain text")).unwrap();
+        match store.archive(&source) {
             Ok(_) => panic!("plain source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&path.display().to_string()),
-                "error names the source: {error}"
+                "error shows the source: {error}"
             ),
         }
         let missing = dir.path().join("absent.tar.gz");
-        match store.archive(&TestSource(missing.clone(), Sha::hash(b"absent"))) {
+        let absent =
+            ResourceHandle::new(dir.path(), missing.clone(), Sha::hash(b"absent")).unwrap();
+        match store.archive(&absent) {
             Ok(_) => panic!("absent source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&missing.display().to_string()),
-                "error names the source: {error}"
+                "error shows the source: {error}"
             ),
         }
     }
@@ -731,7 +718,7 @@ mod tests {
                 let text = error.to_string();
                 assert!(
                     text.contains("absent.txt"),
-                    "error names the member: {text}"
+                    "error shows the member: {text}"
                 );
                 assert!(
                     matches!(error, ResourceError::Read { .. }),
@@ -770,7 +757,7 @@ mod tests {
             Err(error) => {
                 let text = error.to_string();
                 assert!(text.contains("escapes"), "error reports escape: {text}");
-                assert!(text.contains("evil.txt"), "error names the member: {text}");
+                assert!(text.contains("evil.txt"), "error shows the member: {text}");
                 assert!(
                     matches!(error, ResourceError::Escape { .. }),
                     "escape keeps variant: {text}"
@@ -874,7 +861,7 @@ mod tests {
             Ok(_) => panic!("absent archive passes"),
             Err(error) => assert!(
                 error.to_string().contains(&missing.display().to_string()),
-                "error names the archive: {error}"
+                "error shows the archive: {error}"
             ),
         }
     }
@@ -890,11 +877,13 @@ mod tests {
         assert_ne!(sha_a, sha_b);
         let path_a = write_archive(dir.path(), "a.tar.gz", &raw);
         let path_b = write_archive(dir.path(), "b.tar.gz", &raw);
-        let first = match store.archive(&TestSource(path_a, sha_a.clone())) {
+        let first_source = ResourceHandle::new(dir.path(), path_a, sha_a.clone()).unwrap();
+        let first = match store.archive(&first_source) {
             Ok(handle) => handle,
             Err(error) => panic!("first source seals: {error}"),
         };
-        let second = match store.archive(&TestSource(path_b, sha_b.clone())) {
+        let second_source = ResourceHandle::new(dir.path(), path_b, sha_b.clone()).unwrap();
+        let second = match store.archive(&second_source) {
             Ok(handle) => handle,
             Err(error) => panic!("second source seals: {error}"),
         };
@@ -1037,7 +1026,8 @@ mod tests {
         let store = test_store(dir.path());
         let raw = zip_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.zip", &raw);
-        match store.archive(&TestSource(path.clone(), Sha::hash(&raw))) {
+        let source = ResourceHandle::new(dir.path(), path.clone(), Sha::hash(&raw)).unwrap();
+        match store.archive(&source) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha(), &Sha::hash(&raw));
@@ -1046,11 +1036,13 @@ mod tests {
             Err(error) => panic!("zip source seals: {error}"),
         }
         let plain = write_archive(dir.path(), "note.txt", b"plain text");
-        match store.archive(&TestSource(plain.clone(), Sha::hash(b"plain text"))) {
+        let plain_source =
+            ResourceHandle::new(dir.path(), plain.clone(), Sha::hash(b"plain text")).unwrap();
+        match store.archive(&plain_source) {
             Ok(_) => panic!("plain source passes"),
             Err(error) => assert!(
                 error.to_string().contains(&plain.display().to_string()),
-                "error names the source: {error}"
+                "error shows the source: {error}"
             ),
         }
     }
@@ -1186,8 +1178,12 @@ mod tests {
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(events.len(), 1, "unpack fires one fact");
         match &events[0] {
-            Event::Unpacked { kept, total, .. } => {
-                assert_eq!((*kept, *total), (2, 2), "unpack keeps every member");
+            Event::Unpacked { archive, total } => {
+                assert_eq!(*total, 2, "unpack counts every member");
+                assert!(
+                    archive.ends_with("fonts.tar.gz"),
+                    "unpack shows the archive: {archive}"
+                );
             }
             other => panic!("unpack announces itself: {other:?}"),
         }

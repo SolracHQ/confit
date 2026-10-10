@@ -1,14 +1,14 @@
----@module "plugins/mise"
+---@module "plugins._.mise"
 
--- Tool name with its alias map.
+-- The spec gives the tool name and its alias map.
 ---@alias MiseSpec { name: string, aliases: { [string]: string } }
 
-local sugar = require("plugins/sugar")
+local sugar = require("plugins._.sugar")
 
--- Mise tool installer. Declares tool installs with shell aliases.
+-- The module installs mise tools. It declares tool installs and shell aliases.
 local mise = {}
 
----@return table # Installer running `mise install`.
+---@return table # The installer runs `mise install`.
 function mise.init()
 	return {
 		name = "mise",
@@ -18,8 +18,8 @@ function mise.init()
 	}
 end
 
----@param spec MiseSpec # Tool name with its alias map, e.g. `{ name = "bat", aliases = { cat = "bat" } }`.
----@return table # Tool install with shell aliases.
+---@param spec MiseSpec # The spec gives the tool name and its alias map, e.g. `{ name = "bat", aliases = { cat = "bat" } }`.
+---@return table # The table describes the tool install and shell aliases.
 function mise.package(spec)
 	local entries = {}
 	for name, expansion in pairs(spec.aliases or {}) do

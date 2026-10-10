@@ -1,4 +1,4 @@
-//! Bundle input gate holding manifest parse and member checks.
+//! Bundle input gate for manifest parse and member checks.
 
 use confit_model::manifest::{MANIFEST_VERSION, Manifest};
 use thiserror::Error;
@@ -9,21 +9,21 @@ const BLOB_ID_LEN: usize = 64;
 /// Manifest codec failure shapes.
 #[derive(Debug, Error)]
 pub enum CodecError {
-    /// Corrupt payload holding the parse reason.
+    /// Corrupt payload.
     #[error("cannot read manifest: {message}")]
     Corrupt {
         /// The parse reason.
         message: String,
     },
-    /// Unsupported version holding the seen version.
-    #[error("manifest version {got} reads unsupported")]
+    /// Unsupported version.
+    #[error("manifest version {got} is unsupported")]
     Version {
         /// The seen version.
         got: u64,
     },
 }
 
-/// Parses one manifest with the version gate first.
+/// Parse one manifest with the version gate first.
 ///
 /// # Errors
 ///
@@ -55,7 +55,7 @@ pub fn decode(bytes: &[u8]) -> Result<Manifest, CodecError> {
     Ok(manifest)
 }
 
-/// Checks one blob id holds 64 hex chars.
+/// Check one blob id for 64 hex chars.
 ///
 /// # Errors
 ///
@@ -80,7 +80,7 @@ mod tests {
         let bytes = serde_json::to_vec(&raw).unwrap();
         match decode(&bytes) {
             Ok(_) => panic!("stale manifest passes"),
-            Err(CodecError::Version { got }) => assert_eq!(got, 0, "stale keeps version"),
+            Err(CodecError::Version { got }) => assert_eq!(got, 0, "the error keeps the version"),
             Err(error) => panic!("wrong stale variant: {error}"),
         }
     }

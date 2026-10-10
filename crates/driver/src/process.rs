@@ -30,36 +30,81 @@ pub struct ProcessCall {
     pub timeout_secs: u64,
 }
 
+/// Process fault cause.
+///
+/// One cause covers spawn and wait failures. Unmapped kinds carry
+/// their message along.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessFault {
+    /// Unknown binary.
+    UnknownBinary,
+    /// Denied execution.
+    DeniedExecution,
+    /// Unmapped failure with raw text.
+    Unknown {
+        /// The raw failure text.
+        message: String,
+    },
+}
+
+impl ProcessFault {
+    /// Interpret one io kind into its fault.
+    pub fn interpret(kind: std::io::ErrorKind) -> Option<Self> {
+        match kind {
+            std::io::ErrorKind::NotFound => Some(Self::UnknownBinary),
+            std::io::ErrorKind::PermissionDenied => Some(Self::DeniedExecution),
+            _ => None,
+        }
+    }
+
+    /// Return the fault cause for display shells.
+    ///
+    /// Unknown faults echo their raw text.
+    pub fn cause(&self) -> &str {
+        match self {
+            Self::UnknownBinary => "unknown binary",
+            Self::DeniedExecution => "denied execution",
+            Self::Unknown { message } => message,
+        }
+    }
+}
+
+impl std::fmt::Display for ProcessFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.cause())
+    }
+}
+
 /// Process failure shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessError {
-    /// Empty argv holding nothing.
+    /// Empty argv.
     Empty,
-    /// Failed spawn holding the cause.
+    /// Failed spawn.
     Spawn {
-        /// The spawn failure message.
-        message: String,
+        /// The spawn fault cause.
+        fault: ProcessFault,
     },
-    /// Failed wait holding the cause.
+    /// Failed wait.
     Wait {
-        /// The wait failure message.
-        message: String,
+        /// The wait fault cause.
+        fault: ProcessFault,
     },
-    /// Timed-out run holding the cap.
+    /// Timed-out run.
     Timeout {
         /// The run cap in seconds.
         timeout_secs: u64,
     },
-    /// Failed output join holding nothing.
+    /// Failed output join.
     Output,
 }
 
 impl std::fmt::Display for ProcessError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Empty => write!(formatter, "argv reads empty"),
-            Self::Spawn { message } => write!(formatter, "{message}"),
-            Self::Wait { message } => write!(formatter, "{message}"),
+            Self::Empty => write!(formatter, "argv is empty"),
+            Self::Spawn { fault } => write!(formatter, "{fault}"),
+            Self::Wait { fault } => write!(formatter, "{fault}"),
             Self::Timeout { timeout_secs } => {
                 write!(formatter, "timed out after {timeout_secs}s")
             }
@@ -70,7 +115,7 @@ impl std::fmt::Display for ProcessError {
 
 impl std::error::Error for ProcessError {}
 
-/// Runs one argv with extended PATH and a timeout.
+/// Run one argv with extended PATH and a timeout.
 ///
 /// # Errors
 ///

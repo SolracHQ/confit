@@ -13,13 +13,13 @@ use crate::routes::Route;
 const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
-/// One command argument holding text or a late-bound route.
+/// Text or late-bound route for command arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Arg {
-    /// A plain string passing unchanged.
+    /// Plain string for unchanged use.
     Text(String),
-    /// A destination route under apply-time resolving.
+    /// Destination route with apply-time resolution.
     Route(Route),
 }
 
@@ -64,7 +64,7 @@ impl<'de> Visitor<'de> for ArgVisitor {
 }
 
 impl Arg {
-    /// Renders the portable argument display.
+    /// Render the portable argument display.
     pub fn display(&self) -> String {
         match self {
             Self::Text(text) => text.clone(),
@@ -72,7 +72,7 @@ impl Arg {
         }
     }
 
-    /// Materializes one argument into a host path.
+    /// Materialize one argument into a host path.
     pub fn materialize(&self) -> std::path::PathBuf {
         match self {
             Self::Text(text) => std::path::PathBuf::from(text),
@@ -80,9 +80,9 @@ impl Arg {
         }
     }
 
-    /// Renders argv slots as one shell-safe display line.
+    /// Render argv slots as one shell-safe display line.
     ///
-    /// - Slots holding shell-special text quote single.
+    /// - Slots with shell-special text quote single.
     pub fn join(argv: &[Arg]) -> String {
         argv.iter()
             .map(Arg::display)
@@ -110,7 +110,7 @@ impl From<Route> for Arg {
     }
 }
 
-/// Shell quoting for one word.
+/// Quote one word for shell use.
 ///
 /// - Safe text holds alphanumerics and `@%_+=:,./-` only.
 pub fn quote(text: &str) -> Cow<'_, str> {

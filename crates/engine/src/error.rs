@@ -1,5 +1,5 @@
 //! Error
-//! Evaluation failure vocabulary.
+//! Define evaluation failure vocabulary.
 
 use thiserror::Error;
 
@@ -20,19 +20,19 @@ pub enum EngineError {
         /// The repeated destination display.
         display: String,
     },
-    /// Defined-twice config holding its name.
+    /// Defined-twice config.
     #[error("config '{name}' is already defined")]
     Defined {
         /// The repeated config name.
         name: String,
     },
-    /// Changed gate holding its unknown document display.
-    #[error("hook changed gate names unknown document '{route}'")]
+    /// Changed gate.
+    #[error("hook changed gate shows unknown document '{route}'")]
     ChangedUnknown {
         /// The unknown document display.
         route: String,
     },
-    /// Rc guard holding its hooks-only changed leaf.
+    /// Rc guard.
     #[error("document '{display}' {section} holds 'changed' (hooks only)")]
     ChangedInRc {
         /// The offending document display.
@@ -40,7 +40,7 @@ pub enum EngineError {
         /// The offending rc section name.
         section: String,
     },
-    /// Patched target holding its base shape with its patch format.
+    /// Patched target.
     #[error("patch target '{display}' holds '{base}' under '{patch}' patches")]
     Structured {
         /// The patch target display.

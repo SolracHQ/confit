@@ -11,9 +11,9 @@ use confit_store::fetch::error::FetchError;
 use confit_surface_face::module::{Module, VerbDecl};
 
 use crate::error::ApiError;
-use crate::handles::Handle;
+use crate::handles::{Archive, Handle};
 
-/// Fetch options holding the digest pin.
+/// Fetch options.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FetchOpts {
@@ -30,10 +30,11 @@ impl FromLua for FetchOpts {
     }
 }
 
-/// Builds the fetch function with its face, opening urls into handles.
+/// Build the fetch function with its face for urls behind handles.
 pub fn build(lua: &Lua, stores: &Stores) -> mlua::Result<(Value, DefinitionBuilder)> {
     let mut module = Module::start(lua, "Opened urls behind resource handles.")?;
     module.register::<Handle>();
+    module.register::<Archive>();
     module.register::<FetchOpts>();
     let stores = stores.clone();
     module.verb::<(String, Option<FetchOpts>), (Option<Handle>, Option<String>), _>(
@@ -56,15 +57,14 @@ pub fn build(lua: &Lua, stores: &Stores) -> mlua::Result<(Value, DefinitionBuild
     Ok((Value::Function(table.get("fetch")?), face))
 }
 
-/// Opens one url into its resource handle.
+/// Open one url into its resource handle.
 ///
-/// Dead urls return nil with reason and pin mismatches raise.
+/// Dead urls take nil with reason and pin mismatches raise.
 ///
 /// # Errors
 ///
 /// - [`ApiError::Mismatch`] for non-string urls and misshaped pins.
 /// - [`ApiError::Fetch`] for pin mismatches.
-/// - [`ApiError::Open`] for cache containment failures.
 fn fetch_impl(
     _lua: &Lua,
     stores: &Stores,
@@ -76,18 +76,13 @@ fn fetch_impl(
     }
     let wanted = pin_of(opts)?;
     match stores.fetch().fetch(&raw, wanted, false) {
-        Ok(found) => {
-            let opened = stores.resources().fetched(&found).map_err(ApiError::Open)?;
-            Ok((Some(Handle::new(opened, stores.clone())), None))
-        }
+        Ok(found) => Ok((Some(Handle::new(found, stores.clone())), None)),
         Err(error @ FetchError::DigestMismatch { .. }) => Err(ApiError::Fetch(error).into()),
         Err(error) => Ok((None, Some(error.to_string()))),
     }
 }
 
-/// Resolves the digest pin from the options value.
-///
-/// - Missing options read none.
+/// Resolve the digest pin from the options value.
 ///
 /// # Errors
 ///
@@ -99,7 +94,7 @@ fn pin_of(opts: Option<FetchOpts>) -> mlua::Result<Option<Sha>> {
     }
 }
 
-/// Opens one digest pin.
+/// Open one digest pin.
 ///
 /// # Errors
 ///
@@ -127,7 +122,6 @@ mod tests {
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
-                cache_base: dir.join("cache"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
@@ -185,7 +179,7 @@ mod tests {
             Ok(Value::String(reason)) => {
                 assert!(
                     reason.to_string_lossy().contains(URL),
-                    "reason names the url: {reason:?}"
+                    "reason shows the url: {reason:?}"
                 )
             }
             Ok(_) => panic!("dead url returns nil with reason"),
@@ -229,8 +223,11 @@ mod tests {
             Ok(_) => panic!("mismatched pin passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("sha256 mismatch"), "names the pin: {text}");
-                assert!(text.contains(URL), "names the url: {text}");
+                assert!(
+                    text.contains("sha256 mismatch"),
+                    "the text shows the pin: {text}"
+                );
+                assert!(text.contains(URL), "the text shows the url: {text}");
             }
         }
     }
@@ -250,7 +247,7 @@ mod tests {
             Ok(Value::String(reason)) => {
                 assert!(
                     reason.to_string_lossy().contains('1'),
-                    "reason names the url: {reason:?}"
+                    "reason shows the url: {reason:?}"
                 )
             }
             Ok(_) => panic!("coerced url returns nil with reason"),
@@ -260,7 +257,10 @@ mod tests {
             Ok(_) => panic!("empty url passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("a non-empty url"), "names the want: {text}");
+                assert!(
+                    text.contains("a non-empty url"),
+                    "the text shows the want: {text}"
+                );
             }
         }
         let source = format!(r#"return fetch("{URL}", {{ nope = 1 }})"#);
@@ -268,7 +268,7 @@ mod tests {
             Ok(_) => panic!("unknown pin passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("nope"), "names the field: {text}");
+                assert!(text.contains("nope"), "the text shows the field: {text}");
             }
         }
         let source = format!(r#"return fetch("{URL}", {{ sha256 = "zzz" }})"#);
@@ -278,9 +278,9 @@ mod tests {
                 let text = error.to_string();
                 assert!(
                     text.contains("64-char hex digest"),
-                    "names the want: {text}"
+                    "the text shows the want: {text}"
                 );
-                assert!(text.contains("zzz"), "names the received: {text}");
+                assert!(text.contains("zzz"), "the text shows the received: {text}");
             }
         }
     }

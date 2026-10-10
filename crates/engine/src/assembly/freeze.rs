@@ -1,5 +1,4 @@
-//! Frozen leftover documents.
-//! Bodies with blob handles into finished model documents.
+//! Freeze leftover documents into finished model documents.
 
 use std::collections::BTreeMap;
 
@@ -12,7 +11,7 @@ use super::Assembler;
 use crate::error::{EngineError, Result};
 
 impl Assembler<'_> {
-    /// Freezes one destination with body pair into its model document.
+    /// Freeze one destination with body pair into its model document.
     ///
     /// # Errors
     ///
@@ -74,7 +73,7 @@ impl Assembler<'_> {
         Ok(ModelDocument::new(destination.clone(), data))
     }
 
-    /// Collects nested tree slots into opened members.
+    /// Collect nested tree slots into opened members.
     ///
     /// # Errors
     ///
@@ -118,14 +117,14 @@ impl Assembler<'_> {
     }
 }
 
-/// Rejects rc guards holding hooks-only changed leaves.
+/// Reject rc guards with hooks-only changed leaves.
 ///
-/// - Placed and patched entries ride the finished map together, so one
+/// - Placed and patched entries share the finished map, so one
 ///   pass covers base guards with patch-smuggled guards.
 ///
 /// # Errors
 ///
-/// - [`EngineError::ChangedInRc`] for guards holding changed leaves.
+/// - [`EngineError::ChangedInRc`] for guards with changed leaves.
 pub(super) fn check_rc_guards(finished: &BTreeMap<Route, ModelDocument>) -> Result<()> {
     for (destination, document) in finished {
         let Data::Rc(found) = &document.data else {
@@ -150,7 +149,7 @@ pub(super) fn check_rc_guards(finished: &BTreeMap<Route, ModelDocument>) -> Resu
     Ok(())
 }
 
-/// Fills hashes over finished documents.
+/// Fill hashes over finished documents.
 ///
 ///
 /// - [`EngineError::Model`] for documents failing hashes.

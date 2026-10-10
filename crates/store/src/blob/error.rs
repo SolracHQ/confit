@@ -10,7 +10,7 @@ use crate::faults::AccessFault;
 /// Blob failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum BlobError {
-    /// Failed read holding the content hash with the fault.
+    /// Failed read.
     #[error("cannot read blob '{sha}': {fault}")]
     Read {
         /// The content hash under reading.
@@ -18,7 +18,7 @@ pub enum BlobError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Failed write holding the destination path with the fault.
+    /// Failed write.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
         /// The destination path under writing.
@@ -26,7 +26,7 @@ pub enum BlobError {
         /// The write fault cause.
         fault: AccessFault,
     },
-    /// Unknown write failure holding the path with message.
+    /// Unknown write failure.
     #[error("cannot write '{path}': {message}", path = path.display())]
     WriteUnknown {
         /// The destination path under writing.
@@ -34,19 +34,19 @@ pub enum BlobError {
         /// The failure message under writing.
         message: String,
     },
-    /// Corrupt pool entry holding the content hash.
+    /// Corrupt pool entry.
     #[error("blob '{sha}' fails verification")]
     Corrupt {
         /// The content hash under verifying.
         sha: Sha,
     },
-    /// Failed compression holding no further detail.
+    /// Failed compression.
     #[error("cannot compress blob")]
     Compress,
 }
 
 impl BlobError {
-    /// Maps one read io failure at the content hash into domain language.
+    /// Map one read io failure at the content hash into domain language.
     pub fn from_read_io(sha: &Sha, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -62,7 +62,7 @@ impl BlobError {
         }
     }
 
-    /// Maps one write io failure at the destination path into domain language.
+    /// Map one write io failure at the destination path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();

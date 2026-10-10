@@ -10,30 +10,30 @@ use crate::sha::Sha;
 /// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Drift {
-    /// Structured or link leaf differs between recorded and disk.
+    /// Leaf difference between recorded and disk.
     Key {
         /// The recorded destination route.
         path: Route,
-        /// The dotted leaf key, link uses `target`.
+        /// Dotted leaf key with `target` for links.
         key: String,
         /// The recorded leaf value.
         old: Option<serde_json::Value>,
         /// The disk leaf value.
         new: Option<serde_json::Value>,
     },
-    /// Text content differs between recorded and disk.
+    /// Text difference between recorded and disk.
     Hunk {
         /// The recorded destination route.
         path: Route,
         /// The unified diff from recorded to disk.
         hunks: String,
     },
-    /// Recorded destination reads as absent on disk.
+    /// Absent recorded destination on disk.
     Missing {
         /// The recorded destination route.
         path: Route,
     },
-    /// Recorded destination fails to read on disk.
+    /// Unreadable recorded destination on disk.
     Unreadable {
         /// The recorded destination route.
         path: Route,
@@ -43,7 +43,7 @@ pub enum Drift {
 }
 
 impl Drift {
-    /// Reads the drift destination.
+    /// Return the drift destination.
     pub fn path(&self) -> &Route {
         match self {
             Self::Key { path, .. }
@@ -57,14 +57,14 @@ impl Drift {
 /// One drift side order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriftOrder {
-    /// Recorded bytes read as old, disk as new.
+    /// Recorded bytes as old with disk as new.
     RecordedFirst,
-    /// Disk bytes read as old, recorded as new.
+    /// Disk bytes as old with recorded as new.
     DiskFirst,
 }
 
 impl Document {
-    /// Collects drift entries for one present disk path.
+    /// Collect drift entries for one present disk path.
     ///
     /// - Unmanaged documents stay quiet.
     pub fn disk_drift(
@@ -185,7 +185,7 @@ impl Document {
     }
 }
 
-/// Builds render-ready hunk content from first text to second text.
+/// Build render-ready hunk content from first text to second text.
 fn content_hunk(first: &str, second: &str) -> String {
     diffy::create_patch(first, second)
         .to_string()
@@ -197,7 +197,7 @@ fn content_hunk(first: &str, second: &str) -> String {
         .join("\n")
 }
 
-/// Builds one hunk from first bytes to second bytes.
+/// Build one hunk from first bytes to second bytes.
 fn push_hunk(path: &Route, first: &[u8], second: &[u8]) -> Vec<Drift> {
     let old = String::from_utf8_lossy(first);
     let new = String::from_utf8_lossy(second);
@@ -208,7 +208,7 @@ fn push_hunk(path: &Route, first: &[u8], second: &[u8]) -> Vec<Drift> {
     }]
 }
 
-/// Parses disk bytes to a table by format.
+/// Parse disk bytes to a table by format.
 fn parse_disk_table(format: StructuredFormat, disk: &[u8]) -> Option<Table> {
     let text = std::str::from_utf8(disk).ok()?;
     match format {
@@ -218,7 +218,7 @@ fn parse_disk_table(format: StructuredFormat, disk: &[u8]) -> Option<Table> {
     }
 }
 
-/// Diffs two tables leaf by leaf into key entries.
+/// Diff two tables leaf by leaf into key entries.
 fn structured_keys(path: &Route, old: &Table, new: &Table) -> Vec<Drift> {
     let mut old_flat = BTreeMap::new();
     flatten_table(old, "", &mut old_flat);
@@ -243,7 +243,7 @@ fn structured_keys(path: &Route, old: &Table, new: &Table) -> Vec<Drift> {
     out
 }
 
-/// Flattens one table into dotted leaf entries.
+/// Flatten one table into dotted leaf entries.
 fn flatten_table(table: &Table, prefix: &str, out: &mut BTreeMap<String, serde_json::Value>) {
     for (key, value) in table {
         let full = if prefix.is_empty() {
@@ -255,7 +255,7 @@ fn flatten_table(table: &Table, prefix: &str, out: &mut BTreeMap<String, serde_j
     }
 }
 
-/// Flattens one value into dotted leaf entries.
+/// Flatten one value into dotted leaf entries.
 ///
 /// - Array positions echo from 1.
 fn flatten_value(

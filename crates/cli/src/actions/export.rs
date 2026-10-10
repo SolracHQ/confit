@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use confit_model::manifest::Manifest;
 use confit_store::Stores;
-use confit_store::handles::TrustedHandle;
 use confit_store::slot::SlotKind;
 use confit_store::slot::SlotStore;
 
@@ -13,7 +12,7 @@ use crate::error::{CliError, Result};
 
 use crate::cli::ExportArgs;
 
-use crate::sinks::{Sinks, timed};
+use crate::sinks::Sinks;
 
 /// Auto-name stem for exports of the applied slot.
 const APPLIED_STEM: &str = "applied";
@@ -40,7 +39,7 @@ pub struct ExportRunner<'a> {
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Runs the full export flow from flags.
+    /// Run the full export flow from flags.
     pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Result<ExportReport> {
         Self {
             args,
@@ -50,13 +49,13 @@ impl<'a> ExportRunner<'a> {
         .execute()
     }
 
-    /// Resolves the picker, then writes the bundle file or renders pretty
+    /// Resolve the picker, then write the bundle file or render pretty
     /// manifest JSON.
     ///
-    /// The report carries the bundle path for file exports, else the
+    /// Report with the bundle path for file exports, else the
     /// manifest text.
     ///
-    /// - The `-o` destination reads as a literal file path.
+    /// - The `-o` destination is a literal file path.
     /// - Omitted destinations derive from the slot.
     ///
     /// # Errors
@@ -68,18 +67,13 @@ impl<'a> ExportRunner<'a> {
     pub fn execute(self) -> Result<ExportReport> {
         let args = self.args;
         let stores = self.stores;
-        let sinks = self.sinks;
         if args.manifest && args.output.is_some() {
             return Err(CliError::FlagRefuse);
         }
         let slots = stores.slots();
-        let (manifest, auto) = timed("export load", || {
-            resolve_slot_bundle(args.picker.as_deref(), &slots)
-        })?;
+        let (manifest, auto) = resolve_slot_bundle(args.picker.as_deref(), &slots)?;
         if args.manifest {
-            let text = timed("export manifest", || {
-                manifest.json().map_err(CliError::from)
-            })?;
+            let text = manifest.json().map_err(CliError::from)?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -89,13 +83,10 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        sinks.emit_writing_manifest(manifest.documents.len());
-        let written = timed("export write", || {
-            stores
-                .bundles()
-                .write(&manifest, &dest)
-                .map_err(CliError::from)
-        })?;
+        let written = stores
+            .bundles()
+            .write(&manifest, &dest)
+            .map_err(CliError::from)?;
         Ok(ExportReport {
             dest: Some(written.canonical().to_path_buf()),
             manifest: None,
@@ -103,7 +94,7 @@ impl<'a> ExportRunner<'a> {
     }
 }
 
-/// Resolves one picker to its live manifest and auto bundle name.
+/// Resolve one picker to its live manifest and auto bundle name.
 ///
 /// # Errors
 ///
@@ -118,7 +109,7 @@ pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(M
     Ok((manifest, auto_dest(&stem)))
 }
 
-/// Builds one slot-derived bundle destination stem.
+/// Build one slot-derived bundle destination stem.
 fn auto_dest(stem: &str) -> PathBuf {
     std::path::Path::new(stem).to_path_buf()
 }

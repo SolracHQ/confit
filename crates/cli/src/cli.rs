@@ -9,13 +9,13 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
 pub struct Cli {
-    /// Subcommand selecting the run shape.
+    /// subcommand to run
     #[command(subcommand)]
     pub command: Command,
-    /// Log file. Omitted means a per-process temp path.
+    /// logs dir path (default: per-process temp dir)
     #[arg(long)]
-    pub log_file: Option<PathBuf>,
-    /// Log level. Omitted means warn.
+    pub logs_dir: Option<PathBuf>,
+    /// log level (default: warn)
     #[arg(long, default_value_t = log::LevelFilter::Warn)]
     pub log_level: log::LevelFilter,
 }
@@ -23,104 +23,81 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Evaluate the profile, diff against previous state, write the output.
+    /// preview the profile evaluation with drift against previous state
     Plan(PlanArgs),
-    /// Preview the manifest, confirm, and create every document in place.
+    /// confirm the manifest and create every document in place
     Apply(ApplyArgs),
-    /// Scaffold one profile and stubs in the target folder.
+    /// scaffold a profile with stubs in the target folder
     Init(InitArgs),
-    /// Pack one slot into a portable bundle file or print its manifest.
+    /// pack one slot into a portable bundle file or print its manifest
     Export(ExportArgs),
-    /// Drop one named slot and its orphaned blobs.
+    /// delete one named slot with its orphaned blobs
     Delete(DeleteArgs),
 }
 
-/// Shared run flags carried by plan and apply.
-///
-/// Profiles ride positionally. `plan` takes one and `apply` takes a source in
-/// every shape.
-#[derive(Debug, Args)]
-pub struct SharedArgs {
-    /// Require resolution base. Defaults to the profile parent.
-    #[arg(long)]
-    pub root: Option<PathBuf>,
-    /// Plugin folder shaped `{user}/{name}/plugin.lua`. Omitted means
-    ///
-    /// `{root}/plugins`.
-    #[arg(long)]
-    pub plugins: Option<PathBuf>,
-    /// Forces remote downloads past the sidecar cache.
-    #[arg(long = "re-fetch")]
-    pub re_fetch: bool,
-}
+/// Default profile file under the project.
+pub const DEFAULT_PROFILE: &str = "main.lua";
 
-/// Arguments for `confit plan`.
+/// Evaluate the profile and preview the resulting plan.
 #[derive(Debug, Args)]
 pub struct PlanArgs {
-    /// Profile Lua file under evaluation.
-    pub profile: PathBuf,
-    /// Shared seam flags.
-    #[command(flatten)]
-    pub shared: SharedArgs,
-    /// Bundle destination. Omitted writes nothing and previews only.
+    /// project folder to evaluate
+    pub project: PathBuf,
+    /// profile file to evaluate (default: main.lua in the project)
+    #[arg(short, long)]
+    pub profile: Option<PathBuf>,
+    /// write the plan bundle to a file (preview only when omitted)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
 
-/// Arguments for `confit apply`.
-///
-/// The positional sniffs its shape. `.lua` and extensionless paths read a
-/// profile, `.cb` reads a bundle file, `@name` reads a named slot and `%N`
-/// reads history newest-first from one.
+/// Apply one source: `.lua` and extensionless paths form a
+/// profile, `.cb` forms a bundle file, `@name` forms a named slot, `%N`
+/// forms history newest-first from one, and folders form a project
+/// with `-p` profile choice.
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// Source under applying.
+    /// source to apply (`.lua`, `.cb`, `@name`, `%N` or project folder)
     pub source: PathBuf,
-    /// Shared seam flags.
-    #[command(flatten)]
-    pub shared: SharedArgs,
-    /// Skips the confirmation prompt. Drift still re-prompts.
+    /// profile file to evaluate (default: main.lua in the project)
+    #[arg(short, long)]
+    pub profile: Option<PathBuf>,
+    /// skip the confirmation prompt
     #[arg(long)]
     pub force: bool,
 }
 
-/// Arguments for `confit init`.
+/// Scaffold a profile with stubs in a folder.
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Target folder gaining the profile and stubs. Omitted means the current
-    ///
-    /// folder.
+    /// folder to scaffold (default: current folder)
     #[arg(default_value = ".")]
     pub dir: PathBuf,
 }
 
-/// Arguments for `confit export`.
+/// Pack one slot into a bundle or print its manifest.
 #[derive(Debug, Args)]
 pub struct ExportArgs {
-    /// Slot picker holding `%N` history and `@name` slots. Omitted means the
-    ///
-    /// applied slot.
+    /// slot to export (`%N` history or `@name`, default: applied slot)
     pub picker: Option<String>,
-    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb`
-    ///
-    /// unless present.
+    /// write the bundle to a file (default: slot name with `.cb`)
     #[arg(short, long, conflicts_with = "manifest")]
     pub output: Option<PathBuf>,
-    /// Prints pretty manifest JSON to stdout.
+    /// print the manifest as pretty JSON
     #[arg(short, long)]
     pub manifest: bool,
 }
 
-/// Arguments for `confit delete`.
+/// Delete one named slot.
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
-    /// Named slot under deleting, shaped `@name`.
+    /// slot to delete (shaped `@name`)
     pub name: String,
 }
 
-/// Expands one leading `~` against the OS home folder.
+/// Expand one leading `~` against the OS home folder.
 ///
-/// Bare `~` and `~/` inputs resolve against the home folder.
+/// Bare `~` and `~/` inputs map against the home folder.
 ///
 /// - Other inputs and unknown homes pass through unchanged.
 pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
@@ -143,26 +120,26 @@ pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     home.join(rest)
 }
 
-/// Expands tildes across every path arg of one command.
+/// Expand tildes across every path arg of one command.
 pub fn expand_command(command: &mut Command) {
     fn opt(slot: &mut Option<PathBuf>) {
         if let Some(path) = slot {
             *path = expand_tilde(path);
         }
     }
-    fn shared(shared: &mut SharedArgs) {
-        opt(&mut shared.root);
-        opt(&mut shared.plugins);
-    }
     match command {
         Command::Plan(args) => {
-            args.profile = expand_tilde(&args.profile);
-            shared(&mut args.shared);
+            args.project = expand_tilde(&args.project);
+            if let Some(profile) = args.profile.as_mut() {
+                *profile = expand_tilde(profile);
+            }
             opt(&mut args.output);
         }
         Command::Apply(args) => {
             args.source = expand_tilde(&args.source);
-            shared(&mut args.shared);
+            if let Some(profile) = args.profile.as_mut() {
+                *profile = expand_tilde(profile);
+            }
         }
         Command::Init(args) => {
             args.dir = expand_tilde(&args.dir);
@@ -174,21 +151,80 @@ pub fn expand_command(command: &mut Command) {
     }
 }
 
-/// Resolves the require base, defaulting to the profile parent.
+/// Log env var filling the gap between the flag and the default.
+pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
+
+/// App log file name under the logs dir.
+pub const APP_LOG_NAME: &str = "confit.log";
+
+/// Hook output folder name under the logs dir.
+pub const HOOKS_DIR_NAME: &str = "hooks";
+
+/// Resolve the logs dir from the flag with env and default fallbacks.
 ///
-/// - The override, else the profile parent, else the current folder.
-pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -> PathBuf {
-    if let Some(configured) = root {
-        return configured.clone();
+/// - Explicit flags win over the environment.
+/// - `CONFIT_LOG_DIR` fills the gap before the default.
+/// - Omitted values use a per-process temp dir.
+pub fn resolve_logs_dir(explicit: Option<&std::path::Path>) -> PathBuf {
+    if let Some(dir) = explicit {
+        return expand_tilde(dir);
     }
-    profile
-        .and_then(|profile| profile.parent())
+    if let Some(dir) = std::env::var_os(LOGS_DIR_ENV) {
+        return expand_tilde(std::path::Path::new(&dir));
+    }
+    std::env::temp_dir().join(format!("confit-{}", std::process::id()))
+}
+
+/// Resolve the plan profile against the project folder.
+///
+/// - Explicit profiles are absolute or project relative.
+/// - Omitted profiles use the default under the project.
+pub fn plan_profile(project: &std::path::Path, profile: Option<&std::path::Path>) -> PathBuf {
+    match profile {
+        Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
+        Some(explicit) => project.join(explicit),
+        None => project.join(DEFAULT_PROFILE),
+    }
+}
+
+/// Resolve the apply require base from the source parent.
+///
+/// - Source parent first, current folder fallback for absent parents.
+pub fn apply_root(source: &std::path::Path) -> PathBuf {
+    source
+        .parent()
         .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
 }
 
-/// Resolves the plugin folder, defaulting under the root.
-///
-/// - Configured paths win.
-pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> PathBuf {
-    plugins.clone().unwrap_or_else(|| root.join("plugins"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn plan_profile_defaults_under_project() {
+        assert_eq!(
+            plan_profile(Path::new("site"), None),
+            PathBuf::from("site/main.lua"),
+            "omitted profiles use the default"
+        );
+    }
+
+    #[test]
+    fn plan_profile_joins_relative_names() {
+        assert_eq!(
+            plan_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
+            PathBuf::from("site/laptop.lua"),
+            "relative names stay project relative"
+        );
+    }
+
+    #[test]
+    fn plan_profile_keeps_absolute_names() {
+        assert_eq!(
+            plan_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
+            PathBuf::from("/elsewhere/laptop.lua"),
+            "absolute names stay as is"
+        );
+    }
 }

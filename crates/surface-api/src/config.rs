@@ -15,7 +15,7 @@ use crate::paths::decode_route;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// One decoded config holding its name with documents, patches and hooks.
+/// One decoded config.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// The config name.
@@ -29,7 +29,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Builds one config from its name with documents, patches and hooks.
+    /// Build one config from its name with documents, patches and hooks.
     pub fn new(
         name: String,
         documents: HashMap<Route, Document>,
@@ -44,28 +44,28 @@ impl Config {
         }
     }
 
-    /// Reads the config name.
+    /// Return the config name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Reads the documents keyed by destination route.
+    /// Return the documents keyed by destination route.
     pub fn documents(&self) -> &HashMap<Route, Document> {
         &self.documents
     }
 
-    /// Reads the patches in profile return order.
+    /// Return the patches in profile return order.
     pub fn patches(&self) -> &[Patch] {
         &self.patches
     }
 
-    /// Reads the hooks in profile return order.
+    /// Return the hooks in profile return order.
     pub fn hooks(&self) -> &[Hook] {
         &self.hooks
     }
 }
 
-/// Decodes one config table into its name with documents, patches and hooks.
+/// Decode one config table into its name with documents, patches and hooks.
 ///
 /// # Errors
 ///
@@ -131,7 +131,7 @@ pub(crate) fn decode_config(lua: &Lua, value: &Value) -> Result<Config> {
     })
 }
 
-/// Decodes one config name into its string.
+/// Decode one config name into its string.
 ///
 /// # Errors
 ///
@@ -147,7 +147,7 @@ fn read_name(value: &Value) -> Result<String> {
     }
 }
 
-/// Decodes one config section table.
+/// Decode one config section table.
 ///
 /// # Errors
 ///
@@ -163,7 +163,7 @@ fn section_table(item: &Value, field: &str) -> Result<Table> {
     }
 }
 
-/// Decodes one documents map into bodies keyed by destination.
+/// Decode one documents map into bodies keyed by destination.
 ///
 /// # Errors
 ///
@@ -185,7 +185,7 @@ pub(crate) fn decode_documents(
     Ok(documents)
 }
 
-/// Decodes one patches list into patches in order under the config owner.
+/// Decode one patches list into patches in order under the config owner.
 ///
 /// # Errors
 ///
@@ -203,7 +203,7 @@ fn decode_patches(lua: &Lua, table: Option<Table>, owner: Option<&str>) -> Resul
     Ok(patches)
 }
 
-/// Decodes one hooks list into hooks in order.
+/// Decode one hooks list into hooks in order.
 ///
 /// # Errors
 ///
@@ -258,7 +258,7 @@ mod tests {
                     Patch::Structured(found) => {
                         assert_eq!(found.format(), StructuredFormat::Json);
                     }
-                    Patch::Rc(_) => panic!("format presence rides structured"),
+                    Patch::Rc(_) => panic!("format presence means structured"),
                 }
             }
             Err(error) => panic!("config decodes: {error}"),
@@ -304,7 +304,7 @@ mod tests {
             Ok(_) => panic!("unknown config key passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("nope"), "names the key: {text}");
+                assert!(text.contains("nope"), "the text shows the key: {text}");
             }
         }
     }
@@ -347,9 +347,15 @@ mod tests {
             Ok(_) => panic!("nameless config passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("config name"), "names the field: {text}");
-                assert!(text.contains("a string name"), "names the want: {text}");
-                assert!(text.contains("nil"), "names the received: {text}");
+                assert!(
+                    text.contains("config name"),
+                    "the text shows the field: {text}"
+                );
+                assert!(
+                    text.contains("a string name"),
+                    "the text shows the want: {text}"
+                );
+                assert!(text.contains("nil"), "the text shows the received: {text}");
             }
         }
     }
@@ -363,9 +369,15 @@ mod tests {
                 Ok(_) => panic!("nameless config passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains("config name"), "names the field: {text}");
-                    assert!(text.contains("a string name"), "names the want: {text}");
-                    assert!(text.contains("nil"), "names the received: {text}");
+                    assert!(
+                        text.contains("config name"),
+                        "the text shows the field: {text}"
+                    );
+                    assert!(
+                        text.contains("a string name"),
+                        "the text shows the want: {text}"
+                    );
+                    assert!(text.contains("nil"), "the text shows the received: {text}");
                 }
             }
         }
@@ -374,8 +386,14 @@ mod tests {
             Ok(_) => panic!("numeric name passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("config name"), "names the field: {text}");
-                assert!(text.contains("number"), "names the received: {text}");
+                assert!(
+                    text.contains("config name"),
+                    "the text shows the field: {text}"
+                );
+                assert!(
+                    text.contains("number"),
+                    "the text shows the received: {text}"
+                );
             }
         }
     }
@@ -391,7 +409,10 @@ mod tests {
             Ok(_) => panic!("foreign destination passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("a route table"), "names the want: {text}");
+                assert!(
+                    text.contains("a route table"),
+                    "the text shows the want: {text}"
+                );
             }
         }
     }
@@ -481,7 +502,7 @@ mod tests {
                 Ok(_) => panic!("foreign hook passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(want), "names the field: {text}");
+                    assert!(text.contains(want), "the text shows the field: {text}");
                 }
             }
         }
@@ -498,7 +519,7 @@ mod tests {
             Ok(_) => panic!("unknown hook key passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("nope"), "names the key: {text}");
+                assert!(text.contains("nope"), "the text shows the key: {text}");
             }
         }
     }

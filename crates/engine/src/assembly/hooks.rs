@@ -1,5 +1,4 @@
-//! Collected profile hooks.
-//! Merged hooks with changed gates over built routes.
+//! Collect profile hooks with changed gates over built routes.
 
 use std::collections::BTreeSet;
 
@@ -10,11 +9,11 @@ use confit_surface_api::Profile;
 
 use crate::error::{EngineError, Result};
 
-/// Collects one profile's hooks in first-seen order.
+/// Collect one profile's hooks in first-seen order.
 ///
 /// # Errors
 ///
-/// - [`EngineError::ChangedUnknown`] for gates naming unbuilt routes.
+/// - [`EngineError::ChangedUnknown`] for gates showing unbuilt routes.
 pub(super) fn collect_hooks(profile: &Profile, documents: &[ModelDocument]) -> Result<Vec<Hook>> {
     let mut declared = Vec::new();
     for config in profile.configs() {
@@ -25,11 +24,11 @@ pub(super) fn collect_hooks(profile: &Profile, documents: &[ModelDocument]) -> R
     Ok(merged)
 }
 
-/// Rejects changed gates naming routes outside the built set.
+/// Reject changed gates showing routes outside the built set.
 ///
 /// # Errors
 ///
-/// - [`EngineError::ChangedUnknown`] for gates naming unbuilt routes.
+/// - [`EngineError::ChangedUnknown`] for gates showing unbuilt routes.
 fn validate_changed(hooks: &[Hook], documents: &[ModelDocument]) -> Result<()> {
     let built: BTreeSet<Route> = documents
         .iter()

@@ -15,7 +15,7 @@ thread_local! {
     static WRITE_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
 }
 
-/// RAII guard parking one memory filesystem for the thread.
+/// RAII guard over one thread memory filesystem.
 ///
 /// Install holds a fresh empty backend, drop restores the prior one.
 pub struct TestGuard {
@@ -23,7 +23,7 @@ pub struct TestGuard {
 }
 
 impl TestGuard {
-    /// Parks a fresh empty memory filesystem for the thread.
+    /// Park a fresh empty memory filesystem for the thread.
     pub fn install() -> Self {
         let root = VfsPath::new(MemoryFS::new());
         let prior = PARKED.with(|cell| cell.borrow_mut().replace(root));
@@ -33,14 +33,14 @@ impl TestGuard {
         Self { prior }
     }
 
-    /// Arms one sticky read failure for the guard life.
+    /// Arm one sticky read failure for the guard life.
     ///
     /// - Open, read, and read_to_string fail until drop.
     pub fn fail_reads(&self, kind: io::ErrorKind) {
         READ_FAULT.with(|cell| *cell.borrow_mut() = Some(kind));
     }
 
-    /// Arms one sticky write failure for the guard life.
+    /// Arm one sticky write failure for the guard life.
     ///
     /// - Write, create, and append fail until drop.
     pub fn fail_writes(&self, kind: io::ErrorKind) {
@@ -100,7 +100,7 @@ impl Drop for MemFile {
     }
 }
 
-/// Reads whole file bytes for one path.
+/// Read whole file bytes for one path.
 ///
 /// # Errors
 ///
@@ -114,7 +114,7 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     mem_read(&root, path)
 }
 
-/// Reads whole file text for one path.
+/// Read whole file text for one path.
 ///
 /// # Errors
 ///
@@ -129,7 +129,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
     mem_read_to_string(&root, path)
 }
 
-/// Writes whole file bytes to one path.
+/// Write whole file bytes to one path.
 ///
 /// # Errors
 ///
@@ -142,7 +142,7 @@ pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     mem_write(&root, path, bytes)
 }
 
-/// Builds every missing folder along one path.
+/// Build every missing folder along one path.
 ///
 /// # Errors
 ///
@@ -154,7 +154,7 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     to_vfs(&root, path)?.create_dir_all().map_err(io_error)
 }
 
-/// Moves one file onto a new path overwriting any entry.
+/// Move one file onto a new path and overwrite any entry.
 ///
 /// # Errors
 ///
@@ -168,7 +168,7 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     mem_rename(&root, from, to)
 }
 
-/// Copies one file onto a new path overwriting any entry.
+/// Copy one file onto a new path and overwrite any entry.
 ///
 /// # Errors
 ///
@@ -184,7 +184,7 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     Ok(len)
 }
 
-/// Deletes one file.
+/// Delete one file.
 ///
 /// # Errors
 ///
@@ -196,7 +196,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
     to_vfs(&root, path)?.remove_file().map_err(io_error)
 }
 
-/// Reads length and file-type facts for one path.
+/// Read length and file-type facts for one path.
 ///
 /// # Errors
 ///
@@ -208,9 +208,9 @@ pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
     mem_metadata(&root, path)
 }
 
-/// Reports whether one path holds any entry.
+/// Report whether one path holds any entry.
 ///
-/// - Panics while no guard holds.
+/// - Require a guard.
 pub fn exists(path: &Path) -> bool {
     let Some(root) = parked() else {
         panic!("confit driver: no test guard installed");
@@ -218,7 +218,7 @@ pub fn exists(path: &Path) -> bool {
     mem_exists(&root, path)
 }
 
-/// Lists immediate child paths under one folder sorted by name.
+/// List immediate child paths under one folder sorted by name.
 ///
 /// # Errors
 ///
@@ -231,7 +231,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     mem_read_dir(&root, path)
 }
 
-/// Opens one file.
+/// Open one file.
 ///
 /// # Errors
 ///
@@ -251,7 +251,7 @@ pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
 
-/// Reads the last bytes of one backend file.
+/// Read the last bytes of one backend file.
 ///
 /// # Errors
 ///
@@ -272,7 +272,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     Ok(bytes[bytes.len() - tail..].to_vec())
 }
 
-/// Creates one file truncating any entry.
+/// Create one file and truncate any entry.
 ///
 /// # Errors
 ///
@@ -291,7 +291,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
 
-/// Opens one file appending.
+/// Open one file in append mode.
 ///
 /// # Errors
 ///
@@ -318,7 +318,7 @@ pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
 
-/// Deletes one folder with every entry inside.
+/// Delete one folder with every entry inside.
 ///
 /// # Errors
 ///
@@ -329,7 +329,38 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     to_vfs(&root, path)?.remove_dir_all().map_err(io_error)
 }
 
-/// Reads one symlink target.
+/// Resolve one path lexically with symlink-free memory.
+///
+/// - Memory backends hold files as plain entries, so parent steps fold.
+///
+/// # Errors
+///
+/// - [NotFound] when the path holds no entry.
+/// - [Other] when no guard holds.
+pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    use std::path::Component;
+    let root = rooted()?;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            _ => out.push(component),
+        }
+    }
+    if mem_exists(&root, &out) {
+        Ok(out)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no entry '{}'", path.display()),
+        ))
+    }
+}
+
+/// Read one symlink target.
 ///
 /// # Errors
 ///
@@ -343,7 +374,7 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
     ))
 }
 
-/// Creates one symlink replacing any present entry.
+/// Create one symlink and replace any present entry.
 ///
 /// # Errors
 ///
@@ -357,7 +388,7 @@ pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     write(link, target.as_os_str().as_encoded_bytes())
 }
 
-/// Sets unix permission bits on one path.
+/// Set unix permission bits on one path.
 ///
 /// - Present and absent paths alike succeed.
 ///
@@ -372,7 +403,7 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Reads unix permission bits for one path.
+/// Read unix permission bits for one path.
 ///
 /// - Stored bits win over the default.
 ///
@@ -394,22 +425,22 @@ pub fn mode(path: &Path) -> io::Result<u32> {
     Ok(stored.unwrap_or(0o644))
 }
 
-/// Keys one path for the side mode map under the guard.
+/// Key one path for the side mode map under the guard.
 fn mode_key(path: &Path) -> String {
     rooted_path(&path.as_os_str().to_string_lossy())
 }
 
-/// Clones the parked memory root while one guard holds it.
+/// Clone the parked memory root while one guard holds it.
 fn parked() -> Option<VfsPath> {
     PARKED.with(|cell| cell.borrow().clone())
 }
 
-/// Reads the parked memory root failing loud.
+/// Return the parked memory root. Require a guard for the call.
 fn rooted() -> io::Result<VfsPath> {
     parked().ok_or_else(|| io::Error::other("confit driver: no test guard installed"))
 }
 
-/// Fails one read with the armed kind while set.
+/// Fail one read with the armed kind while set.
 fn check_read() -> io::Result<()> {
     if let Some(kind) = READ_FAULT.with(|cell| *cell.borrow()) {
         return Err(io::Error::new(kind, "confit driver: armed read fails"));
@@ -417,7 +448,7 @@ fn check_read() -> io::Result<()> {
     Ok(())
 }
 
-/// Fails one write with the armed kind while set.
+/// Fail one write with the armed kind while set.
 fn check_write() -> io::Result<()> {
     if let Some(kind) = WRITE_FAULT.with(|cell| *cell.borrow()) {
         return Err(io::Error::new(kind, "confit driver: armed write fails"));
@@ -425,7 +456,7 @@ fn check_write() -> io::Result<()> {
     Ok(())
 }
 
-/// Maps one host path onto the parked memory backend.
+/// Map one host path onto the parked memory backend.
 ///
 /// - Absolute paths keep their text, relative paths root at `/`.
 fn to_vfs(root: &VfsPath, path: &Path) -> io::Result<VfsPath> {
@@ -434,7 +465,7 @@ fn to_vfs(root: &VfsPath, path: &Path) -> io::Result<VfsPath> {
     root.join(rooted.as_str()).map_err(io_error)
 }
 
-/// Roots one path text at `/` for the memory backend.
+/// Root one path text at `/` for the memory backend.
 fn rooted_path(text: &str) -> String {
     if text.starts_with('/') {
         text.to_string()
@@ -443,7 +474,7 @@ fn rooted_path(text: &str) -> String {
     }
 }
 
-/// Maps one backend failure onto an io failure keeping not-found.
+/// Map one backend failure onto an io failure and keep not-found.
 fn io_error(error: VfsError) -> io::Error {
     let kind = match error.kind() {
         VfsErrorKind::FileNotFound => io::ErrorKind::NotFound,
@@ -457,7 +488,7 @@ fn io_error(error: VfsError) -> io::Error {
     io::Error::new(kind, format!("{error}"))
 }
 
-/// Reads whole file bytes from the parked memory backend.
+/// Read whole file bytes from the parked memory backend.
 fn mem_read(root: &VfsPath, path: &Path) -> io::Result<Vec<u8>> {
     let target = to_vfs(root, path)?;
     let mut opened = target.open_file().map_err(io_error)?;
@@ -466,12 +497,12 @@ fn mem_read(root: &VfsPath, path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Reads whole file text from the parked memory backend.
+/// Read whole file text from the parked memory backend.
 fn mem_read_to_string(root: &VfsPath, path: &Path) -> io::Result<String> {
     to_vfs(root, path)?.read_to_string().map_err(io_error)
 }
 
-/// Writes whole file bytes onto the parked memory backend.
+/// Write whole file bytes onto the parked memory backend.
 fn mem_write(root: &VfsPath, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut created = to_vfs(root, path)?.create_file().map_err(io_error)?;
     created.write_all(bytes)?;
@@ -479,7 +510,7 @@ fn mem_write(root: &VfsPath, path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Moves one backend file onto a new path overwriting any entry.
+/// Move one backend file onto a new path and overwrite any entry.
 fn mem_rename(root: &VfsPath, from: &Path, to: &Path) -> io::Result<()> {
     let source = to_vfs(root, from)?;
     let dest = to_vfs(root, to)?;
@@ -492,7 +523,7 @@ fn mem_rename(root: &VfsPath, from: &Path, to: &Path) -> io::Result<()> {
     source.move_file(&dest).map_err(io_error)
 }
 
-/// Moves one backend folder onto a new path entry by entry.
+/// Move one backend folder onto a new path entry by entry.
 fn mem_rename_dir(source: &VfsPath, dest: &VfsPath) -> io::Result<()> {
     dest.create_dir_all().map_err(io_error)?;
     let names: Vec<String> = source
@@ -512,7 +543,7 @@ fn mem_rename_dir(source: &VfsPath, dest: &VfsPath) -> io::Result<()> {
     source.remove_dir().map_err(io_error)
 }
 
-/// Reads backend length and file-type facts for one path.
+/// Read backend length and file-type facts for one path.
 fn mem_metadata(root: &VfsPath, path: &Path) -> io::Result<super::FileMeta> {
     let facts = to_vfs(root, path)?.metadata().map_err(io_error)?;
     Ok(super::FileMeta::new(
@@ -521,14 +552,14 @@ fn mem_metadata(root: &VfsPath, path: &Path) -> io::Result<super::FileMeta> {
     ))
 }
 
-/// Reports whether one backend path holds any entry.
+/// Report whether one backend path holds any entry.
 fn mem_exists(root: &VfsPath, path: &Path) -> bool {
     to_vfs(root, path)
         .and_then(|target| target.exists().map_err(io_error))
         .unwrap_or(false)
 }
 
-/// Lists sorted backend child paths under one folder.
+/// List sorted backend child paths under one folder.
 fn mem_read_dir(root: &VfsPath, path: &Path) -> io::Result<Vec<PathBuf>> {
     let target = to_vfs(root, path)?;
     if target.is_file().map_err(io_error)? {

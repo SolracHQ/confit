@@ -11,10 +11,10 @@ use crate::cli::InitArgs;
 
 /// Starter profile text written by init.
 ///
-/// Ships from `resources/profile.lua` beside the crate. One shell config holds
+/// Ships from `resources/main.lua` beside the crate. One shell config holds
 /// one alias patch to config and one eval patch to final. Comments guide first
 /// use.
-const PROFILE_TEXT: &str = include_str!("../../resources/profile.lua");
+const PROFILE_TEXT: &str = include_str!("../../resources/main.lua");
 
 /// Stub files shipped inside the binary, keyed by target-relative path.
 ///
@@ -54,23 +54,22 @@ const STUB_FILES: &[(&str, &str)] = &[
 /// Outcome of one init run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
-    /// The scaffolded profile path.
+    /// Scaffolded profile path.
     pub profile: PathBuf,
-    /// Counts files written, profile, and stubs.
+    /// Written file count, profile with stubs.
     pub written: usize,
 }
 
-/// One init run from flags on the host driver.
+/// Init run from flags on the host driver.
 pub struct InitRunner<'a> {
-    /// The init flags under running.
+    /// Init flags for the run.
     pub args: &'a InitArgs,
 }
 
 impl InitRunner<'_> {
-    /// Writes one profile holding one rc document and editor stubs copied from
-    /// the binary.
+    /// Write one profile with one rc document and editor stubs from the binary.
     ///
-    /// The report carries the scaffolded profile path and the written file
+    /// Report with the scaffolded profile path and the written file
     /// count.
     ///
     /// - Present profile or stubs abort with nothing written.
@@ -81,7 +80,7 @@ impl InitRunner<'_> {
     /// - [`CliError::Write`] with [`CliError::WriteUnknown`]
     ///   for scaffold writes.
     pub fn execute(self) -> Result<InitReport> {
-        let profile = self.args.dir.join("profile.lua");
+        let profile = self.args.dir.join(crate::cli::DEFAULT_PROFILE);
         let mut dests = vec![profile.clone()];
         dests.extend(STUB_FILES.iter().map(|entry| self.args.dir.join(entry.0)));
         let stubs_dir = self.args.dir.join("stubs");
@@ -104,18 +103,13 @@ impl InitRunner<'_> {
     }
 }
 
-/// Writes one scaffold file creating parent folders first.
+/// Write one scaffold file with parent folders first.
 ///
 /// # Errors
 ///
 /// - [`CliError::Write`] with [`CliError::WriteUnknown`]
 ///   for folder and file writes.
 fn write_file(dest: &std::path::Path, text: &[u8]) -> Result<()> {
-    if let Some(parent) = dest.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        driver::fs::create_dir_all(parent)
-            .map_err(|error| CliError::from_write_io(parent, error))?;
-    }
+    driver::fs::create_parent(dest).map_err(|error| CliError::from_write_io(dest, error))?;
     driver::fs::write(dest, text).map_err(|error| CliError::from_write_io(dest, error))
 }

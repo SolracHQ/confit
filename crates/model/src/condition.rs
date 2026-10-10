@@ -33,38 +33,30 @@ pub enum Condition {
         route: Route,
     },
     /// A changed document assertion.
-    ///
-    /// True while `route` previews a write, drift, or absence. Hooks only.
     Changed {
         /// The document route under testing.
         route: Route,
     },
-    /// Holds a conjunction of nested conditions.
-    ///
-    /// Element order feeds equality.
+    /// A conjunction of nested conditions.
     All(Vec<Condition>),
-    /// Holds a disjunction of nested conditions.
-    ///
-    /// Element order feeds equality.
+    /// A disjunction of nested conditions.
     Any(Vec<Condition>),
     /// A negated nested condition.
-    ///
-    /// Serializes as `nop`.
     #[serde(rename = "nop")]
     Not(Box<Condition>),
 }
 
-/// Names the n-ary operator under folding.
+/// N-ary operator for folding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NaryKind {
-    /// Folds an `All` member list.
+    /// `All` member list.
     All,
-    /// Folds an `Any` member list.
+    /// `Any` member list.
     Any,
 }
 
 impl Condition {
-    /// Reports whether one condition tree holds a changed leaf.
+    /// Report whether one condition tree holds a changed leaf.
     pub fn holds_changed(&self) -> bool {
         match self {
             Self::Changed { .. } => true,
@@ -77,7 +69,7 @@ impl Condition {
         }
     }
 
-    /// Collects changed destinations in tree order.
+    /// Collect changed destinations in tree order.
     pub fn collect_changed(&self, out: &mut Vec<Route>) {
         match self {
             Self::Changed { route: dest } => out.push(dest.clone()),
@@ -94,11 +86,11 @@ impl Condition {
         }
     }
 
-    /// Returns the simplified form of one condition tree.
+    /// Return the simplified form of one condition tree.
     ///
-    /// The form reads as an equivalent tree in idempotent normal form.
+    /// The form is an equivalent tree in idempotent normal form.
     ///
-    /// - Empty `All` reads true and empty `Any` reads false.
+    /// - Empty `All` is true and empty `Any` is false.
     pub fn simplified(&self) -> Self {
         let mut out = self.simplify_step();
         loop {
@@ -110,7 +102,7 @@ impl Condition {
         }
     }
 
-    /// Applies one simplification pass over already simple children.
+    /// Apply one simplification pass over already simple children.
     fn simplify_step(&self) -> Self {
         match self {
             Self::Not(inner) => match inner.simplified() {
@@ -123,7 +115,7 @@ impl Condition {
         }
     }
 
-    /// Simplifies one `All` or `Any` member list.
+    /// Simplify one `All` or `Any` member list.
     ///
     /// - Singletons collapse to their member.
     fn nary(kind: NaryKind, items: &[Self]) -> Self {
@@ -164,7 +156,7 @@ impl Condition {
         }
     }
 
-    /// Builds the empty `All` (true) or `Any` (false) constant.
+    /// Build the empty `All` (true) or `Any` (false) constant.
     fn nary_empty(kind: NaryKind) -> Self {
         match kind {
             NaryKind::All => Self::All(Vec::new()),
@@ -172,16 +164,16 @@ impl Condition {
         }
     }
 
-    /// Reports whether one member meets its complement in the list.
+    /// Report whether one member meets its complement in the list.
     fn cancels(flat: &[Self], member: &Self) -> bool {
         let negated = Self::Not(Box::new(member.clone()));
         flat.contains(&negated)
     }
 
-    /// Reports whether one branch absorbs into a sibling member.
+    /// Report whether one branch absorbs into a sibling member.
     ///
-    /// `All` drops an `Any` branch holding any sibling member, and `Any`
-    /// drops an `All` branch holding any sibling member.
+    /// `All` drops an `Any` branch with any sibling member, and `Any`
+    /// drops an `All` branch with any sibling member.
     fn absorbed(flat: &[Self], member: &Self, kind: NaryKind) -> bool {
         let inner = match (kind, member) {
             (NaryKind::All, Self::Any(inner)) | (NaryKind::Any, Self::All(inner)) => inner,

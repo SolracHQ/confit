@@ -8,7 +8,7 @@ use crate::faults::AccessFault;
 /// Fetch failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum FetchError {
-    /// Failed download holding the url with the transport reason.
+    /// Failed download.
     #[error("cannot fetch '{url}': {reason}")]
     Download {
         /// The url under fetching.
@@ -16,7 +16,7 @@ pub enum FetchError {
         /// The transport reason.
         reason: String,
     },
-    /// Failed status holding the url with the status code.
+    /// Failed status.
     #[error("cannot fetch '{url}': status {code}")]
     Status {
         /// The url under fetching.
@@ -24,13 +24,13 @@ pub enum FetchError {
         /// The refusing status code.
         code: u16,
     },
-    /// Timed-out fetch holding the url alone.
+    /// Timed-out fetch.
     #[error("cannot fetch '{url}': timeout")]
     Timeout {
         /// The url under fetching.
         url: String,
     },
-    /// Failed cache read holding the url with the fault.
+    /// Failed cache read.
     #[error("cannot fetch '{url}': {fault}")]
     Read {
         /// The url under fetching.
@@ -38,7 +38,7 @@ pub enum FetchError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Digest mismatch holding the url with want and got.
+    /// Digest mismatch.
     #[error("sha256 mismatch for '{url}': want {want}, got {got}")]
     DigestMismatch {
         /// The url under checking.
@@ -48,13 +48,13 @@ pub enum FetchError {
         /// The seen digest.
         got: Sha,
     },
-    /// Unscripted url holding the url alone.
+    /// Unscripted url.
     #[error("cannot fetch '{url}': no scripted body")]
     Unscripted {
         /// The url under fetching.
         url: String,
     },
-    /// Failed cache write holding the url with the fault.
+    /// Failed cache write.
     #[error("cannot fetch '{url}': {fault}")]
     Write {
         /// The url under caching.
@@ -62,7 +62,7 @@ pub enum FetchError {
         /// The write fault cause.
         fault: AccessFault,
     },
-    /// Unknown cache write failure holding the url with message.
+    /// Unknown cache write failure.
     #[error("cannot fetch '{url}': {message}")]
     WriteUnknown {
         /// The url under caching.
@@ -73,7 +73,7 @@ pub enum FetchError {
 }
 
 impl FetchError {
-    /// Maps one cache io failure at the url into domain language.
+    /// Map one cache io failure at the url into domain language.
     pub fn from_io(url: &str, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -94,7 +94,7 @@ impl FetchError {
         }
     }
 
-    /// Maps one cache write io failure at the url into domain language.
+    /// Map one cache write io failure at the url into domain language.
     pub fn from_write_io(url: &str, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();

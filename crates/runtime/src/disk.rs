@@ -10,24 +10,20 @@ use confit_store::blob::BlobStore;
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
 
-use crate::Applier;
 use crate::error::{Result, RuntimeError};
-
-/// Disk reads and writes.
-pub struct HostDisk;
 
 /// Live disk state.
 pub enum Live {
-    /// Missing destination awaiting creation.
+    /// Missing destination.
     Absent,
-    /// Failing read carrying its fault cause.
+    /// Unreadable destination.
     Unreadable {
         /// The fault cause for the failed read.
         fault: AccessFault,
     },
-    /// Content reader and permission bits for the destination.
+    /// Present destination.
     Present {
-        /// Streams destination bytes.
+        /// Reader for destination bytes.
         reader: Box<dyn std::io::Read>,
         /// Unix permission bits.
         mode: Option<u32>,
@@ -36,158 +32,38 @@ pub enum Live {
 
 /// Live tree member state.
 pub enum LiveMember {
-    /// Failing read carrying its fault cause.
+    /// Unreadable member.
     Unreadable {
         /// The fault cause for the failed read.
         fault: AccessFault,
     },
-    /// Content reader and permission bits for the member.
+    /// Present member.
     Present {
-        /// Streams member bytes.
+        /// Reader for member bytes.
         reader: Box<dyn std::io::Read>,
         /// Unix permission bits.
         mode: Option<u32>,
     },
 }
 
-impl HostDisk {
-    /// Opens one document destination through its kind-aware reader.
-    pub fn live_doc(&self, document: &Document) -> Live {
-        let expanded = document.destination.expand();
-        let is_link = matches!(document.data, Data::Link { .. });
-        live_doc_host(&expanded, is_link)
-    }
-
-    /// Opens one tree destination into relative member readers.
-    pub fn live_tree(&self, document: &Document) -> BTreeMap<String, LiveMember> {
-        let dir = document.destination.expand();
-        live_tree_host(&dir)
-    }
-
-    /// Opens a fresh streaming reader for one tree member path.
-    pub fn open_member(
-        &self,
-        destination: &Route,
-        relative: &str,
-    ) -> Option<Box<dyn std::io::Read>> {
-        let dest = destination.expand();
-        let path = dest.join(relative);
-        if let Ok(target) = driver::fs::read_link(&path) {
-            return Some(Box::new(std::io::Cursor::new(
-                target.as_os_str().as_encoded_bytes().to_vec(),
-            )) as Box<dyn std::io::Read>);
-        }
-        driver::fs::open(&path)
-            .ok()
-            .map(|file| file as Box<dyn std::io::Read>)
-    }
-
-    /// Reports whether one backend path reads present.
-    pub fn exists(&self, path: &Path) -> bool {
-        driver::fs::exists(path)
-    }
-
-    /// Seeds one file at a resolved path for memory runs.
-    pub fn insert(&self, path: &Path, bytes: &[u8]) {
-        let _ = self.write_bytes(path, bytes);
-    }
-
-    /// Writes bytes to one path, creating parents as needed.
-    pub fn write_bytes(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-        ensure_parent(path)?;
-        driver::fs::write(path, bytes)
-    }
-
-    /// Streams one blob to its destination through the blob pool.
-    ///
-    /// # Errors
-    ///
-    /// - [`RuntimeError::MissingBlob`] for dangling hashes.
-    /// - [`RuntimeError::Write`] for unwritable destinations.
-    /// - [`RuntimeError::WriteUnknown`] for unmapped
-    ///   destination failures.
-    pub fn write_blob(&self, dest: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
-        copy_blob(dest, dest, blob, blobs)
-    }
-
-    /// Writes one tree destination member by member.
-    ///
-    /// # Errors
-    ///
-    /// - [`RuntimeError::MissingBlob`] for dangling member
-    ///   hashes naming the destination with the member.
-    /// - [`RuntimeError::Write`] for unwritable members
-    ///   and mode failures.
-    /// - [`RuntimeError::WriteUnknown`] for unmapped
-    ///   member failures.
-    pub fn write_tree(
-        &self,
-        dest: &Path,
-        members: &[ManifestMember],
-        blobs: &BlobStore,
-    ) -> Result<usize> {
-        for member in members {
-            let path = dest.join(&member.relative);
-            copy_blob(dest, &path, &member.blob, blobs)?;
-            driver::fs::set_mode(&path, member.mode)
-                .map_err(|error| RuntimeError::from_write_io(&path, error))?;
-        }
-        Ok(1)
-    }
-
-    /// Creates one symlink, replacing present files.
-    pub fn write_link(&self, link: &Path, target: &Path) -> std::io::Result<()> {
-        driver::fs::write_link(link, target)
-    }
-
-    /// Clears one symlink standing where a file lands.
-    pub fn clear_link(&self, path: &Path) -> std::io::Result<()> {
-        if driver::fs::read_link(path).is_ok() {
-            driver::fs::remove_file(path)?;
-        }
-        Ok(())
-    }
-
-    /// Sets unix permission bits on one path.
-    pub fn set_mode(&self, path: &Path, mode: u32) -> std::io::Result<()> {
-        driver::fs::set_mode(path, mode)
-    }
-
-    /// Removes one backend path, reporting whether anything left.
-    pub fn remove(&self, path: &Path) -> std::io::Result<bool> {
-        if !driver::fs::exists(path) {
-            return Ok(false);
-        }
-        driver::fs::remove_file(path)?;
-        Ok(true)
-    }
-}
-
-impl Applier {
-    /// Seeds one file at a resolved path for memory runs.
-    pub fn insert(&self, path: &Path, bytes: &[u8]) {
-        self.disk.insert(path, bytes);
-    }
-}
-
-/// Opens one host document destination through its kind-aware reader.
-fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
-    let target = match driver::fs::read_link(expanded) {
-        Ok(link) => join_link_target(expanded, &link),
-        Err(_) => expanded.to_path_buf(),
+/// Open one document destination through its kind-aware reader.
+pub fn live_doc(document: &Document) -> Live {
+    let expanded = document.destination.expand();
+    let is_link = matches!(document.data, Data::Link { .. });
+    let target = match driver::fs::read_link(&expanded) {
+        Ok(link) => join_link_target(&expanded, &link),
+        Err(_) => expanded.clone(),
     };
     if is_link {
-        return match driver::fs::read_link(expanded) {
-            Ok(link) => Live::Present {
-                reader: Box::new(std::io::Cursor::new(
-                    link.as_os_str().as_encoded_bytes().to_vec(),
-                )),
+        return match driver::fs::read_link_bytes(&expanded) {
+            Ok(bytes) => Live::Present {
+                reader: Box::new(std::io::Cursor::new(bytes)),
                 mode: None,
             },
-            Err(_) => match driver::fs::open(expanded) {
+            Err(_) => match driver::fs::open(&expanded) {
                 Ok(file) => Live::Present {
                     reader: Box::new(file),
-                    mode: file_mode(expanded),
+                    mode: file_mode(&expanded),
                 },
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Live::Absent,
                 Err(error) => Live::Unreadable {
@@ -208,16 +84,58 @@ fn live_doc_host(expanded: &Path, is_link: bool) -> Live {
     }
 }
 
-/// Opens one host tree destination into relative member readers.
-fn live_tree_host(dir: &Path) -> BTreeMap<String, LiveMember> {
+/// Open one tree destination into relative member readers.
+pub fn live_tree(document: &Document) -> BTreeMap<String, LiveMember> {
+    let dir = document.destination.expand();
     let mut out = BTreeMap::new();
-    walk_tree(dir, dir, &mut out);
+    walk_tree(&dir, &dir, &mut out);
     out
 }
 
-/// Walks one folder into relative member readers.
+/// Open a fresh reader for one tree member path.
+pub fn open_member(destination: &Route, relative: &str) -> Option<Box<dyn std::io::Read>> {
+    let dest = destination.expand();
+    let path = dest.join(relative);
+    if let Ok(bytes) = driver::fs::read_link_bytes(&path) {
+        return Some(Box::new(std::io::Cursor::new(bytes)) as Box<dyn std::io::Read>);
+    }
+    driver::fs::open(&path)
+        .ok()
+        .map(|file| file as Box<dyn std::io::Read>)
+}
+
+/// Write one tree destination member by member.
 ///
-/// - Missing folders read empty.
+/// # Errors
+///
+/// - [`RuntimeError::MissingBlob`] for dangling member
+///   hashes with the destination and the member.
+/// - [`RuntimeError::Write`] for unwritable members
+///   and mode failures.
+/// - [`RuntimeError::WriteUnknown`] for unmapped
+///   member failures.
+pub fn write_tree(dest: &Path, members: &[ManifestMember], blobs: &BlobStore) -> Result<usize> {
+    for member in members {
+        let path = dest.join(&member.relative);
+        copy_blob(dest, &path, &member.blob, blobs)?;
+        driver::fs::set_mode(&path, member.mode)
+            .map_err(|error| RuntimeError::from_write_io(&path, error))?;
+    }
+    Ok(1)
+}
+
+/// Remove one backend path and report whether anything remains.
+pub fn remove(path: &Path) -> std::io::Result<bool> {
+    if driver::fs::is_missing(path) {
+        return Ok(false);
+    }
+    driver::fs::remove_file(path)?;
+    Ok(true)
+}
+
+/// Walk one folder into relative member readers.
+///
+/// - Missing folders are empty.
 fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
     let children = match driver::fs::read_dir(dir) {
         Ok(children) => children,
@@ -237,13 +155,11 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
             walk_tree(root, &child, out);
             continue;
         }
-        if let Ok(target) = driver::fs::read_link(&child) {
+        if let Ok(bytes) = driver::fs::read_link_bytes(&child) {
             out.insert(
                 name.to_string(),
                 LiveMember::Present {
-                    reader: Box::new(std::io::Cursor::new(
-                        target.as_os_str().as_encoded_bytes().to_vec(),
-                    )),
+                    reader: Box::new(std::io::Cursor::new(bytes)),
                     mode: None,
                 },
             );
@@ -274,10 +190,10 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
     }
 }
 
-/// Joins a link target against the link parent.
+/// Join a link target against the link parent.
 ///
 /// - Relative targets resolve beside the link.
-/// - Parent segments pop lexically, staying put past the root.
+/// - Parent segments pop lexically. They stay put past the root.
 fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
     if target.is_absolute() {
         return target.to_path_buf();
@@ -298,38 +214,15 @@ fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
     out
 }
 
-/// Reads unix permission bits for one path.
+/// Read unix permission bits for one path.
 fn file_mode(path: &Path) -> Option<u32> {
-    if driver::fs::read_link(path).is_ok() {
+    if driver::fs::is_link(path) {
         return None;
     }
     driver::fs::mode(path).ok()
 }
 
-/// Drains one streaming reader into bytes.
-pub(crate) fn drain(reader: &mut dyn std::io::Read) -> std::io::Result<Vec<u8>> {
-    let mut out = Vec::new();
-    reader.read_to_end(&mut out)?;
-    Ok(out)
-}
-
-/// Creates the parent folder for one destination path.
-///
-/// - Empty parents skip.
-///
-/// # Errors
-///
-/// Missing ancestors and permission failures surface as io errors.
-fn ensure_parent(dest: &Path) -> std::io::Result<()> {
-    if let Some(parent) = dest.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        driver::fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
-/// Streams one blob to its destination through the blob pool.
+/// Stream one blob to its destination through the blob pool.
 ///
 /// # Errors
 ///
@@ -337,7 +230,12 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
 /// - [`RuntimeError::Write`] for unwritable destinations.
 /// - [`RuntimeError::WriteUnknown`] for unmapped
 ///   destination failures.
-fn copy_blob(dest: &Path, target: &Path, blob: &BlobRef, blobs: &BlobStore) -> Result<()> {
+pub(crate) fn copy_blob(
+    dest: &Path,
+    target: &Path,
+    blob: &BlobRef,
+    blobs: &BlobStore,
+) -> Result<()> {
     use std::io::Write as _;
 
     let handle = blobs
@@ -346,7 +244,8 @@ fn copy_blob(dest: &Path, target: &Path, blob: &BlobRef, blobs: &BlobStore) -> R
     let mut reader = blobs
         .open(&handle)
         .map_err(|error| map_pool(error, dest, target))?;
-    ensure_parent(target).map_err(|error| RuntimeError::from_write_io(target, error))?;
+    driver::fs::create_parent(target)
+        .map_err(|error| RuntimeError::from_write_io(target, error))?;
     let mut out =
         driver::fs::create(target).map_err(|error| RuntimeError::from_write_io(target, error))?;
     std::io::copy(&mut reader, &mut out)
@@ -356,7 +255,7 @@ fn copy_blob(dest: &Path, target: &Path, blob: &BlobRef, blobs: &BlobStore) -> R
     Ok(())
 }
 
-/// Maps one pool failure at the destination into runtime language.
+/// Map one pool failure at the destination into runtime language.
 fn map_pool(error: BlobError, dest: &Path, target: &Path) -> RuntimeError {
     match error {
         BlobError::Read {
@@ -412,7 +311,7 @@ fn map_pool(error: BlobError, dest: &Path, target: &Path) -> RuntimeError {
     }
 }
 
-/// Interprets one live read failure into its fault cause.
+/// Interpret one live read failure into its fault cause.
 fn live_fault(error: std::io::Error) -> AccessFault {
     let kind = error.kind();
     let message = error.to_string();
@@ -448,12 +347,11 @@ mod live_tests {
     fn absent_doc_reads_absent() {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
-        let disk = HostDisk;
-        match disk.live_doc(&text_doc(&dir.path().join("absent.txt"))) {
+        match live_doc(&text_doc(&dir.path().join("absent.txt"))) {
             Live::Absent => {}
-            Live::Present { .. } => panic!("never-written path reads present"),
+            Live::Present { .. } => panic!("never-written path is present"),
             Live::Unreadable { fault } => {
-                panic!("never-written path reads unreadable: {fault}")
+                panic!("never-written path is unreadable: {fault}")
             }
         }
     }
@@ -463,17 +361,19 @@ mod live_tests {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("present.txt");
-        let disk = HostDisk;
-        disk.write_bytes(&path, b"live bytes").unwrap();
+        driver::fs::create_parent(&path).unwrap();
+        driver::fs::write(&path, b"live bytes").unwrap();
         driver::fs::set_mode(&path, 0o755).unwrap();
-        match disk.live_doc(&text_doc(&path)) {
+        match live_doc(&text_doc(&path)) {
             Live::Present { mut reader, mode } => {
-                assert_eq!(drain(&mut reader).unwrap(), b"live bytes".to_vec());
-                assert_eq!(mode, Some(0o755), "live mode rides beside the reader");
+                let mut seen = Vec::new();
+                reader.read_to_end(&mut seen).unwrap();
+                assert_eq!(seen, b"live bytes".to_vec());
+                assert_eq!(mode, Some(0o755), "live mode matches the reader");
             }
-            Live::Absent => panic!("written path reads absent"),
+            Live::Absent => panic!("written path is absent"),
             Live::Unreadable { fault } => {
-                panic!("written path reads unreadable: {fault}")
+                panic!("written path is unreadable: {fault}")
             }
         }
     }
@@ -484,14 +384,13 @@ mod live_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blocked.txt");
         driver::fs::create_dir_all(&path).unwrap();
-        let disk = HostDisk;
-        match disk.live_doc(&text_doc(&path)) {
+        match live_doc(&text_doc(&path)) {
             Live::Unreadable { fault } => assert!(
                 !fault.cause().is_empty(),
                 "unreadable carries the fault cause"
             ),
-            Live::Absent => panic!("directory path reads absent"),
-            Live::Present { .. } => panic!("directory path reads present"),
+            Live::Absent => panic!("directory path is absent"),
+            Live::Present { .. } => panic!("directory path is present"),
         }
     }
 
@@ -500,24 +399,26 @@ mod live_tests {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("tree");
-        let disk = HostDisk;
-        disk.write_bytes(&root.join("present.txt"), b"member bytes")
-            .unwrap();
+        let path = root.join("present.txt");
+        driver::fs::create_parent(&path).unwrap();
+        driver::fs::write(&path, b"member bytes").unwrap();
         let document = Document::new(
             literal(&root),
             Data::Tree {
                 members: Vec::new(),
             },
         );
-        let mut found = disk.live_tree(&document);
+        let mut found = live_tree(&document);
         match found.get_mut("present.txt") {
             Some(LiveMember::Present { reader, .. }) => {
-                assert_eq!(drain(reader).unwrap(), b"member bytes".to_vec());
+                let mut seen = Vec::new();
+                reader.as_mut().read_to_end(&mut seen).unwrap();
+                assert_eq!(seen, b"member bytes".to_vec());
             }
             Some(LiveMember::Unreadable { fault }) => {
-                panic!("written member reads unreadable: {fault}");
+                panic!("written member is unreadable: {fault}");
             }
-            None => panic!("written member reads as map miss"),
+            None => panic!("written member is map miss"),
         }
         assert!(
             !found.contains_key("absent.txt"),

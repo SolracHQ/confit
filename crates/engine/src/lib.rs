@@ -1,5 +1,5 @@
 //! Engine
-//! Lua profile evaluation into finished documents.
+//! Evaluate Lua profiles into finished manifests.
 
 pub mod assembly;
 pub mod engine;
@@ -7,5 +7,5 @@ pub mod error;
 mod loader;
 
 pub use assembly::assemble;
-pub use engine::{Engine, Evaluation};
+pub use engine::Engine;
 pub use error::{EngineError, Result};

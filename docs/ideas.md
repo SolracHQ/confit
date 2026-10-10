@@ -140,3 +140,9 @@ Tree becomes a namespace with more than one source. The compressed road stays ex
 ```lua
 local bundle = confit.document.tree.from_data(dest, { doc1, doc2 })
 ```
+
+---
+
+Idea: Store ini documents
+Importance: Low
+Pain: `:load()` parses ini into plain tables through serini, but no structured format renders ini back, so ini configs cannot round-trip as documents. Ini is very used and strict, stricter than json or toml. Templates cover the need today by rendering text, once templates exist. A stored ini wants a `StructuredFormat` arm with a renderer and round-trip proof, on demand alone.

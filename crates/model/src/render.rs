@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
-/// Renders inline payload bytes in portable display form.
+/// Render inline payload bytes in portable display form.
 ///
 /// # Errors
 ///
@@ -36,7 +36,7 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
     }
 }
 
-/// Renders a table to TOML text.
+/// Render a table to TOML text.
 fn render_toml(table: &Table) -> Result<String> {
     toml::to_string(table).map_err(|source| Error::Render {
         format: StructuredFormat::Toml,
@@ -44,7 +44,7 @@ fn render_toml(table: &Table) -> Result<String> {
     })
 }
 
-/// Renders a table to pretty JSON text.
+/// Render a table to pretty JSON text.
 fn render_json(table: &Table) -> Result<String> {
     serde_json::to_string_pretty(table).map_err(|source| Error::Render {
         format: StructuredFormat::Json,
@@ -52,7 +52,7 @@ fn render_json(table: &Table) -> Result<String> {
     })
 }
 
-/// Renders a table to YAML text.
+/// Render a table to YAML text.
 fn render_yaml(table: &Table) -> Result<String> {
     noyalib::to_string(table).map_err(|source| Error::Render {
         format: StructuredFormat::Yaml,
@@ -60,7 +60,7 @@ fn render_yaml(table: &Table) -> Result<String> {
     })
 }
 
-/// Renders rc data to shell text with trailing newline.
+/// Render rc data to shell text with trailing newline.
 fn render_rc(data: &RcData) -> String {
     let profile = section_lines(&data.profile);
     let config = section_lines(&data.config);
@@ -86,12 +86,12 @@ fn render_rc(data: &RcData) -> String {
     out
 }
 
-/// Collects one section lines in declaration order.
+/// Collect one section lines in declaration order.
 fn section_lines(entries: &[RcEntry]) -> Vec<String> {
     entries.iter().flat_map(render_entry).collect()
 }
 
-/// Renders one rc entry as shell lines.
+/// Render one rc entry as shell lines.
 fn render_entry(entry: &RcEntry) -> Vec<String> {
     let line = match &entry.op {
         RcOp::Env { name, value } => {
@@ -124,7 +124,7 @@ fn render_entry(entry: &RcEntry) -> Vec<String> {
     }
 }
 
-/// Renders one condition as a Bourne test string.
+/// Render one condition as a Bourne test string.
 fn render_guard(guard: &Condition) -> String {
     match guard {
         Condition::EnvEq { key, value } => {
@@ -157,7 +157,7 @@ fn render_guard(guard: &Condition) -> String {
     }
 }
 
-/// Joins nested guards under one operator.
+/// Join nested guards under one operator.
 fn join_guards(items: &[Condition], op: &str) -> String {
     items
         .iter()
@@ -166,7 +166,7 @@ fn join_guards(items: &[Condition], op: &str) -> String {
         .join(&format!(" {op} "))
 }
 
-/// Groups one nested guard for joining under an operator.
+/// Group one nested guard for joining under an operator.
 fn group_guard(item: &Condition, parent: &str) -> String {
     let rendered = render_guard(item);
     match item {
@@ -176,7 +176,7 @@ fn group_guard(item: &Condition, parent: &str) -> String {
     }
 }
 
-/// Renders argv as one shell line with Bourne quoting.
+/// Render argv as one shell line with Bourne quoting.
 fn escape_argv(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| quote(arg).into_owned())
@@ -184,12 +184,12 @@ fn escape_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// Renders slots as one shell line with Bourne quoting.
+/// Render slots as one shell line with Bourne quoting.
 fn escape_args(slots: &[Arg]) -> String {
     slots.iter().map(escape_slot).collect::<Vec<_>>().join(" ")
 }
 
-/// Renders one slot with Bourne quoting.
+/// Render one slot with Bourne quoting.
 fn escape_slot(slot: &Arg) -> String {
     match slot {
         Arg::Text(text) => quote(text).into_owned(),

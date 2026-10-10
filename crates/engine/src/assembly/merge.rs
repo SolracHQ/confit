@@ -1,5 +1,4 @@
-//! Merged patch callbacks.
-//! Structured maps with rc sections under first-writer wins.
+//! Merge patch callbacks under first-writer wins.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +17,7 @@ use super::patches::{rc_base_of, structured_base_of};
 use crate::error::{EngineError, Result};
 
 impl Assembler<'_> {
-    /// Applies structured patch groups over declared bases into documents.
+    /// Apply structured patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
     ///
@@ -45,7 +44,7 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Applies rc patch groups over declared bases into documents.
+    /// Apply rc patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
     ///
@@ -73,11 +72,11 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Runs patch callbacks over base data through live documents.
+    /// Run patch callbacks over base data through live documents.
     ///
     /// - Owned keys keep their values against later writes.
-    /// - Fresh keys ride the writing patch owner.
-    /// - Blocked writes log naming target with key and losing owner.
+    /// - Fresh keys take the writing patch owner.
+    /// - Blocked writes log the target with the key and the losing owner.
     ///
     /// # Errors
     ///
@@ -115,11 +114,11 @@ impl Assembler<'_> {
         Ok(data)
     }
 
-    /// Runs patch callbacks over rc sections through live tables.
+    /// Run patch callbacks over rc sections through live tables.
     ///
     /// - Owned slots keep their first entry against later duplicates.
-    /// - Fresh slots ride the writing patch owner.
-    /// - Dropped duplicates log naming target with section, slot and losing owner.
+    /// - Fresh slots take the writing patch owner.
+    /// - Dropped duplicates log the target with the section, the slot and the losing owner.
     ///
     /// # Errors
     ///
@@ -142,21 +141,21 @@ impl Assembler<'_> {
     }
 }
 
-/// Seeds key owners from base data under the base name.
+/// Seed key owners from base data under the base name.
 ///
-/// - Every base key reads owned by the base.
+/// - Every base key is owned by the base.
 fn seed_key_owners(data: &Table) -> BTreeMap<String, String> {
     data.keys()
         .map(|key| (key.clone(), "base".to_owned()))
         .collect()
 }
 
-/// Merges patch data over live data keeping first writes.
+/// Merge patch data over live data keeping first writes.
 ///
-/// - Unchanged keys ride through silently.
+/// - Unchanged keys pass through silently.
 /// - Owned keys keep their values against later writes.
-/// - Fresh keys ride the writing patch owner.
-/// - Blocked writes log naming target with key and losing owner.
+/// - Fresh keys take the writing patch owner.
+/// - Blocked writes log the target with the key and the losing owner.
 fn merge_first_wins(
     display: &str,
     live: Table,
@@ -209,7 +208,7 @@ struct SlotOwners {
     final_entries: BTreeMap<String, String>,
 }
 
-/// Seeds slot owners from base entries under the base name.
+/// Seed slot owners from base entries under the base name.
 ///
 /// - Slot-free entries skip the sets.
 fn seed_slot_owners(document: &RcDocument) -> SlotOwners {
@@ -220,7 +219,7 @@ fn seed_slot_owners(document: &RcDocument) -> SlotOwners {
     owned
 }
 
-/// Seeds one section map from its entries under the base name.
+/// Seed one section map from its entries under the base name.
 ///
 /// - Slot-free entries skip the map.
 fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
@@ -231,12 +230,12 @@ fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     }
 }
 
-/// Merges patch sections over live sections keeping first entries.
+/// Merge patch sections over live sections keeping first entries.
 ///
-/// - Carried entries ride through silently.
+/// - Carried entries pass through silently.
 /// - Owned slots keep their first entry against later duplicates.
-/// - Fresh slots ride the writing patch owner.
-/// - Dropped duplicates log naming target with section, slot and losing owner.
+/// - Fresh slots take the writing patch owner.
+/// - Dropped duplicates log the target with the section, the slot and the losing owner.
 fn merge_rc_first_wins(
     display: &str,
     live: &RcDocument,
@@ -273,12 +272,12 @@ fn merge_rc_first_wins(
     }
 }
 
-/// Merges one patch section over its live entries keeping first entries.
+/// Merge one patch section over its live entries keeping first entries.
 ///
-/// - Carried entries ride through silently.
+/// - Carried entries pass through silently.
 /// - Owned slots keep their first entry against later duplicates.
-/// - Fresh slots ride the writing patch owner.
-/// - Dropped duplicates log naming target with section, slot and losing owner.
+/// - Fresh slots take the writing patch owner.
+/// - Dropped duplicates log the target with the section, the slot and the losing owner.
 fn merge_section(
     display: &str,
     section: &str,

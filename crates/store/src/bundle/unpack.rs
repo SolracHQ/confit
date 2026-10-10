@@ -1,4 +1,4 @@
-//! Bundle reads.
+//! Bundle input.
 
 use std::collections::BTreeSet;
 use std::io::Read as _;
@@ -14,7 +14,7 @@ use crate::blob::error::BlobError;
 use crate::handles::ArchiveHandle;
 
 impl BundleStore {
-    /// Reads one portable bundle into a live manifest.
+    /// Read one portable bundle into a live manifest.
     ///
     /// # Errors
     ///
@@ -52,7 +52,7 @@ impl BundleStore {
         Ok(manifest)
     }
 
-    /// Reads and parses the bundle manifest member.
+    /// Read and parse the bundle manifest member.
     ///
     /// # Errors
     ///
@@ -74,7 +74,7 @@ impl BundleStore {
         decode(&raw).map_err(|error| from_codec(bundle, error))
     }
 
-    /// Receives one blob member into the cache.
+    /// Receive one blob member into the cache.
     ///
     /// # Errors
     ///
@@ -95,7 +95,7 @@ impl BundleStore {
     }
 }
 
-/// Validates bundle member names.
+/// Validate bundle member names.
 ///
 /// # Errors
 ///
@@ -124,7 +124,7 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     Ok((has_manifest, wanted))
 }
 
-/// Builds one bundle read failure naming the bundle.
+/// Build one bundle read failure for the bundle.
 fn unknown(bundle: &Path, message: String) -> BundleError {
     BundleError::Read {
         path: bundle.to_path_buf(),
@@ -132,7 +132,7 @@ fn unknown(bundle: &Path, message: String) -> BundleError {
     }
 }
 
-/// Maps one codec failure into its bundle error.
+/// Map one codec failure into its bundle error.
 fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
     match error {
         CodecError::Version { got } => BundleError::Version {
@@ -143,7 +143,7 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
     }
 }
 
-/// Maps one blob failure into its bundle error.
+/// Map one blob failure into its bundle error.
 fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
     use crate::faults::AccessFault;
 
@@ -177,14 +177,12 @@ mod tests {
     use crate::StoreRoots;
     use crate::archive::ArchiveStore;
     use crate::blob::{BlobSource, BlobStore};
-    use crate::handles::TrustedHandle;
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
-            cache_base: dir.join("cache"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
         }
@@ -268,16 +266,16 @@ mod tests {
             "bare output gains suffix"
         );
         let names = entry_names(written.canonical());
-        assert_eq!(names[0], BUNDLE_MANIFEST, "manifest rides first");
+        assert_eq!(names[0], BUNDLE_MANIFEST, "the manifest comes first");
         let blobs: Vec<String> = names[1..].to_vec();
-        assert_eq!(blobs.len(), 2, "every blob rides along");
+        assert_eq!(blobs.len(), 2, "every blob is included");
         let mut sorted = blobs.clone();
         sorted.sort();
-        assert_eq!(blobs, sorted, "blob entries ride sorted");
+        assert_eq!(blobs, sorted, "the blob entries stay sorted");
         for name in &blobs {
             assert!(
                 name.starts_with(BUNDLE_BLOBS_PREFIX),
-                "blob entry rides under prefix: {name}"
+                "the blob entry stays under the prefix: {name}"
             );
         }
         match store.read(written.canonical()) {
@@ -347,7 +345,7 @@ mod tests {
             Ok(_) => panic!("thin manifest passes"),
             Err(error) => assert!(
                 error.to_string().contains(&handle.sha().hex()),
-                "missing blob names the hash: {error}"
+                "missing blob shows the hash: {error}"
             ),
         }
     }

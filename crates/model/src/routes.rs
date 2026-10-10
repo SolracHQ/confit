@@ -42,7 +42,7 @@ pub enum SegmentFault {
     Absolute,
     /// Parent step climbing out.
     Parent,
-    /// Drive prefix naming a foreign host.
+    /// Drive prefix showing a foreign host.
     Drive,
     /// Backslash separator from another platform.
     Backslash,
@@ -51,7 +51,7 @@ pub enum SegmentFault {
 }
 
 impl SegmentFault {
-    /// Reads the jail reason for the fault.
+    /// Return the jail reason for the fault.
     pub fn reason(&self) -> &'static str {
         match self {
             Self::Empty => "holds no path",
@@ -70,7 +70,7 @@ impl std::fmt::Display for SegmentFault {
     }
 }
 
-/// Splits one segment string into checked components.
+/// Split one segment string into checked components.
 ///
 /// # Errors
 ///
@@ -213,7 +213,7 @@ impl<'de> Visitor<'de> for RouteVisitor {
     }
 }
 
-/// Builds one route from its base with its raw relative text.
+/// Build one route from its base with its raw relative text.
 ///
 /// # Errors
 ///
@@ -239,7 +239,7 @@ fn check_relative(base: RouteBase, relative: &str) -> Result<Route> {
 }
 
 impl RouteBase {
-    /// Reads the lowercase base name.
+    /// Return the lowercase base name.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Home => "home",
@@ -252,7 +252,7 @@ impl RouteBase {
 }
 
 impl Route {
-    /// Builds a destination route from a base and a path.
+    /// Build a destination route from a base and a path.
     ///
     /// # Errors
     ///
@@ -268,7 +268,7 @@ impl Route {
         Ok(Self { base, relative })
     }
 
-    /// Joins one member segment onto the route.
+    /// Join one member segment onto the route.
     ///
     /// - Empty segments keep the route unchanged.
     pub fn join(&self, segment: &str) -> Self {
@@ -281,7 +281,7 @@ impl Route {
         }
     }
 
-    /// Renders the portable route display in sugar call form.
+    /// Render the portable route display in sugar call form.
     ///
     /// - Named bases render as `base('relative')`.
     /// - Literal renders its bare path.
@@ -292,17 +292,17 @@ impl Route {
         }
     }
 
-    /// Reads the destination base.
+    /// Return the destination base.
     pub fn base(&self) -> RouteBase {
         self.base
     }
 
-    /// Reads the relative path.
+    /// Return the relative path.
     pub fn relative(&self) -> &Path {
         &self.relative
     }
 
-    /// Expands one destination route to its host path.
+    /// Expand one destination route to its host path.
     ///
     /// - Literal carries its path unchanged.
     /// - Unset homes pass the relative path through intact.

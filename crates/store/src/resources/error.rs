@@ -9,7 +9,7 @@ use crate::faults::AccessFault;
 /// Resource failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum ResourceError {
-    /// Failed read holding the resource path with the fault.
+    /// Failed read.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
         /// The resource path under reading.
@@ -17,7 +17,7 @@ pub enum ResourceError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Escaping path holding the offending path.
+    /// Escaping path.
     #[error("resource path '{path}' escapes exec root", path = path.display())]
     Escape {
         /// The offending resource path.
@@ -26,7 +26,7 @@ pub enum ResourceError {
 }
 
 impl ResourceError {
-    /// Maps one io failure at the resource path into domain language.
+    /// Map one io failure at the resource path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();

@@ -1,4 +1,4 @@
-//! Streaming tar member listing and extraction.
+//! Tar member listing and extraction.
 
 use std::path::Path;
 
@@ -7,10 +7,10 @@ use super::spill::{BornMember, from_stream, spill_entry};
 use super::{ArchiveBackend, wants_tar};
 use confit_driver as driver;
 
-/// Streaming tar member listing and extraction.
+/// Tar member listing and extraction.
 ///
-/// Driver framing sniffs gzip itself. Lone singles read under the archive file
-/// name.
+/// Gzip and plain sources with archive file name fallback for lone
+/// singles.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TarBackend;
 
@@ -26,7 +26,7 @@ impl ArchiveBackend for TarBackend {
     }
 }
 
-/// Opens one archive source for streamed reading.
+/// Open one archive source for streamed reading.
 ///
 /// # Errors
 ///
@@ -38,7 +38,7 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
         .map_err(|error| ArchiveError::from_io(source, error))
 }
 
-/// Unpacks tar entries with per-entry streaming hashes.
+/// Unpack tar entries with per-entry streaming hashes.
 ///
 /// - Lone singles read under the archive file name.
 ///
@@ -80,7 +80,7 @@ fn unpack_stream(
     }
 }
 
-/// Derives the lone single fallback from an archive path.
+/// Derive the lone single fallback from an archive path.
 ///
 /// - Tar-style names refuse singles with an empty fallback.
 fn single_fallback(source: &Path) -> String {
@@ -91,7 +91,7 @@ fn single_fallback(source: &Path) -> String {
     }
 }
 
-/// Derives the member name from an archive path.
+/// Derive the member name from an archive path.
 fn member_name(archive: &Path) -> String {
     let base = archive
         .file_name()

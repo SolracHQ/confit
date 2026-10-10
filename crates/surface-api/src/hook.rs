@@ -1,5 +1,5 @@
 //! Hooks
-//! Plain hook tables riding configs beside documents and patches.
+//! Plain hook tables follow configs beside documents and patches.
 
 use mlua::{Lua, Value};
 use mlua_extras::typed::Type;
@@ -13,7 +13,7 @@ use confit_surface_face::module::Named;
 use crate::document::decode_named_shape;
 use crate::error::{ApiError, Result};
 
-/// One hook face holding argv with gates and timeout.
+/// One hook face.
 pub struct HookFace;
 
 confit_surface_face::table_face!(HookFace, {
@@ -32,29 +32,29 @@ const DEFAULT_TIMEOUT_SECS: u64 = 600;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HookShape {
-    /// Holds the command and arguments in order.
+    /// The subprocess argv.
     #[serde(default)]
     argv: Vec<Arg>,
-    /// Holds the PATH extension dirs for the subprocess alone.
+    /// PATH entries for the subprocess alone.
     #[serde(default)]
     path: Vec<Arg>,
-    /// The capability gate. None runs where capable.
+    /// The capability gate with a capable default.
     #[serde(default)]
     requires: Option<Condition>,
-    /// The need gate. None runs unconditionally.
+    /// The need gate with an unconditional default.
     #[serde(default)]
     when: Option<Condition>,
-    /// Holds the proof conditions, AND by list.
+    /// The AND conditions for the run.
     #[serde(default)]
     checks: Vec<Condition>,
-    /// The run cap text. None reads the default cap.
+    /// The run cap text with the default cap.
     #[serde(default)]
     timeout: Option<String>,
 }
 
-/// Decodes one hook table into its model hook.
+/// Decode one hook table into its model hook.
 ///
-/// - Missing optionals read defaults.
+/// - Missing optionals use defaults.
 ///
 /// # Errors
 ///
@@ -79,9 +79,9 @@ pub(crate) fn decode_hook(_lua: &Lua, value: &Value) -> Result<Hook> {
     })
 }
 
-/// Decodes one optional timeout text into seconds.
+/// Decode one optional timeout text into seconds.
 ///
-/// - Missing timeouts read the default cap.
+/// - Missing timeouts use the default cap.
 ///
 /// # Errors
 ///
@@ -93,10 +93,10 @@ fn read_timeout(timeout: Option<&str>) -> Result<u64> {
     }
 }
 
-/// Parses one duration string into seconds.
+/// Parse one duration string into seconds.
 ///
-/// - Bare digits read as seconds, suffixed parts read hours, minutes, and
-///   seconds in descending order holding each unit at most once.
+/// - Bare digits are seconds, and suffixed parts are hours, minutes, and
+///   seconds in descending order with each unit at most once.
 ///
 /// # Errors
 ///
@@ -155,12 +155,12 @@ fn parse_duration(text: &str) -> Result<u64> {
     }
 }
 
-/// Reports whether one char holds an ASCII digit.
+/// Report whether one char is an ASCII digit.
 fn is_digit(byte: char) -> bool {
     byte.is_ascii_digit()
 }
 
-/// Returns one duration unit rank with its bit and factor.
+/// Return one duration unit rank with its bit and factor.
 fn unit_of(rest: &str) -> Option<(u8, u8, u64)> {
     match rest.chars().next() {
         Some('h') => Some((3, 0b100, 3_600)),
@@ -170,7 +170,7 @@ fn unit_of(rest: &str) -> Option<(u8, u8, u64)> {
     }
 }
 
-/// Builds one duration mismatch quoting its text.
+/// Build one duration mismatch with its text.
 fn bad_duration(text: &str) -> ApiError {
     ApiError::mismatch(
         "hook timeout",
@@ -212,7 +212,7 @@ mod tests {
                     let message = error.to_string();
                     assert!(
                         message.contains("hook timeout") && message.contains(text),
-                        "failure names the field with the text: {message}"
+                        "failure shows the field with the text: {message}"
                     );
                 }
             }

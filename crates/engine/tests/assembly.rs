@@ -38,7 +38,7 @@ fn duplicates_fail_across_configs() {
             let text = error.to_string();
             assert!(
                 text.contains("home('.bashrc')"),
-                "names the destination: {text}"
+                "the text shows the destination: {text}"
             );
         }
     }
@@ -70,8 +70,11 @@ fn repeated_names_fail() {
         Ok(_) => panic!("repeated names pass"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("same"), "names the config: {text}");
-            assert!(text.contains("already defined"), "names the fault: {text}");
+            assert!(text.contains("same"), "the text shows the config: {text}");
+            assert!(
+                text.contains("already defined"),
+                "the text shows the fault: {text}"
+            );
         }
     }
 }
@@ -114,7 +117,7 @@ fn duplicates_fail_across_profile_and_configs() {
             let text = error.to_string();
             assert!(
                 text.contains("home('.bashrc')"),
-                "names the destination: {text}"
+                "the text shows the destination: {text}"
             );
         }
     }
@@ -632,10 +635,16 @@ fn structured_mixed_formats_fail_naming_formats() {
             let text = error.to_string();
             assert!(
                 text.contains("home('fresh.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("json"), "names the first format: {text}");
-            assert!(text.contains("toml"), "names the second format: {text}");
+            assert!(
+                text.contains("json"),
+                "the text shows the first format: {text}"
+            );
+            assert!(
+                text.contains("toml"),
+                "the text shows the second format: {text}"
+            );
         }
     }
 }
@@ -661,10 +670,10 @@ fn structured_patches_refuse_text_bases() {
             let text = error.to_string();
             assert!(
                 text.contains("home('note.txt')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("'text'"), "names the base: {text}");
-            assert!(text.contains("'json'"), "names the patch: {text}");
+            assert!(text.contains("'text'"), "the text shows the base: {text}");
+            assert!(text.contains("'json'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -689,10 +698,10 @@ fn rc_patches_refuse_structured_bases() {
             let text = error.to_string();
             assert!(
                 text.contains("home('config.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("'json'"), "names the base: {text}");
-            assert!(text.contains("'rc'"), "names the patch: {text}");
+            assert!(text.contains("'json'"), "the text shows the base: {text}");
+            assert!(text.contains("'rc'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -714,10 +723,10 @@ fn rc_patches_refuse_text_bases() {
             let text = error.to_string();
             assert!(
                 text.contains("home('note.txt')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("'text'"), "names the base: {text}");
-            assert!(text.contains("'rc'"), "names the patch: {text}");
+            assert!(text.contains("'text'"), "the text shows the base: {text}");
+            assert!(text.contains("'rc'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -741,9 +750,12 @@ fn format_patches_gap_on_rc_bases() {
         Ok(_) => panic!("format patch over rc passes"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("home('.bashrc')"), "names the target: {text}");
-            assert!(text.contains("'rc'"), "names the base: {text}");
-            assert!(text.contains("'json'"), "names the patch: {text}");
+            assert!(
+                text.contains("home('.bashrc')"),
+                "the text shows the target: {text}"
+            );
+            assert!(text.contains("'rc'"), "the text shows the base: {text}");
+            assert!(text.contains("'json'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -791,7 +803,7 @@ fn rc_broken_bodies_fail_naming_entries() {
             let text = error.to_string();
             assert!(
                 text.contains("rc profile section"),
-                "names the section: {text}"
+                "the text shows the section: {text}"
             );
         }
     }
@@ -865,7 +877,10 @@ fn changed_gates_over_unbuilt_routes_fail() {
         Ok(_) => panic!("changed gate over unbuilt route passes"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("home('missing')"), "names the route: {text}");
+            assert!(
+                text.contains("home('missing')"),
+                "the text shows the route: {text}"
+            );
         }
     }
 }
@@ -891,9 +906,12 @@ fn rc_changed_guards_in_base_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('.bashrc')"),
-                "names the document: {text}"
+                "the text shows the document: {text}"
             );
-            assert!(text.contains("hooks only"), "names the refusal: {text}");
+            assert!(
+                text.contains("hooks only"),
+                "the text shows the refusal: {text}"
+            );
         }
     }
 }
@@ -918,9 +936,12 @@ fn rc_changed_guards_from_patches_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('.bashrc')"),
-                "names the document: {text}"
+                "the text shows the document: {text}"
             );
-            assert!(text.contains("hooks only"), "names the refusal: {text}");
+            assert!(
+                text.contains("hooks only"),
+                "the text shows the refusal: {text}"
+            );
         }
     }
 }
@@ -943,7 +964,7 @@ fn rc_plain_guards_pass() {
         Ok(documents) => assert_eq!(
             rc_names(&documents[0]),
             vec!["GATED".to_owned()],
-            "guards without changed ride through",
+            "guards without changed pass through",
         ),
         Err(error) => panic!("plain rc guard fails: {error}"),
     }

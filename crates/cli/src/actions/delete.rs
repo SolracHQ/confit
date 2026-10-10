@@ -11,13 +11,13 @@ use crate::error::{CliError, Result};
 pub struct DeleteReport {
     /// The deleted slot name.
     pub name: String,
-    /// Counts pool blobs pruned as orphaned by the removal.
+    /// Pruned orphan pool blob count from the removal.
     pub pruned: usize,
 }
 
-/// Removes one named manifest, then prunes orphan pool blobs.
+/// Remove one named manifest, then prune orphan pool blobs.
 ///
-/// - Takes one `@name` value.
+/// - Single `@name` value.
 /// - Blobs shared with remaining slots stay kept through the prune.
 ///
 /// # Errors

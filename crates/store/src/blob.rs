@@ -5,6 +5,8 @@ pub mod error;
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use confit_model::document::BlobRef;
 use confit_model::progress::{Event, ProgressSender};
@@ -13,7 +15,7 @@ use sha2::Digest;
 
 use crate::StoreRoots;
 use crate::faults::AccessFault;
-use crate::handles::{BlobHandle, TrustedHandle};
+use crate::handles::{BlobHandle, ResourceHandle};
 use crate::slot::SlotStore;
 use confit_driver::{self as driver};
 use error::{BlobError, Result};
@@ -31,9 +33,11 @@ pub struct BlobStore {
     pool: PathBuf,
     cache: PathBuf,
     progress: ProgressSender,
+    started: Arc<AtomicUsize>,
+    finished: Arc<AtomicUsize>,
 }
 
-/// Verifying blob byte stream.
+/// Verified blob byte stream.
 struct VerifiedBlobReader {
     decoder: driver::gzip::Decoder<Box<dyn std::io::Read>>,
     sha: Sha,
@@ -46,21 +50,23 @@ pub enum BlobSource<'a> {
     /// Raw bytes under hashing.
     Bytes(&'a [u8]),
     /// Trusted file with sealed content hash.
-    Handle(&'a dyn TrustedHandle),
+    Handle(&'a ResourceHandle),
 }
 
 impl BlobStore {
-    /// Builds a file-backed blob pool under the config base.
+    /// Build one file-backed blob pool with staging under temp.
     pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
         Self {
             roots: roots.clone(),
             pool: roots.config_base.join(BLOBS_DIR),
-            cache: roots.cache_base.join(BLOBS_DIR),
+            cache: roots.temp_base.join(BLOBS_DIR),
             progress,
+            started: Arc::new(AtomicUsize::new(0)),
+            finished: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// Resolves one manifest ref into its handle.
+    /// Resolve one manifest ref into its handle.
     ///
     /// # Errors
     ///
@@ -76,7 +82,7 @@ impl BlobStore {
         }
     }
 
-    /// Opens a raw byte stream for one handle.
+    /// Open a raw byte stream for one handle.
     ///
     /// # Errors
     ///
@@ -93,7 +99,7 @@ impl BlobStore {
         }) as Box<dyn std::io::Read>)
     }
 
-    /// Spills bytes into the cache sealing both identities.
+    /// Spill bytes into the cache with both identities.
     ///
     /// # Errors
     ///
@@ -102,24 +108,18 @@ impl BlobStore {
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
     pub fn put(&self, source: BlobSource<'_>) -> Result<BlobHandle> {
-        let _ = self
-            .progress
-            .send(Event::CompressStarted { blobs: 1, bytes: 0 });
-        let (mut reader, sha, raw_len): (Box<dyn Read>, Sha, u64) = match source {
+        self.started.fetch_add(1, Ordering::Relaxed);
+        let (mut reader, sha): (Box<dyn Read>, Sha) = match source {
             BlobSource::Bytes(bytes) => (
                 Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>,
                 Sha::hash(bytes),
-                bytes.len() as u64,
             ),
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
                 let sha = handle.sha().clone();
-                let raw_len = driver::fs::metadata(path)
-                    .map(|facts| facts.len())
-                    .unwrap_or(0);
                 let file =
                     driver::fs::open(path).map_err(|error| BlobError::from_read_io(&sha, error))?;
-                (file as Box<dyn Read>, sha, raw_len)
+                (file as Box<dyn Read>, sha)
             }
         };
         driver::fs::create_dir_all(&self.cache)
@@ -140,21 +140,19 @@ impl BlobStore {
         let dest = self.cache.join(handle.stored().hex());
         driver::fs::rename(&staging, &dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
-        let _ = self.progress.send(Event::BlobCompressed {
-            done: 1,
-            total: 1,
-            bytes: raw_len,
-        });
+        let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
+        let total = self.started.load(Ordering::Relaxed);
+        let _ = self.progress.send(Event::BlobCompressed { done, total });
         Ok(handle)
     }
 
-    /// Reports whether one stored hash reads present in the cache or pool.
+    /// Report whether one stored hash is present in the cache or pool.
     fn present(&self, stored: &Sha) -> bool {
         driver::fs::exists(&self.cache.join(stored.hex()))
             || driver::fs::exists(&self.pool.join(stored.hex()))
     }
 
-    /// Lands already-compressed bytes from a trusted member into the cache.
+    /// Receive already-compressed bytes from a trusted member into the cache.
     ///
     /// - Present entries skip.
     ///
@@ -162,7 +160,7 @@ impl BlobStore {
     ///
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
-    pub(crate) fn receive(&self, stored: &Sha, source: &dyn TrustedHandle) -> Result<()> {
+    pub(crate) fn receive(&self, stored: &Sha, source: &ResourceHandle) -> Result<()> {
         let dest = self.cache.join(stored.hex());
         if driver::fs::exists(&dest) {
             return Ok(());
@@ -173,7 +171,7 @@ impl BlobStore {
         .map_err(|error| BlobError::from_write_io(&dest, error))
     }
 
-    /// Opens raw stored bytes with their encoded length.
+    /// Open raw stored bytes with their encoded length.
     ///
     /// # Errors
     ///
@@ -188,7 +186,7 @@ impl BlobStore {
         Ok((len, file as Box<dyn std::io::Read>))
     }
 
-    /// Reads the raw byte count for one handle.
+    /// Read the raw byte count for one handle.
     ///
     /// # Errors
     ///
@@ -214,7 +212,7 @@ impl BlobStore {
         Ok(u32::from_le_bytes(raw) as u64)
     }
 
-    /// Persists cache blobs into the shared pool.
+    /// Persist cache blobs into the shared pool.
     ///
     /// - Vanished cache files skip.
     ///
@@ -235,7 +233,7 @@ impl BlobStore {
                 let _ = driver::fs::remove_file(&source);
                 continue;
             }
-            if !driver::fs::exists(&source) {
+            if driver::fs::is_missing(&source) {
                 continue;
             }
             match driver::atomic_write(&dest, |staging| move_cache_copy(&source, staging)) {
@@ -250,9 +248,9 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Derives the live file for one handle.
+    /// Derive the live file for one handle.
     ///
-    /// - The cache wins while present.
+    /// - Cache copy with pool fallback.
     fn live_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.stored().hex());
         if driver::fs::exists(&cached) {
@@ -262,9 +260,9 @@ impl BlobStore {
         }
     }
 
-    /// Drops cache and pool files outside what slot records.
+    /// Drop cache and pool files outside what slot records.
     ///
-    /// The removal count covers both homes.
+    /// The removal count for both homes.
     ///
     /// # Errors
     ///
@@ -283,7 +281,7 @@ impl BlobStore {
     }
 }
 
-/// Moves one cache file into its pool staging file.
+/// Move one cache file into its pool staging file.
 ///
 /// - A cross-device rename falls back to an exact copy.
 ///
@@ -341,9 +339,9 @@ impl std::io::Read for VerifiedBlobReader {
     }
 }
 
-/// Drops files in one blob home outside the keep set.
+/// Drop files in one blob home outside the keep set.
 ///
-/// - Missing folders read as zero removals.
+/// - Missing folders are zero removals.
 ///
 /// # Errors
 ///
@@ -368,9 +366,9 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
     Ok(removed)
 }
 
-/// Reports whether one blob home file names a hash inside the keep set.
+/// Report whether one blob home file is inside the keep set.
 ///
-/// - Names failing hash parsing read outside the set.
+/// - Files failing hash parsing are outside the set.
 fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -385,14 +383,13 @@ mod tests {
     use confit_model::manifest::Manifest;
     use confit_model::routes::{Route, RouteBase};
 
-    use crate::handles::FetchHandle;
+    use crate::handles::ResourceHandle;
 
     use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
-            cache_base: dir.join("cache"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
         }
@@ -440,7 +437,7 @@ mod tests {
         );
         assert_eq!(read_open(&store, &handle), raw, "open round-trips bytes");
         match store.len(&handle) {
-            Ok(len) => assert_eq!(len, raw.len() as u64, "length reads raw count"),
+            Ok(len) => assert_eq!(len, raw.len() as u64, "length is raw count"),
             Err(error) => panic!("pool length reads: {error}"),
         }
         match store.put(BlobSource::Bytes(raw)) {
@@ -471,7 +468,7 @@ mod tests {
             "a preview writes zero config bytes with cache bytes allowed"
         );
         assert!(
-            driver::fs::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
+            driver::fs::exists(&roots.temp_base.join("blobs").join(handle.stored().hex())),
             "the handle points at its cache file"
         );
         assert_eq!(read_open(&store, &handle), b"preview bytes");
@@ -498,7 +495,7 @@ mod tests {
         }
         assert_eq!(pool_entries(&roots).len(), 1, "pool holds one file");
         assert!(
-            !driver::fs::exists(&roots.cache_base.join("blobs").join(handle.stored().hex())),
+            !driver::fs::exists(&roots.temp_base.join("blobs").join(handle.stored().hex())),
             "persist leaves no cache copy"
         );
         assert!(
@@ -537,7 +534,7 @@ mod tests {
             Err(error) => panic!("cache stores again: {error}"),
         };
         assert_eq!(again, handle, "repeat put keeps identity");
-        let cached = roots.cache_base.join("blobs").join(handle.stored().hex());
+        let cached = roots.temp_base.join("blobs").join(handle.stored().hex());
         let pooled = roots.config_base.join("blobs").join(handle.stored().hex());
         assert!(
             driver::fs::exists(&cached) && driver::fs::exists(&pooled),
@@ -577,14 +574,14 @@ mod tests {
             Ok(_) => panic!("absent blob opens"),
             Err(error) => assert!(
                 error.to_string().contains(&handle.sha().hex()),
-                "missing open names the hash: {error}"
+                "missing open shows the hash: {error}"
             ),
         }
         match store.len(&handle) {
             Ok(_) => panic!("absent length reads"),
             Err(error) => assert!(
                 error.to_string().contains(&handle.sha().hex()),
-                "missing length names the hash: {error}"
+                "missing length shows the hash: {error}"
             ),
         }
     }
@@ -601,20 +598,15 @@ mod tests {
         };
         let source_path = dir.path().join("source.bin");
         driver::fs::write(&source_path, raw).unwrap();
-        let source =
-            FetchHandle::new(source_path, Sha::hash(raw), "https://example.com/source").unwrap();
+        let source = ResourceHandle::new(dir.path(), source_path, Sha::hash(raw)).unwrap();
         match store.put(BlobSource::Handle(&source)) {
             Ok(via_source) => assert_eq!(via_source, via_put, "source keeps identity"),
             Err(error) => panic!("source stores: {error}"),
         }
         assert_eq!(read_open(&store, &via_put), raw);
         let missing_path = dir.path().join("absent.bin");
-        let missing = FetchHandle::new(
-            missing_path.clone(),
-            Sha::hash(b"x"),
-            "https://example.com/x",
-        )
-        .unwrap();
+        let missing =
+            ResourceHandle::new(dir.path(), missing_path.clone(), Sha::hash(b"x")).unwrap();
         match store.put(BlobSource::Handle(&missing)) {
             Ok(_) => panic!("absent source passes"),
             Err(BlobError::Read { sha, fault }) => {
@@ -709,7 +701,7 @@ mod tests {
                     "put keeps the fault"
                 );
                 assert!(
-                    path.starts_with(roots.cache_base.join("blobs")),
+                    path.starts_with(roots.temp_base.join("blobs")),
                     "put keeps the cache path"
                 );
             }
@@ -718,31 +710,49 @@ mod tests {
     }
 
     #[test]
-    fn put_announces_compression_pair_with_bytes() {
+    fn put_announces_finished_blob_with_counts() {
         use confit_model::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&test_roots(dir.path()), sender);
-        let raw = b"announced bytes";
-        match store.put(BlobSource::Bytes(raw)) {
+        match store.put(BlobSource::Bytes(b"announced bytes")) {
             Ok(_) => {}
             Err(error) => panic!("pool stores: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(events.len(), 2, "put fires two facts");
-        assert!(
-            matches!(events[0], Event::CompressStarted { .. }),
-            "compression starts first"
+        assert_eq!(
+            events,
+            vec![Event::BlobCompressed { done: 1, total: 1 }],
+            "put fires one finished fact"
         );
-        match &events[1] {
-            Event::BlobCompressed { done, total, bytes } => {
-                assert_eq!((*done, *total), (1, 1), "single put seals one blob");
-                assert_eq!(*bytes, raw.len() as u64, "finished bytes name raw count");
-            }
-            other => panic!("compression finishes last: {other:?}"),
+    }
+
+    #[test]
+    fn batch_moves_blob_counters_across_puts() {
+        use confit_model::progress::Event;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&test_roots(dir.path()), sender);
+        match store.put(BlobSource::Bytes(b"first bytes")) {
+            Ok(_) => {}
+            Err(error) => panic!("first put stores: {error}"),
         }
+        match store.put(BlobSource::Bytes(b"second bytes")) {
+            Ok(_) => {}
+            Err(error) => panic!("second put stores: {error}"),
+        }
+        let events: Vec<Event> = receiver.try_iter().collect();
+        assert_eq!(
+            events,
+            vec![
+                Event::BlobCompressed { done: 1, total: 1 },
+                Event::BlobCompressed { done: 2, total: 2 },
+            ]
+        );
     }
 
     #[test]

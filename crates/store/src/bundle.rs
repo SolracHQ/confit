@@ -1,5 +1,5 @@
 //! Bundle
-//! Portable bundle archive reads and writes.
+//! Portable bundle archives.
 
 pub mod codec;
 pub mod error;
@@ -22,7 +22,7 @@ pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 /// Bundle blob folder prefix inside the archive.
 pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
-/// Portable bundle archive reads and writes.
+/// Portable bundle archives.
 #[derive(Debug, Clone)]
 pub struct BundleStore {
     pub(crate) archives: Arc<ArchiveStore>,
@@ -31,7 +31,7 @@ pub struct BundleStore {
 }
 
 impl BundleStore {
-    /// Builds a bundle store over shared archive, blob, and resource stores.
+    /// Build a bundle store over shared archive, blob, and resource stores.
     pub fn new(
         archives: Arc<ArchiveStore>,
         blobs: Arc<BlobStore>,
@@ -45,7 +45,7 @@ impl BundleStore {
     }
 }
 
-/// Ensures one bundle destination carries the bundle extension.
+/// Ensure one bundle destination with the bundle extension.
 pub fn ensure_bundle_extension(dest: &Path) -> PathBuf {
     if dest
         .extension()

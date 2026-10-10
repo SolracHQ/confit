@@ -40,7 +40,7 @@ impl super::FsFile for HostFile {
     }
 }
 
-/// Reads whole file bytes for one path.
+/// Read whole file bytes for one path.
 ///
 /// # Errors
 ///
@@ -50,7 +50,7 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
-/// Reads whole file text for one path.
+/// Read whole file text for one path.
 ///
 /// # Errors
 ///
@@ -61,7 +61,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-/// Writes whole file bytes to one path.
+/// Write whole file bytes to one path.
 ///
 /// # Errors
 ///
@@ -71,7 +71,7 @@ pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::write(path, bytes)
 }
 
-/// Builds every missing folder along one path.
+/// Build every missing folder along one path.
 ///
 /// # Errors
 ///
@@ -81,7 +81,7 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)
 }
 
-/// Moves one file onto a new path overwriting any entry.
+/// Move one file onto a new path and overwrite any entry.
 ///
 /// # Errors
 ///
@@ -92,7 +92,7 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::rename(from, to)
 }
 
-/// Copies one file onto a new path overwriting any entry.
+/// Copy one file onto a new path and overwrite any entry.
 ///
 /// # Errors
 ///
@@ -102,7 +102,7 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     std::fs::copy(from, to)
 }
 
-/// Deletes one file.
+/// Delete one file.
 ///
 /// # Errors
 ///
@@ -112,7 +112,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// Reads length and file-type facts for one path.
+/// Read length and file-type facts for one path.
 ///
 /// # Errors
 ///
@@ -126,12 +126,27 @@ pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
     ))
 }
 
-/// Reports whether one path holds any entry.
+/// Report whether one path holds any entry.
 pub fn exists(path: &Path) -> bool {
     path.exists()
 }
 
-/// Lists immediate child paths under one folder sorted by name.
+/// Report whether one path holds a folder.
+pub fn is_dir(path: &Path) -> bool {
+    metadata(path).is_ok_and(|facts| facts.is_dir())
+}
+
+/// Report whether one path holds a plain file.
+pub fn is_file(path: &Path) -> bool {
+    metadata(path).is_ok_and(|facts| facts.is_file())
+}
+
+/// Report whether one path holds a symlink.
+pub fn is_link(path: &Path) -> bool {
+    read_link(path).is_ok()
+}
+
+/// List immediate child paths under one folder sorted by name.
 ///
 /// # Errors
 ///
@@ -147,7 +162,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
-/// Opens one file.
+/// Open one file.
 ///
 /// # Errors
 ///
@@ -157,7 +172,7 @@ pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::File::open(path).map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
 }
 
-/// Reads the last bytes of one file seeking the tail.
+/// Read the last bytes of one file from the tail.
 ///
 /// # Errors
 ///
@@ -181,7 +196,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Creates one file truncating any entry.
+/// Create one file and truncate any entry.
 ///
 /// # Errors
 ///
@@ -191,7 +206,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::File::create(path).map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
 }
 
-/// Opens one file appending.
+/// Open one file in append mode.
 ///
 /// # Errors
 ///
@@ -205,7 +220,7 @@ pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
         .map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
 }
 
-/// Deletes one folder with every entry inside.
+/// Delete one folder with every entry inside.
 ///
 /// # Errors
 ///
@@ -216,7 +231,17 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     std::fs::remove_dir_all(path)
 }
 
-/// Reads one symlink target.
+/// Resolve one path with links through the host.
+///
+/// # Errors
+///
+/// - [NotFound] when the path holds no entry.
+/// - [PermissionDenied] when the path refuses reads.
+pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    std::fs::canonicalize(path)
+}
+
+/// Read one symlink target.
 ///
 /// # Errors
 ///
@@ -227,7 +252,7 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
     std::fs::read_link(path)
 }
 
-/// Creates one symlink replacing any present entry.
+/// Create one symlink and replace any present entry.
 ///
 /// # Errors
 ///
@@ -246,7 +271,7 @@ pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
-/// Sets unix permission bits on one path.
+/// Set unix permission bits on one path.
 ///
 /// # Errors
 ///
@@ -258,7 +283,7 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
 }
 
-/// Reads unix permission bits for one path.
+/// Read unix permission bits for one path.
 ///
 /// # Errors
 ///

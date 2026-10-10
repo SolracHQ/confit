@@ -1,195 +1,120 @@
 //! Apply run
 //! Desired documents to disk writes with prompts.
 
-use std::collections::BTreeSet;
 use std::io::BufRead;
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_model::arg::Arg;
-use confit_model::drift::{Drift, DriftOrder};
-use confit_model::manifest::Manifest;
-use confit_model::routes::Route;
-use confit_runtime::Applier;
-use confit_runtime::Checks;
+use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
 
 use crate::error::{CliError, Result};
 
-use crate::cli::ApplyArgs;
-use crate::hooks::{self, append_hook_log};
+use crate::cli::{ApplyArgs, plan_profile};
 use crate::presentation::drift::drift_lines;
-use crate::presentation::hooks::{describe_condition, evaluate_hooks, resolve_hook};
-use crate::presentation::summary::{Hooks, Summary};
+use crate::presentation::hooks::describe_condition;
+use crate::presentation::summary::render_prepared;
 
-use crate::sinks::{Sinks, log_processed, timed};
+use crate::sinks::Sinks;
 
-use confit_model::progress::Event;
-
-/// Outcome of one successful apply run.
+/// Successful apply run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyReport {
-    /// Counts documents written to disk.
+    /// Count of documents written to disk.
     pub written: usize,
-    /// Counts recorded orphans and dropped tree members removed from disk.
+    /// Count of recorded orphans and dropped tree members removed from disk.
     pub removed: usize,
 }
 
-/// One apply run from desired documents to disk writes.
+/// Apply run from desired documents to disk writes.
 pub struct ApplyRunner<'a> {
-    /// The desired manifest under writing and running.
-    pub manifest: Manifest,
-    /// The previous manifest backing drift and counts.
-    pub previous: Manifest,
-    /// Skips the first prompt. Drift still re-prompts.
+    /// Prepared manifests with drift and changed routes.
+    pub prepared: Prepared,
+    /// First prompt skip with drift re-prompt.
     pub force: bool,
-    /// Gains the confirmation answer, stdin on the host.
+    /// Confirmation answer reader, stdin on the host.
     pub input: &'a mut dyn BufRead,
-    /// The write capabilities for the run.
+    /// Write capabilities for the run.
     pub stores: Stores,
-    /// The destination reads and writes for the run.
-    pub applier: Applier,
-    /// The output senders for the run.
+    /// Output senders for the run.
     pub sinks: Sinks,
-    /// Gains hook output bytes, holding `None` for no log.
-    pub log_file: Option<PathBuf>,
-    /// The check facts, populated at execute start.
-    pub checks: Checks,
-    /// Holds the changed routes, populated at execute start.
-    pub changed: BTreeSet<Route>,
+    /// Hook output folder holding one file per hook.
+    pub hooks_dir: PathBuf,
 }
 
 impl<'a> ApplyRunner<'a> {
-    /// Resolves desired documents from flags with explicit run fields.
+    /// Resolve desired documents from flags with explicit run fields.
     ///
-    /// `@name` reads a named slot, `%N` reads history newest-first from one,
-    /// `.cb` reads a bundle file, and everything else evaluates as a profile.
+    /// `@name` is a named slot, `%N` is history newest-first from one,
+    /// `.cb` is a bundle file, folders evaluate as a project with `-p`
+    /// profile choice, and everything else evaluates as a profile.
     ///
     /// # Errors
     ///
     /// - [`CliError::Slot`] for slot reads.
     /// - [`CliError::Bundle`] for bundle reads.
-    /// - [`CliError::Model`] for manifest builds.
     /// - [`CliError::Engine`] for evaluation failures.
     /// - [`CliError::NoProfile`] for absent profiles.
+    /// - [`CliError::NoDefaultProfile`] for absent defaults.
+    /// - [`CliError::ProfileWithoutProject`] for `-p` with file sources.
     pub fn from_args(
         args: &ApplyArgs,
         input: &'a mut dyn BufRead,
         stores: Stores,
-        applier: Applier,
         sinks: Sinks,
-        log_file: Option<PathBuf>,
+        hooks_dir: PathBuf,
     ) -> Result<Self> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
-        if raw.starts_with('@') || raw.starts_with('%') {
-            let (slot_manifest, _) = stores.slots().resolve(Some(raw))?;
-            return Self::from_slot(
-                slot_manifest,
-                args.force,
-                input,
-                stores,
-                applier,
-                sinks,
-                log_file,
-            );
-        }
-        if positional
+        let desired = if raw.starts_with('@') || raw.starts_with('%') {
+            let (manifest, _) = stores.slots().resolve(Some(raw))?;
+            manifest
+        } else if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
-            sinks.emit_reading_plan(positional);
-            let file_manifest = timed("apply plan load", || stores.bundles().read(positional))?;
-            let previous = stores.slots().load()?;
-            return Ok(Self {
-                manifest: file_manifest,
-                previous,
-                force: args.force,
-                input,
-                stores,
-                applier,
-                sinks,
-                log_file,
-                checks: Checks::default(),
-                changed: BTreeSet::new(),
-            });
-        }
-        if !driver::fs::exists(positional) {
-            return Err(CliError::NoProfile {
-                path: positional.to_path_buf(),
-            });
-        }
-        let evaluation = confit_engine::Engine::new(stores.clone())
-            .evaluate(positional)
-            .map_err(CliError::from)?;
-        let previous = stores.slots().load()?;
-        let manifest = Manifest::build(evaluation.documents, evaluation.hooks)?;
+            stores.bundles().read(positional)?
+        } else if driver::fs::is_dir(positional) {
+            let path = plan_profile(positional, args.profile.as_deref());
+            if args.profile.is_none() && driver::fs::is_missing(&path) {
+                return Err(CliError::NoDefaultProfile {
+                    project: positional.to_path_buf(),
+                });
+            }
+            confit_engine::Engine::new(stores.clone()).evaluate(&path)?
+        } else {
+            if args.profile.is_some() {
+                return Err(CliError::ProfileWithoutProject {
+                    path: positional.to_path_buf(),
+                });
+            }
+            if driver::fs::is_missing(positional) {
+                return Err(CliError::NoProfile {
+                    path: positional.to_path_buf(),
+                });
+            }
+            confit_engine::Engine::new(stores.clone()).evaluate(positional)?
+        };
+        let prepared = confit_runtime::prepare(&stores, desired)?;
         Ok(Self {
-            manifest,
-            previous,
+            prepared,
             force: args.force,
             input,
             stores,
-            applier,
             sinks,
-            log_file,
-            checks: Checks::default(),
-            changed: BTreeSet::new(),
+            hooks_dir,
         })
     }
 
-    /// Builds a slot-backed runner with preview and prompts.
-    fn from_slot(
-        slot_manifest: Manifest,
-        force: bool,
-        input: &'a mut dyn BufRead,
-        stores: Stores,
-        applier: Applier,
-        sinks: Sinks,
-        log_file: Option<PathBuf>,
-    ) -> Result<Self> {
-        let previous = stores.slots().load()?;
-        Ok(Self {
-            manifest: slot_manifest,
-            previous,
-            force,
-            input,
-            stores,
-            applier,
-            sinks,
-            log_file,
-            checks: Checks::default(),
-            changed: BTreeSet::new(),
-        })
-    }
-
-    /// Runs the full apply flow from flags with explicit run fields.
+    /// Apply desired documents with preview, prompts, and rotation.
     ///
-    /// The report carries the write counts.
+    /// Success with the state file and one stored manifest with rotation.
+    /// Report with the write counts.
     ///
-    /// # Errors
-    ///
-    /// Evaluation, prompt, and write failures surface as
-    /// plan or io errors. A non-`yes` answer aborts as a plan error.
-    pub fn run(
-        args: &ApplyArgs,
-        input: &'a mut dyn BufRead,
-        stores: Stores,
-        applier: Applier,
-        sinks: Sinks,
-        log_file: Option<PathBuf>,
-    ) -> Result<ApplyReport> {
-        Self::from_args(args, input, stores, applier, sinks, log_file)?.execute()
-    }
-
-    /// Applies desired documents with preview, prompts, and rotation.
-    ///
-    /// Success writes the state file and one stored manifest with rotation.
-    /// The report carries the write counts.
-    ///
-    /// - Only the literal `yes` proceeds, anything else aborts with nothing
-    ///   written.
-    /// - A fresh snapshot before writing re-prompts on drift.
+    /// - Literal `yes` for progress, anything else for an abort without writes.
+    /// - Fresh snapshot before writing with re-prompt on drift.
     ///
     /// # Errors
     ///
@@ -199,39 +124,14 @@ impl<'a> ApplyRunner<'a> {
     /// - [`CliError::Slot`] for state stores.
     /// - [`CliError::Blob`] for blob resolves with persists and prunes.
     /// - [`CliError::Resolve`] for unresolvable hooks.
-    pub fn execute(mut self) -> Result<ApplyReport> {
-        self.sinks.emit_hashing();
-        let built = std::mem::replace(&mut self.manifest, Manifest::empty());
-        log_processed(&built, &self.previous);
-        let first_run = self.stores.slots().is_first_run();
-        let reference = if first_run { &built } else { &self.previous };
-        let order = if first_run {
-            DriftOrder::DiskFirst
-        } else {
-            DriftOrder::RecordedFirst
-        };
-        let baseline = self.applier.drift(reference, order);
-        self.checks = Checks::current();
-        self.changed = changed_paths(&built, &self.previous, &baseline, first_run);
-        let evaluated = evaluate_hooks(&built, &self.checks, &self.changed)?;
-        let lifecycle = confit_model::hook::diff_lifecycle(&built.hooks, &self.previous.hooks);
-        let report = Summary {
-            built: &built,
-            previous: &self.previous,
-            drift: &baseline,
-            first_run,
-            hooks: Hooks {
-                lifecycle: &lifecycle,
-                evaluated: &evaluated,
-            },
-        };
-        let text = report.render();
-        self.sinks.print_line(text);
+    /// - [`CliError::HookRequires`] for closed Requires gates.
+    pub fn execute(self) -> Result<ApplyReport> {
+        self.sinks.print_line(render_prepared(&self.prepared));
         if !self.force && !self.sinks.confirm(self.input)? {
             return Err(CliError::Aborted);
         }
-        let fresh = self.applier.drift(reference, order);
-        if fresh != baseline {
+        let fresh = confit_runtime::refresh(&self.stores, &self.prepared);
+        if fresh != self.prepared.drifts {
             for line in drift_lines(&fresh) {
                 self.sinks.print_line(line);
             }
@@ -239,18 +139,31 @@ impl<'a> ApplyRunner<'a> {
                 return Err(CliError::Aborted);
             }
         }
-        let written = self
-            .applier
-            .write_documents(&built.documents, &self.changed)?;
-        let removed = self
-            .applier
-            .remove_orphans(&self.previous.documents, &built.documents)?;
-        let removed = removed
-            + self
-                .applier
-                .remove_tree_members(&self.previous.documents, &built.documents)?;
-        self.sinks.emit_writing_manifest(built.documents.len());
-        let _ = self.stores.slots().store(&built)?;
+        let report = self.commit()?;
+        self.run_hooks()?;
+        Ok(report)
+    }
+
+    /// Write built documents with orphan removal and blob rotation.
+    ///
+    /// # Errors
+    ///
+    /// - [`CliError::Runtime`] for destination writes and removals.
+    /// - [`CliError::Slot`] for state stores.
+    /// - [`CliError::Blob`] for blob resolves with persists and prunes.
+    fn commit(&self) -> Result<ApplyReport> {
+        let built = &self.prepared.desired;
+        let previous = &self.prepared.previous;
+        let changed = &self.prepared.changed;
+        let writer = Writer {
+            stores: self.stores.clone(),
+            progress: self.sinks.progress.clone(),
+        };
+        let written = writer.write_documents(&built.documents, changed)?;
+        let removed = writer.remove_orphans(&previous.documents, &built.documents)?;
+        let removed =
+            removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
+        let _ = self.stores.slots().store(built)?;
         let mut handles = Vec::new();
         for document in &built.documents {
             for blob in document.data.blob_refs() {
@@ -259,168 +172,100 @@ impl<'a> ApplyRunner<'a> {
         }
         self.stores.blobs().persist(&handles)?;
         self.stores.blobs().prune()?;
-        self.run_hooks(&built)?;
         Ok(ApplyReport { written, removed })
     }
 
-    /// Runs built hooks after files, state, and history land.
+    /// Run built hooks after files, state, and history land.
     ///
-    /// - Closed gates skip with a line, passing checks skip silently.
+    /// - Closed Requires gates abort the run.
+    /// - Closed When gates and passing checks stay silent.
     /// - Failures abort the rest.
-    fn run_hooks(&mut self, built: &Manifest) -> Result<()> {
-        let total = built.hooks.len();
-        for (index, hook) in built.hooks.iter().enumerate() {
+    fn run_hooks(&self) -> Result<()> {
+        let runner = HookRunner {
+            progress: self.sinks.progress.clone(),
+        };
+        let prepared = &self.prepared;
+        let decided = runner.decide_all(&prepared.desired.hooks, &prepared.changed)?;
+        let total = prepared.desired.hooks.len();
+        for (index, hook) in prepared.desired.hooks.iter().enumerate() {
             let position = index + 1;
-            if let Some(line) = self.gate_line(hook) {
-                self.sinks.print_line(line);
-                continue;
+            match &decided.decisions[index] {
+                HookDecision::RequiresClosed(gate) => {
+                    return Err(CliError::HookRequires {
+                        argv: Arg::join(&hook.argv),
+                        condition: describe_condition(gate),
+                    });
+                }
+                HookDecision::WhenClosed(_) | HookDecision::ChecksPass => {}
+                HookDecision::Run(binary) => {
+                    let line = format!("hook {position} of {total}: {}", Arg::join(&hook.argv));
+                    self.sinks.print_line(line.clone());
+                    let spawned = runner.spawn(hook, binary, position, total)?;
+                    let file_name = hook_file_name(&spawned.argv);
+                    write_hook_log(&self.hooks_dir, &file_name, &line, &spawned.output)?;
+                    log::info!(
+                        "{line} output in {}",
+                        self.hooks_dir.join(&file_name).display()
+                    );
+                    runner.confirm(&spawned)?;
+                    runner.verify(hook, &decided.checks, &prepared.changed, &spawned.argv)?;
+                }
             }
-            if !hook.checks.is_empty()
-                && hook
-                    .checks
-                    .iter()
-                    .all(|check| self.checks.check(check, &self.changed))
-            {
-                let line = format!("skipped: {} (checks pass)", Arg::join(&hook.argv));
-                self.sinks.print_line(line);
-                continue;
-            }
-            self.spawn_hook(hook, position, total)?;
         }
         Ok(())
-    }
-
-    /// # Errors
-    ///
-    /// - [`CliError::Resolve`] for unresolvable binaries.
-    /// - [`CliError::HookFailed`] for nonzero codes.
-    /// - [`CliError::HookChecks`] for unmet post-checks.
-    fn spawn_hook(
-        &mut self,
-        hook: &confit_model::hook::Hook,
-        position: usize,
-        total: usize,
-    ) -> Result<()> {
-        let argv_text = Arg::join(&hook.argv);
-        let binary = resolve_hook(hook, &self.checks).ok_or_else(|| {
-            let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-            CliError::Resolve {
-                argv: argv_text.clone(),
-                head,
-            }
-        })?;
-        let mut spawn: Vec<String> = vec![binary.display().to_string()];
-        for slot in hook.argv.iter().skip(1) {
-            spawn.push(slot.materialize().to_string_lossy().into_owned());
-        }
-        let line = format!("hook {position} of {total}: {argv_text}");
-        self.sinks.print_line(line.clone());
-        let _ = self.sinks.progress.send(Event::HookRunning {
-            position,
-            total,
-            argv: argv_text.clone(),
-        });
-        let mut path_dirs: Vec<std::path::PathBuf> = Vec::with_capacity(hook.path.len());
-        for slot in &hook.path {
-            path_dirs.push(slot.materialize());
-        }
-        let outcome = hooks::run(&spawn, &path_dirs, hook.timeout_secs)?;
-        if let Some(log) = self.log_file.clone() {
-            append_hook_log(&log, &line, &outcome.output)?;
-        }
-        if outcome.code != 0 {
-            return Err(CliError::HookFailed {
-                argv: argv_text.clone(),
-                code: outcome.code,
-            });
-        }
-        self.verify_post_checks(hook)?;
-        log::debug!("hook {position} of {total} ran code={}", outcome.code);
-        Ok(())
-    }
-
-    /// Renders the skip line for the first closed gate, else none.
-    fn gate_line(&self, hook: &confit_model::hook::Hook) -> Option<String> {
-        let argv_text = Arg::join(&hook.argv);
-        if let Some(gate) = hook.requires.as_ref()
-            && !self.checks.check(gate, &self.changed)
-        {
-            return Some(format!(
-                "warn: {argv_text} cannot run ({})",
-                describe_condition(gate)
-            ));
-        }
-        if let Some(gate) = hook.when.as_ref()
-            && !self.checks.check(gate, &self.changed)
-        {
-            return Some(format!(
-                "skipped: {argv_text} (no need: {})",
-                describe_condition(gate)
-            ));
-        }
-        None
-    }
-
-    /// Fails naming post-checks one run leaves unmet.
-    ///
-    /// # Errors
-    ///
-    /// - [`CliError::HookChecks`] for unmet post-checks.
-    fn verify_post_checks(&self, hook: &confit_model::hook::Hook) -> Result<()> {
-        if hook.checks.is_empty() {
-            return Ok(());
-        }
-        let argv_text = Arg::join(&hook.argv);
-        let failed: Vec<String> = hook
-            .checks
-            .iter()
-            .filter(|check| !self.checks.check(check, &self.changed))
-            .map(describe_condition)
-            .collect();
-        if failed.is_empty() {
-            return Ok(());
-        }
-        Err(CliError::HookChecks {
-            argv: argv_text,
-            failed: failed.join(", "),
-        })
     }
 }
 
-/// Computes the changed destination routes for one apply run.
+/// Build one hook log file name from its slug and hash.
 ///
-/// - First runs hold every desired route.
-/// - Steady runs hold plan changes and drifted destinations.
-fn changed_paths(
-    built: &Manifest,
-    previous: &Manifest,
-    drifts: &[Drift],
-    first_run: bool,
-) -> BTreeSet<Route> {
-    use confit_model::document::DocumentStatus;
+/// - Slugs hold lowercase alphanumeric runs joined with dashes.
+/// - Hashes disambiguate hooks sharing one slug.
+fn hook_file_name(argv: &str) -> String {
+    let mut slug = argv
+        .split(|cell: char| !cell.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        slug = "hook".to_owned();
+    }
+    if slug.len() > 40 {
+        slug.truncate(40);
+    }
+    let hash = confit_model::sha::Sha::hash(argv.as_bytes()).short();
+    format!("{slug}-{hash}.log")
+}
 
-    if first_run {
-        return built
-            .documents
-            .iter()
-            .map(|document| document.destination.clone())
-            .collect();
+/// Write one hook header and captured bytes into its own log file.
+///
+/// - Missing parent folders start fresh.
+///
+/// # Errors
+///
+/// - [`CliError::Write`] with [`CliError::WriteUnknown`]
+///   for failed log writes.
+fn write_hook_log(
+    hooks_dir: &std::path::Path,
+    file_name: &str,
+    header: &str,
+    output: &[u8],
+) -> Result<()> {
+    let log = hooks_dir.join(file_name);
+    driver::fs::create_dir_all(hooks_dir).map_err(|error| CliError::from_write_io(&log, error))?;
+    let mut sink =
+        driver::fs::create(&log).map_err(|error| CliError::from_write_io(&log, error))?;
+    sink.write_all(header.as_bytes())
+        .map_err(|error| CliError::from_write_io(&log, error))?;
+    sink.write_all(b"\n")
+        .map_err(|error| CliError::from_write_io(&log, error))?;
+    sink.write_all(output)
+        .map_err(|error| CliError::from_write_io(&log, error))?;
+    if !output.ends_with(b"\n") {
+        sink.write_all(b"\n")
+            .map_err(|error| CliError::from_write_io(&log, error))?;
     }
-    let mut out = BTreeSet::new();
-    for document in &built.documents {
-        if !matches!(document.status(previous), DocumentStatus::Unchanged) {
-            out.insert(document.destination.clone());
-        }
-    }
-    for document in &built.documents {
-        let prefix = format!("{}/", document.destination.display());
-        for drift in drifts {
-            let path = drift.path().display();
-            if path == document.destination.display() || path.starts_with(&prefix) {
-                out.insert(document.destination.clone());
-                break;
-            }
-        }
-    }
-    out
+    sink.sync()
+        .map_err(|error| CliError::from_write_io(&log, error))?;
+    Ok(())
 }

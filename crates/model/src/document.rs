@@ -34,7 +34,7 @@ pub enum StructuredFormat {
 }
 
 impl StructuredFormat {
-    /// Reads the lowercase format name.
+    /// Return the lowercase format name.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -43,7 +43,7 @@ impl StructuredFormat {
         }
     }
 
-    /// Parses a format name in any letter case.
+    /// Parse a format name in any letter case.
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "json" => Some(Self::Json),
@@ -79,7 +79,7 @@ pub enum DocumentKind {
 }
 
 impl DocumentKind {
-    /// Reads the lowercase kind name.
+    /// Return the lowercase kind name.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Structured => "structured",
@@ -101,24 +101,24 @@ impl std::fmt::Display for DocumentKind {
 /// Content-addressed bytes ref for manifests.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlobRef {
-    /// The content hash naming payload bytes.
+    /// Content hash for payload bytes.
     pub sha256: Sha,
-    /// The pool-bytes hash naming gzip bytes.
+    /// Pool-bytes hash for gzip bytes.
     pub stored: Sha,
 }
 
 impl BlobRef {
-    /// Builds one blob ref from sealed content and stored hashes.
+    /// Build one blob ref from sealed content and stored hashes.
     pub fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
 
-    /// Reads the content hash.
+    /// Return the content hash.
     pub fn sha(&self) -> &Sha {
         &self.sha256
     }
 
-    /// Reads the pool-bytes hash.
+    /// Return the pool-bytes hash.
     pub fn stored(&self) -> &Sha {
         &self.stored
     }
@@ -132,21 +132,21 @@ pub enum Data {
     Structured {
         /// The serialization format.
         format: StructuredFormat,
-        /// Holds the structured data table.
+        /// Payload for rendering.
         data: Table,
     },
     /// Plain text content.
     Text {
         /// The exact file text.
         content: String,
-        /// Unix permission bits. None applies the umask default.
+        /// Unix permission bits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
-        /// True while presence alone satisfies the document.
+        /// Presence-only satisfaction flag.
         #[serde(default)]
         unmanaged: bool,
     },
-    /// Describes a symlink placement.
+    /// Symlink placement.
     Link {
         /// The link target.
         target: String,
@@ -157,24 +157,24 @@ pub enum Data {
     Opaque {
         /// The content-addressed file bytes identity.
         blob: BlobRef,
-        /// The raw byte count of the file content.
+        /// Raw byte count of the file content.
         size: u64,
-        /// Unix permission bits. None applies the umask default.
+        /// Unix permission bits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<u32>,
-        /// True while presence alone satisfies the document.
+        /// Presence-only satisfaction flag.
         #[serde(default)]
         unmanaged: bool,
     },
     /// One managed file set under a destination folder.
     Tree {
-        /// Holds members in destination-relative order.
+        /// Tree members in build order.
         members: Vec<ManifestMember>,
     },
 }
 
 impl Data {
-    /// Reads the kind label for this payload.
+    /// Return the kind label for this payload.
     pub fn kind(&self) -> DocumentKind {
         match self {
             Self::Structured { .. } => DocumentKind::Structured,
@@ -186,7 +186,7 @@ impl Data {
         }
     }
 
-    /// Reads the unix permission bits for this payload.
+    /// Return the unix permission bits for this payload.
     pub fn mode(&self) -> Option<u32> {
         match self {
             Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
@@ -194,7 +194,7 @@ impl Data {
         }
     }
 
-    /// Reads the unmanaged flag for this payload.
+    /// Return the unmanaged flag for this payload.
     pub fn unmanaged(&self) -> bool {
         match self {
             Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
@@ -202,7 +202,7 @@ impl Data {
         }
     }
 
-    /// Reads the tree members for this payload.
+    /// Return the tree members for this payload.
     pub fn tree_members(&self) -> Option<&[ManifestMember]> {
         match self {
             Self::Tree { members } => Some(members),
@@ -210,7 +210,7 @@ impl Data {
         }
     }
 
-    /// Collects every blob ref in document order.
+    /// Collect every blob ref in document order.
     pub fn blob_refs(&self) -> Vec<&BlobRef> {
         match self {
             Self::Opaque { blob, .. } => vec![blob],
@@ -222,7 +222,7 @@ impl Data {
     }
 }
 
-/// One persisted document holding metadata and handles.
+/// One persisted document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
@@ -246,7 +246,7 @@ pub enum DocumentStatus {
 }
 
 impl Document {
-    /// Builds a document with an empty data hash.
+    /// Build a document with an empty data hash.
     pub fn new(destination: Route, data: Data) -> Self {
         Self {
             destination,
@@ -255,29 +255,29 @@ impl Document {
         }
     }
 
-    /// Reads the kind label for this document.
+    /// Return the kind label for this document.
     pub fn kind(&self) -> DocumentKind {
         self.data.kind()
     }
 
-    /// Reads the unix permission bits for this document.
+    /// Return the unix permission bits for this document.
     pub fn mode(&self) -> Option<u32> {
         self.data.mode()
     }
 
-    /// Builds one kind with display key.
+    /// Build one kind with display key.
     pub fn key(&self) -> String {
         format!("{}:{}", self.data.kind().name(), self.destination.display())
     }
 
-    /// Reports whether the document carries opaque bytes.
+    /// Report whether the document carries opaque bytes.
     pub fn is_opaque(&self) -> bool {
         matches!(self.kind(), DocumentKind::Opaque)
     }
 }
 
 impl Document {
-    /// Reports the lifecycle status against a previous manifest.
+    /// Report the lifecycle status against a previous manifest.
     pub fn status(&self, previous: &Manifest) -> DocumentStatus {
         let recorded = previous
             .documents
@@ -304,7 +304,7 @@ impl Document {
         }
     }
 
-    /// Fills the data hash by rendering the document.
+    /// Fill the data hash by rendering the document.
     ///
     /// - The hash covers rendered bytes only.
     /// - Opaque hashes copy the blob ref.
@@ -331,9 +331,9 @@ impl Document {
         }
     }
 
-    /// Reports whether a recorded document yields to desired documents.
+    /// Report whether a recorded document yields to desired documents.
     ///
-    /// True while an opaque same-destination sibling exists in desired.
+    /// The flag is true while an opaque same-destination sibling exists in desired.
     pub fn superseded_by(&self, desired: &[Document]) -> bool {
         desired.iter().any(|document| {
             document.destination == self.destination
@@ -343,7 +343,7 @@ impl Document {
     }
 }
 
-/// Renders mode bits as octal digits.
+/// Render mode bits as octal digits.
 pub fn render_mode(mode: u32) -> String {
     format!("{mode:o}")
 }

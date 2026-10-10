@@ -6,16 +6,16 @@ use std::io;
 /// HTTP failure shapes.
 #[derive(Debug)]
 pub enum HttpError {
-    /// Refused status holding the status code.
+    /// Refused status.
     Status {
-        /// The refusing status code.
+        /// The refused status code.
         code: u16,
     },
-    /// Timed-out request holding nothing.
+    /// Timed-out request.
     Timeout,
-    /// Transport failure holding the cause.
+    /// Transport failure.
     Io(io::Error),
-    /// Unscripted test url holding nothing.
+    /// Unscripted test url.
     Unscripted,
 }
 
@@ -45,7 +45,7 @@ impl From<io::Error> for HttpError {
     }
 }
 
-/// Downloads one URL body as a readable stream.
+/// Download one URL body as a readable stream with the total length.
 ///
 /// # Errors
 ///
@@ -53,7 +53,7 @@ impl From<io::Error> for HttpError {
 /// - [Timeout] for timeouts.
 /// - [Io] for transport read failures.
 /// - [Unscripted] for unscripted test urls.
-pub fn download(url: &str, limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
+pub fn download(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
     #[cfg(any(test, feature = "test-support"))]
     {
         registry::download(url, limit)
@@ -64,7 +64,7 @@ pub fn download(url: &str, limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
     }
 }
 
-/// Downloads one URL body over the network.
+/// Download one URL body over the network.
 ///
 /// # Errors
 ///
@@ -72,19 +72,20 @@ pub fn download(url: &str, limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
 /// - [Timeout] for timeouts.
 /// - [Io] for transport read failures.
 #[cfg(not(any(test, feature = "test-support")))]
-fn network(url: &str, limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
+fn network(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
     let response = ureq::get(url).call().map_err(from_ureq)?;
+    let total = response.body().content_length();
     let reader = response
         .into_body()
         .into_with_config()
         .limit(limit)
         .reader();
-    Ok(Box::new(reader))
+    Ok((Box::new(reader), total))
 }
 
-/// Maps one ureq failure into its http error.
+/// Map one ureq failure into its http error.
 ///
-/// Status, timeout, and io keep their shape, other failures read as io with
+/// Status, timeout, and io keep their shape, other failures are io with
 /// the ureq message.
 #[cfg(not(any(test, feature = "test-support")))]
 fn from_ureq(error: ureq::Error) -> HttpError {
@@ -123,7 +124,7 @@ mod registry {
         });
     }
 
-    /// Scripts one URL body for later downloads.
+    /// Script one URL body for later downloads.
     pub fn serve(url: &str, body: &[u8]) {
         SCRIPTS.with(|cell| {
             cell.borrow_mut()
@@ -132,7 +133,7 @@ mod registry {
         });
     }
 
-    /// Scripts one URL failure for later downloads.
+    /// Script one URL failure for later downloads.
     pub fn fail(url: &str, message: &str) {
         SCRIPTS.with(|cell| {
             cell.borrow_mut()
@@ -141,12 +142,12 @@ mod registry {
         });
     }
 
-    /// Reads download counts for one URL.
+    /// Return download counts for one URL.
     pub fn calls(url: &str) -> usize {
         SCRIPTS.with(|cell| cell.borrow().calls.get(url).copied().unwrap_or(0))
     }
 
-    /// Clears every scripted body, failure, and count.
+    /// Clear every scripted body, failure, and count.
     pub fn clear() {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();
@@ -156,12 +157,15 @@ mod registry {
         });
     }
 
-    /// Serves one scripted download recording the call.
+    /// Serve one scripted download with the scripted body length.
     ///
-    /// Scripted failures read as io with the scripted message.
+    /// Scripted failures are io with the scripted message.
     ///
     /// - Unscripted urls fail with no body.
-    pub(super) fn download(url: &str, _limit: u64) -> Result<Box<dyn io::Read>, HttpError> {
+    pub(super) fn download(
+        url: &str,
+        _limit: u64,
+    ) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();
             let count = scripts.calls.get(url).copied().unwrap_or(0);
@@ -170,7 +174,13 @@ mod registry {
                 return Err(HttpError::Io(io::Error::other(message)));
             }
             match scripts.bodies.get(url).cloned() {
-                Some(body) => Ok(Box::new(std::io::Cursor::new(body)) as Box<dyn io::Read>),
+                Some(body) => {
+                    let total = u64::try_from(body.len()).unwrap_or(u64::MAX);
+                    Ok((
+                        Box::new(std::io::Cursor::new(body)) as Box<dyn io::Read>,
+                        Some(total),
+                    ))
+                }
                 None => Err(HttpError::Unscripted),
             }
         })

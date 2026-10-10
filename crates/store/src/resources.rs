@@ -1,5 +1,5 @@
 //! Resources
-//! Trusted-source birth and text reads.
+//! Trusted sources and text.
 
 pub mod error;
 
@@ -8,7 +8,7 @@ use std::path::{Component, Path};
 use confit_model::sha::Sha;
 
 use crate::StoreRoots;
-use crate::handles::{FetchHandle, ResourceHandle, TrustedHandle};
+use crate::handles::ResourceHandle;
 use confit_driver as driver;
 use error::{ResourceError, Result};
 
@@ -18,19 +18,19 @@ const DEFAULT_SPILL_MODE: u32 = 0o644;
 /// Trusted project files.
 #[derive(Debug, Clone)]
 pub struct Resources {
-    /// The store roots backing construction.
+    /// The store roots for construction.
     pub roots: StoreRoots,
 }
 
 impl Resources {
-    /// Builds file-backed resources under explicit roots.
+    /// Build file-backed resources under explicit roots.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
             roots: roots.clone(),
         }
     }
 
-    /// Births a resource handle for one project file.
+    /// Birth a resource handle for one project file.
     ///
     /// # Errors
     ///
@@ -53,7 +53,7 @@ impl Resources {
         ResourceHandle::new(exec_root, path.to_path_buf(), sha)
     }
 
-    /// Reads one trusted file as text.
+    /// Read one trusted file as text.
     ///
     /// # Errors
     ///
@@ -62,26 +62,7 @@ impl Resources {
         read_text(handle.canonical())
     }
 
-    /// Births a resource handle over one fetched body.
-    ///
-    /// # Errors
-    ///
-    /// - [`ResourceError::Escape`] for bodies outside the cache base.
-    pub fn fetched(&self, handle: &FetchHandle) -> Result<ResourceHandle> {
-        let path = handle.canonical();
-        if !path.starts_with(&self.roots.cache_base) {
-            return Err(ResourceError::Escape {
-                path: path.to_path_buf(),
-            });
-        }
-        ResourceHandle::new(
-            &self.roots.cache_base,
-            path.to_path_buf(),
-            handle.sha().clone(),
-        )
-    }
-
-    /// Births a spill handle for one staged file.
+    /// Birth a spill handle for one staged file.
     ///
     /// # Errors
     ///
@@ -109,33 +90,31 @@ impl Resources {
         ResourceHandle::new(dir, joined.clone(), sha)
     }
 
-    /// Streams one handle for reading.
+    /// Stream one handle for reading.
     ///
     /// # Errors
     ///
     /// - [`ResourceError::Read`] for failed file reads.
-    pub fn open(&self, handle: &ResourceHandle) -> Result<Box<dyn std::io::Read>> {
+    pub fn open(&self, handle: &ResourceHandle) -> Result<Box<dyn driver::fs::FsFile>> {
         let path = handle.canonical();
-        driver::fs::open(path)
-            .map(|file| file as Box<dyn std::io::Read>)
-            .map_err(|error| ResourceError::from_io(path, error))
+        driver::fs::open(path).map_err(|error| ResourceError::from_io(path, error))
     }
 
-    /// Reads permission bits for one handle.
+    /// Read permission bits for one handle.
     ///
     /// # Errors
     ///
     /// - [`ResourceError::Read`] for failed file reads.
     pub fn mode(&self, handle: &ResourceHandle) -> Result<u32> {
         let path = handle.canonical();
-        if driver::fs::read_link(path).is_ok() {
+        if driver::fs::is_link(path) {
             return Ok(DEFAULT_SPILL_MODE);
         }
         driver::fs::mode(path).map_err(|error| ResourceError::from_io(path, error))
     }
 }
 
-/// Reads one file as text.
+/// Read one file as text.
 ///
 /// # Errors
 ///
@@ -199,7 +178,7 @@ mod tests {
         match store.resource(&outside) {
             Ok(_) => panic!("escaping resource passes"),
             Err(ResourceError::Escape { path }) => {
-                assert_eq!(path, outside, "escape names the path")
+                assert_eq!(path, outside, "escape shows the path")
             }
             Err(error) => panic!("wrong escape variant: {error}"),
         }
@@ -228,7 +207,7 @@ mod tests {
                 let text = error.to_string();
                 assert!(
                     text.contains(&missing.display().to_string()),
-                    "absent names the path: {text}"
+                    "absent shows the path: {text}"
                 );
                 assert!(text.contains("missing file"), "absent reports loss: {text}");
             }
@@ -326,7 +305,7 @@ mod tests {
         match store.open(&handle) {
             Ok(_) => panic!("absent spill passes"),
             Err(ResourceError::Read { path, fault }) => {
-                assert!(path.ends_with("absent.txt"), "absent names file");
+                assert!(path.ends_with("absent.txt"), "absent shows the file");
                 assert!(
                     matches!(fault, AccessFault::Missing),
                     "absent keeps the fault: {fault}"

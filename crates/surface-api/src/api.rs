@@ -15,7 +15,7 @@ use crate::config::{decode_config, decode_documents};
 use crate::document::Document;
 use crate::error::{ApiError, Result};
 
-/// Builds one builtin module value.
+/// Build one builtin module value.
 ///
 /// # Errors
 ///
@@ -41,7 +41,7 @@ pub fn builtin(lua: &Lua, name: &str) -> mlua::Result<Value> {
     }
 }
 
-/// One profile holding shells with configs and documents.
+/// One profile.
 #[derive(Debug, Clone, Default)]
 pub struct Profile {
     /// Shell names in profile order.
@@ -53,7 +53,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Builds one profile from shells with configs and documents.
+    /// Build one profile from shells with configs and documents.
     pub fn new(
         shells: Vec<String>,
         configs: Vec<Config>,
@@ -66,24 +66,24 @@ impl Profile {
         }
     }
 
-    /// Reads the shell names in profile order.
+    /// Return the shell names in profile order.
     pub fn shells(&self) -> &[String] {
         &self.shells
     }
 
-    /// Reads the configs in profile order.
+    /// Return the configs in profile order.
     pub fn configs(&self) -> &[Config] {
         &self.configs
     }
 
-    /// Reads the documents keyed by destination route.
+    /// Return the documents keyed by destination route.
     pub fn documents(&self) -> &HashMap<Route, Document> {
         &self.documents
     }
 
-    /// Decodes one profile table into shells with configs and documents.
+    /// Decode one profile table into shells with configs and documents.
     ///
-    /// - Missing sections read empty.
+    /// - Missing sections are empty.
     ///
     /// # Errors
     ///
@@ -139,7 +139,7 @@ impl Profile {
     }
 }
 
-/// Decodes one profile section table.
+/// Decode one profile section table.
 ///
 /// # Errors
 ///
@@ -155,7 +155,7 @@ fn section_table(item: &Value, field: &str) -> Result<Table> {
     }
 }
 
-/// Decodes one shells list into names in order.
+/// Decode one shells list into names in order.
 ///
 /// # Errors
 ///
@@ -182,7 +182,7 @@ fn decode_shells(table: Option<Table>) -> Result<Vec<String>> {
     Ok(shells)
 }
 
-/// Decodes one configs list into configs in order.
+/// Decode one configs list into configs in order.
 ///
 /// # Errors
 ///
@@ -204,7 +204,7 @@ fn mismatch_return(value: &Value) -> ApiError {
     ApiError::mismatch("profile", "a profile table", received(value))
 }
 
-/// Runs one closure against the shared stores.
+/// Run one closure against the shared stores.
 ///
 /// # Errors
 ///
@@ -259,7 +259,6 @@ mod tests {
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
-                cache_base: dir.join("cache"),
                 temp_base: dir.join("temp"),
                 project_root: dir.to_path_buf(),
             },
@@ -419,7 +418,7 @@ mod tests {
             Ok(_) => panic!("unknown profile key passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("nope"), "names the key: {text}");
+                assert!(text.contains("nope"), "the text shows the key: {text}");
             }
         }
     }
@@ -435,7 +434,7 @@ mod tests {
             Ok(_) => panic!("foreign shell passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("a string"), "names the want: {text}");
+                assert!(text.contains("a string"), "the text shows the want: {text}");
             }
         }
     }
@@ -454,7 +453,10 @@ mod tests {
             Ok(_) => panic!("foreign destination passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("a route table"), "names the want: {text}");
+                assert!(
+                    text.contains("a route table"),
+                    "the text shows the want: {text}"
+                );
             }
         }
     }
@@ -471,7 +473,7 @@ mod tests {
                 Ok(_) => panic!("foreign return passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(want), "names the want: {text}");
+                    assert!(text.contains(want), "the text shows the want: {text}");
                 }
             }
         }
@@ -484,7 +486,10 @@ mod tests {
             Ok(_) => panic!("unknown module passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("unknown module"), "names the miss: {text}");
+                assert!(
+                    text.contains("unknown module"),
+                    "the text shows the miss: {text}"
+                );
             }
         }
     }

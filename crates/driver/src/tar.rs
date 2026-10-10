@@ -5,23 +5,23 @@ use std::io::Read as _;
 
 use super::gzip;
 
-/// Gzip magic heading every deflated stream.
+/// Gzip magic for every deflated stream.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-/// Tar magic offset holding the format tag.
+/// Offset of the format tag.
 const TAR_MAGIC_OFFSET: usize = 257;
 
-/// Tar magic tag naming the format.
+/// Tar magic tag for the format.
 const TAR_MAGIC: &[u8] = b"ustar";
 
-/// One tar block feeding the format probe.
+/// One tar block for the format probe.
 const TAR_BLOCK: u64 = 512;
 
 /// One tar read member.
 pub struct Member<'a> {
     /// Container name with forward slashes.
     pub name: String,
-    /// Reader yielding the member body bytes.
+    /// Reader for the member body bytes.
     pub reader: Box<dyn io::Read + 'a>,
 }
 
@@ -31,22 +31,22 @@ pub struct BuildMember<'a> {
     pub name: String,
     /// Byte count recorded in the header.
     pub len: u64,
-    /// Reader yielding exactly `len` bytes.
+    /// Reader for exactly `len` bytes.
     pub reader: Box<dyn io::Read + 'a>,
     /// Unix permission bits for the entry.
     pub mode: u32,
 }
 
-/// Reports whether one head window holds tar or gzip bytes.
+/// Report whether one head window holds tar or gzip bytes.
 ///
 /// Gzip magic and tar magic return true, short and plain heads return false.
 pub fn handles(head: &[u8]) -> bool {
     is_gzip(head) || is_tar(head)
 }
 
-/// Lists file member names from a tar stream.
+/// List file member names from a tar stream.
 ///
-/// Gzip bytes decode first. One bare member lists under the fallback.
+/// Gzip bytes decode first. Bare members use the fallback.
 ///
 /// - Folders with non-files and empty names skip.
 ///
@@ -69,9 +69,9 @@ pub fn list_names(reader: impl io::Read, fallback: &str) -> io::Result<Vec<Strin
     single_names(fallback)
 }
 
-/// Walks file members from a tar stream.
+/// Walk file members from a tar stream.
 ///
-/// Gzip bytes decode first. One bare member walks under the fallback.
+/// Gzip bytes decode first. Bare members use the fallback.
 ///
 /// - Folders with non-files and empty names skip.
 ///
@@ -98,7 +98,7 @@ pub fn walk(
     single_walk(windowed.stream, fallback, visit)
 }
 
-/// Builds one plain tar.
+/// Build one plain tar.
 ///
 /// # Errors
 ///
@@ -112,7 +112,7 @@ pub fn build_plain(sink: impl io::Write, members: Vec<BuildMember<'_>>) -> io::R
     Ok(())
 }
 
-/// Builds one gzipped tar.
+/// Build one gzipped tar.
 ///
 /// # Errors
 ///
@@ -139,7 +139,7 @@ struct Probed<R> {
     stream: io::Chain<io::Cursor<Vec<u8>>, R>,
 }
 
-/// Sniffs gzip magic off one stream chaining bytes back.
+/// Sniff gzip magic off one stream and chain bytes back.
 ///
 /// - Short reads chain what they hold.
 ///
@@ -161,12 +161,12 @@ fn probe<R: io::Read>(mut reader: R) -> io::Result<Probed<R>> {
     Ok(Probed { gzipped, stream })
 }
 
-/// Reports gzip magic for one head window.
+/// Report whether one head window holds gzip magic.
 fn is_gzip(head: &[u8]) -> bool {
     head.starts_with(&GZIP_MAGIC)
 }
 
-/// Reports tar magic for one head window.
+/// Report whether one head window holds tar magic.
 fn is_tar(head: &[u8]) -> bool {
     head.get(TAR_MAGIC_OFFSET..TAR_MAGIC_OFFSET + TAR_MAGIC.len())
         .is_some_and(|tag| tag == TAR_MAGIC)
@@ -174,13 +174,13 @@ fn is_tar(head: &[u8]) -> bool {
 
 /// One gunzipped window with its decoder remainder.
 ///
-/// Empty windows read tarred.
+/// Empty windows are tarred.
 struct Windowed<R: io::Read> {
     tarred: bool,
     stream: io::Chain<io::Cursor<Vec<u8>>, gzip::Decoder<R>>,
 }
 
-/// Decodes one tar block window chaining bytes back.
+/// Decode one tar block window and chain bytes back.
 ///
 /// - Short reads end the window.
 ///
@@ -198,7 +198,7 @@ fn gunzip_window<R: io::Read>(reader: R) -> io::Result<Windowed<R>> {
     Ok(Windowed { tarred, stream })
 }
 
-/// Lists one nameless single under its fallback.
+/// List one nameless single under its fallback.
 ///
 /// # Errors
 ///
@@ -210,7 +210,7 @@ fn single_names(fallback: &str) -> io::Result<Vec<String>> {
     Ok(vec![fallback.to_owned()])
 }
 
-/// Walks one nameless single under its fallback.
+/// Walk one nameless single under its fallback.
 ///
 /// # Errors
 ///
@@ -231,7 +231,7 @@ fn single_walk<'a, R: io::Read + 'a>(
     visit(member)
 }
 
-/// Lists file member names from a plain tar stream.
+/// List file member names from a plain tar stream.
 ///
 /// - Folders with non-files and empty names skip.
 ///
@@ -253,7 +253,7 @@ fn plain_names(reader: impl io::Read) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// Walks file members from a plain tar stream.
+/// Walk file members from a plain tar stream.
 ///
 /// - Folders with non-files and empty names skip.
 ///
@@ -282,7 +282,7 @@ fn plain_walk(
     Ok(())
 }
 
-/// Collects one file name from a tar entry.
+/// Collect one file name from a tar entry.
 ///
 /// - Folders with non-files and empty names skip as absent.
 ///
@@ -302,7 +302,7 @@ fn file_name<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> io::Result<Option<St
     }
 }
 
-/// Appends one member under its own header.
+/// Append one member under its own header.
 ///
 /// # Errors
 ///

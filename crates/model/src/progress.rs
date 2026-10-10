@@ -12,6 +12,15 @@ pub enum Event {
         /// Remote address under fetching.
         url: String,
     },
+    /// Fetch reports in-flight bytes for one URL.
+    FetchProgress {
+        /// Remote address under fetching.
+        url: String,
+        /// Bytes under writing.
+        bytes_so_far: u64,
+        /// Body length under downloading.
+        total: Option<u64>,
+    },
     /// Fetch served from the sidecar cache.
     FetchCached {
         /// Remote address under fetching.
@@ -26,52 +35,30 @@ pub enum Event {
         /// Fresh body size in bytes.
         bytes: usize,
     },
-    /// Archive unpacked with kept over total members.
+    /// Archive unpacked with total members.
     Unpacked {
         /// Archive path under unpacking.
         archive: String,
-        /// Members kept by the callback.
-        kept: usize,
         /// Members seen in the archive.
         total: usize,
-    },
-    /// Patch callback finished for one target.
-    PatchApplied {
-        /// Contributing config name.
-        owner: String,
-        /// Target document path or rc.
-        target: String,
-        /// Finished patch count including this patch.
-        done: usize,
-        /// Total patches under running.
-        total: usize,
-    },
-    /// Patch run started with a known total.
-    PatchesStarted {
-        /// Patch count under running.
-        patches: usize,
-    },
-    /// Hash phase entered.
-    Hashing,
-    /// Plan file read entered.
-    ReadingPlan {
-        /// Plan file path under reading.
-        path: String,
-    },
-    /// Manifest payload serialization and write entered.
-    WritingManifest {
-        /// Document count under serializing.
-        documents: usize,
     },
     /// One document landed on disk.
     DocumentWritten {
         /// Destination path under writing.
         path: String,
+        /// Finished write count including this document.
+        done: usize,
+        /// Documents under writing.
+        total: usize,
     },
     /// One document left disk.
     DocumentRemoved {
         /// Destination path under removing.
         path: String,
+        /// Finished removal count including this document.
+        done: usize,
+        /// Documents under scanning.
+        total: usize,
     },
     /// One hook started.
     HookRunning {
@@ -82,21 +69,12 @@ pub enum Event {
         /// Hook argv text under running.
         argv: String,
     },
-    /// Compression started with known totals.
-    CompressStarted {
-        /// Blob count under compressing.
-        blobs: usize,
-        /// Total raw bytes under compressing.
-        bytes: u64,
-    },
     /// One blob finished compressing.
     BlobCompressed {
         /// Finished blob count including this blob.
         done: usize,
         /// Total blobs under compressing.
         total: usize,
-        /// Raw bytes finished including this blob.
-        bytes: u64,
     },
     /// Promotion started with a known blob count.
     Promoting {

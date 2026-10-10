@@ -13,7 +13,7 @@ use crate::resources::error::ResourceError;
 /// Bundle failure shapes.
 #[derive(Debug, Error)]
 pub enum BundleError {
-    /// Failed read holding the bundle path with the fault.
+    /// Failed read.
     #[error("bundle '{path}': {fault}", path = path.display())]
     Read {
         /// The bundle path under reading.
@@ -21,21 +21,21 @@ pub enum BundleError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Unsupported version holding the bundle path with the seen version.
-    #[error("bundle version {got} reads unsupported")]
+    /// Unsupported version.
+    #[error("bundle version {got} is unsupported")]
     Version {
         /// The bundle path under reading.
         path: PathBuf,
         /// The seen version.
         got: u64,
     },
-    /// Missing blob holding the content hash.
+    /// Missing blob.
     #[error("missing blob '{sha}'")]
     Missing {
         /// The content hash under reading.
         sha: Sha,
     },
-    /// Failed write holding the bundle path with the fault.
+    /// Failed write.
     #[error("bundle '{path}': {fault}", path = path.display())]
     Write {
         /// The bundle path under writing.
@@ -43,7 +43,7 @@ pub enum BundleError {
         /// The write fault cause.
         fault: AccessFault,
     },
-    /// Failed manifest render holding the bundle path with the model cause.
+    /// Failed manifest render.
     #[error("bundle '{path}': cannot render manifest: {source}", path = path.display())]
     Manifest {
         /// The bundle path under sealing.
@@ -51,7 +51,7 @@ pub enum BundleError {
         /// The model render cause.
         source: ModelError,
     },
-    /// Unknown write failure holding the bundle path with message.
+    /// Unknown write failure.
     #[error("bundle '{path}': {message}", path = path.display())]
     WriteUnknown {
         /// The bundle path under writing.
@@ -62,7 +62,7 @@ pub enum BundleError {
 }
 
 impl BundleError {
-    /// Maps one io failure at the bundle path into domain language.
+    /// Map one io failure at the bundle path into domain language.
     pub fn from_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -78,7 +78,7 @@ impl BundleError {
         }
     }
 
-    /// Maps one seal io failure at the bundle path into domain language.
+    /// Map one seal io failure at the bundle path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -98,7 +98,7 @@ impl BundleError {
 /// Bundle result alias.
 pub type Result<T> = std::result::Result<T, BundleError>;
 
-/// Maps one archive failure at the bundle path into bundle language.
+/// Map one archive failure at the bundle path into bundle language.
 pub(super) fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
     match error {
         ArchiveError::Read { fault, .. } => BundleError::Read {
@@ -122,7 +122,7 @@ pub(super) fn from_archive(bundle: &Path, error: ArchiveError) -> BundleError {
     }
 }
 
-/// Maps one resource failure at the bundle path into bundle language.
+/// Map one resource failure at the bundle path into bundle language.
 pub(super) fn from_resource(bundle: &Path, error: ResourceError) -> BundleError {
     match error {
         ResourceError::Read { fault, .. } => BundleError::Read {

@@ -8,9 +8,6 @@ use super::spill::{BornMember, spill_entry};
 use confit_driver as driver;
 
 /// Seekable zip member listing and extraction.
-///
-/// Central-directory reads serve names, entry streams spill members one at a
-/// time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZipBackend;
 
@@ -25,7 +22,7 @@ impl ArchiveBackend for ZipBackend {
     }
 }
 
-/// Opens one archive source for seekable reading.
+/// Open one archive source for seekable reading.
 ///
 /// # Errors
 ///
@@ -35,7 +32,7 @@ fn open_source(source: &Path) -> Result<Box<dyn driver::fs::FsFile>> {
     reader.map_err(|error| ArchiveError::from_io(source, error))
 }
 
-/// Maps one zip failure into its archive error.
+/// Map one zip failure into its archive error.
 fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
     match error {
         driver::zip::ZipError::FileNotFound | driver::zip::ZipError::InvalidArchive(_) => {
@@ -71,14 +68,14 @@ fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
     }
 }
 
-/// Builds one raw read failure at the source path.
+/// Build one raw read failure at the source path.
 fn read_unknown(source: &Path, message: String) -> ArchiveError {
     ArchiveError::Read {
         path: source.to_path_buf(),
         fault: crate::faults::AccessFault::Unknown { message },
     }
 }
-/// Unpacks zip entries with per-entry streaming hashes.
+/// Unpack zip entries with per-entry streaming hashes.
 ///
 /// # Errors
 ///

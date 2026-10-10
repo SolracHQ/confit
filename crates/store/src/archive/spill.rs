@@ -1,4 +1,4 @@
-//! Member spilling with hashes and containment.
+//! Member spill with hashes and containment.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,7 @@ pub(crate) struct BornMember {
     pub(crate) sha: Sha,
 }
 
-/// Maps one stream failure into its archive error.
+/// Map one stream failure into its archive error.
 pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
     match error.kind() {
         std::io::ErrorKind::StorageFull
@@ -31,7 +31,7 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
     }
 }
 
-/// Spills one decoded member stream under staging with a hash.
+/// Spill one decoded member stream under staging with a hash.
 ///
 /// - Parents arrive created.
 ///
@@ -49,9 +49,7 @@ pub(crate) fn spill_entry(
 ) -> Result<BornMember> {
     check_member_path(name, source)?;
     let path = staging.join(name);
-    if let Some(parent) = path.parent()
-        && let Err(error) = driver::fs::create_dir_all(parent)
-    {
+    if let Err(error) = driver::fs::create_parent(&path) {
         let _ = driver::fs::remove_dir_all(staging);
         return Err(ArchiveError::from_write_io(source, error));
     }
@@ -73,7 +71,7 @@ pub(crate) fn spill_entry(
     })
 }
 
-/// Rejects escaping member names before one unpack.
+/// Reject escaping member names before one unpack.
 ///
 /// - Decoder failures pass through untouched.
 ///
@@ -90,7 +88,7 @@ pub(crate) fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -
     Ok(())
 }
 
-/// Rejects member paths escaping the unpack folder.
+/// Reject member paths escaping the unpack folder.
 ///
 /// # Errors
 ///

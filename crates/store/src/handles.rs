@@ -7,53 +7,23 @@ use confit_model::document::BlobRef;
 use confit_model::sha::Sha;
 
 use crate::archive::error::ArchiveError;
-use crate::fetch::error::FetchError;
 use crate::resources::error::ResourceError;
 
-/// Canonical identity for a trusted source.
-pub trait TrustedHandle {
-    /// Reads the canonical source path.
-    fn canonical(&self) -> &Path;
-
-    /// Reads the content hash.
-    fn sha(&self) -> &Sha;
-}
-
-/// Fetched artifact identity.
-///
-/// Cache file path, content hash, and origin url. The path holds a non-empty
-/// shape the fetcher proves bytes. The hash holds 64 hex characters.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FetchHandle {
-    cache_path: PathBuf,
-    sha256: Sha,
-    origin: String,
-}
-
-/// Exec-rooted project file identity.
-///
-/// Rooted path and content hash. The path holds containment under the exec
-/// root. The hash holds 64 hex characters.
+/// Handle to a project resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceHandle {
     path: PathBuf,
     sha256: Sha,
 }
 
-/// Content-addressed bytes identity.
-///
-/// The content hash names payload bytes the stored hash names pool bytes.
-/// Handles seal both at birth. Both hashes hold 64 hex characters.
+/// Handle to pooled content bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlobHandle {
     sha256: Sha,
     stored: Sha,
 }
 
-/// Verified compressed archive identity.
-///
-/// Trusted source path, source hash, and compression proof. The proof exists
-/// only for sources verified as compressed archives.
+/// Handle to a verified compressed archive.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArchiveHandle {
     source_path: PathBuf,
@@ -70,60 +40,18 @@ pub enum ArchiveProof {
     Compressed,
 }
 
-impl TrustedHandle for FetchHandle {
-    fn canonical(&self) -> &Path {
-        &self.cache_path
-    }
-
-    fn sha(&self) -> &Sha {
-        &self.sha256
-    }
-}
-
-impl FetchHandle {
-    /// Builds a fetch handle from cache identity.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Read`] for empty cache paths.
-    pub(crate) fn new(
-        cache_path: impl Into<PathBuf>,
-        sha256: Sha,
-        origin: impl Into<String>,
-    ) -> crate::fetch::error::Result<Self> {
-        let cache_path = cache_path.into();
-        let origin = origin.into();
-        if cache_path.as_os_str().is_empty() {
-            return Err(FetchError::Read {
-                url: origin,
-                fault: crate::faults::AccessFault::Missing,
-            });
-        }
-        Ok(Self {
-            cache_path,
-            sha256,
-            origin,
-        })
-    }
-
-    /// Reads the origin url.
-    pub fn origin(&self) -> &str {
-        &self.origin
-    }
-}
-
-impl TrustedHandle for ResourceHandle {
-    fn canonical(&self) -> &Path {
+impl ResourceHandle {
+    /// Return the canonical source path.
+    pub fn canonical(&self) -> &Path {
         &self.path
     }
 
-    fn sha(&self) -> &Sha {
+    /// Return the content hash.
+    pub fn sha(&self) -> &Sha {
         &self.sha256
     }
-}
 
-impl ResourceHandle {
-    /// Builds a resource handle from exec-rooted identity.
+    /// Build a resource handle from exec-rooted identity.
     ///
     /// # Errors
     ///
@@ -142,39 +70,39 @@ impl ResourceHandle {
 }
 
 impl BlobHandle {
-    /// Builds a blob handle from sealed content and stored hashes.
+    /// Build a blob handle from sealed content and stored hashes.
     pub(crate) fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
 
-    /// Reads the content hash.
+    /// Return the content hash.
     pub fn sha(&self) -> &Sha {
         &self.sha256
     }
 
-    /// Reads the pool-bytes hash.
+    /// Return the pool-bytes hash.
     pub fn stored(&self) -> &Sha {
         &self.stored
     }
 
-    /// Builds the manifest ref carrying both hashes.
+    /// Build the manifest ref with both hashes.
     pub fn to_ref(&self) -> BlobRef {
         BlobRef::new(self.sha256.clone(), self.stored.clone())
     }
 }
 
-impl TrustedHandle for ArchiveHandle {
-    fn canonical(&self) -> &Path {
+impl ArchiveHandle {
+    /// Return the canonical source path.
+    pub fn canonical(&self) -> &Path {
         &self.source_path
     }
 
-    fn sha(&self) -> &Sha {
+    /// Return the content hash.
+    pub fn sha(&self) -> &Sha {
         &self.source_sha256
     }
-}
 
-impl ArchiveHandle {
-    /// Builds an archive handle from verified source identity.
+    /// Build an archive handle from verified source identity.
     ///
     /// # Errors
     ///
@@ -194,7 +122,7 @@ impl ArchiveHandle {
         })
     }
 
-    /// Reads the compression proof.
+    /// Return the compression proof.
     pub fn proof(&self) -> ArchiveProof {
         self.proof
     }
@@ -207,42 +135,6 @@ mod tests {
 
     fn fixture_sha() -> Sha {
         Sha::hash(b"confit handle fixture")
-    }
-
-    #[test]
-    fn fetch_handle_builds_from_valid_identity() {
-        let handle = FetchHandle::new(
-            "/cache/starship.toml",
-            fixture_sha(),
-            "https://example.com/starship.toml",
-        )
-        .unwrap();
-        assert_eq!(handle.canonical(), Path::new("/cache/starship.toml"));
-        assert_eq!(handle.sha(), &fixture_sha());
-        assert_eq!(handle.origin(), "https://example.com/starship.toml");
-    }
-
-    #[test]
-    fn fetch_handle_rejects_malformed_sha() {
-        for sha in ["abc", &"zz".repeat(32)] {
-            let error = match Sha::new(sha) {
-                Ok(_) => panic!("malformed sha passes"),
-                Err(error) => error,
-            };
-            assert!(matches!(error, Error::Parse { .. }));
-        }
-    }
-
-    #[test]
-    fn fetch_handle_rejects_empty_path() {
-        let error = match FetchHandle::new("", fixture_sha(), "https://example.com/a.toml") {
-            Ok(_) => panic!("empty cache path passes"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            crate::fetch::error::FetchError::Read { .. }
-        ));
     }
 
     #[test]

@@ -6,6 +6,5 @@
 pub mod actions;
 pub mod cli;
 pub mod error;
-pub mod hooks;
 pub mod presentation;
 pub mod sinks;

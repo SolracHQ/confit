@@ -14,11 +14,11 @@ const EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 pub struct Member<'a> {
     /// Container name with forward slashes.
     pub name: String,
-    /// Reader yielding the member body bytes.
+    /// Reader for the member body bytes.
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Reports whether one head window holds zip bytes.
+/// Report whether one head window holds zip bytes.
 ///
 /// Local file magic and empty archive magic return true, short and plain
 /// heads return false.
@@ -26,15 +26,15 @@ pub fn valid(head: &[u8]) -> bool {
     head.starts_with(&LOCAL_MAGIC) || head.starts_with(&EMPTY_MAGIC)
 }
 
-/// Lists file member names from a zip stream.
+/// List file member names from a zip stream.
 ///
 /// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
 /// - Stream reads fail as zip errors.
-/// - [InvalidPassword] when entries read locked.
-/// - [UnsupportedArchive] when features read unknown.
+/// - [InvalidPassword] when entries are locked.
+/// - [UnsupportedArchive] when features are unknown.
 /// - [CompressionMethodNotSupported] when methods refuse.
 /// - [InvalidArchive] with [FileNotFound] when bytes corrupt.
 pub fn list_names(reader: impl io::Read + io::Seek) -> Result<Vec<String>, ZipError> {
@@ -54,15 +54,15 @@ pub fn list_names(reader: impl io::Read + io::Seek) -> Result<Vec<String>, ZipEr
     Ok(names)
 }
 
-/// Walks file members from a zip stream.
+/// Walk file members from a zip stream.
 ///
 /// - Folders with non-files and empty names skip.
 ///
 /// # Errors
 ///
 /// - Stream, entry, and visitor failures fail as zip errors.
-/// - [InvalidPassword] when entries read locked.
-/// - [UnsupportedArchive] when features read unknown.
+/// - [InvalidPassword] when entries are locked.
+/// - [UnsupportedArchive] when features are unknown.
 /// - [CompressionMethodNotSupported] when methods refuse.
 /// - [InvalidArchive] with [FileNotFound] when bytes corrupt.
 pub fn walk(

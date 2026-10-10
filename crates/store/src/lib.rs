@@ -26,17 +26,15 @@ use slot::SlotStore;
 
 /// Base folders for every write-backed capability.
 ///
-/// All four bases travel together from one construction site. Empty paths read
-/// as unset.
+/// All three bases travel together from one construction site. Empty paths are
+/// unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
-    /// Config base holding slots and history.
+    /// Slot and history storage base.
     pub config_base: PathBuf,
-    /// Cache base holding downloads and blobs.
-    pub cache_base: PathBuf,
-    /// Temp base holding spills and staging folders.
+    /// Fetch cache and staging area for transient files.
     pub temp_base: PathBuf,
-    /// Project root jailing trusted file reads.
+    /// Project boundary for trusted files.
     pub project_root: PathBuf,
 }
 
@@ -53,32 +51,28 @@ pub struct Stores {
     fetch: Arc<FetchCache>,
     /// Compressed archive member listing and extraction.
     archives: Arc<ArchiveStore>,
-    /// Portable bundle archive reads and writes.
+    /// Portable bundle archives.
     bundles: Arc<BundleStore>,
     /// Applied state slot with named slots and history.
     slots: Arc<SlotStore>,
 }
 
 impl StoreRoots {
-    /// Standard host roots from environment folders.
+    /// Build standard host roots from environment folders.
     ///
-    /// - Config rides the `dirs` config folder under `confit`, cache rides the
-    ///   `dirs` cache folder under `confit`, temp rides the process temp
-    ///   folder, project root rides the working folder.
+    /// - Config uses the `dirs` config folder under `confit`, temp uses the
+    ///   process temp folder under `confit`, and the project root is the
+    ///   working folder.
     /// - Unset folders fall back to relative `confit` folders, an unavailable
     ///   working folder falls back to `.`.
     pub fn standard() -> Self {
         let config_base = dirs::config_dir()
             .map(|base| base.join("confit"))
             .unwrap_or_else(|| PathBuf::from("confit"));
-        let cache_base = dirs::cache_dir()
-            .map(|base| base.join("confit"))
-            .unwrap_or_else(|| PathBuf::from("confit"));
-        let temp_base = std::env::temp_dir();
+        let temp_base = std::env::temp_dir().join("confit");
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             config_base,
-            cache_base,
             temp_base,
             project_root,
         }
@@ -86,7 +80,7 @@ impl StoreRoots {
 }
 
 impl Stores {
-    /// Stores over file backends.
+    /// Build stores over file backends.
     pub fn new(roots: StoreRoots, progress: ProgressSender) -> Self {
         let resources = Arc::new(Resources::new(&roots));
         let blobs = Arc::new(BlobStore::new(&roots, progress.clone()));
@@ -106,32 +100,32 @@ impl Stores {
         }
     }
 
-    /// Reads trusted project files.
+    /// Return trusted project files.
     pub fn resources(&self) -> Arc<Resources> {
         self.resources.clone()
     }
 
-    /// Reads the content-addressed blob pool.
+    /// Return the content-addressed blob pool.
     pub fn blobs(&self) -> Arc<BlobStore> {
         self.blobs.clone()
     }
 
-    /// Reads the content-addressed fetch cache.
+    /// Return the content-addressed fetch cache.
     pub fn fetch(&self) -> Arc<FetchCache> {
         self.fetch.clone()
     }
 
-    /// Reads the compressed archive store.
+    /// Return the compressed archive store.
     pub fn archives(&self) -> Arc<ArchiveStore> {
         self.archives.clone()
     }
 
-    /// Reads the portable bundle store.
+    /// Return the portable bundle store.
     pub fn bundles(&self) -> Arc<BundleStore> {
         self.bundles.clone()
     }
 
-    /// Reads the applied state slot store.
+    /// Return the applied state slot store.
     pub fn slots(&self) -> Arc<SlotStore> {
         self.slots.clone()
     }

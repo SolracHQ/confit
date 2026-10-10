@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use super::{ProcessError, ProcessOutput};
+use super::{ProcessError, ProcessFault, ProcessOutput};
 
-/// Runs one argv with extended PATH and a timeout killing late runs.
+/// Run one argv with extended PATH and a timeout that kills late runs.
 pub(super) fn spawn(
     argv: &[String],
     path_dirs: &[PathBuf],
@@ -22,7 +22,7 @@ pub(super) fn spawn(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| ProcessError::Spawn {
-            message: error.to_string(),
+            fault: interpret_fault(error),
         })?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -32,7 +32,7 @@ pub(super) fn spawn(
     let limit = std::time::Duration::from_secs(timeout_secs);
     loop {
         let done = child.try_wait().map_err(|error| ProcessError::Wait {
-            message: error.to_string(),
+            fault: interpret_fault(error),
         })?;
         match done {
             Some(status) => {
@@ -79,5 +79,15 @@ fn extended_path(dirs: &[PathBuf]) -> std::ffi::OsString {
     match std::env::join_paths(parts) {
         Ok(joined) => joined,
         Err(_) => std::ffi::OsString::new(),
+    }
+}
+
+/// Interpret one io failure into its fault.
+fn interpret_fault(error: std::io::Error) -> ProcessFault {
+    let kind = error.kind();
+    let message = error.to_string();
+    match ProcessFault::interpret(kind) {
+        Some(fault) => fault,
+        None => ProcessFault::Unknown { message },
     }
 }

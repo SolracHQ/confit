@@ -3,7 +3,6 @@ resolver = "3"
 members = [
   "crates/model",
   "crates/driver",
-  "crates/engine-old",
   "crates/surface-face",
   "crates/surface-api",
   "crates/engine",

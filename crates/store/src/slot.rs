@@ -25,10 +25,10 @@ const PREVIOUS_DIR: &str = "previous";
 /// Named slot folder name under the config base.
 const PLANS_DIR: &str = "plans";
 
-/// One slot kind selecting applied, named, or history bundles.
+/// Slot kind for applied, named, and history bundles.
 ///
-/// Applied holds the fixed state slot. Named holds one `@name` slot. History
-/// holds one `%N` pick newest-first from one.
+/// Applied is the fixed state slot. Named is one `@name` slot. History
+/// is one `%N` pick newest-first from one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotKind {
     /// The applied slot.
@@ -48,8 +48,8 @@ pub struct HistoryEntry {
 
 /// Applied state slot with named slots and history.
 ///
-/// History lists newest first with `%N` picks from one. Applied, named, and
-/// history bundles ride config base files.
+/// Newest-first history with `%N` picks from one. Config base files for
+/// applied, named, and history bundles.
 #[derive(Debug, Clone)]
 pub struct SlotStore {
     state: PathBuf,
@@ -58,7 +58,7 @@ pub struct SlotStore {
 }
 
 impl SlotStore {
-    /// Builds a file-backed slot store under the config base.
+    /// Build a file-backed slot store under the config base.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
             state: roots.config_base.join(STATE_FILE),
@@ -67,7 +67,7 @@ impl SlotStore {
         }
     }
 
-    /// Resolves the slot path for one validated name.
+    /// Resolve the slot path for one validated name.
     ///
     /// # Errors
     ///
@@ -78,7 +78,7 @@ impl SlotStore {
         Ok(self.plans.join(format!("{name}.json")))
     }
 
-    /// Loads the applied manifest, treating missing slots as empty.
+    /// Load the applied manifest with missing slots as empty.
     ///
     /// # Errors
     ///
@@ -88,7 +88,7 @@ impl SlotStore {
         load_bundle(&self.state)
     }
 
-    /// Writes the applied slot and archives history with rotation.
+    /// Write the applied slot with history rotation.
     ///
     /// # Errors
     ///
@@ -114,11 +114,11 @@ impl SlotStore {
         Ok(dest)
     }
 
-    /// Resolves one picker to its live bundle and slot kind.
+    /// Resolve one picker to its live bundle and slot kind.
     ///
-    /// - Absent pickers read the applied slot.
-    /// - `@name` reads the named slot.
-    /// - `%N` reads history newest-first from one.
+    /// - Absent pickers use the applied slot.
+    /// - `@name` is the named slot.
+    /// - `%N` is history newest-first from one.
     ///
     /// # Errors
     ///
@@ -126,7 +126,7 @@ impl SlotStore {
     ///   picks.
     pub fn resolve(&self, picker: Option<&str>) -> Result<(Manifest, SlotKind)> {
         let Some(raw) = picker else {
-            if !driver::fs::exists(&self.state) {
+            if driver::fs::is_missing(&self.state) {
                 return Err(SlotError::BadPick {
                     input: "".to_owned(),
                 });
@@ -135,7 +135,7 @@ impl SlotStore {
         };
         if let Some(name) = raw.strip_prefix('@') {
             let path = self.named_slot(name)?;
-            if !driver::fs::exists(&path) {
+            if driver::fs::is_missing(&path) {
                 return Err(SlotError::BadPick {
                     input: raw.to_owned(),
                 });
@@ -167,7 +167,7 @@ impl SlotStore {
         })
     }
 
-    /// Lists stored manifests newest first with apply picks.
+    /// List stored manifests newest first with apply picks.
     ///
     /// # Errors
     ///
@@ -182,7 +182,7 @@ impl SlotStore {
             .collect())
     }
 
-    /// Writes one named slot holding its bundle manifest.
+    /// Write one named slot with its bundle manifest.
     ///
     /// # Errors
     ///
@@ -199,7 +199,7 @@ impl SlotStore {
         Ok(())
     }
 
-    /// Drops one named slot.
+    /// Drop one named slot.
     ///
     /// # Errors
     ///
@@ -208,7 +208,7 @@ impl SlotStore {
     /// - [`SlotError::WriteUnknown`] for other removal failures.
     pub fn delete_named(&self, name: &str) -> Result<()> {
         let path = self.named_slot(name)?;
-        if !driver::fs::exists(&path) {
+        if driver::fs::is_missing(&path) {
             return Err(SlotError::BadPick {
                 input: ["@", name].concat(),
             });
@@ -217,15 +217,15 @@ impl SlotStore {
         Ok(())
     }
 
-    /// Reports whether no applied slot reads present.
+    /// Report whether no applied slot is present.
     pub fn is_first_run(&self) -> bool {
-        !driver::fs::exists(&self.state)
+        driver::fs::is_missing(&self.state)
     }
 
-    /// Gathers stored refs for a sweep.
+    /// Gather stored refs for a sweep.
     ///
-    /// - Every stored manifest lends its blob hashes, and missing,
-    ///   unparsable, and stale files lend none.
+    /// - Every stored manifest for the keep set, with missing,
+    ///   unparsable, and stale files outside the set.
     ///
     /// # Errors
     ///
@@ -239,11 +239,11 @@ impl SlotStore {
     }
 }
 
-/// Loads one manifest file with blob ref resolution.
+/// Load one manifest file with blob ref resolution.
 ///
 /// Refs carry content identity.
 ///
-/// - Missing files read as empty.
+/// - Missing files are empty.
 ///
 /// # Errors
 ///
@@ -263,7 +263,7 @@ fn load_bundle(path: &Path) -> Result<Manifest> {
     decode(&bytes).map_err(|error| from_codec(path, error))
 }
 
-/// Maps one codec failure at the slot path into slot language.
+/// Map one codec failure at the slot path into slot language.
 fn from_codec(path: &Path, error: CodecError) -> SlotError {
     match error {
         CodecError::Version { got } => SlotError::Version {
@@ -276,11 +276,11 @@ fn from_codec(path: &Path, error: CodecError) -> SlotError {
     }
 }
 
-/// Collects stored manifests newest first with their file paths.
+/// Collect stored manifests newest first with their file paths.
 ///
 /// - Unreadable files, bad JSON, stale versions, and unresolvable blobs skip
 ///   quietly.
-/// - Missing folders read as empty.
+/// - Missing folders are empty.
 ///
 /// # Errors
 ///
@@ -309,9 +309,9 @@ fn stored_bundles(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
     Ok(out)
 }
 
-/// Lists stored files oldest first.
+/// List stored files oldest first.
 ///
-/// - Missing folders read as empty.
+/// - Missing folders are empty.
 ///
 /// # Errors
 ///
@@ -324,7 +324,7 @@ fn history_files(dir: &Path) -> Result<Vec<PathBuf>> {
     }
 }
 
-/// Drops stored manifests past the kept count, oldest first.
+/// Drop stored manifests past the kept count, oldest first.
 ///
 /// # Errors
 ///
@@ -341,7 +341,7 @@ fn rotate_history(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Writes manifest text to one path, creating parents.
+/// Write manifest text to one path with parents.
 ///
 /// # Errors
 ///
@@ -352,7 +352,7 @@ fn write_text(path: &Path, text: &str) -> Result<()> {
         .map_err(|error| SlotError::from_write_io(path, error))
 }
 
-/// Reads wall-clock nanos for sortable archive file names.
+/// Read wall-clock nanos for sortable archive file names.
 ///
 /// # Errors
 ///
@@ -363,7 +363,7 @@ fn system_nanos() -> std::result::Result<u128, std::time::SystemTimeError> {
         .map(|span| span.as_nanos())
 }
 
-/// Checks one slot name holds one file stem with no separators.
+/// Check one slot name for one file stem with no separators.
 ///
 /// # Errors
 ///
@@ -396,7 +396,7 @@ fn check_slot_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Collects blob refs from one stored manifest.
+/// Collect blob refs from one stored manifest.
 ///
 /// - Missing, unparsable, and stale files add no refs.
 fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
@@ -414,7 +414,7 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
     keep.extend(stored.refs().iter().map(|blob| blob.stored().clone()));
 }
 
-/// Collects blob refs from every manifest file in one folder.
+/// Collect blob refs from every manifest file in one folder.
 ///
 /// - Unreadable and unparsable files skip quietly.
 /// - Missing folders add no refs.
@@ -497,7 +497,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let slots = test_store(dir.path());
-        assert!(slots.is_first_run(), "absent slot reads first run");
+        assert!(slots.is_first_run(), "absent slot is first run");
         match slots.resolve(None) {
             Ok(_) => panic!("absent applied slot passes"),
             Err(SlotError::BadPick { .. }) => {}
@@ -532,7 +532,7 @@ mod tests {
         }
         match slots.resolve(Some("%1")) {
             Ok((manifest, kind)) => {
-                assert_eq!(kind, SlotKind::History(1), "newest reads pick one");
+                assert_eq!(kind, SlotKind::History(1), "newest picks one");
                 assert_eq!(manifest, text_manifest("v7"), "newest keeps last write");
             }
             Err(error) => panic!("newest resolves: {error}"),
@@ -555,7 +555,7 @@ mod tests {
         }
         match slots.resolve(None) {
             Ok((manifest, kind)) => {
-                assert_eq!(kind, SlotKind::Applied, "absent picker reads applied");
+                assert_eq!(kind, SlotKind::Applied, "absent picker is applied");
                 assert_eq!(manifest, applied, "applied picker keeps stored manifest");
             }
             Err(error) => panic!("applied picker resolves: {error}"),

@@ -22,7 +22,7 @@ pub struct Sha {
 }
 
 impl Sha {
-    /// Seals one content hash.
+    /// Seal one content hash.
     ///
     /// # Errors
     ///
@@ -40,7 +40,7 @@ impl Sha {
         Ok(Self { inner })
     }
 
-    /// Hashes bytes into a sealed digest.
+    /// Hash bytes into a sealed digest.
     pub fn hash(bytes: &[u8]) -> Self {
         let digest = sha2::Sha256::digest(bytes);
         Self {
@@ -48,14 +48,14 @@ impl Sha {
         }
     }
 
-    /// Seals a streaming hash.
+    /// Seal a streaming hash.
     pub fn finish(hasher: sha2::Sha256) -> Self {
         Self {
             inner: hasher.finalize().into(),
         }
     }
 
-    /// Hashes a byte stream into a sealed digest with its byte count.
+    /// Hash a byte stream into a sealed digest with its byte count.
     ///
     /// # Errors
     ///
@@ -75,7 +75,7 @@ impl Sha {
         Ok((Self::finish(hasher), len))
     }
 
-    /// Hashes a byte stream into a sealed digest.
+    /// Hash a byte stream into a sealed digest.
     ///
     /// # Errors
     ///
@@ -84,7 +84,7 @@ impl Sha {
         Ok(Self::read_with_size(stream)?.0)
     }
 
-    /// Renders the hex digest.
+    /// Render the hex digest.
     pub fn hex(&self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(SHA_HEX_LEN);
@@ -95,17 +95,17 @@ impl Sha {
         out
     }
 
-    /// Renders the hash and size label.
+    /// Render the hash and size label.
     pub fn label(&self, len: u64) -> String {
         format!("sha256:{self} ({len} bytes)")
     }
 
-    /// Renders the short hash prefix for terminal lines.
+    /// Render the short hash prefix for terminal lines.
     pub fn short(&self) -> String {
         self.hex()[..12].to_owned()
     }
 
-    /// Renders the short hash and size label for terminal lines.
+    /// Render the short hash and size label for terminal lines.
     pub fn label_short(&self, len: u64) -> String {
         format!("sha256:{} ({len} bytes)", self.short())
     }
@@ -136,14 +136,14 @@ impl std::fmt::Display for Sha {
     }
 }
 
-/// Writer hashing every byte passing through.
+/// Writer with a running hash over written bytes.
 pub struct ShaWriter<W> {
     inner: W,
     hasher: sha2::Sha256,
 }
 
 impl<W: std::io::Write> ShaWriter<W> {
-    /// Wraps one writer with a running hash.
+    /// Wrap one writer with a running hash.
     pub fn new(inner: W) -> Self {
         Self {
             inner,
@@ -151,7 +151,7 @@ impl<W: std::io::Write> ShaWriter<W> {
         }
     }
 
-    /// Seals the running hash over every byte written.
+    /// Seal the running hash over every byte written.
     pub fn digest(self) -> Sha {
         Sha::finish(self.hasher)
     }
@@ -169,7 +169,7 @@ impl<W: std::io::Write> std::io::Write for ShaWriter<W> {
     }
 }
 
-/// Decodes one hex character into its value.
+/// Decode one hex character into its value.
 fn hex_value(byte: u8, sha: &str) -> Result<u8> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -182,7 +182,7 @@ fn hex_value(byte: u8, sha: &str) -> Result<u8> {
     }
 }
 
-/// Rejects malformed content hashes.
+/// Reject malformed content hashes.
 fn check_sha_hex(sha: &str) -> Result<()> {
     if sha.len() == SHA_HEX_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Ok(());

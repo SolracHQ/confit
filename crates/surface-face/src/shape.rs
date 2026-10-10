@@ -8,7 +8,7 @@ use mlua_extras::typed::{Type, Typed};
 
 /// One Lua table validated inside the verb body.
 ///
-/// The data type names the face, the table holds field reads.
+/// Data types show the face and tables hold the field reads.
 pub struct Shape<Data>(Table, PhantomData<Data>);
 
 impl<Data> Clone for Shape<Data> {
@@ -24,12 +24,12 @@ impl<Data> std::fmt::Debug for Shape<Data> {
 }
 
 impl<Data> Shape<Data> {
-    /// Reads the stored table reference.
+    /// Return the stored table reference.
     pub fn as_table(&self) -> &Table {
         &self.0
     }
 
-    /// Returns the stored table.
+    /// Return the stored table.
     pub fn into_inner(self) -> Table {
         self.0
     }

@@ -13,7 +13,7 @@ use crate::document::RcDocument;
 use crate::error::ApiError;
 use crate::paths::route_value;
 
-/// One rc document shape holding three entry lists.
+/// One rc document shape.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RcDocumentShape {
@@ -32,25 +32,25 @@ struct RcDocumentShape {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RcEntryShape {
-    /// Exports a plain value.
+    /// The plain value export.
     #[serde(default)]
     env: Option<EnvShape>,
-    /// Shapes a PATH like variable.
+    /// The PATH like variable shape.
     #[serde(default)]
     path: Option<PathShape>,
-    /// Defines an interactive alias.
+    /// The interactive alias definition.
     #[serde(default)]
     alias: Option<AliasShape>,
-    /// Evaluates command output through eval.
+    /// The command output eval.
     #[serde(default)]
     eval: Option<ArgvShape>,
-    /// Runs a plain command line.
+    /// The plain command line run.
     #[serde(default)]
     cmd: Option<ArgvShape>,
-    /// Sources a file into the shell.
+    /// The shell file source.
     #[serde(default)]
     source: Option<SourceShape>,
-    /// The shell session guard. None applies unconditionally.
+    /// The shell session guard with unconditional default.
     #[serde(default)]
     when: Option<Condition>,
 }
@@ -89,7 +89,7 @@ struct AliasShape {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ArgvShape {
-    /// Holds the command and arguments in order.
+    /// The command and arguments in order.
     argv: Vec<Arg>,
 }
 
@@ -112,7 +112,7 @@ impl FromLua for RcDocument {
     }
 }
 
-/// Decodes one rc document shape naming its section.
+/// Decode one rc document shape with its section.
 ///
 /// # Errors
 ///
@@ -126,7 +126,7 @@ fn decode_rc_shape(value: Value) -> mlua::Result<RcDocumentShape> {
     })
 }
 
-/// Returns one rc field for its serde path.
+/// Return one rc field for its serde path.
 fn rc_field(path: &str) -> String {
     let trimmed = path.strip_prefix('.').unwrap_or(path);
     let section = trimmed.split(['.', '[']).next().unwrap_or("");
@@ -148,7 +148,7 @@ fn rc_field(path: &str) -> String {
     }
 }
 
-/// Converts one entry list into model entries.
+/// Convert one entry list into model entries.
 ///
 /// # Errors
 ///
@@ -163,7 +163,7 @@ fn convert_entries(list: Vec<RcEntryShape>, section: &str) -> mlua::Result<Vec<R
 }
 
 impl RcEntryShape {
-    /// Converts one entry shape into its model entry.
+    /// Convert one entry shape into its model entry.
     ///
     /// # Errors
     ///
@@ -228,13 +228,13 @@ impl RcEntryShape {
     }
 }
 
-/// Returns the entry field name for one section.
+/// Return the entry field name for one section.
 fn entry_field(section: &str) -> String {
     ["rc ", section, " entry"].concat()
 }
 
 impl RcDocument {
-    /// Builds the live body table for patch callbacks.
+    /// Build the live body table for patch callbacks.
     ///
     /// # Errors
     ///
@@ -248,7 +248,7 @@ impl RcDocument {
     }
 }
 
-/// Builds one live section list from entries.
+/// Build one live section list from entries.
 fn live_entries(lua: &Lua, entries: &[RcEntry]) -> mlua::Result<Table> {
     let list = lua.create_table()?;
     for (index, entry) in entries.iter().enumerate() {
@@ -257,7 +257,7 @@ fn live_entries(lua: &Lua, entries: &[RcEntry]) -> mlua::Result<Table> {
     Ok(list)
 }
 
-/// Builds one live entry table from its model entry.
+/// Build one live entry table from its model entry.
 fn live_entry(lua: &Lua, entry: &RcEntry) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     let inner = lua.create_table()?;
@@ -296,7 +296,7 @@ fn live_entry(lua: &Lua, entry: &RcEntry) -> mlua::Result<Table> {
     Ok(table)
 }
 
-/// Builds one live argv list from args.
+/// Build one live argv list from args.
 fn live_argv(lua: &Lua, argv: &[Arg]) -> mlua::Result<Table> {
     let list = lua.create_table()?;
     for (index, arg) in argv.iter().enumerate() {
@@ -305,7 +305,7 @@ fn live_argv(lua: &Lua, argv: &[Arg]) -> mlua::Result<Table> {
     Ok(list)
 }
 
-/// Builds one live argv entry from its arg.
+/// Build one live argv entry from its arg.
 fn live_arg(lua: &Lua, arg: &Arg) -> mlua::Result<Value> {
     match arg {
         Arg::Text(text) => Ok(Value::String(lua.create_string(text.as_str())?)),
@@ -313,7 +313,7 @@ fn live_arg(lua: &Lua, arg: &Arg) -> mlua::Result<Value> {
     }
 }
 
-/// Builds one live route table from its route.
+/// Build one live route table from its route.
 fn live_route(lua: &Lua, route: &Route) -> mlua::Result<Value> {
     route_value(lua, route)
 }
@@ -397,7 +397,7 @@ mod tests {
                     }
                     _ => panic!("profile holds the env entry"),
                 }
-                assert!(profile[0].when.is_some(), "guards ride the entry");
+                assert!(profile[0].when.is_some(), "guards stay on the entry");
                 match &profile[1].op {
                     RcOp::Path { name, dir } => {
                         assert_eq!(name, "PATH");
@@ -444,7 +444,7 @@ mod tests {
             (r#"{ profile = { { env = { name = "A" } } } }"#, "value"),
         ] {
             let text = body_error(&lua, body);
-            assert!(text.contains(want), "names the fault: {text}");
+            assert!(text.contains(want), "the text shows the fault: {text}");
         }
     }
 }

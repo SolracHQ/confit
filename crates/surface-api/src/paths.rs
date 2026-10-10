@@ -9,7 +9,7 @@ pub use confit_model::routes::{SegmentFault, split_checked};
 
 use crate::error::{ApiError, Result};
 
-/// Decodes one route table into its route.
+/// Decode one route table into its route.
 ///
 /// # Errors
 ///
@@ -23,7 +23,7 @@ pub(crate) fn decode_route(value: &Value, field: &str) -> Result<Route> {
     )
 }
 
-/// Builds one live route table from its route.
+/// Build one live route table from its route.
 ///
 /// # Errors
 ///

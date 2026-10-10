@@ -9,18 +9,18 @@ use crate::routes::Route;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// One rc operation shaping a shell line.
+/// One rc operation for a shell line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RcOp {
-    /// Exports a plain value.
+    /// Plain value export.
     Env {
         /// The variable name, like `EDITOR`.
         name: String,
         /// The value under export.
         value: String,
     },
-    /// Shapes a PATH like variable around its current value.
+    /// PATH like variable around its current value.
     ///
     /// The directory always prepends to the existing entries.
     Path {
@@ -29,26 +29,26 @@ pub enum RcOp {
         /// The directory route under placement.
         dir: Route,
     },
-    /// Defines an interactive alias.
+    /// Interactive alias.
     Alias {
         /// The alias name, like `ll`.
         name: String,
         /// The alias expansion.
         expansion: String,
     },
-    /// Evaluates command output through eval.
+    /// Command output evaluation through eval.
     Eval {
-        /// Holds the command and arguments in order.
+        /// Eval command.
         argv: Vec<Arg>,
     },
-    /// Runs a plain command line.
+    /// Plain command line.
     Cmd {
-        /// Holds the command and arguments in order.
+        /// Plain command.
         argv: Vec<Arg>,
     },
-    /// Sources a file into the shell.
+    /// File source for the shell.
     Source {
-        /// The file route under sourcing.
+        /// File route for sourcing.
         path: Route,
     },
 }
@@ -57,7 +57,7 @@ pub enum RcOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RcEntry {
-    /// The operation shaping the shell line.
+    /// Operation for the shell line.
     #[serde(flatten)]
     pub op: RcOp,
     /// The shell session guard.
@@ -65,7 +65,7 @@ pub struct RcEntry {
 }
 
 impl RcEntry {
-    /// Reads the collision slot name.
+    /// Return the collision slot name.
     pub fn slot_name(&self) -> Option<&str> {
         match &self.op {
             RcOp::Env { name, .. } | RcOp::Path { name, .. } | RcOp::Alias { name, .. } => {
@@ -75,7 +75,7 @@ impl RcEntry {
         }
     }
 
-    /// Reads the collision log label for the entry.
+    /// Return the collision log label for the entry.
     pub fn log_label(&self) -> &'static str {
         match &self.op {
             RcOp::Env { .. } => "env",
@@ -91,16 +91,16 @@ impl RcEntry {
 /// Accepted rc section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RcSection {
-    /// Entries rendering before the guard.
+    /// Entries before the guard.
     Profile,
-    /// Entries rendering after the guard.
+    /// Entries after the guard.
     Config,
-    /// Entries rendering last.
+    /// Entries last.
     Final,
 }
 
 impl RcSection {
-    /// Parses one raw section name.
+    /// Parse one raw section name.
     ///
     /// # Errors
     ///
@@ -118,21 +118,21 @@ impl RcSection {
     }
 }
 
-/// Rc data holding three entry groups.
+/// Rc data.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RcData {
-    /// Holds entries rendering before the guard.
+    /// Entries before the guard.
     pub profile: Vec<RcEntry>,
-    /// Holds entries rendering after the guard.
+    /// Entries after the guard.
     pub config: Vec<RcEntry>,
-    /// Holds entries rendering last.
+    /// Entries last.
     #[serde(rename = "final")]
     pub final_entries: Vec<RcEntry>,
 }
 
 impl RcData {
-    /// Builds rc data from three entry lists.
+    /// Build rc data from three entry lists.
     pub fn new(profile: Vec<RcEntry>, config: Vec<RcEntry>, final_entries: Vec<RcEntry>) -> Self {
         Self {
             profile,

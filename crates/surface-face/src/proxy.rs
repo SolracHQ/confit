@@ -11,9 +11,9 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Deserialize;
 use std::borrow::Cow;
 
-/// One Lua string holding text.
+/// One Lua string.
 ///
-/// Strict strings fail them naming the received type.
+/// Strict strings refuse other shapes with the received type in the failure.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct StrictString(pub String);
 
@@ -38,17 +38,17 @@ impl FromLua for StrictString {
 
 /// One presentation conversion into its Rust value.
 pub trait Convert<P, T> {
-    /// Conversion failure rendering both channels.
+    /// The conversion failure across both channels.
     type Error: Display + Into<mlua::Error>;
 
-    /// Converts one presentation shape into its Rust value.
+    /// Convert one presentation shape into its Rust value.
     fn convert(presentation: P) -> Result<T, Self::Error>;
 }
 
-/// One Lua presentation shape converting into its Rust value.
+/// One Lua presentation shape with its Rust value.
 ///
-/// P returns the face with the Lua read, the converter returns the Rust value
-/// with the failure.
+/// Presentation shapes give the face with the Lua read, converters give the
+/// Rust value with the failure.
 pub struct ProxyType<P, T, C>(pub T, PhantomData<(P, C)>);
 
 impl<P, T, C> std::fmt::Debug for ProxyType<P, T, C>
@@ -79,12 +79,12 @@ where
 }
 
 impl<P, T, C> ProxyType<P, T, C> {
-    /// Builds one presentation shape holding its converted value.
+    /// Build one presentation shape with its converted value.
     pub fn new(value: T) -> Self {
         Self(value, PhantomData)
     }
 
-    /// Reads the converted Rust value.
+    /// Return the converted Rust value.
     pub fn into_inner(self) -> T {
         self.0
     }

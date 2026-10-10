@@ -1,9 +1,9 @@
 //! Mismatch rendering
-//! Lua type words naming the received shape.
+//! Lua type words showing the received shape.
 
 use mlua::Value;
 
-/// Reads the Lua type word for one value.
+/// Return the Lua type word for one value.
 pub fn received(value: &Value) -> &'static str {
     match value {
         Value::Nil => "nil",

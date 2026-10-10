@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::{BlobRef, DocumentStatus};
 use crate::manifest::Manifest;
 
-/// One persisted tree member holding a blob ref.
+/// One persisted tree member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMember {
@@ -23,15 +23,15 @@ pub struct ManifestMember {
 /// Lifecycle counts for one bundle against a previous manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
-    /// Counts documents absent from the previous manifest.
+    /// Documents absent from the previous manifest.
     pub create: usize,
-    /// Counts documents with a differing data hash.
+    /// Documents with a differing data hash.
     pub update: usize,
-    /// Counts previous documents missing from the manifest.
+    /// Previous documents missing from the manifest.
     pub delete: usize,
 }
 
-/// Counts lifecycle states against a previous manifest.
+/// Count lifecycle states against a previous manifest.
 ///
 /// - Opaque kind changes count as updates, other kind changes count as create
 ///   and delete.
@@ -58,7 +58,7 @@ pub fn summary(built: &Manifest, previous: &Manifest) -> Summary {
     counts
 }
 
-/// Counts changed members between two tree manifests.
+/// Count changed members between two tree manifests.
 pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
     let old_map: BTreeMap<&str, &ManifestMember> = old
         .iter()
@@ -85,7 +85,7 @@ pub fn tree_changed(old: &[ManifestMember], new: &[ManifestMember]) -> usize {
     changed
 }
 
-/// Renders the canonical manifest bytes for tree hashing.
+/// Render the canonical manifest bytes for tree hashing.
 pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
     let mut sorted: Vec<&ManifestMember> = members.iter().collect();
     sorted.sort_by(|left, right| left.relative.cmp(&right.relative));
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(
             (counts.create, counts.update, counts.delete),
             (1, 0, 1),
-            "fresh reads as create and stale reads as delete"
+            "fresh is create and stale is delete"
         );
     }
 

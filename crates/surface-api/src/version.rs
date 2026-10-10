@@ -1,12 +1,12 @@
 //! Version
-//! One integer naming the Lua surface level.
+//! One integer showing the Lua surface level.
 
 use mlua::Value;
 
 /// Api level of the Lua surface.
 pub const API_VERSION: i64 = 1;
 
-/// Returns the version integer.
+/// Return the version integer.
 pub fn value() -> Value {
     Value::Integer(API_VERSION)
 }

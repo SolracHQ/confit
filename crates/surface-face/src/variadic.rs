@@ -4,11 +4,11 @@
 use mlua::{FromLua, FromLuaMulti, Lua, MultiValue};
 use mlua_extras::typed::{Type, Typed};
 
-/// Trailing Lua arguments holding decoded items in call order.
+/// Trailing Lua arguments for the verb call.
 pub struct Variadic<Item>(pub Vec<Item>);
 
 impl<Item> Variadic<Item> {
-    /// Returns the decoded items in call order.
+    /// Return the decoded items in call order.
     pub fn into_inner(self) -> Vec<Item> {
         self.0
     }

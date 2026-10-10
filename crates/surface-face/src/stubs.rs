@@ -11,7 +11,7 @@ use thiserror::Error;
 /// Stub generation failure shapes.
 #[derive(Debug, Error)]
 pub enum StubError {
-    /// Stub file write failure holding the path with the reason.
+    /// Stub file write failure.
     #[error("cannot write stub '{path}': {reason}")]
     Write {
         /// The stub file path.
@@ -19,7 +19,7 @@ pub enum StubError {
         /// The nested failure reason.
         reason: String,
     },
-    /// Stub parse failure holding the path with the reason.
+    /// Stub parse failure.
     #[error("stub '{path}' fails to parse: {reason}")]
     Parse {
         /// The stub file path.
@@ -32,9 +32,9 @@ pub enum StubError {
 /// Stub result alias.
 pub type Result<T> = std::result::Result<T, StubError>;
 
-/// Writes the live stub definitions under one folder.
+/// Write the live stub definitions under one folder.
 ///
-/// - Every file parses as Lua before the call returns.
+/// - All files parse as Lua on write.
 ///
 /// # Errors
 ///
@@ -63,7 +63,7 @@ pub fn write(dir: &Path, groups: &[(String, Definition)]) -> Result<Vec<PathBuf>
     Ok(written)
 }
 
-/// Names one stub meta header after its module file.
+/// Name one stub meta header after its module file.
 ///
 /// # Errors
 ///
@@ -85,10 +85,10 @@ fn name_meta(path: &Path) -> Result<()> {
     })
 }
 
-/// Appends the module return statement returning its values.
+/// Append the module return statement with its values.
 ///
-/// One function returns bare, several return a table, and one bare value
-/// returns bare.
+/// One function takes a bare return, several take a table, and one bare
+/// value takes a bare return.
 ///
 /// # Errors
 ///
@@ -130,7 +130,7 @@ fn append_return(path: &Path, definition: &Definition) -> Result<()> {
     })
 }
 
-/// Gates one stub file through the Lua parser.
+/// Gate one stub file through the Lua parser.
 ///
 /// # Errors
 ///
@@ -172,11 +172,11 @@ mod tests {
             Ok(written) => written,
             Err(error) => panic!("stubs write: {error}"),
         };
-        assert_eq!(written.len(), 1, "one file per module");
+        assert_eq!(written.len(), 1, "the write lands one file per module");
         for path in &written {
             assert!(
                 path.starts_with(dir.path()),
-                "stub lands under the folder: {}",
+                "the stub lands under the folder: {}",
                 path.display()
             );
             let text = std::fs::read_to_string(path).unwrap();
@@ -189,7 +189,7 @@ mod tests {
                 .unwrap();
             assert!(
                 text.starts_with(&format!("--- @meta {module}\n")),
-                "meta names the module: {}",
+                "meta shows the module: {}",
                 path.display()
             );
             assert!(

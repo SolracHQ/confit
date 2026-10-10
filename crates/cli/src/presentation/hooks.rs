@@ -1,42 +1,13 @@
 //! Hooks
-//! Hook preview lines for plans beside documents.
+//! Hook lifecycle lines for plans beside documents.
 
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
-use confit_model::manifest::Manifest;
-use confit_model::routes::Route;
-use confit_runtime::Checks;
-use std::collections::BTreeSet;
-use std::path::PathBuf;
-
-use crate::error::{CliError, Result};
 
 use crate::presentation::summary::Sigil;
 
-/// One hook preview outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PreviewOutcome {
-    /// Requires gate closed with its rendered text.
-    RequiresClosed(String),
-    /// When gate closed with its rendered text.
-    WhenClosed(String),
-    /// Checks all pass with the work standing done.
-    ChecksPass,
-    /// Hook runs with its resolved binary.
-    Run(PathBuf),
-}
-
-/// One evaluated hook pairing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvaluatedHook<'a> {
-    /// The hook under preview.
-    pub hook: &'a Hook,
-    /// The gate or binary for its line.
-    pub outcome: PreviewOutcome,
-}
-
-/// Renders one condition in compact form for warn lines.
+/// Render one condition in compact form for gate text.
 pub fn describe_condition(cond: &Condition) -> String {
     fn render(cond: &Condition) -> String {
         match cond {
@@ -61,7 +32,7 @@ pub fn describe_condition(cond: &Condition) -> String {
     render(&cond.simplified())
 }
 
-/// Renders plan hook lines from lifecycle diff data.
+/// Render plan hook lines from lifecycle diff data.
 pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in lifecycle {
@@ -107,128 +78,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     lines
 }
 
-/// Decides one hook preview outcome.
-///
-/// - Requires, when, and checks gates run before resolving.
-///
-/// # Errors
-///
-/// - [`CliError::Resolve`] for unresolvable binaries.
-fn decide<'a>(
-    hook: &'a Hook,
-    checks: &Checks,
-    changed: &BTreeSet<Route>,
-) -> Result<EvaluatedHook<'a>> {
-    if let Some(gate) = hook.requires.as_ref()
-        && !checks.check(gate, changed)
-    {
-        return Ok(EvaluatedHook {
-            hook,
-            outcome: PreviewOutcome::RequiresClosed(describe_condition(gate)),
-        });
-    }
-    if let Some(gate) = hook.when.as_ref()
-        && !checks.check(gate, changed)
-    {
-        return Ok(EvaluatedHook {
-            hook,
-            outcome: PreviewOutcome::WhenClosed(describe_condition(gate)),
-        });
-    }
-    if checks_pass(hook, checks, changed) {
-        return Ok(EvaluatedHook {
-            hook,
-            outcome: PreviewOutcome::ChecksPass,
-        });
-    }
-    let Some(binary) = resolve_hook(hook, checks) else {
-        let head = hook.argv.first().map(Arg::display).unwrap_or_default();
-        return Err(CliError::Resolve {
-            argv: Arg::join(&hook.argv),
-            head,
-        });
-    };
-    Ok(EvaluatedHook {
-        hook,
-        outcome: PreviewOutcome::Run(binary),
-    })
-}
-
-/// Resolves one hook binary with routes expanded inline.
-///
-/// Route slots expand against host folders and text passes unchanged.
-///
-/// - Hook path entries search first, runtime dirs follow.
-/// - First existing executable wins.
-pub fn resolve_hook(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
-    let head = hook
-        .argv
-        .first()
-        .map(|slot| slot.materialize().to_string_lossy().into_owned())?;
-    let mut dirs: Vec<PathBuf> = hook.path.iter().map(Arg::materialize).collect();
-    dirs.extend(checks.path_dirs.iter().cloned());
-    confit_runtime::find_executable(&head, &dirs)
-}
-
-/// Evaluates one preview outcome per hook in plan order.
-///
-/// # Errors
-///
-/// - [`CliError::Resolve`] for unresolvable binaries.
-pub fn evaluate_hooks<'a>(
-    manifest: &'a Manifest,
-    checks: &Checks,
-    changed: &BTreeSet<Route>,
-) -> Result<Vec<EvaluatedHook<'a>>> {
-    manifest
-        .hooks
-        .iter()
-        .map(|hook| decide(hook, checks, changed))
-        .collect()
-}
-
-/// Renders one evaluated hook line.
-fn render_preview(evaluated: &EvaluatedHook) -> String {
-    let argv = Arg::join(&evaluated.hook.argv);
-    match &evaluated.outcome {
-        PreviewOutcome::RequiresClosed(gate) => {
-            format!("warn: {argv} cannot run ({gate})")
-        }
-        PreviewOutcome::WhenClosed(gate) => {
-            format!("skipped: {argv} (no need: {gate})")
-        }
-        PreviewOutcome::ChecksPass => format!("skipped: {argv} (checks pass)"),
-        PreviewOutcome::Run(binary) => run_line(evaluated.hook, binary),
-    }
-}
-
-/// Renders one evaluated line per hook in plan order.
-pub fn render_evaluated(evaluated: &[EvaluatedHook]) -> Vec<String> {
-    evaluated.iter().map(render_preview).collect()
-}
-
-/// Reports whether one hook reads satisfied with passing checks.
-fn checks_pass(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> bool {
-    !hook.checks.is_empty() && hook.checks.iter().all(|check| checks.check(check, changed))
-}
-
-/// Renders one preview line for a runnable hook.
-fn run_line(hook: &Hook, binary: &std::path::Path) -> String {
-    let rest = hook
-        .argv
-        .iter()
-        .skip(1)
-        .map(Arg::display)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if rest.is_empty() {
-        format!("! run: {}", binary.display())
-    } else {
-        format!("! run: {} {rest}", binary.display())
-    }
-}
-
-/// Renders full gate lines for one added hook.
+/// Render full gate lines for one added hook.
 ///
 /// - Requires and when print once while present, checks print once per member,
 ///   all marked new in slot order.
@@ -256,7 +106,7 @@ fn full_gates(hook: &Hook, out: &mut Vec<String>) {
     }
 }
 
-/// Reads one gate slot name for detail lines.
+/// Return one gate slot name for detail lines.
 fn gate_slot_text(slot: GateSlot) -> &'static str {
     match slot {
         GateSlot::Requires => "requires",
@@ -264,10 +114,10 @@ fn gate_slot_text(slot: GateSlot) -> &'static str {
     }
 }
 
-/// Renders one gate change line per slot while text differs.
+/// Render one gate change line per slot while text differs.
 ///
-/// - Absent-to-present reads added, present-to-absent reads removed, changed
-///   reads old-to-new.
+/// - Absent-to-present is added, present-to-absent is removed, changed
+///   is old-to-new.
 fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
     for change in gates {
         let slot = gate_slot_text(change.slot);
@@ -291,7 +141,7 @@ fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
     }
 }
 
-/// Renders removed check lines before added check lines.
+/// Render removed check lines before added check lines.
 ///
 /// - Removals print in previous order, additions print in desired order.
 fn render_check_changes(removed: &[Condition], added: &[Condition], out: &mut Vec<String>) {
@@ -311,7 +161,7 @@ fn render_check_changes(removed: &[Condition], added: &[Condition], out: &mut Ve
     }
 }
 
-/// Renders one timeout with the run cap suffix.
+/// Render one timeout with the run cap suffix.
 fn timeout_text(secs: u64) -> String {
     format!("{secs}s")
 }
@@ -319,22 +169,7 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::fs::TestGuard;
     use confit_model::hook::merge_hooks;
-
-    fn preview_hook(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> Result<String> {
-        Ok(render_preview(&decide(hook, checks, changed)?))
-    }
-
-    fn hook_preview(
-        manifest: &Manifest,
-        checks: &Checks,
-        changed: &BTreeSet<Route>,
-    ) -> Result<Vec<String>> {
-        Ok(render_evaluated(&evaluate_hooks(
-            manifest, checks, changed,
-        )?))
-    }
 
     fn hook(
         argv: &[&str],
@@ -392,13 +227,6 @@ mod tests {
         }
     }
 
-    fn exists(path: &std::path::Path) -> Condition {
-        Condition::Exists {
-            route: confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, path)
-                .unwrap(),
-        }
-    }
-
     #[test]
     fn describe_collapses_merged_duplicate_gates() {
         let gate = || Condition::All(vec![in_path("mise"), changed("~/.config/mise/config.toml")]);
@@ -439,122 +267,6 @@ mod tests {
         assert_eq!(
             describe_condition(&Condition::Any(Vec::new())).as_str(),
             "false"
-        );
-    }
-
-    fn preview_state() -> (tempfile::TempDir, TestGuard, Checks) {
-        seed_preview()
-    }
-
-    fn seed_preview() -> (tempfile::TempDir, TestGuard, Checks) {
-        use confit_driver as driver;
-
-        let test_guard = TestGuard::install();
-        let guard = tempfile::tempdir().unwrap();
-        let dir = guard.path();
-        driver::fs::create_dir_all(dir).unwrap();
-        driver::fs::write(&dir.join("tool"), b"run").unwrap();
-        driver::fs::set_mode(&dir.join("tool"), 0o755).unwrap();
-        driver::fs::write(&dir.join("probe"), b"data").unwrap();
-        let checks = Checks {
-            vars: Default::default(),
-            path_dirs: vec![dir.to_path_buf()],
-        };
-        (guard, test_guard, checks)
-    }
-
-    fn changed_set(dests: &[&str]) -> BTreeSet<Route> {
-        dests
-            .iter()
-            .map(|dest| {
-                confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, dest)
-                    .unwrap()
-            })
-            .collect()
-    }
-
-    fn preview_line(hook: &Hook, checks: &Checks, changed: &BTreeSet<Route>) -> String {
-        match preview_hook(hook, checks, changed) {
-            Ok(line) => line,
-            Err(error) => panic!("preview renders: {error}"),
-        }
-    }
-
-    fn tool_line(checks: &Checks, rest: &str) -> String {
-        let binary = checks.path_dirs[0].join("tool");
-        if rest.is_empty() {
-            format!("! run: {}", binary.display())
-        } else {
-            format!("! run: {} {rest}", binary.display())
-        }
-    }
-
-    #[test]
-    fn closed_requires_beats_open_when() {
-        let (_guard, _test, checks) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let mut hook = hook(&["tool"], &[], Some(changed("touched")), vec![], 600);
-        hook.requires = Some(changed("missing"));
-        assert_eq!(
-            preview_line(&hook, &checks, &touched).as_str(),
-            "warn: tool cannot run (changed(missing))"
-        );
-    }
-
-    #[test]
-    fn closed_when_beats_passing_checks() {
-        let (_guard, _test, checks) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let probe_path = checks.path_dirs[0].join("probe");
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("missing")),
-            vec![exists(&probe_path)],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &checks, &touched).as_str(),
-            "skipped: tool (no need: changed(missing))"
-        );
-    }
-
-    #[test]
-    fn open_gates_with_passing_checks_skip_on_checks() {
-        let (_guard, _test, checks) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let probe_path = checks.path_dirs[0].join("probe");
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("touched")),
-            vec![exists(&probe_path)],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &checks, &touched).as_str(),
-            "skipped: tool (checks pass)"
-        );
-    }
-
-    #[test]
-    fn open_gates_with_failing_checks_run() {
-        let (_guard, _test, checks) = preview_state();
-        let touched = changed_set(&["touched"]);
-        let absent = checks.path_dirs[0].join("absent");
-        let mut hook = hook(
-            &["tool"],
-            &[],
-            Some(changed("touched")),
-            vec![exists(&absent)],
-            600,
-        );
-        hook.requires = Some(changed("touched"));
-        assert_eq!(
-            preview_line(&hook, &checks, &touched).as_str(),
-            tool_line(&checks, "")
         );
     }
 
@@ -693,111 +405,5 @@ mod tests {
                 "  ~ timeout (60s -> 600s)".to_string(),
             ]
         );
-    }
-
-    fn preview_runtime() -> (tempfile::TempDir, TestGuard, confit_runtime::Checks) {
-        seed_preview()
-    }
-
-    fn hook_fixture(argv: &[&str]) -> confit_model::hook::Hook {
-        confit_model::hook::Hook {
-            argv: argv
-                .iter()
-                .map(|item| Arg::Text(item.to_string()))
-                .collect(),
-            path: Vec::new(),
-            requires: None,
-            when: None,
-            checks: Vec::new(),
-            timeout_secs: confit_runtime::DEFAULT_HOOK_TIMEOUT_SECS,
-        }
-    }
-
-    #[test]
-    fn hook_preview_renders_run_skip_warn_lines() {
-        use confit_model::routes::{Route, RouteBase};
-
-        fn literal(path: &std::path::Path) -> Route {
-            Route::new(RouteBase::Literal, path).unwrap()
-        }
-
-        let (_guard, _test, checks) = preview_runtime();
-        let probe_path = checks.path_dirs[0].join("probe");
-        let manifest = confit_model::manifest::Manifest {
-            version: confit_model::manifest::MANIFEST_VERSION,
-            documents: Vec::new(),
-            hooks: vec![
-                hook_fixture(&["tool", "--flag"]),
-                confit_model::hook::Hook {
-                    checks: vec![confit_model::condition::Condition::Exists {
-                        route: literal(&probe_path),
-                    }],
-                    ..hook_fixture(&["tool"])
-                },
-                confit_model::hook::Hook {
-                    when: Some(Condition::InPath {
-                        name: "absent".into(),
-                    }),
-                    ..hook_fixture(&["tool"])
-                },
-            ],
-        };
-        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new()) {
-            Ok(lines) => lines,
-            Err(error) => panic!("preview renders: {error}"),
-        };
-        assert_eq!(
-            lines,
-            vec![
-                tool_line(&checks, "--flag"),
-                "skipped: tool (checks pass)".to_string(),
-                "skipped: tool (no need: in_path(absent))".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn hook_preview_runs_on_failing_checks() {
-        use confit_model::routes::{Route, RouteBase};
-
-        fn literal(path: &std::path::Path) -> Route {
-            Route::new(RouteBase::Literal, path).unwrap()
-        }
-
-        let (_guard, _test, checks) = preview_runtime();
-        let absent = checks.path_dirs[0].join("absent");
-        let manifest = confit_model::manifest::Manifest {
-            version: confit_model::manifest::MANIFEST_VERSION,
-            documents: Vec::new(),
-            hooks: vec![confit_model::hook::Hook {
-                checks: vec![confit_model::condition::Condition::Exists {
-                    route: literal(&absent),
-                }],
-                ..hook_fixture(&["tool"])
-            }],
-        };
-        let lines = match hook_preview(&manifest, &checks, &BTreeSet::new()) {
-            Ok(lines) => lines,
-            Err(error) => panic!("preview renders: {error}"),
-        };
-        assert_eq!(lines, vec![tool_line(&checks, "")]);
-    }
-
-    #[test]
-    fn hook_preview_miss_fails_naming_hook() {
-        let (_guard, _test, checks) = preview_runtime();
-        let manifest = confit_model::manifest::Manifest {
-            version: confit_model::manifest::MANIFEST_VERSION,
-            documents: Vec::new(),
-            hooks: vec![hook_fixture(&["absent", "install"])],
-        };
-        match hook_preview(&manifest, &checks, &BTreeSet::new()) {
-            Ok(_) => panic!("missing binary passes"),
-            Err(CliError::Resolve { argv, head }) => {
-                assert_eq!(argv, "absent install");
-                assert_eq!(head, "absent");
-            }
-            Err(error) => panic!("wrong miss variant: {error}"),
-        }
     }
 }

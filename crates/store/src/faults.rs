@@ -23,7 +23,7 @@ pub enum AccessFault {
     QuotaExceeded,
     /// Oversized file.
     FileTooLarge,
-    /// Unmapped failure carrying raw text.
+    /// Unmapped failure with raw text.
     Unknown {
         /// The raw failure text.
         message: String,
@@ -31,7 +31,7 @@ pub enum AccessFault {
 }
 
 impl AccessFault {
-    /// Interprets one io kind into its fault.
+    /// Interpret one io kind into its fault.
     pub fn interpret(kind: ErrorKind) -> Option<Self> {
         match kind {
             ErrorKind::NotFound => Some(Self::Missing),
@@ -44,7 +44,7 @@ impl AccessFault {
         }
     }
 
-    /// Names the fault cause for display shells.
+    /// Return the fault cause for display shells.
     ///
     /// Unknown faults echo their raw text.
     pub fn cause(&self) -> &str {

@@ -18,22 +18,22 @@ thread_local! {
     }) };
 }
 
-/// Scripts one process outcome for the next run.
+/// Script one process outcome for the next run.
 pub fn serve(outcome: Result<ProcessOutput, ProcessError>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes.push_back(outcome));
 }
 
-/// Scripts process outcomes replacing the waiting queue.
+/// Script process outcomes and replace the waiting queue.
 pub fn script(outcomes: VecDeque<Result<ProcessOutput, ProcessError>>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes = outcomes);
 }
 
-/// Collects the recorded process calls in order.
+/// Return the recorded process calls in order.
 pub fn calls() -> Vec<ProcessCall> {
     SCRIPTS.with(|cell| cell.borrow().calls.clone())
 }
 
-/// Clears every scripted outcome and recorded call.
+/// Clear every scripted outcome and recorded call.
 pub fn clear() {
     SCRIPTS.with(|cell| {
         let mut scripts = cell.borrow_mut();
@@ -42,7 +42,7 @@ pub fn clear() {
     });
 }
 
-/// Serves one scripted outcome recording the call.
+/// Serve one scripted outcome and record the call.
 pub(super) fn run(
     argv: &[String],
     path_dirs: &[PathBuf],

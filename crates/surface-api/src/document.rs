@@ -18,7 +18,7 @@ use confit_surface_face::translate::json_value;
 use crate::error::ApiError;
 use crate::handles::Handle;
 
-/// One serializable value holding null with scalars and tables.
+/// One serializable value for null with scalars and tables.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct SerializableValue(pub serde_json::Value);
 
@@ -40,10 +40,10 @@ impl FromLua for SerializableValue {
 pub struct TextDocument {
     /// The exact file text.
     pub text: String,
-    /// Unix permission bits. None applies the umask default.
+    /// Unix permission bits with the umask default.
     #[serde(default)]
     pub mode: Mode,
-    /// True while presence alone satisfies the document.
+    /// The presence-only satisfaction flag.
     pub unmanaged: Option<bool>,
 }
 
@@ -61,7 +61,7 @@ impl FromLua for TextDocument {
 pub struct StructuredDocument {
     /// The serialization format name.
     pub format: StructuredFormat,
-    /// Holds the structured data table.
+    /// The payload for rendering.
     pub data: BTreeMap<String, SerializableValue>,
 }
 
@@ -73,7 +73,7 @@ impl FromLua for StructuredDocument {
     }
 }
 
-/// Link body holding its target route.
+/// Link body.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinkDocument {
@@ -89,7 +89,7 @@ impl FromLua for LinkDocument {
     }
 }
 
-/// Rc body holding three entry lists.
+/// Rc body.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RcDocument {
@@ -107,16 +107,14 @@ pub struct RcDocument {
 
 confit_surface_face::typed!(RcDocument);
 
-/// Opaque body holding its resource handle.
-///
-/// The handle opens at conversion.
+/// Opaque body.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub struct OpaqueDocument {
     /// The opened input handle.
     pub handle: Handle,
-    /// Unix permission bits. None applies the umask default.
+    /// Unix permission bits with the umask default.
     pub mode: Mode,
-    /// True while presence alone satisfies the document.
+    /// The presence-only satisfaction flag.
     pub unmanaged: bool,
 }
 
@@ -150,30 +148,28 @@ impl FromLua for OpaqueDocument {
     }
 }
 
-/// One tree slot holding a file handle or a nested tree.
+/// One tree slot.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum TreeSlot {
     /// One file under its opened input handle.
     Handle(Handle),
-    /// One subfolder holding slots by single name.
+    /// One subfolder.
     Tree(Tree),
 }
 
 confit_surface_face::typed!(TreeSlot);
 
-/// One tree holding slots by single file name.
+/// One tree.
 #[derive(Debug, Clone, PartialEq, Default, JsonSchema)]
 pub struct Tree(pub HashMap<String, TreeSlot>);
 
 confit_surface_face::typed!(Tree);
 
-/// Tree body holding slots by single name.
-///
-/// Handles open at conversion. An empty map builds a bare folder.
+/// Tree body with a bare folder for an empty map.
 #[derive(Debug, Clone, PartialEq, Default, JsonSchema)]
 pub struct TreeDocument {
-    /// Holds slots by single file name.
+    /// The tree members for the build.
     pub members: Tree,
 }
 
@@ -195,7 +191,7 @@ impl FromLua for TreeDocument {
     }
 }
 
-/// Decodes one members table into slots by single name.
+/// Decode one members table into slots by single name.
 ///
 /// # Errors
 ///
@@ -241,7 +237,7 @@ fn decode_members(files: &Table) -> mlua::Result<HashMap<String, TreeSlot>> {
     Ok(members)
 }
 
-/// Rejects tree keys outside single names.
+/// Reject tree keys outside single names.
 ///
 /// # Errors
 ///
@@ -266,7 +262,7 @@ fn check_single_name(name: &str) -> mlua::Result<()> {
     Ok(())
 }
 
-// The union face rides beside its manual FromLua twin.
+// The union face sits beside its manual FromLua twin.
 confit_surface_face::union_face! {
     /// One document body in any shape.
     #[derive(Debug, Clone, PartialEq)]
@@ -324,7 +320,7 @@ impl FromLua for Document {
 }
 
 impl Document {
-    /// Reads the lowercase kind name for this body.
+    /// Return the lowercase kind name for this body.
     pub fn kind_name(&self) -> &'static str {
         match self {
             Self::Text(_) => "text",
@@ -337,7 +333,7 @@ impl Document {
     }
 }
 
-/// Collects the sorted string keys of one body table.
+/// Collect the sorted string keys of one body table.
 ///
 /// # Errors
 ///
@@ -357,7 +353,7 @@ fn body_keys(table: &Table) -> mlua::Result<Vec<String>> {
     Ok(keys)
 }
 
-/// Counts marker families present in sorted keys.
+/// Count marker families present in sorted keys.
 fn family_count(keys: &[String]) -> usize {
     let mut count = 0;
     if keys.contains(&"text".to_owned()) {
@@ -384,7 +380,7 @@ fn family_count(keys: &[String]) -> usize {
     count
 }
 
-/// Decodes one body table from its value.
+/// Decode one body table from its value.
 ///
 /// # Errors
 ///
@@ -396,7 +392,7 @@ fn body_table(value: &Value) -> mlua::Result<Table> {
     }
 }
 
-/// Rejects unknown keys naming the key.
+/// Reject unknown keys with the key.
 ///
 /// # Errors
 ///
@@ -424,7 +420,7 @@ fn check_keys(table: &Table, known: &[&str]) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Decodes one pure-data shape with its failure path.
+/// Decode one pure-data shape with its failure path.
 ///
 /// # Errors
 ///
@@ -449,7 +445,7 @@ where
     })
 }
 
-/// Decodes one pure-data shape under its prefix with its failure path.
+/// Decode one pure-data shape under its prefix with its failure path.
 ///
 /// # Errors
 ///
@@ -465,7 +461,7 @@ where
     })
 }
 
-/// Returns one prefixed field for its serde path.
+/// Return one prefixed field for its serde path.
 fn named_field(prefix: &str, path: &str) -> String {
     let trimmed = path.strip_prefix('.').unwrap_or(path);
     if trimmed.is_empty() {
@@ -477,7 +473,7 @@ fn named_field(prefix: &str, path: &str) -> String {
     }
 }
 
-/// One mode string converting into bits.
+/// One mode string for bit conversion.
 pub struct ParseMode;
 
 impl Convert<Option<String>, Option<u32>> for ParseMode {
@@ -501,7 +497,7 @@ impl Convert<Option<String>, Option<u32>> for ParseMode {
 /// Mode presentation with its bits.
 pub type Mode = ProxyType<Option<String>, Option<u32>, ParseMode>;
 
-/// Decodes one optional unmanaged flag.
+/// Decode one optional unmanaged flag.
 ///
 /// # Errors
 ///
@@ -515,7 +511,7 @@ fn read_unmanaged_field(table: &Table) -> mlua::Result<Option<bool>> {
     }
 }
 
-/// Parses octal or symbolic permission text.
+/// Parse octal or symbolic permission text.
 fn parse_mode_bits(text: &str) -> Option<u32> {
     if text.starts_with('d') {
         return None;
@@ -636,7 +632,7 @@ mod tests {
         let refused = body_error(&lua, r#"{ text = "hi", mode = 644 }"#);
         assert!(
             refused.contains("expected a string"),
-            "names the fault: {refused}"
+            "the error shows the fault: {refused}"
         );
         for (body, want) in [
             (r#"{ text = 1 }"#, "expected a string"),
@@ -645,7 +641,7 @@ mod tests {
             (r#"{ text = "hi", bogus = 1 }"#, "bogus"),
         ] {
             let text = body_error(&lua, body);
-            assert!(text.contains(want), "names the fault: {text}");
+            assert!(text.contains(want), "the text shows the fault: {text}");
         }
     }
 
@@ -664,7 +660,7 @@ mod tests {
             _ => panic!("structured body decodes"),
         }
         let text = body_error(&lua, r#"{ format = "json" }"#);
-        assert!(text.contains("data"), "names the field: {text}");
+        assert!(text.contains("data"), "the text shows the field: {text}");
     }
 
     #[test]
@@ -680,7 +676,10 @@ mod tests {
             _ => panic!("link body decodes"),
         }
         let text = body_error(&lua, r#"{ target = "linked" }"#);
-        assert!(text.contains("a route table"), "names the want: {text}");
+        assert!(
+            text.contains("a route table"),
+            "the text shows the want: {text}"
+        );
     }
 
     #[test]
@@ -690,10 +689,10 @@ mod tests {
             &lua,
             r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
         );
-        assert!(text.contains("text"), "names the marker: {text}");
-        assert!(text.contains("target"), "names the marker: {text}");
+        assert!(text.contains("text"), "the text shows the marker: {text}");
+        assert!(text.contains("target"), "the text shows the marker: {text}");
         let bare = body_error(&lua, r#"{ nope = 1 }"#);
-        assert!(bare.contains("nope"), "names the key: {bare}");
+        assert!(bare.contains("nope"), "the error shows the key: {bare}");
     }
 
     fn opened_lua() -> (tempfile::TempDir, Lua) {
@@ -706,7 +705,6 @@ mod tests {
         let stores = confit_store::Stores::new(
             confit_store::StoreRoots {
                 config_base: directory.path().join("config"),
-                cache_base: directory.path().join("cache"),
                 temp_base: directory.path().join("temp"),
                 project_root: directory.path().join("project"),
             },
@@ -740,7 +738,7 @@ mod tests {
         );
         assert!(
             refused.contains("expected a string"),
-            "names the fault: {refused}"
+            "the error shows the fault: {refused}"
         );
         for (body, want) in [
             (
@@ -750,7 +748,7 @@ mod tests {
             (r#"{ handle = "note.txt" }"#, "a resource handle"),
         ] {
             let text = body_error(&lua, body);
-            assert!(text.contains(want), "names the fault: {text}");
+            assert!(text.contains(want), "the text shows the fault: {text}");
         }
     }
 
@@ -801,7 +799,7 @@ mod tests {
             ),
         ] {
             let text = body_error(&lua, body);
-            assert!(text.contains(want), "names the fault: {text}");
+            assert!(text.contains(want), "the text shows the fault: {text}");
         }
     }
 }

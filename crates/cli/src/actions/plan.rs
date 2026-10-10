@@ -3,129 +3,78 @@
 
 use std::path::Path;
 
-use confit_model::drift::{Drift, DriftOrder};
-use confit_model::manifest::Manifest;
-use confit_runtime::Applier;
+use confit_driver as driver;
 use confit_store::Stores;
 
 use crate::error::{CliError, Result};
 
-use crate::cli::PlanArgs;
+use crate::cli::{PlanArgs, plan_profile};
+use crate::presentation::summary::render_prepared;
 
-use crate::sinks::{Sinks, log_processed, timed};
+use crate::sinks::Sinks;
 
-/// Outcome of one profile run with its previous manifest.
-#[derive(Debug)]
-pub struct PlanOutcome {
-    /// The built manifest with counts.
-    pub built: Manifest,
-    /// The previous manifest backing lifecycle marks.
-    pub previous: Manifest,
-    /// Holds disk edits leading the summary, desired versus disk on first runs.
-    pub drift: Vec<Drift>,
-    /// True while the state slot file reads absent.
-    pub first_run: bool,
+/// Successful plan run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanReport {
+    /// Rendered summary text for display.
+    pub text: String,
 }
 
-/// One plan run from plan flags to a built bundle.
+/// Plan run from plan flags to a built bundle.
 pub struct PlanRunner<'a> {
-    /// The plan flags under running.
+    /// Plan flags for the run.
     pub args: &'a PlanArgs,
-    /// The write capabilities for the run.
+    /// Write capabilities for the run.
     pub stores: Stores,
-    /// The destination reads and writes for the run.
-    pub applier: Applier,
-    /// The output senders for the run.
+    /// Output senders for the run.
     pub sinks: Sinks,
 }
 
 impl PlanRunner<'_> {
-    /// Evaluates the engine, loads previous manifest, diffs drift, builds the
-    /// core bundle, and writes the payload on demand.
+    /// Prepare the shared preview and write the payload on demand.
     ///
-    /// The outcome carries the built bundle with its previous manifest and
-    /// drift.
+    /// Report with the rendered preview.
     ///
     /// # Errors
     ///
     /// - [`crate::error::CliError::Slot`] for slot reads and writes.
     /// - [`crate::error::CliError::Bundle`] for bundle writes.
-    /// - [`crate::error::CliError::Model`] for manifest builds.
     /// - [`crate::error::CliError::Engine`] for evaluation failures.
-    pub fn execute(self) -> Result<PlanOutcome> {
-        let evaluation = confit_engine::Engine::new(self.stores.clone())
-            .evaluate(&self.args.profile)
-            .map_err(CliError::from)?;
-        let documents = evaluation.documents;
-        let slots = self.stores.slots();
-        let first_run = slots.is_first_run();
-        let previous = slots.load()?;
-
-        self.sinks.emit_hashing();
-        let built = timed("hash", || Manifest::build(documents, evaluation.hooks))?;
-        log_processed(&built, &previous);
-
-        let drifts = timed("drift", || {
-            if first_run {
-                self.applier.drift(&built, DriftOrder::DiskFirst)
-            } else {
-                self.applier.drift(&previous, DriftOrder::RecordedFirst)
-            }
-        });
-        if self.args.output.is_some() {
-            self.sinks.emit_writing_manifest(built.documents.len());
+    /// - [`crate::error::CliError::NoDefaultProfile`] for absent defaults.
+    /// - [`crate::error::CliError::NoProfile`] for absent profiles.
+    pub fn execute(self) -> Result<PlanReport> {
+        let path = plan_profile(&self.args.project, self.args.profile.as_deref());
+        if self.args.profile.is_none() && driver::fs::is_missing(&path) {
+            return Err(CliError::NoDefaultProfile {
+                project: self.args.project.clone(),
+            });
         }
-        timed("write", || match self.args.output.as_deref() {
-            Some(dest) if is_named_output(dest) => {
-                let name = dest
+        let desired = confit_engine::Engine::new(self.stores.clone()).evaluate(&path)?;
+        let prepared = confit_runtime::prepare(&self.stores, desired)?;
+        let text = render_prepared(&prepared);
+        if let Some(output) = self.args.output.as_deref() {
+            if is_named_output(output) {
+                let name = output
                     .to_str()
                     .and_then(|text| text.strip_prefix('@'))
                     .unwrap_or("");
-                slots.store_named(name, &built).map_err(CliError::from)
+                self.stores
+                    .slots()
+                    .store_named(name, &prepared.desired)
+                    .map_err(CliError::from)?;
+            } else {
+                self.stores
+                    .bundles()
+                    .write(&prepared.desired, output)
+                    .map(|_| ())
+                    .map_err(CliError::from)?;
             }
-            Some(dest) => self
-                .stores
-                .bundles()
-                .write(&built, dest)
-                .map(|_| ())
-                .map_err(CliError::from),
-            None => Ok(()),
-        })?;
-        Ok(PlanOutcome {
-            built,
-            previous,
-            drift: drifts,
-            first_run,
-        })
+        }
+        Ok(PlanReport { text })
     }
 }
 
-/// Reports true while one output value names a stored slot.
-pub fn is_named_output(raw: &Path) -> bool {
+/// Report whether one output value shows a stored slot.
+fn is_named_output(raw: &Path) -> bool {
     raw.to_str().is_some_and(|text| text.starts_with('@'))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn named_output_stays_exempt_from_cb_suffix() {
-        assert!(
-            is_named_output(Path::new("@work")),
-            "@name reads as slot output"
-        );
-        assert!(
-            !is_named_output(Path::new("plan.cb")),
-            "explicit path reads as file output"
-        );
-        assert!(
-            !is_named_output(Path::new("plan")),
-            "bare path reads as file output"
-        );
-        assert!(
-            !is_named_output(Path::new("plan.CB")),
-            "uppercase suffix reads as file output"
-        );
-    }
 }

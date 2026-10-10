@@ -3,7 +3,7 @@
 
 use confit_model::drift::Drift;
 
-/// Renders drift entries as display lines, one or more per entry.
+/// Render drift entries as display lines, one or more per entry.
 pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in entries {
@@ -67,7 +67,7 @@ pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
     lines
 }
 
-/// Renders one scalar leaf value as display text.
+/// Render one scalar leaf value as display text.
 fn leaf_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(text) => text.clone(),

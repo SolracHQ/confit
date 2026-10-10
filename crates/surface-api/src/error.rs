@@ -56,7 +56,7 @@ pub enum ApiError {
 }
 
 impl ApiError {
-    /// Builds one mismatch error naming its field.
+    /// Build one mismatch error with its field.
     pub fn mismatch(
         field: impl Into<String>,
         want: impl Into<String>,
@@ -79,9 +79,9 @@ impl From<ApiError> for mlua::Error {
 /// Surface result alias.
 pub type Result<T> = std::result::Result<T, ApiError>;
 
-/// Unwraps one Lua failure back into its surface shape.
+/// Unwrap one Lua failure back into its surface shape.
 ///
-/// - Foreign Lua failures ride the Lua variant.
+/// - Foreign Lua failures take the Lua variant.
 pub(crate) fn api_of(error: mlua::Error) -> ApiError {
     match error.downcast_ref::<ApiError>().cloned() {
         Some(known) => known,

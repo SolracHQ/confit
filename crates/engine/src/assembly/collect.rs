@@ -1,5 +1,4 @@
-//! Collected profile documents.
-//! Names with documents keyed by destination route.
+//! Collect profile documents keyed by destination route.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,7 +7,7 @@ use confit_surface_api::{Document, Profile};
 
 use crate::error::{EngineError, Result};
 
-/// Rejects repeated config names holding the first repeat.
+/// Reject repeated config names. The error holds the first repeat.
 ///
 /// # Errors
 ///
@@ -26,7 +25,7 @@ pub(super) fn check_names(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-/// Collects one profile's documents keyed by destination route.
+/// Collect one profile's documents keyed by destination route.
 ///
 /// - Profile documents join first, config documents follow in order.
 ///

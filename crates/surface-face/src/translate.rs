@@ -6,7 +6,7 @@ use serde_json::Value as Json;
 
 use mlua_extras::typed::{Index, Type};
 
-/// Implements Typed through the schemars face of a data shape.
+/// Implement Typed through the schemars face of a data shape.
 #[macro_export]
 macro_rules! typed {
     ($target:ty) => {
@@ -18,9 +18,9 @@ macro_rules! typed {
     };
 }
 
-/// Declares one sealed handle face under its type name.
+/// Declare one sealed handle face under its type name.
 ///
-/// Userdata ends schemas.
+/// Handles seal their schemas as userdata.
 #[macro_export]
 macro_rules! handle_schema {
     ($target:ty) => {
@@ -36,7 +36,7 @@ macro_rules! handle_schema {
     };
 }
 
-/// Derives one stub face from the schemars schema of a data shape.
+/// Derive one stub face from the schemars schema of a data shape.
 pub fn face_of<T: JsonSchema>() -> Type {
     match serde_json::to_value(schemars::schema_for!(T)) {
         Ok(mut root) => {
@@ -47,7 +47,7 @@ pub fn face_of<T: JsonSchema>() -> Type {
     }
 }
 
-/// Points recursive `#` self refs at the named root definition.
+/// Point recursive `#` self refs at the named root definition.
 fn root_refs(node: &mut Json, name: &str) {
     match node {
         Json::Object(fields) => {
@@ -67,7 +67,7 @@ fn root_refs(node: &mut Json, name: &str) {
     }
 }
 
-/// Translates one schemars shape into its stub face.
+/// Translate one schemars shape into its stub face.
 pub fn translate(node: &Json) -> Type {
     if node.as_bool() == Some(true) {
         return json_value();
@@ -130,7 +130,7 @@ pub fn translate(node: &Json) -> Type {
     }
 }
 
-/// Returns the face for one JSON type name.
+/// Return the face for one JSON type name.
 fn translate_type(name: &str) -> Type {
     match name {
         "string" => Type::string(),
@@ -152,7 +152,7 @@ fn translate_array(node: &Json) -> Type {
     }
 }
 
-/// Collects sibling object fields beside a composition key.
+/// Collect sibling object fields beside a composition key.
 fn sibling_fields(node: &Json, composed: &str) -> Option<Vec<(Index, Type)>> {
     let mut sibling = node.clone();
     if let Some(object) = sibling.as_object_mut() {
@@ -172,7 +172,7 @@ fn sibling_fields(node: &Json, composed: &str) -> Option<Vec<(Index, Type)>> {
     }
 }
 
-/// Merges sibling fields into one union member.
+/// Merge sibling fields into one union member.
 ///
 /// - Member fields win on clashes.
 fn merge_fields(face: Type, extra: &[(Index, Type)]) -> Type {
@@ -188,7 +188,7 @@ fn merge_fields(face: Type, extra: &[(Index, Type)]) -> Type {
         _ => face,
     }
 }
-/// Returns the JSON value face holding null with scalars and tables.
+/// Return the JSON value face with null, scalars, and tables.
 pub fn json_value() -> Type {
     Type::union(vec![
         Type::nil(),
@@ -287,7 +287,7 @@ mod tests {
             More(Vec<Linked>),
         }
         let text = format!("{:?}", face_of::<Linked>());
-        assert!(text.contains("Linked"), "names the root: {text}");
+        assert!(text.contains("Linked"), "the text shows the root: {text}");
         assert!(
             !text.contains("\"#\""),
             "never leaks the root pointer: {text}"

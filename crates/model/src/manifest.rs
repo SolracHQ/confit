@@ -7,24 +7,24 @@ use crate::hook::Hook;
 
 use serde::{Deserialize, Serialize};
 
-/// Manifest format version written by every bundle build.
+/// Manifest format version for bundle builds.
 pub const MANIFEST_VERSION: u32 = 7;
 
-/// Persisted plan holding metadata and blob references.
+/// Persisted plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// The plan format version.
     pub version: u32,
-    /// Holds persisted documents in path order.
+    /// Plan documents in path order.
     pub documents: Vec<Document>,
-    /// Holds merged hooks in first-seen order.
+    /// Plan hooks in first-seen order.
     #[serde(default)]
     pub hooks: Vec<Hook>,
 }
 
 impl Manifest {
-    /// Builds an empty manifest at the current version.
+    /// Build an empty manifest at the current version.
     pub fn empty() -> Self {
         Self {
             version: MANIFEST_VERSION,
@@ -33,7 +33,7 @@ impl Manifest {
         }
     }
 
-    /// Builds the desired manifest from documents with filled hashes.
+    /// Build the desired manifest from documents with filled hashes.
     ///
     /// - Documents sort by destination display.
     ///
@@ -56,7 +56,7 @@ impl Manifest {
         })
     }
 
-    /// Lists cloned blob refs in document order.
+    /// List cloned blob refs in document order.
     pub fn refs(&self) -> Vec<BlobRef> {
         let mut refs = Vec::new();
         for document in &self.documents {
@@ -65,7 +65,7 @@ impl Manifest {
         refs
     }
 
-    /// Serializes one manifest as pretty JSON.
+    /// Serialize one manifest as pretty JSON.
     ///
     /// # Errors
     ///

@@ -15,22 +15,22 @@ pub struct VerbDecl<'a> {
     pub name: &'a str,
     /// The verb documentation.
     pub documentation: &'a str,
-    /// Holds parameter names with documentation.
+    /// The verb parameter docs.
     pub params: &'a [(&'a str, &'a str)],
-    /// Holds return documentation in order.
+    /// The verb return docs in order.
     pub rets: &'a [&'a str],
 }
 
 /// One module under building.
 pub struct Module {
-    /// Holds the module table.
+    /// The registered verbs.
     table: Table,
     /// The module face.
     face: DefinitionBuilder,
 }
 
 impl Module {
-    /// Starts one module holding an empty table with a documented face.
+    /// Start one module with an empty table and a documented face.
     pub fn start(lua: &Lua, documentation: &'static str) -> mlua::Result<Self> {
         Ok(Self {
             table: lua.create_table()?,
@@ -38,26 +38,26 @@ impl Module {
         })
     }
 
-    /// Registers one handle class under its trailing type name.
+    /// Register one handle class under its trailing type name.
     pub fn register<T: Typed>(&mut self) {
         let face = std::mem::take(&mut self.face).register::<T>(class_name::<T>());
         self.face = face;
     }
 
-    /// Registers one alias face under its name.
+    /// Register one alias face under its name.
     pub fn register_face(&mut self, name: impl Into<Cow<'static, str>>, face: Type) {
         let taken = std::mem::take(&mut self.face);
         self.face = taken.register_as(name, face);
     }
 
-    /// Registers one schema face under its trailing type name.
+    /// Register one schema face under its trailing type name.
     pub fn register_schema<T: JsonSchema>(&mut self) {
         let face = crate::translate::face_of::<T>();
         let taken = std::mem::take(&mut self.face);
         self.face = taken.register_as(class_name::<T>(), face);
     }
 
-    /// Declares one verb with its face.
+    /// Declare one verb with its face.
     ///
     /// # Errors
     ///
@@ -81,13 +81,13 @@ impl Module {
         Ok(())
     }
 
-    /// Finishes one module into its table with its face.
+    /// Finish one module into its table with its face.
     pub fn finish(self) -> (Table, DefinitionBuilder) {
         (self.table, self.face)
     }
 }
 
-/// One named type ref returning its face from the Rust type name.
+/// One named type ref with its face from the Rust type name.
 pub struct Named<T>(PhantomData<T>);
 
 impl<T> Typed for Named<T> {
@@ -96,9 +96,9 @@ impl<T> Typed for Named<T> {
     }
 }
 
-/// Declares one union enum with its face over named member types.
+/// Declare one union enum with its face over named member types.
 ///
-/// The member list owns the enum.
+/// Member faces form the enum face.
 #[macro_export]
 macro_rules! union_face {
     (
@@ -121,10 +121,10 @@ macro_rules! union_face {
     };
 }
 
-/// Declares one table face from named member faces.
+/// Declare one table face from named member faces.
 ///
-/// Required fields return their face, optional fields union with nil. Field
-/// names stringify from the declared idents, member faces arrive as type
+/// Required fields hold their face, optional fields union with nil. Field
+/// names come from the declared idents, member faces come as type
 /// expressions.
 #[macro_export]
 macro_rules! table_face {
@@ -154,7 +154,7 @@ macro_rules! table_face {
     };
 }
 
-/// Wraps one module table.
+/// Wrap one module table.
 ///
 /// # Errors
 ///
@@ -173,7 +173,7 @@ pub fn readonly(lua: &Lua, name: &'static str, inner: Table) -> mlua::Result<Val
     Ok(Value::Table(proxy))
 }
 
-/// Names one registered type after its trailing segment.
+/// Return the trailing segment of one registered type name.
 pub fn class_name<T>() -> String {
     std::any::type_name::<T>()
         .rsplit("::")

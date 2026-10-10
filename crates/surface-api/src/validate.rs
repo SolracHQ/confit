@@ -19,11 +19,11 @@ use crate::document::{
     Document, LinkDocument, OpaqueDocument, RcDocument, StructuredDocument, TextDocument, Tree,
     TreeDocument, TreeSlot,
 };
-use crate::handles::Handle;
+use crate::handles::{Archive, Handle};
 use crate::hook::HookFace;
 use crate::patch::{Patch, RcPatch, StructuredPatch, decode_patch};
 
-/// Builds the validate module table with its face.
+/// Build the validate module table with its face.
 pub fn build(lua: &Lua) -> mlua::Result<(Value, DefinitionBuilder)> {
     let mut module = Module::start(lua, "Shape checks over config tables.")?;
     module.register::<TextDocument>();
@@ -36,6 +36,7 @@ pub fn build(lua: &Lua) -> mlua::Result<(Value, DefinitionBuilder)> {
     module.register::<OpaqueDocument>();
     module.register::<TreeDocument>();
     module.register::<Handle>();
+    module.register::<Archive>();
     module.register::<Tree>();
     module.register::<TreeSlot>();
     module.register::<Document>();
@@ -82,7 +83,8 @@ pub fn build(lua: &Lua) -> mlua::Result<(Value, DefinitionBuilder)> {
     Ok((readonly(lua, "confit.validate", table)?, face))
 }
 
-/// Checks one body table, returning true with nil or false with the reason.
+/// Check one body table with true and nil for good shapes and false with
+/// the reason for bad shapes.
 fn document_impl(lua: &Lua, body: Shape<Named<Document>>) -> mlua::Result<(bool, Option<String>)> {
     Ok(checked(
         Document::from_lua(Value::Table(body.into_inner()), lua)
@@ -91,7 +93,8 @@ fn document_impl(lua: &Lua, body: Shape<Named<Document>>) -> mlua::Result<(bool,
     ))
 }
 
-/// Checks one config table, returning true with nil or false with the reason.
+/// Check one config table with true and nil for good shapes and false with
+/// the reason for bad shapes.
 fn config_impl(lua: &Lua, config: Shape<ConfigFace>) -> mlua::Result<(bool, Option<String>)> {
     Ok(checked(
         decode_config(lua, &Value::Table(config.into_inner()))
@@ -100,7 +103,8 @@ fn config_impl(lua: &Lua, config: Shape<ConfigFace>) -> mlua::Result<(bool, Opti
     ))
 }
 
-/// Checks one patch table, returning true with nil or false with the reason.
+/// Check one patch table with true and nil for good shapes and false with
+/// the reason for bad shapes.
 fn patch_impl(lua: &Lua, patch: Shape<Patch>) -> mlua::Result<(bool, Option<String>)> {
     Ok(checked(
         decode_patch(lua, &Value::Table(patch.into_inner()), None)
@@ -109,7 +113,7 @@ fn patch_impl(lua: &Lua, patch: Shape<Patch>) -> mlua::Result<(bool, Option<Stri
     ))
 }
 
-/// One config face holding name with documents, patches and hooks.
+/// One config face.
 struct ConfigFace;
 
 confit_surface_face::table_face!(ConfigFace, {
@@ -119,7 +123,7 @@ confit_surface_face::table_face!(ConfigFace, {
     optional hooks: Type::array(Named::<HookFace>::ty()),
 });
 
-/// Returns one bool with reason pair from its outcome.
+/// Return one bool with reason pair from its outcome.
 fn checked(outcome: std::result::Result<(), String>) -> (bool, Option<String>) {
     match outcome {
         Ok(()) => (true, None),
@@ -148,7 +152,6 @@ mod tests {
         let stores = confit_store::Stores::new(
             confit_store::StoreRoots {
                 config_base: directory.path().join("config"),
-                cache_base: directory.path().join("cache"),
                 temp_base: directory.path().join("temp"),
                 project_root: root,
             },
@@ -199,7 +202,7 @@ mod tests {
             return reason
         "#;
         let text = reason_of(run(&lua, source));
-        assert!(!text.is_empty(), "reason names the fault: {text}");
+        assert!(!text.is_empty(), "reason shows the fault: {text}");
     }
 
     #[test]
@@ -230,7 +233,7 @@ mod tests {
             return reason
         "#;
         let text = reason_of(run(&lua, source));
-        assert!(text.contains("nope"), "reason names the key: {text}");
+        assert!(text.contains("nope"), "reason shows the key: {text}");
     }
 
     #[test]
@@ -247,7 +250,7 @@ mod tests {
         let text = reason_of(run(&lua, source));
         assert!(
             text.contains("config name"),
-            "reason names the field: {text}"
+            "reason shows the field: {text}"
         );
     }
 
@@ -332,7 +335,7 @@ mod tests {
         ];
         for (source, want) in cases {
             let text = reason_of(run(&lua, source));
-            assert!(text.contains(want), "reason names the fault: {text}");
+            assert!(text.contains(want), "reason shows the fault: {text}");
         }
     }
 
@@ -380,7 +383,7 @@ mod tests {
         ];
         for (source, want) in cases {
             let text = reason_of(run(&lua, source));
-            assert!(text.contains(want), "reason names the fault: {text}");
+            assert!(text.contains(want), "reason shows the fault: {text}");
         }
     }
 
@@ -434,8 +437,8 @@ mod tests {
             ]
             .concat();
             let text = reason_of(run(&lua, &source));
-            assert!(text.contains(first), "reason names the fault: {text}");
-            assert!(text.contains(second), "reason names the fault: {text}");
+            assert!(text.contains(first), "reason shows the fault: {text}");
+            assert!(text.contains(second), "reason shows the fault: {text}");
         }
     }
 }

@@ -1,6 +1,6 @@
 -- Welcome to confit. This profile builds your shell setup.
--- Profiles return three things: shells to render for, documents
--- holding file contents, and configs grouping your changes.
+-- Profiles return three things. Shells select render targets, documents describe
+-- file contents, and configs group your changes.
 
 -- A config groups your changes under one name. Start with one
 -- per tool or area. Configs hold patches, which modify

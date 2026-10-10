@@ -22,7 +22,7 @@ pub use document::{
     StructuredDocument, TextDocument, Tree, TreeDocument, TreeSlot,
 };
 pub use error::{ApiError, Result};
-pub use handles::Handle;
+pub use handles::{Archive, Handle};
 pub use hook::HookFace;
 pub use patch::{Level, Patch, RcPatch, StructuredPatch};
 pub use version::API_VERSION;

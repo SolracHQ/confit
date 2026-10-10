@@ -1,9 +1,10 @@
 use clap::Parser;
 
-use confit_cli::cli::{Cli, Command, resolve_root};
+use confit_cli::actions::apply::ApplyRunner;
+use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
 use confit_cli::presentation::spinner::Live;
 use confit_cli::sinks::Sinks;
-use confit_runtime::Applier;
+use confit_driver as driver;
 use confit_store::{StoreRoots, Stores};
 
 fn main() {
@@ -13,22 +14,26 @@ fn main() {
     }
 }
 
-/// Runs the selected subcommand to completion.
+/// Run the selected subcommand to completion.
 ///
-/// - The log path prints after the summary.
+/// - Log path after the summary.
 /// - Drift notes lead with success.
 fn run() -> confit_cli::error::Result<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);
-    if let Some(path) = cli.log_file.as_mut() {
-        *path = confit_cli::cli::expand_tilde(path);
-    }
-    let log_path = match cli.log_file.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => std::env::temp_dir().join(format!("confit-{}.log", std::process::id())),
-    };
+    let logs_dir = resolve_logs_dir(cli.logs_dir.as_deref());
+    let log_path = logs_dir.join(APP_LOG_NAME);
+    let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
+    driver::fs::create_dir_all(&hooks_dir)
+        .map_err(|error| confit_cli::error::CliError::from_write_io(&hooks_dir, error))?;
     let dispatch = fern::Dispatch::new()
-        .format(|out, message, _record| out.finish(format_args!("{message}")))
+        .format(|out, message, _record| {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|span| span.as_millis())
+                .unwrap_or(0);
+            out.finish(format_args!("[{stamp}] {message}"))
+        })
         .level(cli.log_level)
         .chain(fern::log_file(&log_path).map_err(|error| {
             confit_cli::error::CliError::Unknown {
@@ -40,14 +45,14 @@ fn run() -> confit_cli::error::Result<()> {
     let _ = dispatch.apply();
     match &cli.command {
         Command::Plan(args) => run_plan(args, &log_path),
-        Command::Apply(args) => run_apply(args, &log_path),
+        Command::Apply(args) => run_apply(args, &log_path, &hooks_dir),
         Command::Init(args) => run_init(args),
         Command::Export(args) => run_export(args),
         Command::Delete(args) => run_delete(args),
     }
 }
 
-/// Runs plan with summary output.
+/// Run plan with summary output.
 fn run_plan(
     args: &confit_cli::cli::PlanArgs,
     log_path: &std::path::Path,
@@ -55,63 +60,56 @@ fn run_plan(
     let live = Live::new();
     let sender = live.sink();
     let mut roots = StoreRoots::standard();
-    roots.project_root = resolve_root(&args.shared.root, Some(&args.profile));
+    roots.project_root = args.project.clone();
     let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
         print: live.print_handle(),
         suspend: live.suspend_handle(),
     };
-    let outcome = confit_cli::actions::plan::PlanRunner {
+    let prepared = confit_cli::actions::plan::PlanRunner {
         args,
         stores: stores.clone(),
-        applier: Applier::with_stores(stores, sender),
         sinks,
     }
     .execute()?;
     live.finish();
-    let lifecycle =
-        confit_model::hook::diff_lifecycle(&outcome.built.hooks, &outcome.previous.hooks);
-    let summary = confit_cli::presentation::summary::Summary {
-        built: &outcome.built,
-        previous: &outcome.previous,
-        drift: &outcome.drift,
-        first_run: outcome.first_run,
-        hooks: confit_cli::presentation::summary::Hooks {
-            lifecycle: &lifecycle,
-            evaluated: &[],
-        },
-    };
-    anstream::println!("{}", summary.render());
+    anstream::println!("{}", prepared.text);
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())
 }
 
-/// Runs apply with preview and prompts.
+/// Run apply with preview and prompts.
 fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
+    hooks_dir: &std::path::Path,
 ) -> confit_cli::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let live = Live::new();
     let sender = live.sink();
     let mut roots = StoreRoots::standard();
-    roots.project_root = resolve_root(&args.shared.root, Some(&args.source));
+    roots.project_root = if driver::fs::is_dir(&args.source) {
+        args.source.clone()
+    } else {
+        apply_root(&args.source)
+    };
     let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
         print: live.print_handle(),
         suspend: live.suspend_handle(),
     };
-    let report = match confit_cli::actions::apply::ApplyRunner::run(
+    let report = match ApplyRunner::from_args(
         args,
         &mut input,
         stores.clone(),
-        Applier::with_stores(stores, sender),
         sinks,
-        Some(log_path.to_path_buf()),
-    ) {
+        hooks_dir.to_path_buf(),
+    )
+    .and_then(ApplyRunner::execute)
+    {
         Ok(report) => report,
         Err(error) => {
             live.finish();
@@ -132,7 +130,7 @@ fn run_apply(
     Ok(())
 }
 
-/// Runs export writing a bundle file or printing its manifest.
+/// Run export and write a bundle file or print its manifest.
 fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let stores = Stores::new(StoreRoots::standard(), live.sink());
@@ -145,7 +143,7 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<(
     Ok(())
 }
 
-/// Runs delete dropping one named slot and orphan blobs.
+/// Run delete and drop one named slot and orphan blobs.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<()> {
     let live = Live::new();
     let stores = Stores::new(StoreRoots::standard(), live.sink());
@@ -154,7 +152,7 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<(
     Ok(())
 }
 
-/// Runs init with project scaffolding on host seams.
+/// Run init with project scaffolding on host seams.
 fn run_init(args: &confit_cli::cli::InitArgs) -> confit_cli::error::Result<()> {
     let report = confit_cli::actions::init::InitRunner { args }.execute()?;
     anstream::println!(

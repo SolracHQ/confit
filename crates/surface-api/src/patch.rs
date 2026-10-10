@@ -39,7 +39,7 @@ pub enum Level {
 confit_surface_face::typed!(Level);
 
 impl Level {
-    /// Reads the numeric rank.
+    /// Return the numeric rank.
     pub fn rank(self) -> u8 {
         match self {
             Self::Minor => 0,
@@ -50,7 +50,7 @@ impl Level {
         }
     }
 
-    /// Parses one level name in any letter case.
+    /// Parse one level name in any letter case.
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "minor" => Some(Self::Minor),
@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for Level {
 struct PatchShape {
     /// The patch target route.
     target: Route,
-    /// The structured format under patching. None rides rc.
+    /// The structured format under patching with an rc default.
     #[serde(default)]
     format: Option<String>,
     /// The patch merge level. Higher ranks apply first.
@@ -112,7 +112,7 @@ confit_surface_face::table_face!(StructuredPatch, {
 });
 
 impl StructuredPatch {
-    /// Builds one structured patch.
+    /// Build one structured patch.
     pub fn new(
         target: Route,
         format: StructuredFormat,
@@ -129,27 +129,27 @@ impl StructuredPatch {
         }
     }
 
-    /// Reads the patch target route.
+    /// Return the patch target route.
     pub fn target(&self) -> &Route {
         &self.target
     }
 
-    /// Reads the structured format under patching.
+    /// Return the structured format under patching.
     pub fn format(&self) -> StructuredFormat {
         self.format
     }
 
-    /// Reads the patch callback over live data.
+    /// Return the patch callback over live data.
     pub fn apply(&self) -> &Function {
         self.apply.as_function()
     }
 
-    /// Reads the patch merge level.
+    /// Return the patch merge level.
     pub fn priority(&self) -> Level {
         self.priority
     }
 
-    /// Reads the owner config name.
+    /// Return the owner config name.
     pub fn owner(&self) -> Option<&str> {
         self.owner.as_deref()
     }
@@ -191,7 +191,7 @@ confit_surface_face::table_face!(RcPatch, {
 });
 
 impl RcPatch {
-    /// Builds one rc patch.
+    /// Build one rc patch.
     pub fn new(target: Route, apply: Function, priority: Level, owner: Option<String>) -> Self {
         Self {
             target,
@@ -201,22 +201,22 @@ impl RcPatch {
         }
     }
 
-    /// Reads the patch target route.
+    /// Return the patch target route.
     pub fn target(&self) -> &Route {
         &self.target
     }
 
-    /// Reads the patch callback over live sections.
+    /// Return the patch callback over live sections.
     pub fn apply(&self) -> &Function {
         self.apply.as_function()
     }
 
-    /// Reads the patch merge level.
+    /// Return the patch merge level.
     pub fn priority(&self) -> Level {
         self.priority
     }
 
-    /// Reads the owner config name.
+    /// Return the owner config name.
     pub fn owner(&self) -> Option<&str> {
         self.owner.as_deref()
     }
@@ -244,7 +244,7 @@ impl FromLua for RcPatch {
     }
 }
 
-// The union face rides beside its manual FromLua twin.
+// The union face sits beside its manual FromLua twin.
 confit_surface_face::union_face! {
     /// One patch declaration in either shape.
     #[derive(Debug, Clone)]
@@ -263,7 +263,7 @@ impl FromLua for Patch {
 }
 
 impl Patch {
-    /// Reads the patch target route.
+    /// Return the patch target route.
     pub fn target(&self) -> &Route {
         match self {
             Self::Structured(found) => found.target(),
@@ -271,7 +271,7 @@ impl Patch {
         }
     }
 
-    /// Reads the patch callback over live data.
+    /// Return the patch callback over live data.
     pub fn apply(&self) -> &Function {
         match self {
             Self::Structured(found) => found.apply(),
@@ -279,7 +279,7 @@ impl Patch {
         }
     }
 
-    /// Reads the patch merge level.
+    /// Return the patch merge level.
     pub fn priority(&self) -> Level {
         match self {
             Self::Structured(found) => found.priority(),
@@ -287,7 +287,7 @@ impl Patch {
         }
     }
 
-    /// Reads the owner config name.
+    /// Return the owner config name.
     pub fn owner(&self) -> Option<&str> {
         match self {
             Self::Structured(found) => found.owner(),
@@ -295,7 +295,7 @@ impl Patch {
         }
     }
 
-    /// Stamps one owner config name over the patch.
+    /// Stamp one owner config name over the patch.
     fn set_owner(&mut self, owner: &str) {
         match self {
             Self::Structured(found) => found.owner = Some(owner.to_owned()),
@@ -304,9 +304,9 @@ impl Patch {
     }
 }
 
-/// Decodes one patch table into its declaration.
+/// Decode one patch table into its declaration.
 ///
-/// - The config name stamps the patch owner.
+/// - Config names stamp the patch owner.
 ///
 /// # Errors
 ///
@@ -329,7 +329,7 @@ pub(crate) fn decode_patch(
     Ok(patch)
 }
 
-/// Decodes one patch table from its value.
+/// Decode one patch table from its value.
 ///
 /// # Errors
 ///
@@ -345,7 +345,7 @@ fn patch_table(value: &Value) -> crate::error::Result<Table> {
     }
 }
 
-/// Reports whether one patch table holds the format marker.
+/// Report whether one patch table holds the format marker.
 ///
 /// # Errors
 ///
@@ -371,7 +371,7 @@ fn patch_has_format(table: &Table) -> crate::error::Result<bool> {
     Ok(false)
 }
 
-/// Decodes one patch shape past its function callback.
+/// Decode one patch shape past its function callback.
 ///
 /// # Errors
 ///
@@ -393,7 +393,7 @@ fn decode_stripped_shape(lua: &Lua, table: &Table) -> mlua::Result<PatchShape> {
     decode_named_shape(Value::Table(probe), "patch")
 }
 
-/// Decodes one required patch callback over its live document type.
+/// Decode one required patch callback over its live document type.
 ///
 /// # Errors
 ///
@@ -407,7 +407,7 @@ fn patch_required_apply<Document: Typed>(
         .map_err(|_| ApiError::mismatch("patch apply", "a function", received(&item)).into())
 }
 
-/// Decodes one patch format name through its structured shape.
+/// Decode one patch format name through its structured shape.
 ///
 /// # Errors
 ///
@@ -467,7 +467,7 @@ mod tests {
                 Ok(_) => panic!("foreign rc patch passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(want), "names the fault: {text}");
+                    assert!(text.contains(want), "the text shows the fault: {text}");
                 }
             }
         }
@@ -485,7 +485,7 @@ mod tests {
                 assert_eq!(found.target().display(), "home('app.json')");
                 assert_eq!(found.format(), StructuredFormat::Toml);
             }
-            Ok(Patch::Rc(_)) => panic!("format presence rides structured"),
+            Ok(Patch::Rc(_)) => panic!("format presence means structured"),
             Err(error) => panic!("patch decodes: {error}"),
         }
         let bare = config_of(
@@ -496,7 +496,7 @@ mod tests {
             Ok(Patch::Rc(found)) => {
                 assert_eq!(found.target().display(), "home('app.sh')");
             }
-            Ok(Patch::Structured(_)) => panic!("format absence rides rc"),
+            Ok(Patch::Structured(_)) => panic!("format absence means rc"),
             Err(error) => panic!("rc patch decodes: {error}"),
         }
     }
@@ -528,7 +528,7 @@ mod tests {
                 Ok(_) => panic!("foreign patch passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(want), "names the fault: {text}");
+                    assert!(text.contains(want), "the text shows the fault: {text}");
                 }
             }
         }
@@ -621,7 +621,7 @@ mod tests {
                 Ok(_) => panic!("foreign priority passes: {source}"),
                 Err(error) => {
                     let text = error.to_string();
-                    assert!(text.contains(want), "names the field: {text}");
+                    assert!(text.contains(want), "the text shows the field: {text}");
                 }
             }
         }
@@ -638,7 +638,7 @@ mod tests {
             Ok(_) => panic!("table owner passes"),
             Err(error) => {
                 let text = error.to_string();
-                assert!(text.contains("owner"), "names the key: {text}");
+                assert!(text.contains("owner"), "the text shows the key: {text}");
             }
         }
     }

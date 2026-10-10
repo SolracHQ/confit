@@ -10,7 +10,7 @@ use crate::module::Named;
 
 /// One Lua callback over its live document type.
 ///
-/// The document type names the face, the function takes calls.
+/// Document types show the face and functions take the calls.
 pub struct Callback<Document>(Function, PhantomData<Document>);
 
 impl<Document> Clone for Callback<Document> {
@@ -26,17 +26,17 @@ impl<Document> std::fmt::Debug for Callback<Document> {
 }
 
 impl<Document> Callback<Document> {
-    /// Wraps one function as its callback.
+    /// Wrap one function as its callback.
     pub fn new(function: Function) -> Self {
         Self(function, PhantomData)
     }
 
-    /// Reads the stored function reference.
+    /// Return the stored function reference.
     pub fn as_function(&self) -> &Function {
         &self.0
     }
 
-    /// Returns the stored function.
+    /// Return the stored function.
     pub fn into_inner(self) -> Function {
         self.0
     }

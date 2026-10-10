@@ -70,7 +70,7 @@ fn duplicate_destinations_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('.bashrc')"),
-                "names the destination: {text}"
+                "the text shows the destination: {text}"
             );
         }
     }
@@ -133,7 +133,7 @@ fn patches_apply_over_declared_documents() {
                     assert_eq!(
                         data.get("extra").and_then(|item| item.as_str()),
                         Some("yes"),
-                        "fresh keys ride the writing patch",
+                        "fresh keys take the writing patch",
                     );
                 }
                 _ => panic!("patched document stays structured"),
@@ -153,8 +153,11 @@ fn duplicate_names_fail() {
         Ok(_) => panic!("duplicate names pass"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("same"), "names the config: {text}");
-            assert!(text.contains("already defined"), "names the fault: {text}");
+            assert!(text.contains("same"), "the text shows the config: {text}");
+            assert!(
+                text.contains("already defined"),
+                "the text shows the fault: {text}"
+            );
         }
     }
 }
@@ -230,9 +233,9 @@ fn text_bases_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('note.txt')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("text"), "names the base: {text}");
+            assert!(text.contains("text"), "the text shows the base: {text}");
         }
     }
 }
@@ -264,10 +267,10 @@ fn format_gaps_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('config.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("json"), "names the base: {text}");
-            assert!(text.contains("toml"), "names the patch: {text}");
+            assert!(text.contains("json"), "the text shows the base: {text}");
+            assert!(text.contains("toml"), "the text shows the patch: {text}");
         }
     }
 }
@@ -333,10 +336,10 @@ fn rc_text_bases_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('note.txt')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("'text'"), "names the base: {text}");
-            assert!(text.contains("'rc'"), "names the patch: {text}");
+            assert!(text.contains("'text'"), "the text shows the base: {text}");
+            assert!(text.contains("'rc'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -366,9 +369,12 @@ fn rc_format_gaps_fail() {
         Ok(_) => panic!("rc format gap passes"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("home('.bashrc')"), "names the target: {text}");
-            assert!(text.contains("'rc'"), "names the base: {text}");
-            assert!(text.contains("'json'"), "names the patch: {text}");
+            assert!(
+                text.contains("home('.bashrc')"),
+                "the text shows the target: {text}"
+            );
+            assert!(text.contains("'rc'"), "the text shows the base: {text}");
+            assert!(text.contains("'json'"), "the text shows the patch: {text}");
         }
     }
 }
@@ -445,10 +451,10 @@ fn rc_patches_over_structured_bases_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('config.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("json"), "names the base: {text}");
-            assert!(text.contains("rc"), "names the patch: {text}");
+            assert!(text.contains("json"), "the text shows the base: {text}");
+            assert!(text.contains("rc"), "the text shows the patch: {text}");
         }
     }
 }
@@ -465,10 +471,16 @@ fn mixed_structured_formats_fail() {
             let text = error.to_string();
             assert!(
                 text.contains("home('fresh.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("json"), "names the first format: {text}");
-            assert!(text.contains("toml"), "names the second format: {text}");
+            assert!(
+                text.contains("json"),
+                "the text shows the first format: {text}"
+            );
+            assert!(
+                text.contains("toml"),
+                "the text shows the second format: {text}"
+            );
         }
     }
 }
@@ -485,10 +497,10 @@ fn mixed_kind_same_target_gaps() {
             let text = error.to_string();
             assert!(
                 text.contains("home('config.json')"),
-                "names the target: {text}"
+                "the text shows the target: {text}"
             );
-            assert!(text.contains("json"), "names the base: {text}");
-            assert!(text.contains("rc"), "names the patch: {text}");
+            assert!(text.contains("json"), "the text shows the base: {text}");
+            assert!(text.contains("rc"), "the text shows the patch: {text}");
         }
     }
 }
@@ -503,7 +515,7 @@ fn foreign_patch_keys_fail_naming_keys() {
         Ok(_) => panic!("foreign patch key passes"),
         Err(error) => {
             let text = error.to_string();
-            assert!(text.contains("nope"), "names the key: {text}");
+            assert!(text.contains("nope"), "the text shows the key: {text}");
         }
     }
 }

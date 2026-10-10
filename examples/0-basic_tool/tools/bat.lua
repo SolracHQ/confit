@@ -1,4 +1,4 @@
-local mise = require("plugins/mise")
+local mise = require("plugins._.mise")
 
 return mise.package({
 	name = "bat",

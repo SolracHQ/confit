@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use confit_driver::process::ProcessFault;
 use confit_engine::error::EngineError;
+use confit_model::condition::Condition;
 use confit_model::error::Error as ModelError;
 use confit_runtime::error::RuntimeError;
 use confit_store::blob::error::BlobError;
@@ -13,28 +15,30 @@ use confit_store::bundle::error::BundleError;
 use confit_store::faults::AccessFault;
 use confit_store::slot::error::SlotError;
 
+use crate::presentation::hooks::describe_condition;
+
 /// Cli failure shapes.
 #[derive(Debug, Error)]
 pub enum CliError {
-    /// Model failure holding the nested model error.
+    /// Model failure.
     #[error(transparent)]
     Model(#[from] ModelError),
-    /// Engine failure holding the nested engine error.
+    /// Engine failure.
     #[error(transparent)]
     Engine(#[from] EngineError),
-    /// Runtime failure holding the nested runtime error.
+    /// Runtime failure.
     #[error(transparent)]
-    Runtime(#[from] RuntimeError),
-    /// Slot failure holding the nested slot error.
+    Runtime(RuntimeError),
+    /// Slot failure.
     #[error(transparent)]
     Slot(#[from] SlotError),
-    /// Bundle failure holding the nested bundle error.
+    /// Bundle failure.
     #[error(transparent)]
     Bundle(#[from] BundleError),
-    /// Blob failure holding the nested blob error.
+    /// Blob failure.
     #[error(transparent)]
     Blob(#[from] BlobError),
-    /// Unknown failure holding its context with the message.
+    /// Unknown failure.
     #[error("cannot use {context}: {message}")]
     Unknown {
         /// The failure context.
@@ -42,7 +46,7 @@ pub enum CliError {
         /// The failure message for the log alone.
         message: String,
     },
-    /// Failed read holding the path with the fault.
+    /// Failed read.
     #[error("cannot read '{path}': {fault}", path = path.display())]
     Read {
         /// The path under reading.
@@ -50,7 +54,7 @@ pub enum CliError {
         /// The read fault cause.
         fault: AccessFault,
     },
-    /// Failed write holding the path with the fault.
+    /// Failed write.
     #[error("cannot write '{path}': {fault}", path = path.display())]
     Write {
         /// The path under writing.
@@ -58,7 +62,7 @@ pub enum CliError {
         /// The write fault cause.
         fault: AccessFault,
     },
-    /// Unknown write failure holding the path.
+    /// Unknown write failure.
     #[error(
         "cannot write '{path}': unexpected error, details in the log",
         path = path.display()
@@ -69,26 +73,26 @@ pub enum CliError {
         /// The failure message for the log alone.
         message: String,
     },
-    /// Empty hook argv holding nothing.
-    #[error("hook argv reads empty")]
+    /// Empty hook argv.
+    #[error("hook argv is empty")]
     EmptyArgv,
-    /// Failed hook spawn holding argv.
-    #[error("hook '{argv}' cannot spawn, see log")]
+    /// Failed hook spawn.
+    #[error("hook '{argv}' cannot spawn: {fault}")]
     Spawn {
         /// The joined argv under spawning.
         argv: String,
-        /// The spawn failure message for the log alone.
-        message: String,
+        /// The spawn fault cause.
+        fault: ProcessFault,
     },
-    /// Failed hook wait holding argv.
-    #[error("hook '{argv}' cannot wait, see log")]
+    /// Failed hook wait.
+    #[error("hook '{argv}' cannot wait: {fault}")]
     Wait {
         /// The joined argv under waiting.
         argv: String,
-        /// The wait failure message for the log alone.
-        message: String,
+        /// The wait fault cause.
+        fault: ProcessFault,
     },
-    /// Timed-out hook holding argv with the cap.
+    /// Timed-out hook.
     #[error("hook '{argv}' timed out after {timeout_secs}s")]
     Timeout {
         /// The joined argv under running.
@@ -96,13 +100,13 @@ pub enum CliError {
         /// The run cap in seconds.
         timeout_secs: u64,
     },
-    /// Failed hook output holding argv alone.
+    /// Failed hook output.
     #[error("hook '{argv}' cannot read output")]
     Output {
         /// The joined argv under reading.
         argv: String,
     },
-    /// Unresolvable hook holding argv with the head.
+    /// Unresolvable hook.
     #[error("hook '{argv}' cannot resolve '{head}': install it or extend hook path")]
     Resolve {
         /// The joined argv under resolving.
@@ -110,7 +114,7 @@ pub enum CliError {
         /// The binary head under resolving.
         head: String,
     },
-    /// Failed hook holding argv with the code.
+    /// Failed hook.
     #[error("hook '{argv}' failed with code {code}")]
     HookFailed {
         /// The joined argv under running.
@@ -118,7 +122,7 @@ pub enum CliError {
         /// The process exit code.
         code: i32,
     },
-    /// Failed hook checks holding argv with the names.
+    /// Failed hook checks.
     #[error("hook '{argv}' failed checks after run: {failed}")]
     HookChecks {
         /// The joined argv under running.
@@ -126,16 +130,39 @@ pub enum CliError {
         /// The unmet check names.
         failed: String,
     },
-    /// Aborted apply holding nothing.
-    #[error("apply aborted: answer reads no 'yes'")]
+    /// Blocked hook gate.
+    #[error("hook '{argv}' cannot run ({condition})")]
+    HookRequires {
+        /// The joined argv under blocking.
+        argv: String,
+        /// The closed gate condition.
+        condition: String,
+    },
+    /// Aborted apply.
+    #[error("apply aborted: answer says no 'yes'")]
     Aborted,
-    /// Missing profile holding the path.
-    #[error("apply reads no profile '{path}'", path = path.display())]
+    /// Missing profile.
+    #[error("apply says no profile '{path}'", path = path.display())]
     NoProfile {
         /// The profile path under reading.
         path: PathBuf,
     },
-    /// Present scaffold holding the path.
+    /// Missing default profile.
+    #[error(
+        "no profile under '{project}': pass '-p PATH' or add 'main.lua'",
+        project = project.display()
+    )]
+    NoDefaultProfile {
+        /// The project folder under the run.
+        project: PathBuf,
+    },
+    /// Profile flag with a file source.
+    #[error("'-p' needs a project folder, '{path}' is a file", path = path.display())]
+    ProfileWithoutProject {
+        /// The file source under applying.
+        path: PathBuf,
+    },
+    /// Present scaffold.
     #[error(
         "init: '{path}' already exists, remove it or pick another target",
         path = path.display()
@@ -144,21 +171,42 @@ pub enum CliError {
         /// The present path under scaffolding.
         path: PathBuf,
     },
-    /// Bad delete name holding the input.
+    /// Bad delete name.
     #[error(
-        "delete: '{input}' reads unsupported, want '@name'; history and the current slot never delete"
+        "delete: '{input}' is unsupported, want '@name'; history and the current slot never delete"
     )]
     BadName {
         /// The delete input under parsing.
         input: String,
     },
-    /// Refused export flags holding nothing.
+    /// Refused export flags.
     #[error("export: '-o' plus '--manifest' refuse together, pick one")]
     FlagRefuse,
 }
 
+impl From<RuntimeError> for CliError {
+    /// Map one runtime failure onto cli language.
+    fn from(error: RuntimeError) -> Self {
+        match error {
+            RuntimeError::Slot(source) => Self::Slot(source),
+            RuntimeError::EmptyArgv => Self::EmptyArgv,
+            RuntimeError::Spawn { argv, fault } => Self::Spawn { argv, fault },
+            RuntimeError::Wait { argv, fault } => Self::Wait { argv, fault },
+            RuntimeError::Timeout { argv, timeout_secs } => Self::Timeout { argv, timeout_secs },
+            RuntimeError::Output { argv } => Self::Output { argv },
+            RuntimeError::HookResolve { argv, head } => Self::Resolve { argv, head },
+            RuntimeError::HookFailed { argv, code } => Self::HookFailed { argv, code },
+            RuntimeError::HookChecks { argv, failed } => Self::HookChecks {
+                argv,
+                failed: join_conditions(&failed),
+            },
+            other => Self::Runtime(other),
+        }
+    }
+}
+
 impl CliError {
-    /// Maps one read io failure at the path into domain language.
+    /// Map one read io failure at the path into domain language.
     pub fn from_read_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -174,7 +222,7 @@ impl CliError {
         }
     }
 
-    /// Maps one write io failure at the path into domain language.
+    /// Map one write io failure at the path into domain language.
     pub fn from_write_io(path: &Path, error: std::io::Error) -> Self {
         let kind = error.kind();
         let message = error.to_string();
@@ -190,7 +238,7 @@ impl CliError {
         }
     }
 
-    /// Renders one user-visible line with detail in the log.
+    /// Render one user-visible line with detail in the log.
     pub fn terminal(&self) -> String {
         match self {
             Self::Model(_)
@@ -210,12 +258,13 @@ impl CliError {
             | Self::Resolve { .. }
             | Self::HookFailed { .. }
             | Self::HookChecks { .. }
+            | Self::HookRequires { .. }
             | Self::EmptyArgv => self.hook_line(),
             _ => self.to_string(),
         }
     }
 
-    /// Renders one transported lower error as its task line.
+    /// Render one transported lower error as its task line.
     fn transport_line(&self) -> String {
         match self {
             Self::Model(error) => transport_model(error),
@@ -228,7 +277,7 @@ impl CliError {
         }
     }
 
-    /// Renders one file failure as its task line.
+    /// Render one file failure as its task line.
     fn file_line(&self) -> String {
         match self {
             Self::Read { path, fault } => file_fault("cannot read", path, fault),
@@ -245,23 +294,17 @@ impl CliError {
         }
     }
 
-    /// Renders one hook failure as its task line.
+    /// Render one hook failure as its task line.
     fn hook_line(&self) -> String {
         match self {
-            Self::Spawn { argv, message } => {
-                log::error!("hook '{argv}' spawn failed: {message}");
-                self.to_string()
-            }
-            Self::Wait { argv, message } => {
-                log::error!("hook '{argv}' wait failed: {message}");
-                self.to_string()
-            }
+            Self::Spawn { argv, fault } => hook_fault("spawn", argv, fault),
+            Self::Wait { argv, fault } => hook_fault("wait", argv, fault),
             _ => self.to_string(),
         }
     }
 }
 
-/// Renders one file fault with unknown failures in the log.
+/// Render one file fault with unknown failures in the log.
 fn file_fault(op: &str, path: &Path, fault: &AccessFault) -> String {
     match fault {
         AccessFault::Unknown { message } => {
@@ -275,7 +318,18 @@ fn file_fault(op: &str, path: &Path, fault: &AccessFault) -> String {
     }
 }
 
-/// Maps one model error into its task line.
+/// Render one hook fault with unknown failures in the log.
+fn hook_fault(op: &str, argv: &str, fault: &ProcessFault) -> String {
+    match fault {
+        ProcessFault::Unknown { message } => {
+            log::error!("hook '{argv}' {op} failed: {message}");
+            format!("hook '{argv}' cannot {op}: unexpected error, details in the log")
+        }
+        known => format!("hook '{argv}' cannot {op}: {known}"),
+    }
+}
+
+/// Map one model error into its task line.
 fn transport_model(error: &ModelError) -> String {
     match error {
         ModelError::Parse { input, want } => {
@@ -295,15 +349,40 @@ fn transport_model(error: &ModelError) -> String {
     }
 }
 
-/// Maps one engine error into its task line.
+/// Map one engine error into its task line.
 fn transport_engine(error: &EngineError) -> String {
     log::error!("evaluation failed: {error}");
     "evaluation failed: unexpected error, details in the log".to_owned()
 }
 
-/// Maps one runtime error into its task line.
+/// Map one runtime error into its task line.
 fn transport_runtime(error: &RuntimeError) -> String {
     match error {
+        RuntimeError::Slot(source) => transport_slot(source),
+        RuntimeError::EmptyArgv => CliError::EmptyArgv.to_string(),
+        RuntimeError::Spawn { argv, fault } => hook_fault("spawn", argv, fault),
+        RuntimeError::Wait { argv, fault } => hook_fault("wait", argv, fault),
+        RuntimeError::Timeout { argv, timeout_secs } => CliError::Timeout {
+            argv: argv.clone(),
+            timeout_secs: *timeout_secs,
+        }
+        .to_string(),
+        RuntimeError::Output { argv } => CliError::Output { argv: argv.clone() }.to_string(),
+        RuntimeError::HookResolve { argv, head } => CliError::Resolve {
+            argv: argv.clone(),
+            head: head.clone(),
+        }
+        .to_string(),
+        RuntimeError::HookFailed { argv, code } => CliError::HookFailed {
+            argv: argv.clone(),
+            code: *code,
+        }
+        .to_string(),
+        RuntimeError::HookChecks { argv, failed } => CliError::HookChecks {
+            argv: argv.clone(),
+            failed: join_conditions(failed),
+        }
+        .to_string(),
         RuntimeError::Render { route, reason, .. } => {
             log::error!("render '{}' failed: {reason}", route.display());
             error.to_string()
@@ -326,7 +405,16 @@ fn transport_runtime(error: &RuntimeError) -> String {
     }
 }
 
-/// Maps one slot error into its task line.
+/// Join unmet checks into one display list.
+fn join_conditions(failed: &[Condition]) -> String {
+    failed
+        .iter()
+        .map(describe_condition)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Map one slot error into its task line.
 fn transport_slot(error: &SlotError) -> String {
     use confit_store::slot::error::SlotError as Slot;
     match error {
@@ -347,7 +435,7 @@ fn transport_slot(error: &SlotError) -> String {
     }
 }
 
-/// Maps one bundle error into its task line.
+/// Map one bundle error into its task line.
 fn transport_bundle(error: &BundleError) -> String {
     use confit_store::bundle::error::BundleError as Bundle;
     match error {
@@ -362,7 +450,7 @@ fn transport_bundle(error: &BundleError) -> String {
             format!("missing blob '{}', see log", sha.short())
         }
         Bundle::Version { got, .. } => {
-            format!("bundle version {got} reads unsupported")
+            format!("bundle version {got} is unsupported")
         }
         Bundle::Manifest { path, source } => {
             log::error!("bundle manifest '{}' failed: {source}", path.display());
@@ -374,7 +462,7 @@ fn transport_bundle(error: &BundleError) -> String {
     }
 }
 
-/// Maps one blob error into its task line.
+/// Map one blob error into its task line.
 fn transport_blob(error: &BlobError) -> String {
     match error {
         BlobError::Read { sha, fault } => match fault {

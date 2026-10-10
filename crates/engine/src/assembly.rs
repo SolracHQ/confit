@@ -1,5 +1,5 @@
 //! Assembly
-//! Validated profiles into finished documents.
+//! Assemble validated profiles into finished documents.
 
 mod collect;
 mod freeze;
@@ -18,7 +18,7 @@ use confit_surface_api::Profile;
 
 use crate::error::Result;
 
-/// Assembles validated profiles into finished documents.
+/// Validated profile assembly into finished documents.
 ///
 /// - Lua callbacks run through the shared instance with first writes winning.
 /// - Blob handles open through shared stores with hashes filled last.
@@ -28,22 +28,22 @@ pub struct Assembler<'a> {
 }
 
 impl<'a> Assembler<'a> {
-    /// Builds one assembler over live Lua with shared stores.
+    /// Build one assembler over live Lua with shared stores.
     pub fn new(lua: &'a Lua, stores: &'a Stores) -> Self {
         Self { lua, stores }
     }
 
-    /// Reads the live Lua instance.
+    /// Return the live Lua instance.
     pub(super) fn lua(&self) -> &Lua {
         self.lua
     }
 
-    /// Reads the shared stores.
+    /// Return the shared stores.
     pub(super) fn stores(&self) -> &Stores {
         self.stores
     }
 
-    /// Collects one profile into documents in stable route order.
+    /// Collect one profile into documents in stable route order.
     ///
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
@@ -55,7 +55,7 @@ impl<'a> Assembler<'a> {
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
     /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
-    /// - [`crate::error::EngineError::ChangedInRc`] for rc guards holding
+    /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
     ///   hooks-only changed leaves.
     /// - [`crate::error::EngineError::Model`] for documents failing hashes.
     /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
@@ -84,11 +84,11 @@ impl<'a> Assembler<'a> {
         Ok(finished.into_values().collect())
     }
 
-    /// Collects one profile's hooks in first-seen order.
+    /// Collect one profile's hooks in first-seen order.
     ///
     /// # Errors
     ///
-    /// - [`crate::error::EngineError::ChangedUnknown`] for gates naming
+    /// - [`crate::error::EngineError::ChangedUnknown`] for gates with
     ///   unbuilt routes.
     pub fn collect_hooks(
         &self,
@@ -99,7 +99,7 @@ impl<'a> Assembler<'a> {
     }
 }
 
-/// Collects one profile into documents in stable route order.
+/// Collect one profile into documents in stable route order.
 ///
 /// - Patches merge in rank-descending level order over structured maps and rc
 ///   sections with first writes winning.
@@ -111,7 +111,7 @@ impl<'a> Assembler<'a> {
 /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
 /// - [`crate::error::EngineError::Defined`] for repeated config names.
 /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
-/// - [`crate::error::EngineError::ChangedInRc`] for rc guards holding
+/// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
 ///   hooks-only changed leaves.
 /// - [`crate::error::EngineError::Model`] for documents failing hashes.
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
@@ -119,11 +119,11 @@ pub fn assemble(lua: &Lua, stores: &Stores, profile: &Profile) -> Result<Vec<Mod
     Assembler::new(lua, stores).assemble(profile)
 }
 
-/// Collects one profile's hooks in first-seen order.
+/// Collect one profile's hooks in first-seen order.
 ///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::ChangedUnknown`] for gates naming unbuilt
+/// - [`crate::error::EngineError::ChangedUnknown`] for gates showing unbuilt
 ///   routes.
 pub fn collect_hooks(profile: &Profile, documents: &[ModelDocument]) -> Result<Vec<Hook>> {
     hooks::collect_hooks(profile, documents)

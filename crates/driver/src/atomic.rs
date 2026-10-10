@@ -9,10 +9,10 @@ const STAGING_SUFFIX: &str = ".part";
 /// Streaming chunk for exact copies.
 const COPY_CHUNK: usize = 8192;
 
-/// Sequence feeding unique staging names per process.
+/// Sequence for unique staging names per process.
 static STAGING_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Derives the sibling scratch path for one destination.
+/// Derive the sibling scratch path for one destination.
 pub fn stage_path(dest: &Path) -> PathBuf {
     let seq = STAGING_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut staging = dest.as_os_str().to_owned();
@@ -20,12 +20,12 @@ pub fn stage_path(dest: &Path) -> PathBuf {
     PathBuf::from(staging)
 }
 
-/// Writes one file atomically through a sibling rename.
+/// Write one file atomically through a sibling rename.
 ///
 /// - Parent folders build first.
-/// - Closure failure removes staging and reports the closure error.
-/// - A rename failure with a present destination reports success with the
-///   winner standing.
+/// - Closure failures remove staging and report the closure error.
+/// - Rename failures with a present destination report success with the
+///   present entry kept.
 ///
 /// # Errors
 ///
@@ -35,11 +35,7 @@ pub fn atomic_write(
     dest: &Path,
     write: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    if let Some(parent) = dest.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        crate::fs::create_dir_all(parent)?;
-    }
+    crate::fs::create_parent(dest)?;
     let staging = stage_path(dest);
     if let Err(error) = write(&staging) {
         let _ = crate::fs::remove_file(&staging);
@@ -58,7 +54,7 @@ pub fn atomic_write(
     }
 }
 
-/// Streams one reader into one writer exactly.
+/// Stream one reader into one writer exactly.
 ///
 /// # Errors
 ///

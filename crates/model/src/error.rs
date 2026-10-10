@@ -9,7 +9,7 @@ use crate::routes::SegmentFault;
 /// Core failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum Error {
-    /// Parse failure holding the input and the wanted shape.
+    /// Parse failure.
     #[error("invalid '{input}': want {want}")]
     Parse {
         /// The offending input value.
@@ -17,7 +17,7 @@ pub enum Error {
         /// The wanted shape.
         want: String,
     },
-    /// Structured render failure holding the format with its reason.
+    /// Structured render failure.
     #[error("cannot render {format}: {reason}")]
     Render {
         /// The format under rendering.
@@ -25,7 +25,7 @@ pub enum Error {
         /// The serializer reason.
         reason: String,
     },
-    /// Unhashable document holding the destination with the render reason.
+    /// Unhashable document.
     #[error("cannot hash '{document}': {reason}")]
     Unhashable {
         /// The destination display under hashing.
@@ -33,12 +33,12 @@ pub enum Error {
         /// The render reason.
         reason: String,
     },
-    /// Route jail failure holding the input with its fault.
+    /// Route jail failure.
     #[error("invalid '{input}': want valid relative segments ({fault})")]
     Segment {
         /// The offending relative text.
         input: String,
-        /// The jail fault naming the offense.
+        /// Jail fault for the offense.
         fault: SegmentFault,
     },
 }

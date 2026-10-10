@@ -2,14 +2,14 @@
 
 use std::io;
 
-/// Trailer holding the raw byte count.
+/// Raw byte count in the trailer.
 pub const TRAILER_LEN: u64 = 4;
 
-/// Gzip decoder reading decoded bytes on demand.
+/// Gzip decoder for decoded bytes on demand.
 pub struct Decoder<R: io::Read>(flate2::read::GzDecoder<R>);
 
 impl<R: io::Read> Decoder<R> {
-    /// Opens one decoder.
+    /// Open one decoder.
     pub fn open(reader: R) -> Self {
         Self(flate2::read::GzDecoder::new(reader))
     }
@@ -21,11 +21,11 @@ impl<R: io::Read> io::Read for Decoder<R> {
     }
 }
 
-/// Gzip encoder compressing at one level.
+/// Gzip encoder at one compression level.
 pub struct Encoder<W: io::Write>(flate2::write::GzEncoder<W>);
 
 impl<W: io::Write> Encoder<W> {
-    /// Opens one encoder.
+    /// Open one encoder.
     pub fn open(sink: W, level: u32) -> Self {
         Self(flate2::write::GzEncoder::new(
             sink,
@@ -33,7 +33,7 @@ impl<W: io::Write> Encoder<W> {
         ))
     }
 
-    /// Finishes the stream returning the sink.
+    /// Finish the stream and return the sink.
     ///
     /// # Errors
     ///
