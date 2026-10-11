@@ -4,7 +4,7 @@ use std::io::BufRead;
 
 use crate::error::{CliError, Result};
 
-use confit_model::progress::ProgressSender;
+use confit_driver::progress::ProgressSender;
 
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 

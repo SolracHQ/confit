@@ -108,7 +108,7 @@ mod tests {
     use crate::document::{Data, Document};
     use crate::manifest::MANIFEST_VERSION;
     use crate::routes::{Route, RouteBase};
-    use crate::sha::Sha;
+    use confit_driver::sha::Sha;
 
     fn sealed(content: &str, stored: &str) -> BlobRef {
         BlobRef::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap())

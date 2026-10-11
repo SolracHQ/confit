@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::{Document, StructuredFormat, Table};
 use crate::routes::Route;
-use crate::sha::Sha;
+use confit_driver::sha::Sha;
 
 /// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]

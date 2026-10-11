@@ -7,14 +7,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-crossbeam-channel.workspace = true
+confit-driver = { version = "0.8.0", path = "../driver" }
 diffy.workspace = true
 dirs.workspace = true
 noyalib.workspace = true
 schemars = "1.2.2"
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 

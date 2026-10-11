@@ -3,11 +3,11 @@
 
 use std::collections::BTreeMap;
 
+use confit_driver::sha::Sha;
 use confit_model::document::{Data, Document, render_mode};
 use confit_model::drift::{Drift, DriftOrder};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
-use confit_model::sha::Sha;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
 

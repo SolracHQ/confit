@@ -10,8 +10,8 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_model::progress::{Event, ProgressSender};
-use confit_model::sha::Sha;
+use confit_driver::progress::{Event, ProgressSender};
+use confit_driver::sha::Sha;
 
 use crate::StoreRoots;
 use crate::handles::{ArchiveHandle, ResourceHandle};
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn extract_announces_unpacked_with_counts() {
-        use confit_model::progress::Event;
+        use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();

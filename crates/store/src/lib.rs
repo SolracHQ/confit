@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use confit_model::progress::ProgressSender;
+use confit_driver::progress::ProgressSender;
 
 pub mod archive;
 pub mod blob;

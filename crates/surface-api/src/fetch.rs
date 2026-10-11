@@ -5,7 +5,7 @@ use mlua_extras::typed::generator::DefinitionBuilder;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use confit_model::sha::Sha;
+use confit_driver::sha::Sha;
 use confit_store::Stores;
 use confit_store::fetch::error::FetchError;
 use confit_surface_face::module::{Module, VerbDecl};
@@ -112,7 +112,7 @@ mod tests {
     use std::path::Path;
 
     use confit_driver::fs::TestGuard;
-    use confit_model::sha::Sha;
+    use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
 
     const URL: &str = "https://example.com/tool.bin";

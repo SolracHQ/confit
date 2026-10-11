@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 
 use confit_driver::process::ProcessFault;
+use confit_driver::sha::Sha;
 use confit_model::condition::Condition;
 use confit_model::document::StructuredFormat;
 use confit_model::routes::Route;
-use confit_model::sha::Sha;
 use thiserror::Error;
 
 use confit_store::faults::AccessFault;

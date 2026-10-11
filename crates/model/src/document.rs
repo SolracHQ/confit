@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::manifest::Manifest;
 use crate::routes::Route;
-use crate::sha::Sha;
+use confit_driver::sha::Sha;
 
 pub use rc::{RcData, RcEntry, RcOp, RcSection};
 pub(crate) use tree::tree_manifest_bytes;
@@ -420,8 +420,8 @@ mod tests {
     #[test]
     fn fill_hash_copies_opaque_blob_sha() {
         let blob = BlobRef::new(
-            crate::sha::Sha::new("aa".repeat(32)).unwrap(),
-            crate::sha::Sha::new("bb".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
         );
         let expected = blob.sha256.hex();
         let hash = fill(Data::Opaque {
@@ -439,12 +439,12 @@ mod tests {
     #[test]
     fn fill_hash_sorts_tree_members_for_stable_hash() {
         let first = BlobRef::new(
-            crate::sha::Sha::new("aa".repeat(32)).unwrap(),
-            crate::sha::Sha::new("bb".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
         );
         let second = BlobRef::new(
-            crate::sha::Sha::new("cc".repeat(32)).unwrap(),
-            crate::sha::Sha::new("dd".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("cc".repeat(32)).unwrap(),
+            confit_driver::sha::Sha::new("dd".repeat(32)).unwrap(),
         );
         let ordered = vec![
             ManifestMember {
@@ -470,7 +470,8 @@ mod tests {
                 mode: 0o644,
             },
         ];
-        let expected = crate::sha::Sha::hash(&crate::document::tree_manifest_bytes(&ordered)).hex();
+        let expected =
+            confit_driver::sha::Sha::hash(&crate::document::tree_manifest_bytes(&ordered)).hex();
         assert_eq!(
             fill(Data::Tree {
                 members: shuffled.clone()

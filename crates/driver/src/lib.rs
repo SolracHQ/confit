@@ -12,6 +12,10 @@ pub mod gzip;
 pub mod http;
 /// Process spawns with scripted outcomes under tests.
 pub mod process;
+/// Progress facts for one run.
+pub mod progress;
+/// Sealed content hashes.
+pub mod sha;
 /// Tar framing.
 pub mod tar;
 /// Zip framing.

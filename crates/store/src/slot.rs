@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::codec::{CodecError, decode};
+use confit_driver::sha::Sha;
 use confit_model::manifest::{MANIFEST_VERSION, Manifest};
-use confit_model::sha::Sha;
 
 use crate::StoreRoots;
 use confit_driver as driver;

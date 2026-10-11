@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use confit_driver::progress::{Event, ProgressSender};
+use confit_driver::sha::{Sha, ShaWriter};
 use confit_model::document::BlobRef;
-use confit_model::progress::{Event, ProgressSender};
-use confit_model::sha::{Sha, ShaWriter};
 use sha2::Digest;
 
 use crate::StoreRoots;
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn put_announces_finished_blob_with_counts() {
-        use confit_model::progress::Event;
+        use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn batch_moves_blob_counters_across_puts() {
-        use confit_model::progress::Event;
+        use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn persist_announces_promoting_count() {
-        use confit_model::progress::Event;
+        use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();

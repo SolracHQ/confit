@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_driver::sha::Sha;
 use confit_model::document::BlobRef;
-use confit_model::sha::Sha;
 
 use crate::archive::error::ArchiveError;
 use crate::resources::error::ResourceError;
@@ -131,7 +131,7 @@ impl ArchiveHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::error::Error;
+    use confit_driver::sha::ShaError;
 
     fn fixture_sha() -> Sha {
         Sha::hash(b"confit handle fixture")
@@ -163,7 +163,7 @@ mod tests {
             Ok(_) => panic!("malformed sha passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Parse { .. }));
+        assert!(matches!(error, ShaError::Parse { .. }));
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
                 Ok(_) => panic!("malformed sha passes"),
                 Err(error) => error,
             };
-            assert!(matches!(error, Error::Parse { .. }));
+            assert!(matches!(error, ShaError::Parse { .. }));
         }
     }
 
@@ -205,6 +205,6 @@ mod tests {
             Ok(_) => panic!("malformed sha passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Parse { .. }));
+        assert!(matches!(error, ShaError::Parse { .. }));
     }
 }

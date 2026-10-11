@@ -83,7 +83,7 @@ mod tests {
     use super::*;
     use crate::document::Data;
     use crate::routes::{Route, RouteBase};
-    use crate::sha::Sha;
+    use confit_driver::sha::Sha;
 
     fn test_ref(content: &str, stored: &str) -> BlobRef {
         let sha = Sha::new(content).unwrap();

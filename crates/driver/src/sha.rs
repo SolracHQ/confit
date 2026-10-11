@@ -4,7 +4,30 @@
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-use crate::error::{Error, Result};
+/// Sealed hash failure shapes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaError {
+    /// Parse failure.
+    Parse {
+        /// The offending input value.
+        input: String,
+        /// The wanted shape.
+        want: String,
+    },
+}
+
+impl std::fmt::Display for ShaError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse { input, want } => write!(formatter, "invalid '{input}': want {want}"),
+        }
+    }
+}
+
+impl std::error::Error for ShaError {}
+
+/// Sealed hash result alias.
+pub type Result<T> = std::result::Result<T, ShaError>;
 
 /// Byte count for a SHA-256 digest.
 const SHA_BYTE_LEN: usize = 32;
@@ -26,7 +49,7 @@ impl Sha {
     ///
     /// # Errors
     ///
-    /// - [`Error::Parse`] for malformed hashes.
+    /// - [`ShaError::Parse`] for malformed hashes.
     pub fn new(sha: impl Into<String>) -> Result<Self> {
         let sha = sha.into();
         check_sha_hex(&sha)?;
@@ -175,7 +198,7 @@ fn hex_value(byte: u8, sha: &str) -> Result<u8> {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::Parse {
+        _ => Err(ShaError::Parse {
             input: sha.to_owned(),
             want: "64 hex characters".to_owned(),
         }),
@@ -187,7 +210,7 @@ fn check_sha_hex(sha: &str) -> Result<()> {
     if sha.len() == SHA_HEX_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Ok(());
     }
-    Err(Error::Parse {
+    Err(ShaError::Parse {
         input: sha.to_owned(),
         want: "64 hex characters".to_owned(),
     })

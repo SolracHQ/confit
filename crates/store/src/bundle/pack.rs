@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use confit_driver::sha::Sha;
 use confit_driver::{self as driver};
 use confit_model::document::BlobRef;
 use confit_model::manifest::Manifest;
-use confit_model::sha::Sha;
 
 use super::BundleStore;
 use super::ensure_bundle_extension;
@@ -150,9 +150,9 @@ mod tests {
     use std::io::Read as _;
 
     use super::*;
+    use confit_driver::sha::Sha;
     use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
-    use confit_model::sha::Sha;
 
     use crate::StoreRoots;
     use crate::archive::ArchiveStore;

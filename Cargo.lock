@@ -260,7 +260,10 @@ dependencies = [
 name = "confit-driver"
 version = "0.8.0"
 dependencies = [
+ "crossbeam-channel",
  "flate2",
+ "serde",
+ "sha2",
  "tar",
  "tempfile",
  "ureq",
@@ -288,14 +291,13 @@ dependencies = [
 name = "confit-model"
 version = "0.8.0"
 dependencies = [
- "crossbeam-channel",
+ "confit-driver",
  "diffy",
  "dirs",
  "noyalib",
  "schemars",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "toml",

@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, Table, summary};
 use confit_model::drift::Drift;
@@ -11,7 +12,6 @@ use confit_model::hook::HookLifecycle;
 use confit_model::manifest::Manifest;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
-use confit_model::sha::Sha;
 
 use crate::presentation::drift::drift_lines;
 use crate::presentation::hooks::lifecycle_lines;

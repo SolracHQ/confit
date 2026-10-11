@@ -226,7 +226,7 @@ fn hook_file_name(argv: &str) -> String {
     if slug.len() > 40 {
         slug.truncate(40);
     }
-    let hash = confit_model::sha::Sha::hash(argv.as_bytes()).short();
+    let hash = confit_driver::sha::Sha::hash(argv.as_bytes()).short();
     format!("{slug}-{hash}.log")
 }
 

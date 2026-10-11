@@ -131,7 +131,7 @@ pub fn normalize(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use confit_driver::fs::TestGuard;
-    use confit_model::sha::Sha;
+    use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
 
     fn test_stores(dir: &Path) -> Stores {

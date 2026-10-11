@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use confit_driver as driver;
+use confit_driver::progress::{Event, ProgressSender};
 use confit_model::document::{Data, Document};
-use confit_model::progress::{Event, ProgressSender};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -201,7 +201,7 @@ impl Writer {
 mod tests {
     use super::*;
     use confit_driver::fs::TestGuard;
-    use confit_model::progress::Event;
+    use confit_driver::progress::Event;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 

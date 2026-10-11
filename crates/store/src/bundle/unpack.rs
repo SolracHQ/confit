@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 use std::io::Read as _;
 use std::path::Path;
 
+use confit_driver::sha::Sha;
 use confit_model::manifest::Manifest;
-use confit_model::sha::Sha;
 
 use super::codec::{CodecError, check_blob_id, decode};
 use super::error::{BundleError, Result, from_archive, from_resource};

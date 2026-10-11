@@ -1,6 +1,6 @@
 //! Fetch failures.
 
-use confit_model::sha::Sha;
+use confit_driver::sha::Sha;
 use thiserror::Error;
 
 use crate::faults::AccessFault;

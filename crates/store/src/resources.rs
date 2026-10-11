@@ -5,7 +5,7 @@ pub mod error;
 
 use std::path::{Component, Path};
 
-use confit_model::sha::Sha;
+use confit_driver::sha::Sha;
 
 use crate::StoreRoots;
 use crate::handles::ResourceHandle;

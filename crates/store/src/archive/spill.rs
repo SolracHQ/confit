@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_model::sha::{Sha, ShaWriter};
+use confit_driver::sha::{Sha, ShaWriter};
 
 use super::ArchiveBackend;
 use super::error::{ArchiveError, Result};

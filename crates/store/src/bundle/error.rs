@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_driver::sha::Sha;
 use confit_model::error::Error as ModelError;
-use confit_model::sha::Sha;
 use thiserror::Error;
 
 use crate::archive::error::ArchiveError;

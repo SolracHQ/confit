@@ -6,8 +6,8 @@ pub mod transport;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use confit_model::progress::{Event, ProgressSender};
-use confit_model::sha::Sha;
+use confit_driver::progress::{Event, ProgressSender};
+use confit_driver::sha::Sha;
 use sha2::Digest as _;
 
 use self::transport::BODY_LIMIT_BYTES;

@@ -1,5 +1,5 @@
 //! Confit core
-//! Pure document and plan types with rendering and hashing.
+//! Pure document and plan types with rendering.
 
 #![deny(missing_docs)]
 
@@ -10,7 +10,5 @@ pub mod drift;
 pub mod error;
 pub mod hook;
 pub mod manifest;
-pub mod progress;
 pub mod render;
 pub mod routes;
-pub mod sha;

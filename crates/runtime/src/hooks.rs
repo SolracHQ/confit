@@ -4,10 +4,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
+use confit_driver::progress::{Event, ProgressSender};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
-use confit_model::progress::{Event, ProgressSender};
 use confit_model::routes::Route;
 
 use crate::checks::{Checks, find_executable};

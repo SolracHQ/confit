@@ -253,7 +253,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use confit_driver::fs::TestGuard;
-    use confit_model::progress::Event;
+    use confit_driver::progress::Event;
     use confit_store::{StoreRoots, Stores};
 
     fn test_stores(dir: &Path) -> Stores {
