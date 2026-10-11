@@ -9,6 +9,8 @@ members = [
   "crates/cli",
   "crates/store",
   "crates/runtime",
+  "crates/binding",
+  "crates/binding-macros",
 ]
 
 [workspace.dependencies]
