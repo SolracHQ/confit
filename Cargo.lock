@@ -292,7 +292,6 @@ name = "confit-model"
 version = "0.8.0"
 dependencies = [
  "confit-driver",
- "diffy",
  "dirs",
  "noyalib",
  "schemars",
@@ -311,6 +310,7 @@ dependencies = [
  "confit-model",
  "confit-store",
  "crossbeam-channel",
+ "diffy",
  "log",
  "noyalib",
  "serde_json",

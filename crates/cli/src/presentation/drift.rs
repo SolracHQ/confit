@@ -1,7 +1,22 @@
 //! Drift lines
 //! Display lines over core drift entries.
 
-use confit_model::drift::Drift;
+use std::collections::{BTreeMap, BTreeSet};
+
+use confit_model::document::Table;
+use confit_model::routes::Route;
+use confit_runtime::Drift;
+
+/// One flattened leaf difference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafChange {
+    /// The dotted leaf key.
+    pub key: String,
+    /// The old leaf value.
+    pub old: Option<serde_json::Value>,
+    /// The new leaf value.
+    pub new: Option<serde_json::Value>,
+}
 
 /// Render drift entries as display lines, one or more per entry.
 pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
@@ -13,34 +28,12 @@ pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
                 key,
                 old,
                 new,
-            } => match (old, new) {
-                (Some(old_value), Some(new_value)) => {
-                    lines.push(format!(
-                        "~ {}: {} = {} -> {}",
-                        path.display(),
-                        key,
-                        leaf_text(old_value),
-                        leaf_text(new_value)
-                    ));
+            } => push_key_line(&mut lines, path, key, old, new),
+            Drift::Structured { path, old, new } => {
+                for change in leaf_changes(old, new) {
+                    push_key_line(&mut lines, path, &change.key, &change.old, &change.new);
                 }
-                (Some(old_value), None) => {
-                    lines.push(format!(
-                        "- {}: {} = {}",
-                        path.display(),
-                        key,
-                        leaf_text(old_value)
-                    ));
-                }
-                (None, Some(new_value)) => {
-                    lines.push(format!(
-                        "+ {}: {} = {}",
-                        path.display(),
-                        key,
-                        leaf_text(new_value)
-                    ));
-                }
-                (None, None) => {}
-            },
+            }
             Drift::Hunk { hunks, .. } => {
                 for line in hunks.lines() {
                     if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
@@ -68,13 +61,104 @@ pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
 }
 
 /// Render one scalar leaf value as display text.
-fn leaf_text(value: &serde_json::Value) -> String {
+pub fn leaf_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(text) => text.clone(),
         serde_json::Value::Number(_) | serde_json::Value::Bool(_) => value.to_string(),
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
             serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+        }
+    }
+}
+
+/// Flatten one table into dotted leaf entries.
+pub fn flatten_table(table: &Table) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for (key, value) in table {
+        flatten_value(key, value, &mut out);
+    }
+    out
+}
+
+/// Collect leaf differences between two tables.
+pub fn leaf_changes(old: &Table, new: &Table) -> Vec<LeafChange> {
+    let old_flat = flatten_table(old);
+    let new_flat = flatten_table(new);
+    let mut keys = BTreeSet::new();
+    keys.extend(old_flat.keys().cloned());
+    keys.extend(new_flat.keys().cloned());
+    let mut out = Vec::new();
+    for key in keys {
+        let old_value = old_flat.get(&key).cloned();
+        let new_value = new_flat.get(&key).cloned();
+        if old_value != new_value {
+            out.push(LeafChange {
+                key,
+                old: old_value,
+                new: new_value,
+            });
+        }
+    }
+    out
+}
+
+/// Push one leaf change line for one destination.
+fn push_key_line(
+    lines: &mut Vec<String>,
+    path: &Route,
+    key: &str,
+    old: &Option<serde_json::Value>,
+    new: &Option<serde_json::Value>,
+) {
+    match (old, new) {
+        (Some(old_value), Some(new_value)) => {
+            lines.push(format!(
+                "~ {}: {key} = {} -> {}",
+                path.display(),
+                leaf_text(old_value),
+                leaf_text(new_value)
+            ));
+        }
+        (Some(old_value), None) => {
+            lines.push(format!(
+                "- {}: {key} = {}",
+                path.display(),
+                leaf_text(old_value)
+            ));
+        }
+        (None, Some(new_value)) => {
+            lines.push(format!(
+                "+ {}: {key} = {}",
+                path.display(),
+                leaf_text(new_value)
+            ));
+        }
+        (None, None) => {}
+    }
+}
+
+/// Flatten one value into dotted leaf entries.
+///
+/// - Array positions echo from 1.
+fn flatten_value(
+    key: &str,
+    value: &serde_json::Value,
+    out: &mut BTreeMap<String, serde_json::Value>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (inner, item) in map {
+                flatten_value(&format!("{key}.{inner}"), item, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                flatten_value(&format!("{key}[{}]", index + 1), item, out);
+            }
+        }
+        _ => {
+            out.insert(key.to_string(), value.clone());
         }
     }
 }

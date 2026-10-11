@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 confit-driver = { version = "0.8.0", path = "../driver" }
-diffy.workspace = true
 dirs.workspace = true
 noyalib.workspace = true
 schemars = "1.2.2"

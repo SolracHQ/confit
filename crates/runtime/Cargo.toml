@@ -17,6 +17,7 @@ sha2.workspace = true
 crossbeam-channel.workspace = true
 thiserror.workspace = true
 log.workspace = true
+diffy.workspace = true
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

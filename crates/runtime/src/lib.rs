@@ -13,7 +13,7 @@ mod render;
 mod write;
 
 pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, find_executable};
-pub use differ::Differ;
+pub use differ::{Differ, Drift, DriftOrder};
 pub use disk::{Live, LiveMember};
 pub use hooks::{DecidedHooks, HookDecision, HookRunner, Spawned};
 pub use prepare::{Prepared, prepare, refresh};

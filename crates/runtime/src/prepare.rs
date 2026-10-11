@@ -3,12 +3,11 @@
 use std::collections::BTreeSet;
 
 use confit_model::document::DocumentStatus;
-use confit_model::drift::{Drift, DriftOrder};
 use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-use crate::differ::Differ;
+use crate::differ::{Differ, Drift, DriftOrder};
 use crate::error::Result;
 
 /// Prepared manifests with drift and changed routes.
@@ -102,6 +101,7 @@ fn changed_paths(
         for drift in drifts {
             let path = match drift {
                 Drift::Key { path, .. }
+                | Drift::Structured { path, .. }
                 | Drift::Hunk { path, .. }
                 | Drift::Missing { path }
                 | Drift::Unreadable { path, .. } => path,

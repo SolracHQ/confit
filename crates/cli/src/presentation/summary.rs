@@ -2,18 +2,18 @@
 //! Stderr summary over built bundles.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, Table, summary};
-use confit_model::drift::Drift;
 use confit_model::hook::HookLifecycle;
 use confit_model::manifest::Manifest;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
+use confit_runtime::Drift;
 
-use crate::presentation::drift::drift_lines;
+use crate::presentation::drift::{drift_lines, flatten_table, leaf_changes, leaf_text};
 use crate::presentation::hooks::lifecycle_lines;
 
 /// Yellow style for changed lines.
@@ -465,6 +465,7 @@ fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Dri
         .filter(|entry| {
             let path = match entry {
                 Drift::Key { path, .. }
+                | Drift::Structured { path, .. }
                 | Drift::Hunk { path, .. }
                 | Drift::Missing { path }
                 | Drift::Unreadable { path, .. } => path.display(),
@@ -522,30 +523,19 @@ fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift])
     let mut out = Vec::new();
     for entry in entries {
         match entry {
-            Drift::Key { key, old, new, .. } => match (old, new) {
-                (Some(old_value), Some(new_value)) => out.push(painter.paint(
-                    Sigil::Update,
-                    &format!(
-                        "  {} {key} = {} -> {}",
-                        Sigil::Update.mark(),
-                        leaf_text(old_value),
-                        leaf_text(new_value)
-                    ),
-                )),
-                (Some(old_value), None) => out.push(painter.paint(
-                    Sigil::Remove,
-                    &format!(
-                        "  {} {key} = {}",
-                        Sigil::Remove.mark(),
-                        leaf_text(old_value)
-                    ),
-                )),
-                (None, Some(new_value)) => out.push(painter.paint(
-                    Sigil::Add,
-                    &format!("  {} {key} = {}", Sigil::Add.mark(), leaf_text(new_value)),
-                )),
-                (None, None) => {}
-            },
+            Drift::Key { key, old, new, .. } => {
+                out.extend(paint_key_line(painter, key, old, new));
+            }
+            Drift::Structured { old, new, .. } => {
+                for change in leaf_changes(old, new) {
+                    out.extend(paint_key_line(
+                        painter,
+                        &change.key,
+                        &change.old,
+                        &change.new,
+                    ));
+                }
+            }
             Drift::Hunk { hunks, .. } => {
                 out.extend(painted_hunk_lines(painter, hunks));
             }
@@ -589,7 +579,10 @@ fn member_rel(document: &Document, entry: &Drift) -> String {
     let dest = document.destination.display();
     match entry {
         Drift::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
-        Drift::Hunk { path, .. } | Drift::Missing { path } | Drift::Unreadable { path, .. } => {
+        Drift::Structured { path, .. }
+        | Drift::Hunk { path, .. }
+        | Drift::Missing { path }
+        | Drift::Unreadable { path, .. } => {
             let rendered = path.display();
             rendered
                 .strip_prefix(dest.as_str())
@@ -597,53 +590,6 @@ fn member_rel(document: &Document, entry: &Drift) -> String {
                 .unwrap_or(&rendered)
                 .to_string()
         }
-    }
-}
-
-/// Render one scalar leaf value as display text.
-fn leaf_text(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(text) => text.clone(),
-        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => value.to_string(),
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
-        }
-    }
-}
-
-/// Collect flattened leaf lines for one table.
-fn table_leaves(table: &Table, prefix: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for (key, value) in table {
-        let full = if prefix.is_empty() {
-            key.clone()
-        } else {
-            format!("{prefix}.{key}")
-        };
-        out.extend(collect_value(&full, value));
-    }
-    out
-}
-
-/// Collect leaf lines for one value under its dotted key.
-fn collect_value(key: &str, value: &serde_json::Value) -> Vec<(String, String)> {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut out = Vec::new();
-            for (inner, item) in map {
-                out.extend(collect_value(&format!("{key}.{inner}"), item));
-            }
-            out
-        }
-        serde_json::Value::Array(items) => {
-            let mut out = Vec::new();
-            for (index, item) in items.iter().enumerate() {
-                out.extend(collect_value(&format!("{key}[{}]", index + 1), item));
-            }
-            out
-        }
-        _ => vec![(key.to_string(), leaf_text(value))],
     }
 }
 
@@ -676,9 +622,9 @@ fn named_text(op: &RcOp) -> String {
 /// Collect plain entry bodies for one document.
 fn entry_bodies(document: &Document) -> Vec<String> {
     match &document.data {
-        Data::Structured { data, .. } => table_leaves(data, "")
+        Data::Structured { data, .. } => flatten_table(data)
             .into_iter()
-            .map(|(key, value)| format!("{key} = {value}"))
+            .map(|(key, value)| format!("{key} = {}", leaf_text(&value)))
             .collect(),
         Data::Text { content, .. } => {
             if content.is_empty() {
@@ -724,27 +670,6 @@ fn touches_opaque(first: &Document, second: &Document) -> bool {
 /// Render the hash and size label for one opaque ref.
 fn opaque_ref_label(sha: &Sha, size: u64) -> String {
     format!("sha256:{sha} ({size} bytes)")
-}
-
-/// Flatten one JSON value into dotted leaf entries.
-fn flatten_json(key: &str, value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
-    let mut out = BTreeMap::new();
-    match value {
-        serde_json::Value::Object(map) => {
-            for (inner, item) in map {
-                out.extend(flatten_json(&format!("{key}.{inner}"), item));
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for (index, item) in items.iter().enumerate() {
-                out.extend(flatten_json(&format!("{key}[{}]", index + 1), item));
-            }
-        }
-        _ => {
-            out.insert(key.to_string(), value.clone());
-        }
-    }
-    out
 }
 
 /// Collect update lines with old to new values.
@@ -868,47 +793,49 @@ fn split_key(key: &str) -> (&str, &str) {
 
 /// Collect structured leaf changes with old to new values.
 fn structured_update_lines(painter: &Painter, new: &Table, old: &Table) -> Vec<String> {
-    let mut old_flat = BTreeMap::new();
-    for (key, value) in old {
-        old_flat.extend(flatten_json(key, value));
-    }
-    let mut new_flat = BTreeMap::new();
-    for (key, value) in new {
-        new_flat.extend(flatten_json(key, value));
-    }
-    let mut keys = BTreeSet::new();
-    keys.extend(old_flat.keys().cloned());
-    keys.extend(new_flat.keys().cloned());
     let mut out = Vec::new();
-    let mut sorted: Vec<String> = keys.into_iter().collect();
-    sorted.sort();
-    for key in sorted {
-        let old_value = old_flat.get(&key).cloned();
-        let new_value = new_flat.get(&key).cloned();
-        if old_value != new_value {
-            match (&old_value, &new_value) {
-                (Some(old_text), Some(new_text)) => out.push(painter.paint(
-                    Sigil::Update,
-                    &format!(
-                        "  {} {key} = {} -> {}",
-                        Sigil::Update.mark(),
-                        leaf_text(old_text),
-                        leaf_text(new_text)
-                    ),
-                )),
-                (Some(old_text), None) => out.push(painter.paint(
-                    Sigil::Remove,
-                    &format!("  {} {key} = {}", Sigil::Remove.mark(), leaf_text(old_text)),
-                )),
-                (None, Some(new_text)) => out.push(painter.paint(
-                    Sigil::Add,
-                    &format!("  {} {key} = {}", Sigil::Add.mark(), leaf_text(new_text)),
-                )),
-                (None, None) => {}
-            }
-        }
+    for change in leaf_changes(old, new) {
+        out.extend(paint_key_line(
+            painter,
+            &change.key,
+            &change.old,
+            &change.new,
+        ));
     }
     out
+}
+
+/// Paint one leaf change line for one dotted key.
+fn paint_key_line(
+    painter: &Painter,
+    key: &str,
+    old: &Option<serde_json::Value>,
+    new: &Option<serde_json::Value>,
+) -> Option<String> {
+    match (old, new) {
+        (Some(old_value), Some(new_value)) => Some(painter.paint(
+            Sigil::Update,
+            &format!(
+                "  {} {key} = {} -> {}",
+                Sigil::Update.mark(),
+                leaf_text(old_value),
+                leaf_text(new_value)
+            ),
+        )),
+        (Some(old_value), None) => Some(painter.paint(
+            Sigil::Remove,
+            &format!(
+                "  {} {key} = {}",
+                Sigil::Remove.mark(),
+                leaf_text(old_value)
+            ),
+        )),
+        (None, Some(new_value)) => Some(painter.paint(
+            Sigil::Add,
+            &format!("  {} {key} = {}", Sigil::Add.mark(), leaf_text(new_value)),
+        )),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
