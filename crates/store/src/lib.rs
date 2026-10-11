@@ -10,19 +10,17 @@ use confit_driver::progress::ProgressSender;
 
 pub mod archive;
 pub mod blob;
-pub mod bundle;
 pub mod faults;
 pub mod fetch;
 pub mod handles;
 pub mod resources;
-pub mod slot;
+pub mod state;
 
 use archive::ArchiveStore;
 use blob::BlobStore;
-use bundle::BundleStore;
 use fetch::FetchCache;
 use resources::Resources;
-use slot::SlotStore;
+use state::StateStore;
 
 /// Base folders for every write-backed capability.
 ///
@@ -30,9 +28,9 @@ use slot::SlotStore;
 /// unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
-    /// Slot and history storage base.
+    /// State and history storage base.
     pub config_base: PathBuf,
-    /// Fetch cache and staging area for transient files.
+    /// Fetch cache and pending area for transient files.
     pub temp_base: PathBuf,
     /// Project boundary for trusted files.
     pub project_root: PathBuf,
@@ -51,10 +49,8 @@ pub struct Stores {
     fetch: Arc<FetchCache>,
     /// Compressed archive member listing and extraction.
     archives: Arc<ArchiveStore>,
-    /// Portable bundle archives.
-    bundles: Arc<BundleStore>,
-    /// Applied state slot with named slots and history.
-    slots: Arc<SlotStore>,
+    /// Named state files with history.
+    states: Arc<StateStore>,
 }
 
 impl StoreRoots {
@@ -93,9 +89,8 @@ impl Stores {
             resources: resources.clone(),
             blobs: blobs.clone(),
             fetch: Arc::new(FetchCache::new(&roots, progress)),
-            archives: archives.clone(),
-            bundles: Arc::new(BundleStore::new(archives, blobs, resources)),
-            slots: Arc::new(SlotStore::new(&roots)),
+            archives,
+            states: Arc::new(StateStore::new(&roots)),
             roots,
         }
     }
@@ -120,13 +115,8 @@ impl Stores {
         self.archives.clone()
     }
 
-    /// Return the portable bundle store.
-    pub fn bundles(&self) -> Arc<BundleStore> {
-        self.bundles.clone()
-    }
-
-    /// Return the applied state slot store.
-    pub fn slots(&self) -> Arc<SlotStore> {
-        self.slots.clone()
+    /// Return named state files with history.
+    pub fn states(&self) -> Arc<StateStore> {
+        self.states.clone()
     }
 }

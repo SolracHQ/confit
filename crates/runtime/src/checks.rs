@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(
             find_executable("link_ok", &dirs),
             Some(dir.path().join("link_ok")),
-            "live link follows its target"
+            "current link follows its target"
         );
         assert_eq!(
             find_executable("link_dead", &dirs),

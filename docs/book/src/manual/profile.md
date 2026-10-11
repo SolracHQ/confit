@@ -50,7 +50,7 @@ confit plan server.lua -o @server
 confit apply @laptop
 ```
 
-One shared slot keeps drift honest. Every switch diffs against the same applied result.
+One shared slot keeps difference honest. Every switch diffs against the same applied result.
 
 For the exact contract see [spec plan](../spec/plan.md).
 

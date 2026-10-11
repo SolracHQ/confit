@@ -11,9 +11,7 @@ use confit_model::condition::Condition;
 use confit_model::error::Error as ModelError;
 use confit_runtime::error::RuntimeError;
 use confit_store::blob::error::BlobError;
-use confit_store::bundle::error::BundleError;
 use confit_store::faults::AccessFault;
-use confit_store::slot::error::SlotError;
 
 use crate::presentation::hooks::describe_condition;
 
@@ -29,12 +27,6 @@ pub enum CliError {
     /// Runtime failure.
     #[error(transparent)]
     Runtime(RuntimeError),
-    /// Slot failure.
-    #[error(transparent)]
-    Slot(#[from] SlotError),
-    /// Bundle failure.
-    #[error(transparent)]
-    Bundle(#[from] BundleError),
     /// Blob failure.
     #[error(transparent)]
     Blob(#[from] BlobError),
@@ -173,10 +165,16 @@ pub enum CliError {
     },
     /// Bad delete name.
     #[error(
-        "delete: '{input}' is unsupported, want '@name'; history and the current slot never delete"
+        "delete: '{input}' is unsupported, want '@name'; history and the current state never delete"
     )]
     BadName {
         /// The delete input under parsing.
+        input: String,
+    },
+    /// Bad state pick.
+    #[error("bad state pick '{input}'")]
+    BadPicker {
+        /// The picker input under parsing.
         input: String,
     },
     /// Refused export flags.
@@ -188,7 +186,6 @@ impl From<RuntimeError> for CliError {
     /// Map one runtime failure onto cli language.
     fn from(error: RuntimeError) -> Self {
         match error {
-            RuntimeError::Slot(source) => Self::Slot(source),
             RuntimeError::EmptyArgv => Self::EmptyArgv,
             RuntimeError::Spawn { argv, fault } => Self::Spawn { argv, fault },
             RuntimeError::Wait { argv, fault } => Self::Wait { argv, fault },
@@ -241,12 +238,9 @@ impl CliError {
     /// Render one user-visible line with detail in the log.
     pub fn terminal(&self) -> String {
         match self {
-            Self::Model(_)
-            | Self::Engine(_)
-            | Self::Runtime(_)
-            | Self::Slot(_)
-            | Self::Bundle(_)
-            | Self::Blob(_) => self.transport_line(),
+            Self::Model(_) | Self::Engine(_) | Self::Runtime(_) | Self::Blob(_) => {
+                self.transport_line()
+            }
             Self::Read { .. }
             | Self::Write { .. }
             | Self::WriteUnknown { .. }
@@ -270,8 +264,6 @@ impl CliError {
             Self::Model(error) => transport_model(error),
             Self::Engine(error) => transport_engine(error),
             Self::Runtime(error) => transport_runtime(error),
-            Self::Slot(error) => transport_slot(error),
-            Self::Bundle(error) => transport_bundle(error),
             Self::Blob(error) => transport_blob(error),
             _ => self.to_string(),
         }
@@ -358,7 +350,6 @@ fn transport_engine(error: &EngineError) -> String {
 /// Map one runtime error into its task line.
 fn transport_runtime(error: &RuntimeError) -> String {
     match error {
-        RuntimeError::Slot(source) => transport_slot(source),
         RuntimeError::EmptyArgv => CliError::EmptyArgv.to_string(),
         RuntimeError::Spawn { argv, fault } => hook_fault("spawn", argv, fault),
         RuntimeError::Wait { argv, fault } => hook_fault("wait", argv, fault),
@@ -402,6 +393,38 @@ fn transport_runtime(error: &RuntimeError) -> String {
         RuntimeError::Refusal { .. } => error.to_string(),
         RuntimeError::Write { path, fault } => file_fault("cannot write", path, fault),
         RuntimeError::Remove { path, fault } => file_fault("cannot remove", path, fault),
+        RuntimeError::StateRead { path, fault } => file_fault("cannot read", path, fault),
+        RuntimeError::StateWriteUnknown { path, message } => {
+            log::error!("write '{}' failed: {message}", path.display());
+            error.to_string()
+        }
+        RuntimeError::StateManifest { source } => {
+            log::error!("state manifest failed: {source}");
+            "cannot render manifest, see log".to_owned()
+        }
+        RuntimeError::StateCorrupt { .. }
+        | RuntimeError::StateVersion { .. }
+        | RuntimeError::BadPick { .. } => error.to_string(),
+        RuntimeError::BundleRead { path, fault } => file_fault("bundle read", path, fault),
+        RuntimeError::BundleWrite { path, fault } => file_fault("bundle write", path, fault),
+        RuntimeError::BundleWriteUnknown { path, message } => {
+            log::error!("bundle write '{}' failed: {message}", path.display());
+            error.to_string()
+        }
+        RuntimeError::BundleMissing { sha } => {
+            log::error!("missing bundle blob '{}'", sha.hex());
+            format!("missing blob '{}', see log", sha.short())
+        }
+        RuntimeError::BundleVersion { got, .. } => {
+            format!("bundle version {got} is unsupported")
+        }
+        RuntimeError::BundleManifest { path, source } => {
+            log::error!("bundle manifest '{}' failed: {source}", path.display());
+            format!(
+                "bundle '{}' cannot render manifest, see log",
+                path.display()
+            )
+        }
     }
 }
 
@@ -412,54 +435,6 @@ fn join_conditions(failed: &[Condition]) -> String {
         .map(describe_condition)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Map one slot error into its task line.
-fn transport_slot(error: &SlotError) -> String {
-    use confit_store::slot::error::SlotError as Slot;
-    match error {
-        Slot::Read { path, fault } => file_fault("cannot read", path, fault),
-        Slot::Write { path, fault } => file_fault("cannot write", path, fault),
-        Slot::WriteUnknown { path, message } => {
-            log::error!("write '{}' failed: {message}", path.display());
-            error.to_string()
-        }
-        Slot::Manifest { path, source } => {
-            log::error!("slot manifest '{}' failed: {source}", path.display());
-            format!(
-                "cannot write '{}': cannot render manifest, see log",
-                path.display()
-            )
-        }
-        _ => error.to_string(),
-    }
-}
-
-/// Map one bundle error into its task line.
-fn transport_bundle(error: &BundleError) -> String {
-    use confit_store::bundle::error::BundleError as Bundle;
-    match error {
-        Bundle::Read { path, fault } => file_fault("bundle read", path, fault),
-        Bundle::Write { path, fault } => file_fault("bundle write", path, fault),
-        Bundle::WriteUnknown { path, message } => {
-            log::error!("bundle write '{}' failed: {message}", path.display());
-            error.to_string()
-        }
-        Bundle::Missing { sha } => {
-            log::error!("missing bundle blob '{}'", sha.hex());
-            format!("missing blob '{}', see log", sha.short())
-        }
-        Bundle::Version { got, .. } => {
-            format!("bundle version {got} is unsupported")
-        }
-        Bundle::Manifest { path, source } => {
-            log::error!("bundle manifest '{}' failed: {source}", path.display());
-            format!(
-                "bundle '{}' cannot render manifest, see log",
-                path.display()
-            )
-        }
-    }
 }
 
 /// Map one blob error into its task line.

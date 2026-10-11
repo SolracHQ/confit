@@ -10,6 +10,7 @@ workspace = true
 confit-model = { version = "0.8.0", path = "../model" }
 confit-driver = { version = "0.8.0", path = "../driver" }
 confit-store = { version = "0.8.0", path = "../store" }
+serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 noyalib.workspace = true
@@ -21,4 +22,5 @@ diffy.workspace = true
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }
+tar.workspace = true
 tempfile.workspace = true

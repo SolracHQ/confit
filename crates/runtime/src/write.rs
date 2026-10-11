@@ -1,4 +1,4 @@
-//! Destination writes with orphan removal.
+//! Destination writes with deleted removal.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -119,7 +119,7 @@ impl Writer {
     /// - [`RuntimeError::Remove`] for removal faults.
     /// - [`RuntimeError::RemoveUnknown`] for unmapped
     ///   removal failures.
-    pub fn remove_orphans(&self, recorded: &[Document], desired: &[Document]) -> Result<usize> {
+    pub fn remove_deleted(&self, recorded: &[Document], desired: &[Document]) -> Result<usize> {
         let total = recorded.len();
         let mut done = 0;
         let mut removed = 0;
@@ -213,7 +213,7 @@ mod tests {
         Document::new(
             literal(path),
             Data::Text {
-                content: "orphan bytes".into(),
+                content: "deleted bytes".into(),
                 mode: None,
                 unmanaged: false,
             },
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_orphans_announces_document_removed() {
+    fn remove_deleted_announces_document_removed() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = StoreRoots {
@@ -234,13 +234,13 @@ mod tests {
             stores: Stores::new(roots, sender.clone()),
             progress: sender,
         };
-        let path = dir.path().join("orphan.txt");
+        let path = dir.path().join("deleted.txt");
         driver::fs::create_parent(&path).unwrap();
-        driver::fs::write(&path, b"orphan bytes").unwrap();
+        driver::fs::write(&path, b"deleted bytes").unwrap();
         let recorded = vec![text_doc(&path)];
-        match writer.remove_orphans(&recorded, &[]) {
-            Ok(removed) => assert_eq!(removed, 1, "orphan leaves disk"),
-            Err(error) => panic!("orphans remove: {error}"),
+        match writer.remove_deleted(&recorded, &[]) {
+            Ok(removed) => assert_eq!(removed, 1, "deleted leaves disk"),
+            Err(error) => panic!("deleted remove: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_moves_remove_counters_across_orphans() {
+    fn batch_moves_remove_counters_across_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = StoreRoots {
@@ -270,12 +270,12 @@ mod tests {
         let first = dir.path().join("first.txt");
         let second = dir.path().join("second.txt");
         driver::fs::create_parent(&first).unwrap();
-        driver::fs::write(&first, b"orphan bytes").unwrap();
-        driver::fs::write(&second, b"orphan bytes").unwrap();
+        driver::fs::write(&first, b"deleted bytes").unwrap();
+        driver::fs::write(&second, b"deleted bytes").unwrap();
         let recorded = vec![text_doc(&first), text_doc(&second)];
-        match writer.remove_orphans(&recorded, &[]) {
-            Ok(removed) => assert_eq!(removed, 2, "both orphans leave disk"),
-            Err(error) => panic!("orphans remove: {error}"),
+        match writer.remove_deleted(&recorded, &[]) {
+            Ok(removed) => assert_eq!(removed, 2, "both deleted leave disk"),
+            Err(error) => panic!("deleted remove: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(

@@ -1,10 +1,13 @@
 //! Plan run
-//! Profile flags into built bundles with drift.
+//! Profile flags into built bundles with differences.
 
 use std::path::Path;
 
 use confit_driver as driver;
+use confit_runtime::bundle::Bundler;
+use confit_runtime::manifest::Manifest;
 use confit_store::Stores;
+use confit_store::state::Picker;
 
 use crate::error::{CliError, Result};
 
@@ -37,8 +40,8 @@ impl PlanRunner<'_> {
     ///
     /// # Errors
     ///
-    /// - [`crate::error::CliError::Slot`] for slot reads and writes.
-    /// - [`crate::error::CliError::Bundle`] for bundle writes.
+    /// - [`crate::error::CliError::BadPicker`] for malformed names.
+    /// - [`crate::error::CliError::Runtime`] for state and bundle writes.
     /// - [`crate::error::CliError::Engine`] for evaluation failures.
     /// - [`crate::error::CliError::NoDefaultProfile`] for absent defaults.
     /// - [`crate::error::CliError::NoProfile`] for absent profiles.
@@ -49,22 +52,25 @@ impl PlanRunner<'_> {
                 project: self.args.project.clone(),
             });
         }
-        let desired = confit_engine::Engine::new(self.stores.clone()).evaluate(&path)?;
+        let evaluated = confit_engine::Engine::new(self.stores.clone()).evaluate(&path)?;
+        let desired = Manifest::build(evaluated.documents, evaluated.hooks)?;
         let prepared = confit_runtime::prepare(&self.stores, desired)?;
         let text = render_prepared(&prepared);
         if let Some(output) = self.args.output.as_deref() {
             if is_named_output(output) {
-                let name = output
-                    .to_str()
-                    .and_then(|text| text.strip_prefix('@'))
-                    .unwrap_or("");
-                self.stores
-                    .slots()
-                    .store_named(name, &prepared.desired)
+                let raw = output.to_str().unwrap_or("");
+                let picker: Picker = raw.parse().map_err(|_| CliError::BadPicker {
+                    input: raw.to_owned(),
+                })?;
+                let Picker::Named(_) = picker else {
+                    return Err(CliError::BadPicker {
+                        input: raw.to_owned(),
+                    });
+                };
+                Manifest::store_named(&self.stores.states(), &picker, &prepared.desired)
                     .map_err(CliError::from)?;
             } else {
-                self.stores
-                    .bundles()
+                Bundler::new(&self.stores)
                     .write(&prepared.desired, output)
                     .map(|_| ())
                     .map_err(CliError::from)?;
@@ -74,7 +80,7 @@ impl PlanRunner<'_> {
     }
 }
 
-/// Report whether one output value shows a stored slot.
+/// Report whether one output value shows a stored state.
 fn is_named_output(raw: &Path) -> bool {
     raw.to_str().is_some_and(|text| text.starts_with('@'))
 }

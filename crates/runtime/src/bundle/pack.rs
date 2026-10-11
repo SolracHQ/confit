@@ -3,41 +3,45 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use confit_driver::sha::Sha;
 use confit_driver::{self as driver};
 use confit_model::document::BlobRef;
-use confit_model::manifest::Manifest;
+use confit_store::blob::error::BlobError;
+use confit_store::faults::AccessFault;
+use confit_store::handles::ArchiveHandle;
 
-use super::BundleStore;
+use super::Bundler;
 use super::ensure_bundle_extension;
-use super::error::{BundleError, Result};
 use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST};
-use crate::blob::error::BlobError;
-use crate::handles::ArchiveHandle;
+use crate::error::{Result, RuntimeError};
+use crate::manifest::Manifest;
 
 /// Entry mode for bundle members.
 const BUNDLE_ENTRY_MODE: u32 = 0o644;
 
-impl BundleStore {
+impl Bundler {
     /// Write one portable bundle with the manifest and the blobs.
     ///
-    /// The sealed handle shows the written file.
+    /// The verified handle shows the written file.
     ///
     /// - Destinations carry the bundle extension.
     /// - Members sort manifest-first in stored-hash order.
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Read`] for failed bundle reads.
-    /// - [`BundleError::Missing`] for missing blobs.
-    /// - [`BundleError::Write`] for seal write faults.
-    /// - [`BundleError::WriteUnknown`] for other seal write failures.
+    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleMissing`] for missing blobs.
+    /// - [`RuntimeError::BundleWrite`] for write faults.
+    /// - [`RuntimeError::BundleWriteUnknown`] for other write
+    ///   failures.
+    /// - [`RuntimeError::BundleManifest`] for manifest render failures.
     pub fn write(&self, manifest: &Manifest, dest: &Path) -> Result<ArchiveHandle> {
         let dest = ensure_bundle_extension(dest);
-        let text = manifest.json().map_err(|error| BundleError::Manifest {
-            path: dest.clone(),
-            source: error,
-        })?;
+        let text = manifest
+            .json()
+            .map_err(|error| RuntimeError::BundleManifest {
+                path: dest.clone(),
+                source: error,
+            })?;
         let mut members = Vec::with_capacity(manifest.refs().len() + 1);
         members.push(driver::tar::BuildMember {
             name: BUNDLE_MANIFEST.to_owned(),
@@ -54,15 +58,15 @@ impl BundleStore {
                 mode: BUNDLE_ENTRY_MODE,
             });
         }
-        seal_bundle(&dest, members)
+        self.write_staged(&dest, members)
     }
 
     /// Open one blob reader with its member name and length.
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Missing`] for missing blobs.
-    /// - [`BundleError::Read`] for other failed blob reads.
+    /// - [`RuntimeError::BundleMissing`] for missing blobs.
+    /// - [`RuntimeError::BundleRead`] for other failed blob reads.
     fn stored_member(
         &self,
         blob: &BlobRef,
@@ -71,11 +75,11 @@ impl BundleStore {
         let handle = self.blobs.resolve(blob).map_err(|error| match error {
             BlobError::Read {
                 sha,
-                fault: crate::faults::AccessFault::Missing,
-            } => BundleError::Missing { sha },
-            other => BundleError::Read {
+                fault: AccessFault::Missing,
+            } => RuntimeError::BundleMissing { sha },
+            other => RuntimeError::BundleRead {
                 path: dest.to_path_buf(),
-                fault: crate::faults::AccessFault::Unknown {
+                fault: AccessFault::Unknown {
                     message: other.to_string(),
                 },
             },
@@ -86,17 +90,44 @@ impl BundleStore {
             .map_err(|error| match error {
                 BlobError::Read {
                     sha,
-                    fault: crate::faults::AccessFault::Missing,
-                } => BundleError::Missing { sha },
-                other => BundleError::Read {
+                    fault: AccessFault::Missing,
+                } => RuntimeError::BundleMissing { sha },
+                other => RuntimeError::BundleRead {
                     path: dest.to_path_buf(),
-                    fault: crate::faults::AccessFault::Unknown {
+                    fault: AccessFault::Unknown {
                         message: other.to_string(),
                     },
                 },
             })?;
         let name = [BUNDLE_BLOBS_PREFIX, &blob.stored.to_string()].concat();
         Ok((name, len, reader))
+    }
+
+    /// Write one staged bundle into its destination file.
+    ///
+    /// The verified handle carries the finished file path and its content hash.
+    ///
+    /// - Member order is as given.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleWrite`] for write faults.
+    /// - [`RuntimeError::BundleWriteUnknown`] for other build and hash
+    ///   failures.
+    fn write_staged(
+        &self,
+        dest: &Path,
+        members: Vec<driver::tar::BuildMember<'_>>,
+    ) -> Result<ArchiveHandle> {
+        driver::atomic_write(dest, |path| {
+            let sink = driver::fs::create(path)?;
+            driver::tar::build_plain(sink, members)
+        })
+        .map_err(|error| RuntimeError::from_bundle_write_io(dest, error))?;
+        self.archives
+            .register_archive(dest)
+            .map_err(|error| RuntimeError::from_archive(dest, error))
     }
 }
 
@@ -111,53 +142,16 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
     unique.into_values().collect()
 }
 
-/// Seal one staged bundle into its destination file.
-///
-/// The sealed handle carries the finished file path and its content hash.
-///
-/// - Member order is as given.
-///
-/// # Errors
-///
-/// - [`BundleError::Read`] for failed bundle reads.
-/// - [`BundleError::Write`] for seal write faults.
-/// - [`BundleError::WriteUnknown`] for other build and hash failures.
-fn seal_bundle(dest: &Path, members: Vec<driver::tar::BuildMember<'_>>) -> Result<ArchiveHandle> {
-    driver::atomic_write(dest, |path| {
-        let sink = driver::fs::create(path)?;
-        driver::tar::build_plain(sink, members)
-    })
-    .map_err(|error| BundleError::from_write_io(dest, error))?;
-    let sha = bundle_sha(dest)?;
-    ArchiveHandle::new(dest.to_path_buf(), sha).map_err(|error| BundleError::WriteUnknown {
-        path: dest.to_path_buf(),
-        message: error.to_string(),
-    })
-}
-
-/// Hash one finished bundle file.
-///
-/// # Errors
-///
-/// - [`BundleError::Read`] for failed bundle reads.
-fn bundle_sha(source: &Path) -> Result<Sha> {
-    let mut file = driver::fs::open(source).map_err(|error| BundleError::from_io(source, error))?;
-    Sha::read(&mut file).map_err(|error| BundleError::from_io(source, error))
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Read as _;
 
     use super::*;
     use confit_driver::sha::Sha;
+    use confit_driver::{self as driver, fs::TestGuard};
     use confit_model::document::{Data, Document};
     use confit_model::routes::{Route, RouteBase};
-
-    use crate::StoreRoots;
-    use crate::archive::ArchiveStore;
-    use crate::blob::{BlobSource, BlobStore};
-    use confit_driver::{self as driver, fs::TestGuard};
+    use confit_store::StoreRoots;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -167,19 +161,16 @@ mod tests {
         }
     }
 
-    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
-        use std::sync::Arc;
-
-        use crate::resources::Resources;
+    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
+        use confit_store::Stores;
+        use confit_store::blob::BlobSource;
 
         let roots = test_roots(dir);
-        let resources = Arc::new(Resources::new(&roots));
         let (sender, _) = crossbeam_channel::unbounded();
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots, sender));
+        let stores = Stores::new(roots, sender);
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
-            let handle = match blobs.put(BlobSource::Bytes(body)) {
+            let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
@@ -194,7 +185,7 @@ mod tests {
             ));
         }
         match Manifest::build(documents, Vec::new()) {
-            Ok(manifest) => (BundleStore::new(archives, blobs, resources), manifest),
+            Ok(manifest) => (Bundler::new(&stores), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }
     }
@@ -250,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn write_seals_finished_file_with_streamed_blobs() {
+    fn write_registers_finished_file_with_streamed_blobs() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
@@ -262,13 +253,13 @@ mod tests {
         assert_eq!(
             written.canonical(),
             dir.path().join("plan.cb").as_path(),
-            "seal points at the destination"
+            "write points at the destination"
         );
         let raw = driver::fs::read(written.canonical()).unwrap();
         assert_eq!(
             written.sha(),
             &Sha::hash(&raw),
-            "seal hashes the finished bytes"
+            "write hashes the finished bytes"
         );
         let mut bodies = entry_bodies(written.canonical());
         bodies.sort();
@@ -292,6 +283,8 @@ mod tests {
 
     #[test]
     fn write_falls_back_to_pool() {
+        use confit_store::blob::BlobStore;
+
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"pool bytes"]);
@@ -330,23 +323,23 @@ mod tests {
     fn write_reports_write_storage_full() {
         let dir = tempfile::tempdir().unwrap();
         let guard = TestGuard::install();
-        let (store, manifest) = opaque_manifest(dir.path(), &[b"sealed bytes"]);
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"written bytes"]);
         guard.fail_writes(std::io::ErrorKind::StorageFull);
         let dest = dir.path().join("plan");
         match store.write(&manifest, &dest) {
             Ok(_) => panic!("full disk passes"),
-            Err(BundleError::Write { path, fault }) => {
+            Err(RuntimeError::BundleWrite { path, fault }) => {
                 assert!(
-                    matches!(fault, crate::faults::AccessFault::StorageFull),
-                    "seal keeps the fault"
+                    matches!(fault, confit_store::faults::AccessFault::StorageFull),
+                    "write keeps the fault"
                 );
                 assert_eq!(
                     path,
                     dir.path().join("plan.cb"),
-                    "seal keeps the destination"
+                    "write keeps the destination"
                 );
             }
-            Err(error) => panic!("wrong seal variant: {error}"),
+            Err(error) => panic!("wrong write variant: {error}"),
         }
     }
 }

@@ -2,16 +2,16 @@
 //! Portable bundle archives.
 
 pub mod codec;
-pub mod error;
 mod pack;
 mod unpack;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::archive::ArchiveStore;
-use crate::blob::BlobStore;
-use crate::resources::Resources;
+use confit_store::Stores;
+use confit_store::archive::ArchiveStore;
+use confit_store::blob::BlobStore;
+use confit_store::resources::Resources;
 
 /// Bundle file extension imposed on explicit outputs.
 const BUNDLE_EXTENSION: &str = "cb";
@@ -24,23 +24,19 @@ pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
 
 /// Portable bundle archives.
 #[derive(Debug, Clone)]
-pub struct BundleStore {
+pub struct Bundler {
     pub(crate) archives: Arc<ArchiveStore>,
     pub(crate) blobs: Arc<BlobStore>,
     pub(crate) resources: Arc<Resources>,
 }
 
-impl BundleStore {
-    /// Build a bundle store over shared archive, blob, and resource stores.
-    pub fn new(
-        archives: Arc<ArchiveStore>,
-        blobs: Arc<BlobStore>,
-        resources: Arc<Resources>,
-    ) -> Self {
+impl Bundler {
+    /// Build a bundler over shared stores.
+    pub fn new(stores: &Stores) -> Self {
         Self {
-            archives,
-            blobs,
-            resources,
+            archives: stores.archives(),
+            blobs: stores.blobs(),
+            resources: stores.resources(),
         }
     }
 }

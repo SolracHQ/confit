@@ -53,9 +53,9 @@ impl FetchCache {
             .join(Sha::hash(url.as_bytes()).hex())
     }
 
-    /// Derive the staging path for one URL download.
-    fn staging_path(&self, url: &str) -> PathBuf {
-        driver::stage_path(&self.content_path(&Sha::hash(url.as_bytes()).hex()))
+    /// Derive the pending path for one URL download.
+    fn pending_path(&self, url: &str) -> PathBuf {
+        driver::pending_path(&self.content_path(&Sha::hash(url.as_bytes()).hex()))
     }
 
     /// Find a cached handle with a valid index digest.
@@ -115,7 +115,7 @@ impl FetchCache {
         })
     }
 
-    /// Download one URL body into the cache through staging.
+    /// Download one URL body into the cache through pending.
     ///
     /// # Errors
     ///
@@ -143,20 +143,20 @@ impl FetchCache {
         reader: impl std::io::Read,
         total: Option<u64>,
     ) -> Result<(PathBuf, Sha, usize)> {
-        let staging = self.staging_path(url);
-        driver::fs::create_parent(&staging)
+        let pending = self.pending_path(url);
+        driver::fs::create_parent(&pending)
             .map_err(|error| FetchError::from_write_io(url, error))?;
-        let outcome = self.stream_to_staging(url, reader, &staging, total);
+        let outcome = self.stream_to_pending(url, reader, &pending, total);
         let (digest, bytes) = match outcome {
             Ok(done) => done,
             Err(error) => {
-                let _ = driver::fs::remove_file(&staging);
+                let _ = driver::fs::remove_file(&pending);
                 return Err(error);
             }
         };
         let content = self.content_path(&digest.hex());
-        driver::atomic_write(&content, |final_staging| {
-            driver::fs::rename(&staging, final_staging)
+        driver::atomic_write(&content, |final_pending| {
+            driver::fs::rename(&pending, final_pending)
         })
         .map_err(|error| FetchError::from_write_io(url, error))?;
         self.write_index(url, &digest)?;
@@ -176,22 +176,22 @@ impl FetchCache {
             .map_err(|error| FetchError::from_write_io(url, error))
     }
 
-    /// Stream one body into staging with a hash.
+    /// Stream one body into pending with a hash.
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Read`] for failed staging reads.
+    /// - [`FetchError::Read`] for failed pending reads.
     /// - [`FetchError::Write`] for cache write faults.
     /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    fn stream_to_staging(
+    fn stream_to_pending(
         &self,
         url: &str,
         reader: impl std::io::Read,
-        staging: &Path,
+        pending: &Path,
         total: Option<u64>,
     ) -> Result<(Sha, usize)> {
         let file =
-            driver::fs::create(staging).map_err(|error| FetchError::from_write_io(url, error))?;
+            driver::fs::create(pending).map_err(|error| FetchError::from_write_io(url, error))?;
         let mut writer = std::io::BufWriter::new(file);
         let mut limited = reader.take(BODY_LIMIT_BYTES);
         let mut hasher = sha2::Sha256::new();
@@ -982,7 +982,10 @@ mod tests {
         driver::fs::write(&source_path, &small).unwrap();
         let source = ResourceHandle::new(dir.path(), source_path, Sha::hash(&small)).unwrap();
         let via_source = store.put(BlobSource::Handle(&source)).unwrap();
-        assert_eq!(via_source, via_put, "trusted source keeps sealed identity");
+        assert_eq!(
+            via_source, via_put,
+            "trusted source keeps verified identity"
+        );
         let large: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
         assert!(large.len() > STREAM_BUF_BYTES);
         let large_put = store.put(BlobSource::Bytes(&large)).unwrap();
@@ -997,7 +1000,7 @@ mod tests {
         );
         assert_eq!(
             large_put, large_sourced,
-            "both shapes keep one sealed identity"
+            "both shapes keep one verified identity"
         );
         for handle in [&large_put, &large_sourced] {
             let mut found = Vec::new();
@@ -1017,13 +1020,13 @@ mod tests {
         match cache.fetch(URL, None, false) {
             Ok(_) => panic!("oversized file passes"),
             Err(FetchError::Write { url, fault }) => {
-                assert_eq!(url, URL, "stage keeps the url");
+                assert_eq!(url, URL, "pending keeps the url");
                 assert!(
                     matches!(fault, crate::faults::AccessFault::FileTooLarge),
-                    "stage keeps the fault"
+                    "pending keeps the fault"
                 );
             }
-            Err(error) => panic!("wrong stage variant: {error}"),
+            Err(error) => panic!("wrong pending variant: {error}"),
         }
     }
 }

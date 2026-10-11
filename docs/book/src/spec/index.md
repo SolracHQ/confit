@@ -8,7 +8,7 @@ Spec-Version 0.8.0 tracks the workspace crates at version 0.8.0.
 `confit --version` reports the same version through the clap
 `version` attribute on the CLI parser.
 This page stays a living document on the main branch.
-Sealed releases stay readable under git tags through one recipe:
+Registered releases stay readable under git tags through one recipe:
 
 ```sh
 just show-spec VERSION=0.7
@@ -54,7 +54,7 @@ Same profile and same cache yields the same bundle.
   for each subcommand.
 - plan: The plan page records profile evaluation, diffing, and
   bundle output.
-- drift: The drift page records state-versus-disk notes and
+- difference: The difference page records state-versus-disk notes and
   first-run behavior.
 - apply: The apply page records guarded writes and hook runs.
 - storage: The storage page records bundles, slots, and the blob

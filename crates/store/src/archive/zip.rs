@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::ArchiveBackend;
 use super::error::{ArchiveError, Result};
-use super::spill::{BornMember, spill_entry};
+use super::extract::{ExtractedMember, extract_entry};
 use confit_driver as driver;
 
 /// Seekable zip member listing and extraction.
@@ -17,8 +17,8 @@ impl ArchiveBackend for ZipBackend {
         driver::zip::list_names(reader).map_err(|error| from_zip(source, error))
     }
 
-    fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-        unpack_stream(open_source(source)?, source, staging)
+    fn unpack(&self, source: &Path, pending: &Path) -> Result<Vec<ExtractedMember>> {
+        unpack_stream(open_source(source)?, source, pending)
     }
 }
 
@@ -85,25 +85,25 @@ fn read_unknown(source: &Path, message: String) -> ArchiveError {
 fn unpack_stream(
     reader: Box<dyn driver::fs::FsFile>,
     source: &Path,
-    staging: &Path,
-) -> Result<Vec<BornMember>> {
-    let mut born = Vec::new();
+    pending: &Path,
+) -> Result<Vec<ExtractedMember>> {
+    let mut extracted = Vec::new();
     let mut failure: Option<ArchiveError> = None;
     let outcome = driver::zip::walk(reader, |framed| {
         let driver::zip::Member { name, reader } = framed;
-        match spill_entry(source, staging, &name, reader) {
+        match extract_entry(source, pending, &name, reader) {
             Ok(member) => {
-                born.push(member);
+                extracted.push(member);
                 Ok(())
             }
             Err(error) => {
                 failure = Some(error);
-                Err(std::io::Error::other("archive spill failed"))
+                Err(std::io::Error::other("archive extract failed"))
             }
         }
     });
     match outcome {
-        Ok(()) => Ok(born),
+        Ok(()) => Ok(extracted),
         Err(error) => {
             if let Some(error) = failure {
                 Err(error)

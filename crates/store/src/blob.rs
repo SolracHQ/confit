@@ -16,7 +16,6 @@ use sha2::Digest;
 use crate::StoreRoots;
 use crate::faults::AccessFault;
 use crate::handles::{BlobHandle, ResourceHandle};
-use crate::slot::SlotStore;
 use confit_driver::{self as driver};
 use error::{BlobError, Result};
 
@@ -29,7 +28,6 @@ const BLOB_GZIP_LEVEL: u32 = 6;
 /// Content-addressed blob pool.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
-    roots: StoreRoots,
     pool: PathBuf,
     cache: PathBuf,
     progress: ProgressSender,
@@ -45,19 +43,18 @@ struct VerifiedBlobReader {
     done: bool,
 }
 
-/// Blob spill source shapes.
+/// Blob source shapes.
 pub enum BlobSource<'a> {
     /// Raw bytes under hashing.
     Bytes(&'a [u8]),
-    /// Trusted file with sealed content hash.
+    /// Trusted file with verified content hash.
     Handle(&'a ResourceHandle),
 }
 
 impl BlobStore {
-    /// Build one file-backed blob pool with staging under temp.
+    /// Build one file-backed blob pool with pending under temp.
     pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
         Self {
-            roots: roots.clone(),
             pool: roots.config_base.join(BLOBS_DIR),
             cache: roots.temp_base.join(BLOBS_DIR),
             progress,
@@ -89,7 +86,7 @@ impl BlobStore {
     /// - [`BlobError::Read`] for failed blob reads.
     pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
         let sha = handle.sha().clone();
-        let path = self.live_path(handle);
+        let path = self.current_path(handle);
         let file = driver::fs::open(&path).map_err(|error| BlobError::from_read_io(&sha, error))?;
         Ok(Box::new(VerifiedBlobReader {
             decoder: driver::gzip::Decoder::open(file as Box<dyn std::io::Read>),
@@ -99,7 +96,7 @@ impl BlobStore {
         }) as Box<dyn std::io::Read>)
     }
 
-    /// Spill bytes into the cache with both identities.
+    /// Write bytes into the cache with both identities.
     ///
     /// # Errors
     ///
@@ -124,10 +121,10 @@ impl BlobStore {
         };
         driver::fs::create_dir_all(&self.cache)
             .map_err(|error| BlobError::from_write_io(&self.cache, error))?;
-        let staging = driver::stage_path(&self.cache.join(sha.hex()));
-        let staged = driver::fs::create(&staging)
-            .map_err(|error| BlobError::from_write_io(&staging, error))?;
-        let mut encoder = driver::gzip::Encoder::open(ShaWriter::new(staged), BLOB_GZIP_LEVEL);
+        let pending = driver::pending_path(&self.cache.join(sha.hex()));
+        let pended = driver::fs::create(&pending)
+            .map_err(|error| BlobError::from_write_io(&pending, error))?;
+        let mut encoder = driver::gzip::Encoder::open(ShaWriter::new(pended), BLOB_GZIP_LEVEL);
         driver::copy_stream(&mut reader, &mut encoder).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
                 BlobError::from_read_io(&sha, error)
@@ -138,7 +135,7 @@ impl BlobStore {
         let stored = writer.digest();
         let handle = BlobHandle::new(sha.clone(), stored);
         let dest = self.cache.join(handle.stored().hex());
-        driver::fs::rename(&staging, &dest)
+        driver::fs::rename(&pending, &dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
         let total = self.started.load(Ordering::Relaxed);
@@ -160,13 +157,13 @@ impl BlobStore {
     ///
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
-    pub(crate) fn receive(&self, stored: &Sha, source: &ResourceHandle) -> Result<()> {
+    pub fn receive(&self, stored: &Sha, source: &ResourceHandle) -> Result<()> {
         let dest = self.cache.join(stored.hex());
         if driver::fs::exists(&dest) {
             return Ok(());
         }
-        driver::atomic_write(&dest, |staging| {
-            driver::fs::copy(source.canonical(), staging).map(|_| ())
+        driver::atomic_write(&dest, |pending| {
+            driver::fs::copy(source.canonical(), pending).map(|_| ())
         })
         .map_err(|error| BlobError::from_write_io(&dest, error))
     }
@@ -176,8 +173,8 @@ impl BlobStore {
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed blob reads.
-    pub(crate) fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
-        let path = self.live_path(handle);
+    pub fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
+        let path = self.current_path(handle);
         let len = driver::fs::metadata(&path)
             .map_err(|error| BlobError::from_read_io(handle.sha(), error))?
             .len();
@@ -194,19 +191,19 @@ impl BlobStore {
     /// - [`BlobError::Corrupt`] for corrupt pool files.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
         let sha = handle.sha().clone();
-        let footer = driver::fs::read_tail(&self.live_path(handle), driver::gzip::TRAILER_LEN)
+        let footer = driver::fs::read_tail(&self.current_path(handle), driver::gzip::TRAILER_LEN)
             .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => BlobError::Read {
-                    sha: sha.clone(),
-                    fault: AccessFault::Missing,
-                },
-                std::io::ErrorKind::PermissionDenied => BlobError::Read {
-                    sha: sha.clone(),
-                    fault: AccessFault::Denied,
-                },
-                std::io::ErrorKind::UnexpectedEof => BlobError::Corrupt { sha: sha.clone() },
-                _ => BlobError::from_read_io(&sha, error),
-            })?;
+            std::io::ErrorKind::NotFound => BlobError::Read {
+                sha: sha.clone(),
+                fault: AccessFault::Missing,
+            },
+            std::io::ErrorKind::PermissionDenied => BlobError::Read {
+                sha: sha.clone(),
+                fault: AccessFault::Denied,
+            },
+            std::io::ErrorKind::UnexpectedEof => BlobError::Corrupt { sha: sha.clone() },
+            _ => BlobError::from_read_io(&sha, error),
+        })?;
         let mut raw = [0u8; driver::gzip::TRAILER_LEN as usize];
         raw.copy_from_slice(&footer);
         Ok(u32::from_le_bytes(raw) as u64)
@@ -236,7 +233,7 @@ impl BlobStore {
             if driver::fs::is_missing(&source) {
                 continue;
             }
-            match driver::atomic_write(&dest, |staging| move_cache_copy(&source, staging)) {
+            match driver::atomic_write(&dest, |pending| move_cache_copy(&source, pending)) {
                 Ok(()) => {
                     // Cache copies clean best-effort; the OS reaps the rest.
                     let _ = driver::fs::remove_file(&source);
@@ -248,10 +245,10 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Derive the live file for one handle.
+    /// Derive the current file for one handle.
     ///
     /// - The cache copy wins over the pool.
-    fn live_path(&self, handle: &BlobHandle) -> PathBuf {
+    fn current_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.stored().hex());
         if driver::fs::exists(&cached) {
             cached
@@ -260,28 +257,22 @@ impl BlobStore {
         }
     }
 
-    /// Drop cache and pool files outside what slot records.
+    /// Drop cache and pool files outside the keep set.
     ///
     /// The removal count for both homes.
     ///
     /// # Errors
     ///
     /// - [`BlobError::Write`] for write faults.
-    /// - [`BlobError::WriteUnknown`] for keep set reads, listing,
-    ///   and removal failures.
-    pub fn prune(&self) -> Result<usize> {
-        let slots = SlotStore::new(&self.roots);
-        let keep = slots.keep_set().map_err(|error| BlobError::WriteUnknown {
-            path: self.roots.config_base.clone(),
-            message: error.to_string(),
-        })?;
-        let mut removed = prune_dir(&self.cache, &keep)?;
-        removed += prune_dir(&self.pool, &keep)?;
+    /// - [`BlobError::WriteUnknown`] for listing and removal failures.
+    pub fn prune(&self, keep: &BTreeSet<Sha>) -> Result<usize> {
+        let mut removed = prune_dir(&self.cache, keep)?;
+        removed += prune_dir(&self.pool, keep)?;
         Ok(removed)
     }
 }
 
-/// Move one cache file into its pool staging file.
+/// Move one cache file into its pool pending file.
 ///
 /// - A cross-device rename falls back to an exact copy.
 ///
@@ -289,13 +280,13 @@ impl BlobStore {
 ///
 /// - io failures from rename, open, and copy carry the cache file.
 /// - a vanished cache file reports as NotFound.
-fn move_cache_copy(source: &Path, staging: &Path) -> std::io::Result<()> {
-    match driver::fs::rename(source, staging) {
+fn move_cache_copy(source: &Path, pending: &Path) -> std::io::Result<()> {
+    match driver::fs::rename(source, pending) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(error),
         Err(_) => {
             let mut reader = driver::fs::open(source)?;
-            let mut writer = driver::fs::create(staging)?;
+            let mut writer = driver::fs::create(pending)?;
             driver::copy_stream(&mut reader, &mut writer)?;
             Ok(())
         }
@@ -379,9 +370,6 @@ fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{Data, Document};
-    use confit_model::manifest::Manifest;
-    use confit_model::routes::{Route, RouteBase};
 
     use crate::handles::ResourceHandle;
 
@@ -425,11 +413,11 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("pool stores: {error}"),
         };
-        assert_eq!(handle.sha(), &Sha::hash(raw), "content hash seals bytes");
+        assert_eq!(handle.sha(), &Sha::hash(raw), "content hash matches bytes");
         assert_ne!(
             handle.stored(),
             handle.sha(),
-            "stored hash seals encoded bytes"
+            "stored hash matches encoded bytes"
         );
         assert!(
             store.resolve(&handle.to_ref()).is_ok(),
@@ -447,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn put_spills_into_cache_with_zero_pool_bytes() {
+    fn put_extracts_into_cache_with_zero_pool_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
@@ -587,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn both_source_shapes_keep_sealed_identity() {
+    fn both_source_shapes_keep_verified_identity() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
@@ -627,7 +615,6 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
-        let slots = SlotStore::new(&roots);
         let kept = match store.put(BlobSource::Bytes(b"kept bytes")) {
             Ok(handle) => handle,
             Err(error) => panic!("kept blob stores: {error}"),
@@ -636,47 +623,26 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("dropped blob stores: {error}"),
         };
-        let manifest = match Manifest::build(
-            vec![Document::new(
-                Route::new(RouteBase::Home, "bin").unwrap(),
-                Data::Opaque {
-                    blob: kept.to_ref(),
-                    size: 10,
-                    mode: None,
-                    unmanaged: false,
-                },
-            )],
-            Vec::new(),
-        ) {
-            Ok(manifest) => manifest,
-            Err(error) => panic!("manifest builds: {error}"),
-        };
         match store.persist(std::slice::from_ref(&kept)) {
             Ok(_) => {}
             Err(error) => panic!("persist lands: {error}"),
         }
-        match slots.store(&manifest) {
-            Ok(_) => {}
-            Err(error) => panic!("referencing manifest stores: {error}"),
-        }
-        match store.prune() {
-            Ok(removed) => assert_eq!(removed, 1, "prune drops the orphan"),
+        let keep = BTreeSet::from([kept.stored().clone()]);
+        match store.prune(&keep) {
+            Ok(removed) => assert_eq!(removed, 1, "prune drops the unreferenced"),
             Err(error) => panic!("pool prunes: {error}"),
         }
         assert!(
             store.resolve(&kept.to_ref()).is_ok(),
             "the referenced blob survives"
         );
-        assert!(store.resolve(&dropped.to_ref()).is_err(), "the orphan dies");
+        assert!(
+            store.resolve(&dropped.to_ref()).is_err(),
+            "the unreferenced dies"
+        );
         assert_eq!(read_open(&store, &kept), b"kept bytes");
-        for _ in 1..=6 {
-            match slots.store(&Manifest::empty()) {
-                Ok(_) => {}
-                Err(error) => panic!("empty manifest stores: {error}"),
-            }
-        }
-        match store.prune() {
-            Ok(removed) => assert_eq!(removed, 1, "rotation drains the rest"),
+        match store.prune(&BTreeSet::new()) {
+            Ok(removed) => assert_eq!(removed, 1, "an empty keep drains the rest"),
             Err(error) => panic!("pool prunes again: {error}"),
         }
         assert!(

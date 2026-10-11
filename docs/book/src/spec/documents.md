@@ -62,14 +62,14 @@ YAML renders through the YAML encoder.
 The hash covers rendered bytes with SHA-256. The digest
 reads as lowercase hex.
 
-#### Drift shape
+#### Difference shape
 
 Recorded and disk tables diff leaf by leaf. Dotted keys
 name leaves. Indices ride brackets counting from 1. Changed leaves carry
 old and new values. Added leaves carry new values only.
 Removed leaves carry old values only. An explicit null
 stays distinct from an absent key. Disk bytes outside the
-format fall back to a hunk.
+format fall back to a diff.
 
 #### Apply behavior
 
@@ -108,9 +108,9 @@ the recorded manifest, rewritten ones land once.
 The hash covers content bytes with SHA-256. The digest
 reads as lowercase hex.
 
-#### Drift shape
+#### Difference shape
 
-Changed content renders as one unified hunk. The hunk
+Changed content renders as one unified diff. The diff
 carries content lines only. The renderer strips file
 markers. A recorded mode and a differing disk mode adds
 a `mode` key entry.
@@ -167,9 +167,9 @@ Each per-shell file hashes separately. The hash covers
 rendered shell text with SHA-256. The digest reads as
 lowercase hex.
 
-#### Drift shape
+#### Difference shape
 
-Changed rc files render as one unified hunk, like text.
+Changed rc files render as one unified diff, like text.
 Modes never attach to rc documents.
 
 #### Apply behavior
@@ -202,7 +202,7 @@ The target string forms the link body.
 The hash covers target bytes with SHA-256. The digest
 reads as lowercase hex.
 
-#### Drift shape
+#### Difference shape
 
 A changed target reports under the `target` key with old
 and new strings.
@@ -247,7 +247,7 @@ The hash copies the blob reference. The blob reference
 holds the SHA-256 over raw bytes. The digest reads as
 lowercase hex.
 
-#### Drift shape
+#### Difference shape
 
 Changed bytes report under the `content` key. Values carry
 hash and size labels. Equal bytes stay quiet. A recorded
@@ -308,12 +308,12 @@ reads as lowercase hex.
 755 setup.sh {hex}
 ```
 
-#### Drift shape
+#### Difference shape
 
-Drift walks the destination member by member. Missing
+Difference walks the destination member by member. Missing
 members report missing under the joined path. Changed
 bytes report hash and size labels under the member key.
-Changed modes report under the `member:mode` key. Drift
+Changed modes report under the `member:mode` key. Difference
 covers recorded members alone.
 
 #### Apply behavior

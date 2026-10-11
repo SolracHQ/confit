@@ -10,7 +10,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::manifest::Manifest;
 use crate::routes::Route;
 use confit_driver::sha::Sha;
 
@@ -108,7 +107,7 @@ pub struct BlobRef {
 }
 
 impl BlobRef {
-    /// Build one blob ref from sealed content and stored hashes.
+    /// Build one blob ref from verified content and stored hashes.
     pub fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
@@ -224,10 +223,10 @@ pub struct Document {
     pub data_hash: String,
 }
 
-/// Per-document lifecycle status against previous manifest.
+/// Per-document lifecycle status against previous documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentStatus {
-    /// Document absent from previous manifest.
+    /// Document absent from previous documents.
     Create,
     /// Document present with a differing data hash.
     Update,
@@ -267,15 +266,14 @@ impl Document {
 }
 
 impl Document {
-    /// Report the lifecycle status against a previous manifest.
-    pub fn status(&self, previous: &Manifest) -> DocumentStatus {
+    /// Report the lifecycle status against previous documents.
+    pub fn status(&self, previous: &[Document]) -> DocumentStatus {
         let recorded = previous
-            .documents
             .iter()
             .find(|document| document.key() == self.key());
         match recorded {
             None => {
-                let opaque = previous.documents.iter().find(|recorded| {
+                let opaque = previous.iter().find(|recorded| {
                     recorded.destination == self.destination
                         && recorded.key() != self.key()
                         && (recorded.is_opaque() || self.is_opaque())
@@ -362,7 +360,7 @@ mod tests {
         });
         assert_eq!(
             hash, "f007767c80150f15e9cacf96dc8d24ac3b6b3094c9b727d1534b175910968f2a",
-            "text hash drifts only when rendered bytes change"
+            "text hash differs only when rendered bytes change"
         );
     }
 
@@ -376,7 +374,7 @@ mod tests {
         });
         assert_eq!(
             hash, "796a0bdfc73f373f33ec3098a246b3d27a10d75e9f4f3dd4e4630efc0f2d3184",
-            "structured hash drifts only when rendered bytes change"
+            "structured hash differs only when rendered bytes change"
         );
     }
 
@@ -413,7 +411,7 @@ mod tests {
         assert_eq!(
             fill(data),
             "4e0bb0e9341fc39990d9a6f3476e68a3d2c49e75102ccb2daa7ba7bfcf275f97",
-            "rc hash drifts only when rendered bytes change"
+            "rc hash differs only when rendered bytes change"
         );
     }
 

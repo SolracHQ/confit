@@ -70,7 +70,7 @@ impl ResourceHandle {
 }
 
 impl BlobHandle {
-    /// Build a blob handle from sealed content and stored hashes.
+    /// Build a blob handle from verified content and stored hashes.
     pub(crate) fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
@@ -125,6 +125,24 @@ impl ArchiveHandle {
     /// Return the compression proof.
     pub fn proof(&self) -> ArchiveProof {
         self.proof
+    }
+}
+
+/// Handle to a stored state file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StateHandle {
+    path: PathBuf,
+}
+
+impl StateHandle {
+    /// Return the state file path.
+    pub fn canonical(&self) -> &Path {
+        &self.path
+    }
+
+    /// Build a state handle from its file path.
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
     }
 }
 
@@ -192,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_handle_builds_with_sealed_proof() {
+    fn archive_handle_builds_with_verified_proof() {
         let handle = ArchiveHandle::new("/cache/fonts.zip", fixture_sha()).unwrap();
         assert_eq!(handle.canonical(), Path::new("/cache/fonts.zip"));
         assert_eq!(handle.sha(), &fixture_sha());

@@ -1,4 +1,4 @@
-//! Member spill with hashes and containment.
+//! Member extraction with hashes and containment.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use super::error::{ArchiveError, Result};
 use confit_driver::{self as driver};
 
 /// Archive member with a streamed content hash.
-pub(crate) struct BornMember {
+pub(crate) struct ExtractedMember {
     pub(crate) name: String,
     pub(crate) sha: Sha,
 }
@@ -31,39 +31,39 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
     }
 }
 
-/// Spill one decoded member stream under staging with a hash.
+/// Extract one decoded member stream under pending with a hash.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping member names.
 /// - [`ArchiveError::Read`] for failed source reads.
-/// - [`ArchiveError::Write`] for spill write faults.
-/// - [`ArchiveError::WriteUnknown`] for other spill write failures.
-pub(crate) fn spill_entry(
+/// - [`ArchiveError::Write`] for extract write faults.
+/// - [`ArchiveError::WriteUnknown`] for other extract write failures.
+pub(crate) fn extract_entry(
     source: &Path,
-    staging: &Path,
+    pending: &Path,
     name: &str,
     reader: impl std::io::Read,
-) -> Result<BornMember> {
+) -> Result<ExtractedMember> {
     check_member_path(name, source)?;
-    let path = staging.join(name);
+    let path = pending.join(name);
     if let Err(error) = driver::fs::create_parent(&path) {
-        let _ = driver::fs::remove_dir_all(staging);
+        let _ = driver::fs::remove_dir_all(pending);
         return Err(ArchiveError::from_write_io(source, error));
     }
     let file = match driver::fs::create(&path) {
         Ok(file) => file,
         Err(error) => {
-            let _ = driver::fs::remove_dir_all(staging);
+            let _ = driver::fs::remove_dir_all(pending);
             return Err(ArchiveError::from_write_io(source, error));
         }
     };
     let mut writer = ShaWriter::new(file);
     if let Err(error) = driver::copy_stream(reader, &mut writer) {
-        let _ = driver::fs::remove_dir_all(staging);
+        let _ = driver::fs::remove_dir_all(pending);
         return Err(from_stream(source, error));
     }
-    Ok(BornMember {
+    Ok(ExtractedMember {
         name: name.to_owned(),
         sha: writer.digest(),
     })
@@ -78,7 +78,7 @@ pub(crate) fn spill_entry(
 /// - [`ArchiveError::Escape`] for escaping members.
 /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
 /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-/// - [`ArchiveError::UnsupportedCompression`] for sealed compression.
+/// - [`ArchiveError::UnsupportedCompression`] for verified compression.
 pub(crate) fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -> Result<()> {
     for name in &backend.names(source)? {
         check_member_path(name, source)?;
@@ -126,13 +126,13 @@ mod tests {
         );
         match &error {
             ArchiveError::Write { path: found, fault } => {
-                assert_eq!(found, source, "spill keeps the source");
+                assert_eq!(found, source, "extract keeps the source");
                 assert!(
                     matches!(*fault, AccessFault::StorageFull),
-                    "spill keeps the fault: {error}"
+                    "extract keeps the fault: {error}"
                 );
             }
-            other => panic!("wrong spill variant: {other}"),
+            other => panic!("wrong extract variant: {other}"),
         }
         let error = from_stream(
             source,

@@ -10,7 +10,6 @@ workspace = true
 confit-model = { version = "0.8.0", path = "../model" }
 confit-driver = { version = "0.8.0", path = "../driver" }
 dirs.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 

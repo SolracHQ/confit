@@ -23,15 +23,15 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// preview the profile evaluation with drift against previous state
+    /// preview the profile evaluation with differences against previous state
     Plan(PlanArgs),
     /// confirm the manifest and create every document in place
     Apply(ApplyArgs),
     /// scaffold a profile with stubs in the target folder
     Init(InitArgs),
-    /// pack one slot into a portable bundle file or print its manifest
+    /// pack one state into a portable bundle file or print its manifest
     Export(ExportArgs),
-    /// delete one named slot with its orphaned blobs
+    /// delete one named state with its unreferenced blobs
     Delete(DeleteArgs),
 }
 
@@ -52,7 +52,7 @@ pub struct PlanArgs {
 }
 
 /// Apply one source: `.lua` and extensionless paths form a
-/// profile, `.cb` forms a bundle file, `@name` forms a named slot, `%N`
+/// profile, `.cb` forms a bundle file, `@name` forms a named state, `%N`
 /// forms history newest-first from one, and folders form a project
 /// with `-p` profile choice.
 #[derive(Debug, Args)]
@@ -75,12 +75,12 @@ pub struct InitArgs {
     pub dir: PathBuf,
 }
 
-/// Pack one slot into a bundle or print its manifest.
+/// Pack one state into a bundle or print its manifest.
 #[derive(Debug, Args)]
 pub struct ExportArgs {
-    /// slot to export (`%N` history or `@name`, default: applied slot)
+    /// state to export (`%N` history or `@name`, default: applied state)
     pub picker: Option<String>,
-    /// write the bundle to a file (default: slot name with `.cb`)
+    /// write the bundle to a file (default: state name with `.cb`)
     #[arg(short, long, conflicts_with = "manifest")]
     pub output: Option<PathBuf>,
     /// print the manifest as pretty JSON
@@ -88,10 +88,10 @@ pub struct ExportArgs {
     pub manifest: bool,
 }
 
-/// Delete one named slot.
+/// Delete one named state.
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
-    /// slot to delete (shaped `@name`)
+    /// state to delete (shaped `@name`)
     pub name: String,
 }
 
@@ -122,8 +122,8 @@ pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
 
 /// Expand tildes across every path arg of one command.
 pub fn expand_command(command: &mut Command) {
-    fn opt(slot: &mut Option<PathBuf>) {
-        if let Some(path) = slot {
+    fn opt(target: &mut Option<PathBuf>) {
+        if let Some(path) = target {
             *path = expand_tilde(path);
         }
     }

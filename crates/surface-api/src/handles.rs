@@ -111,7 +111,7 @@ impl Handle {
         }
     }
 
-    /// Seal the opened input as its archive, else nil with reason.
+    /// Register the opened input as its archive, else nil with reason.
     ///
     /// - Non-archives produce nil with reason.
     fn archive(&self) -> mlua::Result<(Option<Archive>, Option<String>)> {
@@ -351,8 +351,8 @@ mod tests {
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(resource("fonts.tar.gz"))
-            local archive, seal_reason = handle:archive()
-            assert(archive ~= nil, seal_reason)
+            local archive, archive_reason = handle:archive()
+            assert(archive ~= nil, archive_reason)
             local members, members_reason = archive:members()
             assert(members ~= nil, members_reason)
             assert(#members == 2)
@@ -381,8 +381,8 @@ mod tests {
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(resource("fonts.zip"))
-            local archive, seal_reason = handle:archive()
-            assert(archive ~= nil, seal_reason)
+            local archive, archive_reason = handle:archive()
+            assert(archive ~= nil, archive_reason)
             local members, members_reason = archive:members()
             assert(members ~= nil, members_reason)
             assert(#members == 2)
@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn non_archive_names_seal() {
+    fn non_archive_reports_reason() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
@@ -448,7 +448,7 @@ mod tests {
                 let text = reason.to_string_lossy();
                 assert!(
                     text.contains("not a compressed archive"),
-                    "the text shows the seal: {text}"
+                    "the text shows the reason: {text}"
                 );
             }
             Ok(_) => panic!("non-archive returns nil with reason"),
@@ -476,7 +476,7 @@ mod tests {
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "alpha"),
             Ok(_) => panic!("repeated member returns its text"),
-            Err(error) => panic!("repeated members reuse the spill: {error}"),
+            Err(error) => panic!("repeated members reuse the extract: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(events.len(), 1, "repeat unpack fires once");

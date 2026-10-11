@@ -53,7 +53,7 @@ stay resolvable. Present hashes skip the write, so slots share
 stored bytes. Blob bytes land gzipped with level 6 under content
 hashes. Compression runs in parallel with per-blob progress.
 Loads hydrate lazily. Disk bytes matching a hash win before any
-pool read, so steady plans skip pool bytes. Pool hits verify
+pool read, so repeat plans skip pool bytes. Pool hits verify
 and cache per run. Missing pool entries fail naming the hash:
 
 ```

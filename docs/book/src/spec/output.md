@@ -1,6 +1,6 @@
 # Output
 
-The summary renders titled sections in fixed order. Drift
+The summary renders titled sections in fixed order. Difference
 notes lead. Resources follow. Hooks trail resources. Summary
 and counts close the text. Sections holding zero lines skip
 their title. Titles read as follows:
@@ -12,9 +12,9 @@ Hooks
 Summary
 ```
 
-## Drift section
+## Difference section
 
-Steady drift groups hunk content under one header per path
+Repeat difference groups diff content under one header per path
 with key lines inline beside it:
 
 ```
@@ -25,9 +25,9 @@ Changes outside Confit will be overwritten on next apply
 ~ app.toml: tools.bat = recorded -> disk
 ```
 
-Headers carry the update sigil. Hunk lines carry per symbol
-paint through shared hunk rendering. Key lines reuse drift
-grammar from the drift page.
+Headers carry the update sigil. Diff lines carry per symbol
+paint through shared diff rendering. Key lines reuse difference
+grammar from the difference page.
 
 ## Resources section
 
@@ -51,7 +51,7 @@ add sigil. Bodies vary by kind as follows:
 ```
 
 Update blocks open with `~` and render per kind shapes from
-the drift page. Delete blocks close with `-` and carry zero
+the difference page. Delete blocks close with `-` and carry zero
 bodies:
 
 ```
@@ -132,5 +132,5 @@ Hooks: {added} to add, {changed} to change, {destroyed} to destroy.
 ```
 
 Hook counts read top level sigils alone with nested detail
-skipping counts. First run counts derive from drift groups
+skipping counts. First run counts derive from difference groups
 with destroy pinned at zero.

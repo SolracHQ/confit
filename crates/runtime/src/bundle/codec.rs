@@ -1,6 +1,6 @@
 //! Bundle input gate for manifest parse and member checks.
 
-use confit_model::manifest::{MANIFEST_VERSION, Manifest};
+use crate::manifest::{MANIFEST_VERSION, Manifest};
 use thiserror::Error;
 
 /// Blob id length in lowercase hex chars.

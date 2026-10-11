@@ -61,7 +61,7 @@ impl SuspendControl {
 ///
 /// Thread-owned spinner over facts, prints, and shutdown.
 /// Print lines through `println`. Single-line shutdown clear with thread join on finish.
-pub struct Live {
+pub struct Terminal {
     /// Fact sender for the renderer thread.
     tx: ProgressSender,
     /// Line sender for the renderer thread.
@@ -78,7 +78,7 @@ pub struct Live {
     done: AtomicBool,
 }
 
-impl Live {
+impl Terminal {
     /// Build one renderer, hidden without a stderr terminal.
     pub fn new() -> Self {
         use std::io::IsTerminal as _;
@@ -162,7 +162,7 @@ impl Live {
     }
 }
 
-impl Default for Live {
+impl Default for Terminal {
     /// Build one renderer like `new`.
     fn default() -> Self {
         Self::new()

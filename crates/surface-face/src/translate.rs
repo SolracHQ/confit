@@ -18,9 +18,9 @@ macro_rules! typed {
     };
 }
 
-/// Declare one sealed handle face under its type name.
+/// Declare one verified handle face under its type name.
 ///
-/// Handles seal their schemas as userdata.
+/// Handles show their schemas as userdata.
 #[macro_export]
 macro_rules! handle_schema {
     ($target:ty) => {

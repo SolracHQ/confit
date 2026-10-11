@@ -30,7 +30,7 @@
 - [Spec](spec/index.md)
 - [CLI](spec/cli.md)
 - [Plan](spec/plan.md)
-- [Drift](spec/drift.md)
+- [Difference](spec/drift.md)
 - [Apply](spec/apply.md)
 - [Storage](spec/storage.md)
 - [Documents](spec/documents.md)

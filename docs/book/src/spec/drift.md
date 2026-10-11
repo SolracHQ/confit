@@ -1,4 +1,4 @@
-# Drift
+# Difference
 
 Two comparisons drive plan. State against disk reports manual
 edits behind recorded paths. Plan against state reports
@@ -20,19 +20,19 @@ supported. Tables flatten to dotted leaves, with arrays
 gaining `[index]` segments counting from 1. Changed keys carry old and new
 values. Added keys carry new alone. Removed keys carry old
 alone. An explicit null renders as `null`, distinct from a
-missing key. Disk bytes past parsing fall back to a text hunk
+missing key. Disk bytes past parsing fall back to a text diff
 in current side order.
 
 ### Text
 
-Byte inequality renders one unified hunk between recorded and
+Byte inequality renders one unified diff between recorded and
 disk bytes. Present unmanaged documents compare nothing.
 Equal bytes render zero entries. File markers
 strip before display on every path.
 
 ### Rc
 
-Rendered bytes compare like text. Mismatches render hunks in
+Rendered bytes compare like text. Mismatches render diffs in
 current side order. Equal renders stay quiet like text.
 
 ### Link
@@ -65,7 +65,7 @@ The destination folder walks member by member in manifest
 order. Missing members report deletion under the joined
 destination path. Changed bytes report hash and size labels
 under the member key at the destination path. Changed modes
-report under `{member}:mode`. Drift covers recorded members
+report under `{member}:mode`. Difference covers recorded members
 alone.
 
 ### Modes
@@ -125,13 +125,13 @@ added, removed, and modified members with order ignored:
 ### Text bodies
 
 Text updates render desired lines under the update sigil.
-Hunks stay out of this comparison. Recorded bytes serve the
+Diffs stay out of this comparison. Recorded bytes serve the
 hash alone.
 
-### Rc hunks
+### Rc diffs
 
-Rc updates render one recorded to desired hunk with per
-symbol paint. Markers strip before display like drift hunks.
+Rc updates render one recorded to desired diff with per
+symbol paint. Markers strip before display like difference diffs.
 
 ### Headers
 
@@ -160,7 +160,7 @@ first:
   ~ name = disk -> desired
 ```
 
-Text hunks render disk first under the document header.
+Text diffs render disk first under the document header.
 Structured, link, and opaque leaves read
 `~ {key} = {disk} -> {desired}`. Trees collapse to one
 counted line:
@@ -171,7 +171,7 @@ counted line:
 ```
 
 Documents holding zero entries render zero lines and leave
-the counts. First runs skip the drift section, with drift
+the counts. First runs skip the difference section, with difference
 entries folding into resource blocks instead. Counts read
 as follows, with destroy pinned at zero:
 
@@ -183,7 +183,7 @@ The Hooks line joins while hooks move.
 
 ## Line shapes
 
-Steady drift lines follow this grammar:
+Repeat difference lines follow this grammar:
 
 ```
 ~ {path}: {key} = {old} -> {new}
@@ -195,12 +195,12 @@ cannot read '{path}': {reason}. changed outside config: add to
 config or the next apply loses them
 ```
 
-Hunk content lines drop `---`, `+++`, and `@@` markers
+Diff content lines drop `---`, `+++`, and `@@` markers
 before display. Removals print first with the red style,
 additions follow with the green style, context stays plain
 with the marker space dropped so code aligns. Scalars render
 with strings bare, numbers and bools as JSON, null as
 `null`, arrays and objects as compact JSON.
 
-Drift rides along with a successful run. Exit stays 0 while
-drift entries exist.
+Difference rides along with a successful run. Exit stays 0 while
+difference entries exist.

@@ -49,7 +49,7 @@ re-applies one newest-first from one:
 confit apply %1
 ```
 
-Hand-edit a file and run plan. The drift shows. The summary
+Hand-edit a file and run plan. The difference shows. The summary
 names every change.
 
 ## One state per user
@@ -63,6 +63,6 @@ through the positional, evaluation and fetching costs stay
 paid, and the switch stays trivial and fast. Experiments
 apply a rendered file.
 
-For the exact contract see [spec apply](../spec/apply.md) and [spec drift](../spec/drift.md).
+For the exact contract see [spec apply](../spec/apply.md) and [spec difference](../spec/drift.md).
 
 Safe applies now read clearly. Next, [Troubleshooting](troubleshooting.md) fixes common stops.

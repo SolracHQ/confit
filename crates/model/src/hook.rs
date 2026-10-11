@@ -205,7 +205,7 @@ pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<Hook
         }
     }
     for recorded in previous {
-        if find_live(recorded, current).is_none() {
+        if find_current(recorded, current).is_none() {
             out.push(HookLifecycle {
                 hook: recorded,
                 change: HookChange::Removed,
@@ -266,7 +266,7 @@ fn find_recorded<'a>(hook: &Hook, previous: &'a [Hook]) -> Option<&'a Hook> {
 }
 
 /// Find one desired hook sharing identity with one recorded hook.
-fn find_live<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
+fn find_current<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
     current.iter().find(|hook| same_identity(hook, recorded))
 }
 

@@ -14,11 +14,11 @@ pub mod http;
 pub mod process;
 /// Progress facts for one run.
 pub mod progress;
-/// Sealed content hashes.
+/// Verified content hashes.
 pub mod sha;
 /// Tar framing.
 pub mod tar;
 /// Zip framing.
 pub mod zip;
 
-pub use atomic::{atomic_write, copy_stream, stage_path};
+pub use atomic::{atomic_write, copy_stream, pending_path};

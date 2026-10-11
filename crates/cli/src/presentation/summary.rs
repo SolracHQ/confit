@@ -8,12 +8,12 @@ use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, Table, summary};
 use confit_model::hook::HookLifecycle;
-use confit_model::manifest::Manifest;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
-use confit_runtime::Drift;
+use confit_runtime::Difference;
+use confit_runtime::manifest::Manifest;
 
-use crate::presentation::drift::{drift_lines, flatten_table, leaf_changes, leaf_text};
+use crate::presentation::difference::{difference_lines, flatten_table, leaf_changes, leaf_text};
 use crate::presentation::hooks::lifecycle_lines;
 
 /// Yellow style for changed lines.
@@ -27,8 +27,8 @@ const HEADER_STYLE: &str = "\x1b[1m";
 /// Style reset suffix.
 const RESET: &str = "\x1b[0m";
 
-/// Drift section title showing manual edits as apply losses.
-const DRIFT_TITLE: &str = "Changes outside Confit will be overwritten on next apply";
+/// Difference section title showing manual edits as apply losses.
+const DIFFERENCE_TITLE: &str = "Changes outside Confit will be overwritten on next apply";
 /// Resources section title over document blocks.
 const RESOURCES_TITLE: &str = "Resources";
 /// Hooks section title over lifecycle lines.
@@ -139,8 +139,8 @@ pub struct Summary<'a> {
     /// Previous manifest for lifecycle marks.
     pub previous: &'a Manifest,
     /// Manifest versus disk edits leading the text.
-    pub drift: &'a [Drift],
-    /// First-run flag for an absent state slot.
+    pub differences: &'a [Difference],
+    /// First-run flag for absent state.
     pub first_run: bool,
     /// Hook display data for the hooks section.
     pub hooks: Hooks<'a>,
@@ -157,8 +157,8 @@ impl Summary<'_> {
         push_section(
             &mut lines,
             &painter,
-            DRIFT_TITLE,
-            self.steady_drift_lines(&painter),
+            DIFFERENCE_TITLE,
+            self.repeat_difference_lines(&painter),
         );
         push_section(
             &mut lines,
@@ -176,13 +176,13 @@ impl Summary<'_> {
         lines.join("\n")
     }
 
-    /// Collect resource blocks for steady runs.
+    /// Collect resource blocks for repeat runs.
     ///
     /// - Unchanged documents excluded.
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
-            let status = document.status(self.previous);
+            let status = document.status(&self.previous.documents);
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
             }
@@ -211,7 +211,7 @@ impl Summary<'_> {
                 "Documents: {adds} to add, {changes} to change, 0 to destroy."
             ));
         } else {
-            let counts = summary(self.built, self.previous);
+            let counts = summary(&self.built.documents, &self.previous.documents);
             out.push(format!(
                 "Documents: {} to add, {} to change, {} to destroy.",
                 counts.create, counts.update, counts.delete
@@ -229,12 +229,12 @@ impl Summary<'_> {
 
     /// Count first-run creates and overwrites.
     ///
-    /// - Documents with no drift entries leave the counts.
+    /// - Documents with no difference entries leave the counts.
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
         for document in &self.built.documents {
-            let entries = first_run_entries(self.drift, document);
+            let entries = first_run_entries(self.differences, document);
             if entries.is_empty() {
                 continue;
             }
@@ -247,13 +247,13 @@ impl Summary<'_> {
         (adds, changes)
     }
 
-    /// Render the first-run form over desired versus disk drift.
+    /// Render the first-run form over desired versus disk differences.
     fn render_first_run(&self) -> String {
         let painter = Painter::new();
         let mut lines = Vec::new();
         let mut resources = Vec::new();
         for document in &self.built.documents {
-            let entries = first_run_entries(self.drift, document);
+            let entries = first_run_entries(self.differences, document);
             if entries.is_empty() {
                 continue;
             }
@@ -286,7 +286,7 @@ impl Summary<'_> {
 
     /// Render entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
-        match document.status(self.previous) {
+        match document.status(&self.previous.documents) {
             DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  {} {body}", Sigil::Add.mark())))
@@ -299,23 +299,23 @@ impl Summary<'_> {
         }
     }
 
-    /// Render steady drift entries with grouped and painted hunks.
-    fn steady_drift_lines(&self, painter: &Painter) -> Vec<String> {
+    /// Render repeat difference entries with grouped and painted diffs.
+    fn repeat_difference_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
-        for entry in self.drift {
+        for entry in self.differences {
             match entry {
-                Drift::Hunk { path, hunks } => {
-                    out.push(painter.paint(Sigil::Header, &self.drift_hunk_header(path)));
-                    out.extend(painted_hunk_lines(painter, hunks));
+                Difference::Diff { path, diff } => {
+                    out.push(painter.paint(Sigil::Header, &self.difference_diff_header(path)));
+                    out.extend(painted_diff_lines(painter, diff));
                 }
-                _ => out.extend(drift_lines(std::slice::from_ref(entry))),
+                _ => out.extend(difference_lines(std::slice::from_ref(entry))),
             }
         }
         out
     }
 
-    /// Render the header line for one steady hunk destination.
-    fn drift_hunk_header(&self, path: &Route) -> String {
+    /// Render the header line for one repeat diff destination.
+    fn difference_diff_header(&self, path: &Route) -> String {
         let found = self
             .previous
             .documents
@@ -389,7 +389,7 @@ pub fn render_prepared(prepared: &confit_runtime::Prepared) -> String {
     Summary {
         built: &prepared.desired,
         previous: &prepared.previous,
-        drift: &prepared.drifts,
+        differences: &prepared.differences,
         first_run: prepared.first_run,
         hooks: Hooks {
             lifecycle: &lifecycle,
@@ -453,22 +453,25 @@ fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
     counts
 }
 
-/// Collect one document's drift entries for first runs.
+/// Collect one document's difference entries for first runs.
 ///
 /// - Tree member entries group under their destination path.
 /// - Every other entry under its own path.
-fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Drift> {
+fn first_run_entries<'a>(
+    differences: &'a [Difference],
+    document: &Document,
+) -> Vec<&'a Difference> {
     let dest = document.destination.display();
     let is_tree = document.data.tree_members().is_some();
-    drift
+    differences
         .iter()
         .filter(|entry| {
             let path = match entry {
-                Drift::Key { path, .. }
-                | Drift::Structured { path, .. }
-                | Drift::Hunk { path, .. }
-                | Drift::Missing { path }
-                | Drift::Unreadable { path, .. } => path.display(),
+                Difference::Key { path, .. }
+                | Difference::Structured { path, .. }
+                | Difference::Diff { path, .. }
+                | Difference::Missing { path }
+                | Difference::Unreadable { path, .. } => path.display(),
             };
             if path == dest {
                 return true;
@@ -485,17 +488,17 @@ fn first_run_entries<'a>(drift: &'a [Drift], document: &Document) -> Vec<&'a Dri
 ///
 /// - Whole-file missing entries always land whole.
 /// - Whole trees with missing entries alone land whole.
-fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
+fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     if entries
         .iter()
-        .any(|entry| matches!(entry, Drift::Missing { path } if path == &document.destination))
+        .any(|entry| matches!(entry, Difference::Missing { path } if path == &document.destination))
     {
         return true;
     }
     if document.data.tree_members().is_some() {
         return entries
             .iter()
-            .all(|entry| matches!(entry, Drift::Missing { .. }));
+            .all(|entry| matches!(entry, Difference::Missing { .. }));
     }
     false
 }
@@ -504,7 +507,11 @@ fn first_run_creates(document: &Document, entries: &[&Drift]) -> bool {
 ///
 /// Trees collapse to one changed member count. Unreadable paths show the
 /// replacement.
-fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift]) -> Vec<String> {
+fn first_run_updates(
+    painter: &Painter,
+    document: &Document,
+    entries: &[&Difference],
+) -> Vec<String> {
     if let Some(members) = document.data.tree_members() {
         let mut rels = BTreeSet::new();
         for entry in entries {
@@ -523,10 +530,10 @@ fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift])
     let mut out = Vec::new();
     for entry in entries {
         match entry {
-            Drift::Key { key, old, new, .. } => {
+            Difference::Key { key, old, new, .. } => {
                 out.extend(paint_key_line(painter, key, old, new));
             }
-            Drift::Structured { old, new, .. } => {
+            Difference::Structured { old, new, .. } => {
                 for change in leaf_changes(old, new) {
                     out.extend(paint_key_line(
                         painter,
@@ -536,35 +543,34 @@ fn first_run_updates(painter: &Painter, document: &Document, entries: &[&Drift])
                     ));
                 }
             }
-            Drift::Hunk { hunks, .. } => {
-                out.extend(painted_hunk_lines(painter, hunks));
+            Difference::Diff { diff, .. } => {
+                out.extend(painted_diff_lines(painter, diff));
             }
-            Drift::Unreadable { reason, .. } => out.push(painter.paint(
+            Difference::Unreadable { reason, .. } => out.push(painter.paint(
                 Sigil::Update,
                 &format!(
                     "  {} unreadable ({reason}), apply will write desired content",
                     Sigil::Update.mark()
                 ),
             )),
-            Drift::Missing { .. } => {}
+            Difference::Missing { .. } => {}
         }
     }
     out
 }
 
-/// Paint unified hunk content lines by their leading symbol.
-fn painted_hunk_lines(painter: &Painter, hunks: &str) -> Vec<String> {
-    hunks
-        .lines()
+/// Paint unified diff content lines by their leading symbol.
+fn painted_diff_lines(painter: &Painter, diff: &str) -> Vec<String> {
+    diff.lines()
         .filter(|line| {
             !(line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@"))
         })
-        .map(|line| paint_hunk_line(painter, line))
+        .map(|line| paint_diff_line(painter, line))
         .collect()
 }
 
-/// Paint one hunk content line by its leading symbol.
-fn paint_hunk_line(painter: &Painter, line: &str) -> String {
+/// Paint one diff content line by its leading symbol.
+fn paint_diff_line(painter: &Painter, line: &str) -> String {
     if let Some(rest) = line.strip_prefix('+') {
         painter.paint(Sigil::Add, &format!("  +{rest}"))
     } else if let Some(rest) = line.strip_prefix('-') {
@@ -575,14 +581,14 @@ fn paint_hunk_line(painter: &Painter, line: &str) -> String {
 }
 
 /// Render one entry's tree member rel under its destination.
-fn member_rel(document: &Document, entry: &Drift) -> String {
+fn member_rel(document: &Document, entry: &Difference) -> String {
     let dest = document.destination.display();
     match entry {
-        Drift::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
-        Drift::Structured { path, .. }
-        | Drift::Hunk { path, .. }
-        | Drift::Missing { path }
-        | Drift::Unreadable { path, .. } => {
+        Difference::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
+        Difference::Structured { path, .. }
+        | Difference::Diff { path, .. }
+        | Difference::Missing { path }
+        | Difference::Unreadable { path, .. } => {
             let rendered = path.display();
             rendered
                 .strip_prefix(dest.as_str())
@@ -751,8 +757,8 @@ fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
         .collect()
 }
 
-/// Build one recorded-to-desired unified hunk for plan updates.
-fn recorded_hunk(old: &str, new: &str) -> String {
+/// Build one recorded-to-desired unified diff for plan updates.
+fn recorded_diff(old: &str, new: &str) -> String {
     diffy::create_patch(old, new)
         .to_string()
         .lines()
@@ -763,7 +769,7 @@ fn recorded_hunk(old: &str, new: &str) -> String {
         .join("\n")
 }
 
-/// Render one rc update as a recorded to desired text hunk with desired-body
+/// Render one rc update as a recorded to desired text diff with desired-body
 /// fallback.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match inline_bytes(&recorded.data) {
@@ -779,8 +785,8 @@ fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) 
     }
     let old = String::from_utf8_lossy(&old_bytes);
     let new = String::from_utf8_lossy(&new_bytes);
-    let hunks = recorded_hunk(&old, &new);
-    painted_hunk_lines(painter, &hunks)
+    let diff = recorded_diff(&old, &new);
+    painted_diff_lines(painter, &diff)
 }
 
 /// Split a manifest key into kind and path halves.
@@ -844,7 +850,7 @@ mod tests {
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
     use confit_model::hook::Hook;
-    use confit_model::manifest::Manifest;
+    use confit_runtime::manifest::Manifest;
 
     fn probe_hook() -> Hook {
         Hook {
@@ -865,7 +871,7 @@ mod tests {
         let prepared = confit_runtime::Prepared {
             desired,
             previous: Manifest::empty(),
-            drifts: Vec::new(),
+            differences: Vec::new(),
             first_run: false,
             changed: BTreeSet::new(),
         };

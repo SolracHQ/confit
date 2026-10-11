@@ -1,11 +1,11 @@
-//! Drift lines
-//! Display lines over core drift entries.
+//! Difference lines
+//! Display lines over core difference entries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use confit_model::document::Table;
 use confit_model::routes::Route;
-use confit_runtime::Drift;
+use confit_runtime::Difference;
 
 /// One flattened leaf difference.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,24 +18,24 @@ pub struct LeafChange {
     pub new: Option<serde_json::Value>,
 }
 
-/// Render drift entries as display lines, one or more per entry.
-pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
+/// Render difference entries as display lines, one or more per entry.
+pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in entries {
         match entry {
-            Drift::Key {
+            Difference::Key {
                 path,
                 key,
                 old,
                 new,
             } => push_key_line(&mut lines, path, key, old, new),
-            Drift::Structured { path, old, new } => {
+            Difference::Structured { path, old, new } => {
                 for change in leaf_changes(old, new) {
                     push_key_line(&mut lines, path, &change.key, &change.old, &change.new);
                 }
             }
-            Drift::Hunk { hunks, .. } => {
-                for line in hunks.lines() {
+            Difference::Diff { diff, .. } => {
+                for line in diff.lines() {
                     if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
                     {
                         continue;
@@ -43,13 +43,13 @@ pub fn drift_lines(entries: &[Drift]) -> Vec<String> {
                     lines.push(line.to_string());
                 }
             }
-            Drift::Missing { path } => {
+            Difference::Missing { path } => {
                 lines.push(format!(
                     "{}: manually deleted. changed outside config: add to config or the next apply loses them",
                     path.display()
                 ));
             }
-            Drift::Unreadable { path, reason } => {
+            Difference::Unreadable { path, reason } => {
                 lines.push(format!(
                     "cannot read '{}': {reason}. changed outside config: add to config or the next apply loses them",
                     path.display()

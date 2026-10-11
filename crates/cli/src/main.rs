@@ -2,7 +2,7 @@ use clap::Parser;
 
 use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
-use confit_cli::presentation::spinner::Live;
+use confit_cli::presentation::spinner::Terminal;
 use confit_cli::sinks::Sinks;
 use confit_driver as driver;
 use confit_store::{StoreRoots, Stores};
@@ -54,15 +54,15 @@ fn run_plan(
     args: &confit_cli::cli::PlanArgs,
     log_path: &std::path::Path,
 ) -> confit_cli::error::Result<()> {
-    let live = Live::new();
-    let sender = live.sink();
+    let terminal = Terminal::new();
+    let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
     let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
-        print: live.print_handle(),
-        suspend: live.suspend_handle(),
+        print: terminal.print_handle(),
+        suspend: terminal.suspend_handle(),
     };
     let prepared = confit_cli::actions::plan::PlanRunner {
         args,
@@ -70,7 +70,7 @@ fn run_plan(
         sinks,
     }
     .execute()?;
-    live.finish();
+    terminal.finish();
     anstream::println!("{}", prepared.text);
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
@@ -84,8 +84,8 @@ fn run_apply(
     hooks_dir: &std::path::Path,
 ) -> confit_cli::error::Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
-    let live = Live::new();
-    let sender = live.sink();
+    let terminal = Terminal::new();
+    let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
     roots.project_root = if driver::fs::is_dir(&args.source) {
         args.source.clone()
@@ -95,8 +95,8 @@ fn run_apply(
     let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
-        print: live.print_handle(),
-        suspend: live.suspend_handle(),
+        print: terminal.print_handle(),
+        suspend: terminal.suspend_handle(),
     };
     let report = match ApplyRunner::from_args(
         args,
@@ -109,13 +109,13 @@ fn run_apply(
     {
         Ok(report) => report,
         Err(error) => {
-            live.finish();
+            terminal.finish();
             anstream::eprintln!("log: {}", log_path.display());
             log::logger().flush();
             return Err(error);
         }
     };
-    live.finish();
+    terminal.finish();
     anstream::println!(
         "applied: {} files, {} removed",
         report.written,
@@ -129,8 +129,8 @@ fn run_apply(
 
 /// Run export and write a bundle file or print its manifest.
 fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<()> {
-    let live = Live::new();
-    let stores = Stores::new(StoreRoots::standard(), live.sink());
+    let terminal = Terminal::new();
+    let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
     if let Some(dest) = report.dest {
         anstream::println!("export: {}", dest.display());
@@ -140,10 +140,10 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<(
     Ok(())
 }
 
-/// Run delete and drop one named slot and orphan blobs.
+/// Run delete and drop one named state and unreferenced blobs.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<()> {
-    let live = Live::new();
-    let stores = Stores::new(StoreRoots::standard(), live.sink());
+    let terminal = Terminal::new();
+    let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
     anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
     Ok(())

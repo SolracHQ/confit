@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::error::{ArchiveError, Result};
-use super::spill::{BornMember, from_stream, spill_entry};
+use super::extract::{ExtractedMember, extract_entry, from_stream};
 use super::{ArchiveBackend, wants_tar};
 use confit_driver as driver;
 
@@ -21,8 +21,8 @@ impl ArchiveBackend for TarBackend {
         driver::tar::list_names(reader, &fallback).map_err(|error| from_stream(source, error))
     }
 
-    fn unpack(&self, source: &Path, staging: &Path) -> Result<Vec<BornMember>> {
-        unpack_stream(open_source(source)?, source, staging)
+    fn unpack(&self, source: &Path, pending: &Path) -> Result<Vec<ExtractedMember>> {
+        unpack_stream(open_source(source)?, source, pending)
     }
 }
 
@@ -50,26 +50,26 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
 fn unpack_stream(
     reader: Box<dyn std::io::Read>,
     source: &Path,
-    staging: &Path,
-) -> Result<Vec<BornMember>> {
-    let mut born = Vec::new();
+    pending: &Path,
+) -> Result<Vec<ExtractedMember>> {
+    let mut extracted = Vec::new();
     let mut failure: Option<ArchiveError> = None;
     let fallback = single_fallback(source);
     let outcome = driver::tar::walk(reader, &fallback, |framed| {
         let driver::tar::Member { name, reader } = framed;
-        match spill_entry(source, staging, &name, reader) {
+        match extract_entry(source, pending, &name, reader) {
             Ok(member) => {
-                born.push(member);
+                extracted.push(member);
                 Ok(())
             }
             Err(error) => {
                 failure = Some(error);
-                Err(std::io::Error::other("archive spill failed"))
+                Err(std::io::Error::other("archive extract failed"))
             }
         }
     });
     match outcome {
-        Ok(()) => Ok(born),
+        Ok(()) => Ok(extracted),
         Err(error) => {
             if let Some(error) = failure {
                 Err(error)

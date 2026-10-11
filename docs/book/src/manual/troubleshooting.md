@@ -26,7 +26,7 @@ hook 1 of 1: tool --flag
 
 The log path prints after the run. Steps with passing checks stay skipped.
 
-## A hand edit drifts
+## A hand edit differs
 
 **Symptom.** The next plan reports the file changed on disk and asks again.
 

@@ -5,31 +5,31 @@ use std::io::Read as _;
 use std::path::Path;
 
 use confit_driver::sha::Sha;
-use confit_model::manifest::Manifest;
+use confit_store::blob::error::BlobError;
+use confit_store::handles::ArchiveHandle;
 
 use super::codec::{CodecError, check_blob_id, decode};
-use super::error::{BundleError, Result, from_archive, from_resource};
-use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, BundleStore};
-use crate::blob::error::BlobError;
-use crate::handles::ArchiveHandle;
+use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, Bundler};
+use crate::error::{Result, RuntimeError};
+use crate::manifest::Manifest;
 
-impl BundleStore {
-    /// Read one portable bundle into a live manifest.
+impl Bundler {
+    /// Read one portable bundle into a stored manifest.
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Read`] for failed bundle reads.
-    /// - [`BundleError::Version`] for unsupported versions.
-    /// - [`BundleError::Missing`] for missing blobs.
+    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleVersion`] for unsupported versions.
+    /// - [`RuntimeError::BundleMissing`] for missing blobs.
     pub fn read(&self, path: &Path) -> Result<Manifest> {
         let handle = self
             .archives
-            .seal(path)
-            .map_err(|error| from_archive(path, error))?;
+            .register_archive(path)
+            .map_err(|error| RuntimeError::from_archive(path, error))?;
         let names = self
             .archives
             .members(&handle)
-            .map_err(|error| from_archive(path, error))?;
+            .map_err(|error| RuntimeError::from_archive(path, error))?;
         let (has_manifest, wanted) = check_names(&names, path)?;
         if !has_manifest {
             return Err(unknown(path, "missing manifest".to_owned()));
@@ -38,7 +38,7 @@ impl BundleStore {
         let refs = manifest.refs();
         for blob in &refs {
             if !wanted.iter().any(|name| name == blob.stored.hex().as_str()) {
-                return Err(BundleError::Missing {
+                return Err(RuntimeError::BundleMissing {
                     sha: blob.sha256.clone(),
                 });
             }
@@ -53,21 +53,21 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Read`] for failed member reads.
-    /// - [`BundleError::Version`] for stale versions.
+    /// - [`RuntimeError::BundleRead`] for failed member reads.
+    /// - [`RuntimeError::BundleVersion`] for stale versions.
     fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
         let member = self
             .archives
             .extract_member(handle, BUNDLE_MANIFEST)
-            .map_err(|error| from_archive(bundle, error))?;
+            .map_err(|error| RuntimeError::from_archive(bundle, error))?;
         let mut reader = self
             .resources
             .open(&member)
-            .map_err(|error| from_resource(bundle, error))?;
+            .map_err(|error| RuntimeError::from_resource(bundle, error))?;
         let mut raw = Vec::new();
         reader
             .read_to_end(&mut raw)
-            .map_err(|error| BundleError::from_io(bundle, error))?;
+            .map_err(|error| RuntimeError::from_bundle_io(bundle, error))?;
         decode(&raw).map_err(|error| from_codec(bundle, error))
     }
 
@@ -75,15 +75,16 @@ impl BundleStore {
     ///
     /// # Errors
     ///
-    /// - [`BundleError::Read`] for failed member reads.
-    /// - [`BundleError::Write`] for receive write faults.
-    /// - [`BundleError::WriteUnknown`] for other receive write failures.
+    /// - [`RuntimeError::BundleRead`] for failed member reads.
+    /// - [`RuntimeError::BundleWrite`] for receive write faults.
+    /// - [`RuntimeError::BundleWriteUnknown`] for other receive write
+    ///   failures.
     fn receive_blob(&self, handle: &ArchiveHandle, stored: &str, bundle: &Path) -> Result<()> {
         let name = [BUNDLE_BLOBS_PREFIX, stored].concat();
         let member = self
             .archives
             .extract_member(handle, &name)
-            .map_err(|error| from_archive(bundle, error))?;
+            .map_err(|error| RuntimeError::from_archive(bundle, error))?;
         let stored_sha = Sha::new(stored).map_err(|error| unknown(bundle, error.to_string()))?;
         self.blobs
             .receive(&stored_sha, &member)
@@ -96,8 +97,8 @@ impl BundleStore {
 ///
 /// # Errors
 ///
-/// - [`BundleError::Read`] for failed bundle reads.
-/// - [`BundleError::Version`] for stale codec versions.
+/// - [`RuntimeError::BundleRead`] for failed bundle reads.
+/// - [`RuntimeError::BundleVersion`] for stale codec versions.
 fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     let mut has_manifest = false;
     let mut wanted: Vec<String> = Vec::new();
@@ -122,17 +123,17 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
 }
 
 /// Build one bundle read failure for the bundle.
-fn unknown(bundle: &Path, message: String) -> BundleError {
-    BundleError::Read {
+fn unknown(bundle: &Path, message: String) -> RuntimeError {
+    RuntimeError::BundleRead {
         path: bundle.to_path_buf(),
-        fault: crate::faults::AccessFault::Unknown { message },
+        fault: confit_store::faults::AccessFault::Unknown { message },
     }
 }
 
 /// Map one codec failure into its bundle error.
-fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
+fn from_codec(bundle: &Path, error: CodecError) -> RuntimeError {
     match error {
-        CodecError::Version { got } => BundleError::Version {
+        CodecError::Version { got } => RuntimeError::BundleVersion {
             path: bundle.to_path_buf(),
             got,
         },
@@ -141,23 +142,23 @@ fn from_codec(bundle: &Path, error: CodecError) -> BundleError {
 }
 
 /// Map one blob failure into its bundle error.
-fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
-    use crate::faults::AccessFault;
+fn from_blob(bundle: &Path, error: BlobError) -> RuntimeError {
+    use confit_store::faults::AccessFault;
 
     match error {
         BlobError::Read {
             sha,
             fault: AccessFault::Missing,
-        } => BundleError::Missing { sha },
-        BlobError::Read { fault, .. } => BundleError::Read {
+        } => RuntimeError::BundleMissing { sha },
+        BlobError::Read { fault, .. } => RuntimeError::BundleRead {
             path: bundle.to_path_buf(),
             fault,
         },
-        BlobError::Write { fault, .. } => BundleError::Write {
+        BlobError::Write { fault, .. } => RuntimeError::BundleWrite {
             path: bundle.to_path_buf(),
             fault,
         },
-        BlobError::WriteUnknown { message, .. } => BundleError::WriteUnknown {
+        BlobError::WriteUnknown { message, .. } => RuntimeError::BundleWriteUnknown {
             path: bundle.to_path_buf(),
             message,
         },
@@ -168,14 +169,11 @@ fn from_blob(bundle: &Path, error: BlobError) -> BundleError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{Data, Document};
-    use confit_model::routes::{Route, RouteBase};
-
-    use crate::StoreRoots;
-    use crate::archive::ArchiveStore;
-    use crate::blob::{BlobSource, BlobStore};
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
+    use confit_model::document::{Data, Document};
+    use confit_model::routes::{Route, RouteBase};
+    use confit_store::StoreRoots;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -185,19 +183,16 @@ mod tests {
         }
     }
 
-    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (BundleStore, Manifest) {
-        use std::sync::Arc;
-
-        use crate::resources::Resources;
+    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
+        use confit_store::Stores;
+        use confit_store::blob::BlobSource;
 
         let roots = test_roots(dir);
-        let resources = Arc::new(Resources::new(&roots));
         let (sender, _) = crossbeam_channel::unbounded();
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots, sender));
+        let stores = Stores::new(roots, sender);
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
-            let handle = match blobs.put(BlobSource::Bytes(body)) {
+            let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
@@ -212,7 +207,7 @@ mod tests {
             ));
         }
         match Manifest::build(documents, Vec::new()) {
-            Ok(manifest) => (BundleStore::new(archives, blobs, resources), manifest),
+            Ok(manifest) => (Bundler::new(&stores), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }
     }
@@ -294,7 +289,7 @@ mod tests {
         build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
         match store.read(&path) {
             Ok(_) => panic!("stale manifest passes"),
-            Err(BundleError::Version { path: found, got }) => {
+            Err(RuntimeError::BundleVersion { path: found, got }) => {
                 assert_eq!(found, path, "stale keeps its path");
                 assert_eq!(got, 0, "stale keeps its version");
             }
@@ -304,19 +299,16 @@ mod tests {
 
     #[test]
     fn read_refuses_missing_blob() {
-        use std::sync::Arc;
-
-        use crate::resources::Resources;
+        use confit_store::Stores;
+        use confit_store::blob::BlobSource;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
-        let resources = Arc::new(Resources::new(&roots));
         let (sender, _) = crossbeam_channel::unbounded();
-        let archives = Arc::new(ArchiveStore::new(&roots, resources.clone(), sender.clone()));
-        let blobs = Arc::new(BlobStore::new(&roots, sender));
-        let store = BundleStore::new(archives, blobs.clone(), resources);
-        let handle = match blobs.put(BlobSource::Bytes(b"wanted bytes")) {
+        let stores = Stores::new(roots, sender);
+        let store = Bundler::new(&stores);
+        let handle = match stores.blobs().put(BlobSource::Bytes(b"wanted bytes")) {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
         };
@@ -404,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn write_seals_plain_tar_envelope() {
+    fn write_builds_plain_tar_envelope() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);

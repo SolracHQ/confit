@@ -1,12 +1,13 @@
 //! Export run
-//! Slot picker into bundle files or manifest prints.
+//! State picker into bundle files or manifest prints.
 
 use std::path::PathBuf;
 
-use confit_model::manifest::Manifest;
+use confit_runtime::bundle::Bundler;
+use confit_runtime::manifest::Manifest;
 use confit_store::Stores;
-use confit_store::slot::SlotKind;
-use confit_store::slot::SlotStore;
+use confit_store::state::Picker;
+use confit_store::state::StateStore;
 
 use crate::error::{CliError, Result};
 
@@ -14,7 +15,7 @@ use crate::cli::ExportArgs;
 
 use crate::sinks::Sinks;
 
-/// Auto-name stem for exports of the applied slot.
+/// Auto-name stem for exports of the applied state.
 const APPLIED_STEM: &str = "applied";
 /// Auto-name stem prefix for exports of history entries.
 const HISTORY_STEM_PREFIX: &str = "prev-";
@@ -56,22 +57,28 @@ impl<'a> ExportRunner<'a> {
     /// manifest text.
     ///
     /// - The `-o` destination is a literal file path.
-    /// - Omitted destinations derive from the slot.
+    /// - Omitted destinations derive from the state.
     ///
     /// # Errors
     ///
     /// - [`CliError::FlagRefuse`] for joint flags.
-    /// - [`CliError::Slot`] for slot resolves.
+    /// - [`CliError::BadPicker`] for malformed pickers.
+    /// - [`CliError::Runtime`] for state resolves and bundle writes.
     /// - [`CliError::Model`] for manifest renders.
-    /// - [`CliError::Bundle`] for bundle writes.
     pub fn execute(self) -> Result<ExportReport> {
         let args = self.args;
         let stores = self.stores;
         if args.manifest && args.output.is_some() {
             return Err(CliError::FlagRefuse);
         }
-        let slots = stores.slots();
-        let (manifest, auto) = resolve_slot_bundle(args.picker.as_deref(), &slots)?;
+        let bundles = Bundler::new(&stores);
+        let picker = match args.picker.as_deref() {
+            None => Picker::Applied,
+            Some(raw) => raw.parse().map_err(|_| CliError::BadPicker {
+                input: raw.to_owned(),
+            })?,
+        };
+        let (manifest, auto) = resolve_state_bundle(&picker, &stores.states())?;
         if args.manifest {
             let text = manifest.json().map_err(CliError::from)?;
             return Ok(ExportReport {
@@ -83,10 +90,7 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        let written = stores
-            .bundles()
-            .write(&manifest, &dest)
-            .map_err(CliError::from)?;
+        let written = bundles.write(&manifest, &dest).map_err(CliError::from)?;
         Ok(ExportReport {
             dest: Some(written.canonical().to_path_buf()),
             manifest: None,
@@ -94,22 +98,22 @@ impl<'a> ExportRunner<'a> {
     }
 }
 
-/// Resolve one picker to its live manifest and auto bundle name.
+/// Resolve one picker to its stored manifest and auto bundle name.
 ///
 /// # Errors
 ///
-/// - [`CliError::Slot`] for slot resolves.
-pub fn resolve_slot_bundle(picker: Option<&str>, slots: &SlotStore) -> Result<(Manifest, PathBuf)> {
-    let (manifest, kind) = slots.resolve(picker)?;
-    let stem = match kind {
-        SlotKind::Applied => APPLIED_STEM.to_string(),
-        SlotKind::Named(name) => name,
-        SlotKind::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
+/// - [`CliError::Runtime`] for state resolves.
+pub fn resolve_state_bundle(picker: &Picker, states: &StateStore) -> Result<(Manifest, PathBuf)> {
+    let manifest = Manifest::resolve(states, picker)?;
+    let stem = match picker {
+        Picker::Applied => APPLIED_STEM.to_string(),
+        Picker::Named(name) => name.clone(),
+        Picker::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
     };
     Ok((manifest, auto_dest(&stem)))
 }
 
-/// Build one slot-derived bundle destination stem.
+/// Build one state-derived bundle destination stem.
 fn auto_dest(stem: &str) -> PathBuf {
     std::path::Path::new(stem).to_path_buf()
 }

@@ -1,29 +1,29 @@
-//! Atomic file writes and exact streaming copies over unique staging names.
+//! Atomic file writes and exact streaming copies over unique pending names.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Staging suffix for sibling scratch files.
-const STAGING_SUFFIX: &str = ".part";
+/// Pending suffix for sibling scratch files.
+const PENDING_SUFFIX: &str = ".part";
 
 /// Streaming chunk for exact copies.
 const COPY_CHUNK: usize = 8192;
 
-/// Sequence for unique staging names per process.
-static STAGING_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Sequence for unique pending names per process.
+static PENDING_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Derive the sibling scratch path for one destination.
-pub fn stage_path(dest: &Path) -> PathBuf {
-    let seq = STAGING_SEQ.fetch_add(1, Ordering::Relaxed);
-    let mut staging = dest.as_os_str().to_owned();
-    staging.push(format!("{STAGING_SUFFIX}-{}-{seq}", std::process::id()));
-    PathBuf::from(staging)
+pub fn pending_path(dest: &Path) -> PathBuf {
+    let seq = PENDING_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut pending = dest.as_os_str().to_owned();
+    pending.push(format!("{PENDING_SUFFIX}-{}-{seq}", std::process::id()));
+    PathBuf::from(pending)
 }
 
 /// Write one file atomically through a sibling rename.
 ///
 /// - Parent folders build first.
-/// - Closure failures remove staging and report the closure error.
+/// - Closure failures remove pending and report the closure error.
 /// - Rename failures with a present destination report success with the
 ///   present entry kept.
 ///
@@ -36,19 +36,19 @@ pub fn atomic_write(
     write: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     crate::fs::create_parent(dest)?;
-    let staging = stage_path(dest);
-    if let Err(error) = write(&staging) {
-        let _ = crate::fs::remove_file(&staging);
+    let pending = pending_path(dest);
+    if let Err(error) = write(&pending) {
+        let _ = crate::fs::remove_file(&pending);
         return Err(error);
     }
-    match crate::fs::rename(&staging, dest) {
+    match crate::fs::rename(&pending, dest) {
         Ok(()) => Ok(()),
         Err(_) if crate::fs::metadata(dest).is_ok() => {
-            let _ = crate::fs::remove_file(&staging);
+            let _ = crate::fs::remove_file(&pending);
             Ok(())
         }
         Err(error) => {
-            let _ = crate::fs::remove_file(&staging);
+            let _ = crate::fs::remove_file(&pending);
             Err(error)
         }
     }
@@ -85,12 +85,12 @@ mod tests {
         let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        atomic_write(&dest, |staging| crate::fs::write(staging, b"atomic bytes")).unwrap();
+        atomic_write(&dest, |pending| crate::fs::write(pending, b"atomic bytes")).unwrap();
         assert_eq!(crate::fs::read(&dest).unwrap(), b"atomic bytes");
     }
 
     #[test]
-    fn atomic_write_failure_cleans_staging() {
+    fn atomic_write_failure_cleans_pending() {
         let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
@@ -104,7 +104,7 @@ mod tests {
         );
         let parent = dest.parent().unwrap().to_path_buf();
         let leftovers = crate::fs::read_dir(&parent).unwrap_or_default();
-        assert!(leftovers.is_empty(), "failed write leaves no staging entry");
+        assert!(leftovers.is_empty(), "failed write leaves no pending entry");
     }
 
     #[test]
@@ -114,7 +114,7 @@ mod tests {
         let dest = dir.path().join("atomic").join("note.bin");
         crate::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         crate::fs::write(&dest, b"winner").unwrap();
-        atomic_write(&dest, |staging| crate::fs::write(staging, b"newcomer")).unwrap();
+        atomic_write(&dest, |pending| crate::fs::write(pending, b"newcomer")).unwrap();
         assert_eq!(crate::fs::read(&dest).unwrap(), b"newcomer");
     }
 

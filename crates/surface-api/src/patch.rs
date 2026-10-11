@@ -22,7 +22,7 @@ confit_surface_face::function_face! {
     pub struct ApplyArgs<Document> {
         /// Target route of the patched document.
         route: RouteMarker,
-        /// Live document under patching.
+        /// Current document under patching.
         document: Document,
     }
 }
@@ -132,7 +132,7 @@ pub struct StructuredPatch {
     pub target: PatchTarget,
     /// The structured format under patching.
     pub format: StructuredFormat,
-    /// The patch callback over live data.
+    /// The patch callback over current data.
     pub apply: Callback<ApplyArgs<StructuredDocument>>,
     /// The patch merge level. Higher ranks apply first.
     pub priority: Level,
@@ -190,7 +190,7 @@ impl FromLua for StructuredPatch {
 pub struct RcPatch {
     /// The patch destination over a route or a filter.
     pub target: PatchTarget,
-    /// The patch callback over live sections.
+    /// The patch callback over current sections.
     pub apply: Callback<ApplyArgs<RcDocument>>,
     /// The patch merge level. Higher ranks apply first.
     pub priority: Level,
@@ -407,7 +407,7 @@ fn patch_optional_filter(table: &Table, lua: &Lua) -> mlua::Result<Option<Callba
     }
 }
 
-/// Decode one required patch callback over its live document type.
+/// Decode one required patch callback over its current document type.
 ///
 /// # Errors
 ///

@@ -452,7 +452,7 @@ mod tests {
         set_mode(&tool, 0o755).unwrap();
         write(&regular, b"run").unwrap();
         set_mode(&regular, 0o644).unwrap();
-        // Links hold no backend under the guard: a live link
+        // Links hold no backend under the guard: a current link
         // mirrors as a stored exec entry, a dangling link
         // mirrors as a never-written path, both reading the
         // same verdict the disk link reports.

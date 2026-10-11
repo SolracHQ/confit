@@ -1,24 +1,24 @@
-//! Prepared manifests with drift and changed routes.
+//! Prepared manifests with differences and changed routes.
 
 use std::collections::BTreeSet;
 
 use confit_model::document::DocumentStatus;
-use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-use crate::differ::{Differ, Drift, DriftOrder};
+use crate::differ::{Differ, Difference, DifferenceOrder};
 use crate::error::Result;
+use crate::manifest::Manifest;
 
-/// Prepared manifests with drift and changed routes.
+/// Prepared manifests with differences and changed routes.
 pub struct Prepared {
     /// Built manifest with counts.
     pub desired: Manifest,
     /// Previous manifest for lifecycle marks.
     pub previous: Manifest,
-    /// Drift list behind the rendered preview.
-    pub drifts: Vec<Drift>,
-    /// First-run flag for an absent state slot.
+    /// Difference list behind the rendered preview.
+    pub differences: Vec<Difference>,
+    /// First-run flag for absent state.
     pub first_run: bool,
     /// Changed routes behind hook conditions and writes.
     pub changed: BTreeSet<Route>,
@@ -28,59 +28,59 @@ pub struct Prepared {
 ///
 /// # Errors
 ///
-/// - [`crate::error::RuntimeError::Slot`] for slot reads.
+/// - [`crate::error::RuntimeError::StateRead`] for state reads.
 pub fn prepare(stores: &Stores, desired: Manifest) -> Result<Prepared> {
-    let previous = stores.slots().load()?;
+    let previous = Manifest::load(&stores.states())?;
     log_processed(&desired, &previous);
-    let first_run = stores.slots().is_first_run();
-    let drifts = drift_with(stores, first_run, &desired, &previous);
-    let changed = changed_paths(&desired, &previous, &drifts, first_run);
+    let first_run = stores.states().is_first_run();
+    let differences = difference_with(stores, first_run, &desired, &previous);
+    let changed = changed_paths(&desired, &previous, &differences, first_run);
     Ok(Prepared {
         desired,
         previous,
-        drifts,
+        differences,
         first_run,
         changed,
     })
 }
 
-/// Refresh the drift list with first-run reference rules.
-pub fn refresh(stores: &Stores, prepared: &Prepared) -> Vec<Drift> {
-    drift_with(
+/// Refresh the difference list with first-run reference rules.
+pub fn refresh(stores: &Stores, prepared: &Prepared) -> Vec<Difference> {
+    difference_with(
         stores,
-        stores.slots().is_first_run(),
+        stores.states().is_first_run(),
         &prepared.desired,
         &prepared.previous,
     )
 }
 
 /// Diff one built manifest with first-run reference rules.
-fn drift_with(
+fn difference_with(
     stores: &Stores,
     first_run: bool,
     built: &Manifest,
     previous: &Manifest,
-) -> Vec<Drift> {
+) -> Vec<Difference> {
     let reference = if first_run { built } else { previous };
     let order = if first_run {
-        DriftOrder::DiskFirst
+        DifferenceOrder::DiskFirst
     } else {
-        DriftOrder::RecordedFirst
+        DifferenceOrder::RecordedFirst
     };
     Differ {
         stores: stores.clone(),
     }
-    .drift(reference, order)
+    .differences(reference, order)
 }
 
 /// Compute the changed destination routes for one apply run.
 ///
 /// - First runs hold every desired route.
-/// - Steady runs hold plan changes and drifted destinations.
+/// - Repeat runs hold plan changes and difference destinations.
 fn changed_paths(
     built: &Manifest,
     previous: &Manifest,
-    drifts: &[Drift],
+    differences: &[Difference],
     first_run: bool,
 ) -> BTreeSet<Route> {
     if first_run {
@@ -92,19 +92,22 @@ fn changed_paths(
     }
     let mut out = BTreeSet::new();
     for document in &built.documents {
-        if !matches!(document.status(previous), DocumentStatus::Unchanged) {
+        if !matches!(
+            document.status(&previous.documents),
+            DocumentStatus::Unchanged
+        ) {
             out.insert(document.destination.clone());
         }
     }
     for document in &built.documents {
         let prefix = format!("{}/", document.destination.display());
-        for drift in drifts {
-            let path = match drift {
-                Drift::Key { path, .. }
-                | Drift::Structured { path, .. }
-                | Drift::Hunk { path, .. }
-                | Drift::Missing { path }
-                | Drift::Unreadable { path, .. } => path,
+        for difference in differences {
+            let path = match difference {
+                Difference::Key { path, .. }
+                | Difference::Structured { path, .. }
+                | Difference::Diff { path, .. }
+                | Difference::Missing { path }
+                | Difference::Unreadable { path, .. } => path,
             }
             .display();
             if path == document.destination.display() || path.starts_with(&prefix) {
@@ -119,7 +122,7 @@ fn changed_paths(
 /// Log finished documents with lifecycle status.
 fn log_processed(built: &Manifest, previous: &Manifest) {
     for document in &built.documents {
-        let status = match document.status(previous) {
+        let status = match document.status(&previous.documents) {
             DocumentStatus::Create => "create",
             DocumentStatus::Update => "update",
             DocumentStatus::Unchanged => "unchanged",

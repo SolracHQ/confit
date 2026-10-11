@@ -7,13 +7,16 @@ use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_model::arg::Arg;
+use confit_runtime::bundle::Bundler;
+use confit_runtime::manifest::Manifest;
 use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
+use confit_store::state::Picker;
 
 use crate::error::{CliError, Result};
 
 use crate::cli::{ApplyArgs, plan_profile};
-use crate::presentation::drift::drift_lines;
+use crate::presentation::difference::difference_lines;
 use crate::presentation::hooks::describe_condition;
 use crate::presentation::summary::render_prepared;
 
@@ -24,15 +27,15 @@ use crate::sinks::Sinks;
 pub struct ApplyReport {
     /// Count of documents written to disk.
     pub written: usize,
-    /// Count of recorded orphans and dropped tree members removed from disk.
+    /// Count of deleted documents and dropped tree members removed from disk.
     pub removed: usize,
 }
 
 /// Apply run from desired documents to disk writes.
 pub struct ApplyRunner<'a> {
-    /// Prepared manifests with drift and changed routes.
+    /// Prepared manifests with differences and changed routes.
     pub prepared: Prepared,
-    /// First prompt skip with drift re-prompt.
+    /// First prompt skip with difference re-prompt.
     pub force: bool,
     /// Confirmation answer reader, stdin on the host.
     pub input: &'a mut dyn BufRead,
@@ -47,14 +50,14 @@ pub struct ApplyRunner<'a> {
 impl<'a> ApplyRunner<'a> {
     /// Resolve desired documents from flags with explicit run fields.
     ///
-    /// `@name` is a named slot, `%N` is history newest-first from one,
+    /// `@name` is a named state, `%N` is history newest-first from one,
     /// `.cb` is a bundle file, folders evaluate as a project with `-p`
     /// profile choice, and everything else evaluates as a profile.
     ///
     /// # Errors
     ///
-    /// - [`CliError::Slot`] for slot reads.
-    /// - [`CliError::Bundle`] for bundle reads.
+    /// - [`CliError::BadPicker`] for malformed pickers.
+    /// - [`CliError::Runtime`] for state and bundle reads.
     /// - [`CliError::Engine`] for evaluation failures.
     /// - [`CliError::NoProfile`] for absent profiles.
     /// - [`CliError::NoDefaultProfile`] for absent defaults.
@@ -68,14 +71,17 @@ impl<'a> ApplyRunner<'a> {
     ) -> Result<Self> {
         let positional = args.source.as_path();
         let raw = positional.to_str().unwrap_or("");
+        let bundles = Bundler::new(&stores);
         let desired = if raw.starts_with('@') || raw.starts_with('%') {
-            let (manifest, _) = stores.slots().resolve(Some(raw))?;
-            manifest
+            let picker: Picker = raw.parse().map_err(|_| CliError::BadPicker {
+                input: raw.to_owned(),
+            })?;
+            Manifest::resolve(&stores.states(), &picker)?
         } else if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
-            stores.bundles().read(positional)?
+            bundles.read(positional)?
         } else if driver::fs::is_dir(positional) {
             let path = plan_profile(positional, args.profile.as_deref());
             if args.profile.is_none() && driver::fs::is_missing(&path) {
@@ -83,7 +89,8 @@ impl<'a> ApplyRunner<'a> {
                     project: positional.to_path_buf(),
                 });
             }
-            confit_engine::Engine::new(stores.clone()).evaluate(&path)?
+            let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(&path)?;
+            Manifest::build(evaluated.documents, evaluated.hooks)?
         } else {
             if args.profile.is_some() {
                 return Err(CliError::ProfileWithoutProject {
@@ -95,7 +102,8 @@ impl<'a> ApplyRunner<'a> {
                     path: positional.to_path_buf(),
                 });
             }
-            confit_engine::Engine::new(stores.clone()).evaluate(positional)?
+            let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(positional)?;
+            Manifest::build(evaluated.documents, evaluated.hooks)?
         };
         let prepared = confit_runtime::prepare(&stores, desired)?;
         Ok(Self {
@@ -108,7 +116,7 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Apply desired documents with preview, drift prompts, and rotation.
+    /// Apply desired documents with preview, difference prompts, and rotation.
     ///
     /// Success with the state file and one stored manifest with rotation.
     /// Report with the write counts.
@@ -120,7 +128,7 @@ impl<'a> ApplyRunner<'a> {
     /// - [`CliError::Aborted`] for non-`yes` answers.
     /// - [`CliError::Unknown`] for prompt failures.
     /// - [`CliError::Runtime`] for destination writes and removals.
-    /// - [`CliError::Slot`] for state stores.
+    /// - [`CliError::Runtime`] for state stores.
     /// - [`CliError::Blob`] for blob resolves with persists and prunes.
     /// - [`CliError::Resolve`] for unresolvable hooks.
     /// - [`CliError::HookRequires`] for closed Requires gates.
@@ -130,8 +138,8 @@ impl<'a> ApplyRunner<'a> {
             return Err(CliError::Aborted);
         }
         let fresh = confit_runtime::refresh(&self.stores, &self.prepared);
-        if fresh != self.prepared.drifts {
-            for line in drift_lines(&fresh) {
+        if fresh != self.prepared.differences {
+            for line in difference_lines(&fresh) {
                 self.sinks.print_line(line);
             }
             if !self.sinks.confirm(self.input)? {
@@ -143,12 +151,12 @@ impl<'a> ApplyRunner<'a> {
         Ok(report)
     }
 
-    /// Write built documents with orphan removal and blob rotation.
+    /// Write built documents with deleted document removal and blob rotation.
     ///
     /// # Errors
     ///
     /// - [`CliError::Runtime`] for destination writes and removals.
-    /// - [`CliError::Slot`] for state stores.
+    /// - [`CliError::Runtime`] for state stores.
     /// - [`CliError::Blob`] for blob resolves with persists and prunes.
     fn commit(&self) -> Result<ApplyReport> {
         let built = &self.prepared.desired;
@@ -159,10 +167,10 @@ impl<'a> ApplyRunner<'a> {
             progress: self.sinks.progress.clone(),
         };
         let written = writer.write_documents(&built.documents, changed)?;
-        let removed = writer.remove_orphans(&previous.documents, &built.documents)?;
+        let removed = writer.remove_deleted(&previous.documents, &built.documents)?;
         let removed =
             removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
-        let _ = self.stores.slots().store(built)?;
+        Manifest::store(&self.stores.states(), built)?;
         let mut handles = Vec::new();
         for document in &built.documents {
             for blob in document.data.blob_refs() {
@@ -170,7 +178,8 @@ impl<'a> ApplyRunner<'a> {
             }
         }
         self.stores.blobs().persist(&handles)?;
-        self.stores.blobs().prune()?;
+        let keep = Manifest::keep_set(&self.stores.states())?;
+        self.stores.blobs().prune(&keep)?;
         Ok(ApplyReport { written, removed })
     }
 

@@ -90,7 +90,7 @@ Documents: 1 to add, 0 to change, 1 to destroy.
 ```
 
 While the fixed slot reads absent, the run counts as first. The
-drift reference reads the desired manifest, the order reads
+difference reference reads the desired manifest, the order reads
 disk-first, and the preview frames impact as desired versus
 disk. Past the first run the reference reads the previous manifest
 with recorded-first order.
@@ -106,9 +106,9 @@ Apply these changes? Type 'yes' to continue:
 Terminal runs print that line to stderr. Piped runs read the
 answer line straight from stdin.
 The run continues for the literal `yes` alone. `--force` skips this first
-prompt. A fresh drift check runs before every write. Matching
+prompt. A fresh difference check runs before every write. Matching
 snapshots proceed straight to disk. Differing snapshots print
-fresh drift lines and prompt again. Any other answer aborts the
+fresh difference lines and prompt again. Any other answer aborts the
 run:
 
 ```
@@ -135,9 +135,9 @@ kind:
   file lands in its place.
 - Modes land after bytes. Parents build on demand.
 
-Recorded orphans delete next. Orphans hold state-recorded paths
-missing from desired documents. Tree destinations stay out of
-this pass. Dropped tree members delete after that. Members hold
+Recorded unreferenced paths delete next. Unreferenced paths hold
+state-recorded paths missing from desired documents. Tree destinations
+stay out of this pass. Dropped tree members delete after that. Members hold
 recorded manifest entries missing from the desired manifest at a
 kept destination. Hand-placed files stay put. Destinations stay
 put.
@@ -152,15 +152,15 @@ land.
 The report counts the run:
 
 - `written` counts written documents.
-- `removed` counts orphans and dropped members.
+- `removed` counts unreferenced paths and dropped members.
 - `stored` holds the fresh archive path.
 
 ### Hooks
 
 Hooks run in plan order after the writes land. Changed gates
 read the apply-start set. The first run holds every built path.
-Later runs hold rewritten and drift-touched paths, with tree
-member drift mapping to the parent destination. Each run prints
+Later runs hold rewritten and difference-touched paths, with tree
+member difference mapping to the parent destination. Each run prints
 its position:
 
 ```
@@ -250,7 +250,7 @@ applied: 4 files, 1 removed
 previous: {base}/previous/{stamp}.json
 ```
 
-The preview, drift lines, prompts, the spinner and
+The preview, difference lines, prompts, the spinner and
 the run log path land on stderr:
 
 ```
@@ -258,7 +258,7 @@ log: /tmp/confit-1234.log
 ```
 
 The print sender runs on terminals, so piped runs skip preview
-, drift lines, and prompt text. The `log:` line lands on
+, difference lines, and prompt text. The `log:` line lands on
 stderr for failed runs too. Plan
 errors print through the command wrapper with exit code 1:
 

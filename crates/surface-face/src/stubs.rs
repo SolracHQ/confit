@@ -32,7 +32,7 @@ pub enum StubError {
 /// Stub result alias.
 pub type Result<T> = std::result::Result<T, StubError>;
 
-/// Write the live stub definitions under one folder.
+/// Write the current stub definitions under one folder.
 ///
 /// - All files parse as Lua on write.
 ///
@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use mlua_extras::typed::generator::Definition;
 
-    fn live_sample() -> Vec<(String, Definition)> {
+    fn current_sample() -> Vec<(String, Definition)> {
         vec![(
             "confit.version".to_owned(),
             Definition::start()
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn write_lands_stubs() {
         let dir = tempfile::tempdir().unwrap();
-        let written = match write(dir.path(), &live_sample()) {
+        let written = match write(dir.path(), &current_sample()) {
             Ok(written) => written,
             Err(error) => panic!("stubs write: {error}"),
         };

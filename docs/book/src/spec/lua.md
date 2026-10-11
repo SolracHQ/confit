@@ -859,7 +859,7 @@ shapes and builder failures.
 `changed` reads membership in the changed set. First
 runs hold every built path in the set, so every gate
 reads true. Later runs hold rewritten documents and
-drifted documents. Tree member drift maps to the parent
+differenced documents. Tree member difference maps to the parent
 destination. Unknown paths fail the plan naming the
 path.
 

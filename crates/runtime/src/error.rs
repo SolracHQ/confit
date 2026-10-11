@@ -7,11 +7,13 @@ use confit_driver::process::ProcessFault;
 use confit_driver::sha::Sha;
 use confit_model::condition::Condition;
 use confit_model::document::StructuredFormat;
+use confit_model::error::Error as ModelError;
 use confit_model::routes::Route;
 use thiserror::Error;
 
+use confit_store::archive::error::ArchiveError;
 use confit_store::faults::AccessFault;
-use confit_store::slot::error::SlotError;
+use confit_store::resources::error::ResourceError;
 
 /// Refused payload shape for one render refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,9 +113,94 @@ pub enum RuntimeError {
         /// The member path under writing.
         member: PathBuf,
     },
-    /// Failed slot load.
-    #[error(transparent)]
-    Slot(#[from] SlotError),
+    /// Failed state read.
+    #[error("cannot read '{path}': {fault}", path = path.display())]
+    StateRead {
+        /// The state path under reading.
+        path: PathBuf,
+        /// The read fault cause.
+        fault: AccessFault,
+    },
+    /// Corrupt state.
+    #[error("cannot read '{path}': corrupt state", path = path.display())]
+    StateCorrupt {
+        /// The state path under reading.
+        path: PathBuf,
+    },
+    /// Unsupported state version.
+    #[error("state version {got} is unsupported")]
+    StateVersion {
+        /// The state path under reading.
+        path: PathBuf,
+        /// The seen version.
+        got: u64,
+    },
+    /// Bad state pick.
+    #[error("bad state pick '{input}'")]
+    BadPick {
+        /// The picker input under resolving.
+        input: String,
+    },
+    /// Failed state manifest render.
+    #[error("cannot render manifest: {source}")]
+    StateManifest {
+        /// The model render cause.
+        source: ModelError,
+    },
+    /// Unknown state write failure.
+    #[error("cannot write '{path}': {message}", path = path.display())]
+    StateWriteUnknown {
+        /// The state path under writing.
+        path: PathBuf,
+        /// The failure message under writing.
+        message: String,
+    },
+    /// Failed bundle read.
+    #[error("bundle '{path}': {fault}", path = path.display())]
+    BundleRead {
+        /// The bundle path under reading.
+        path: PathBuf,
+        /// The read fault cause.
+        fault: AccessFault,
+    },
+    /// Unsupported bundle version.
+    #[error("bundle version {got} is unsupported")]
+    BundleVersion {
+        /// The bundle path under reading.
+        path: PathBuf,
+        /// The seen version.
+        got: u64,
+    },
+    /// Missing bundle blob.
+    #[error("missing blob '{sha}'")]
+    BundleMissing {
+        /// The content hash under reading.
+        sha: Sha,
+    },
+    /// Failed bundle write.
+    #[error("bundle '{path}': {fault}", path = path.display())]
+    BundleWrite {
+        /// The bundle path under writing.
+        path: PathBuf,
+        /// The write fault cause.
+        fault: AccessFault,
+    },
+    /// Failed bundle manifest render.
+    #[error("bundle '{path}': cannot render manifest: {source}", path = path.display())]
+    BundleManifest {
+        /// The bundle path under writing.
+        path: PathBuf,
+        /// The model render cause.
+        source: ModelError,
+    },
+    /// Unknown bundle write failure.
+    #[error("bundle '{path}': {message}", path = path.display())]
+    BundleWriteUnknown {
+        /// The bundle path under writing.
+        path: PathBuf,
+        /// The failure message under writing.
+        message: String,
+    },
     /// Empty hook argv.
     #[error("hook argv is empty")]
     EmptyArgv,
@@ -202,6 +289,78 @@ impl RuntimeError {
             None => Self::RemoveUnknown {
                 path: path.to_path_buf(),
                 message,
+            },
+        }
+    }
+
+    /// Map one io failure at the bundle path into domain language.
+    pub fn from_bundle_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
+        let message = error.to_string();
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::BundleRead {
+                path: path.to_path_buf(),
+                fault,
+            },
+            None => Self::BundleRead {
+                path: path.to_path_buf(),
+                fault: AccessFault::Unknown { message },
+            },
+        }
+    }
+
+    /// Map one write io failure at the bundle path into domain language.
+    pub fn from_bundle_write_io(path: &Path, error: std::io::Error) -> Self {
+        let kind = error.kind();
+        let message = error.to_string();
+        match AccessFault::interpret(kind) {
+            Some(fault) => Self::BundleWrite {
+                path: path.to_path_buf(),
+                fault,
+            },
+            None => Self::BundleWriteUnknown {
+                path: path.to_path_buf(),
+                message,
+            },
+        }
+    }
+
+    /// Map one archive failure at the bundle path into domain language.
+    pub fn from_archive(bundle: &Path, error: ArchiveError) -> Self {
+        match error {
+            ArchiveError::Read { fault, .. } => Self::BundleRead {
+                path: bundle.to_path_buf(),
+                fault,
+            },
+            ArchiveError::Write { fault, .. } => Self::BundleWrite {
+                path: bundle.to_path_buf(),
+                fault,
+            },
+            ArchiveError::WriteUnknown { message, .. } => Self::BundleWriteUnknown {
+                path: bundle.to_path_buf(),
+                message,
+            },
+            other => Self::BundleRead {
+                path: bundle.to_path_buf(),
+                fault: AccessFault::Unknown {
+                    message: other.to_string(),
+                },
+            },
+        }
+    }
+
+    /// Map one resource failure at the bundle path into domain language.
+    pub fn from_resource(bundle: &Path, error: ResourceError) -> Self {
+        match error {
+            ResourceError::Read { fault, .. } => Self::BundleRead {
+                path: bundle.to_path_buf(),
+                fault,
+            },
+            other => Self::BundleRead {
+                path: bundle.to_path_buf(),
+                fault: AccessFault::Unknown {
+                    message: other.to_string(),
+                },
             },
         }
     }

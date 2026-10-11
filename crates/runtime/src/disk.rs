@@ -12,8 +12,8 @@ use confit_store::faults::AccessFault;
 
 use crate::error::{Result, RuntimeError};
 
-/// Live disk state.
-pub enum Live {
+/// Disk state.
+pub enum Disk {
     /// Missing destination.
     Absent,
     /// Unreadable destination.
@@ -30,8 +30,8 @@ pub enum Live {
     },
 }
 
-/// Live tree member state.
-pub enum LiveMember {
+/// Disk tree member state.
+pub enum DiskMember {
     /// Unreadable member.
     Unreadable {
         /// The fault cause for the failed read.
@@ -47,7 +47,7 @@ pub enum LiveMember {
 }
 
 /// Open one document destination through its kind-aware reader.
-pub fn live_doc(document: &Document) -> Live {
+pub fn disk_doc(document: &Document) -> Disk {
     let expanded = document.destination.expand();
     let is_link = matches!(document.data, Data::Link { .. });
     let target = match driver::fs::read_link(&expanded) {
@@ -56,36 +56,36 @@ pub fn live_doc(document: &Document) -> Live {
     };
     if is_link {
         return match driver::fs::read_link_bytes(&expanded) {
-            Ok(bytes) => Live::Present {
+            Ok(bytes) => Disk::Present {
                 reader: Box::new(std::io::Cursor::new(bytes)),
                 mode: None,
             },
             Err(_) => match driver::fs::open(&expanded) {
-                Ok(file) => Live::Present {
+                Ok(file) => Disk::Present {
                     reader: Box::new(file),
                     mode: file_mode(&expanded),
                 },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Live::Absent,
-                Err(error) => Live::Unreadable {
-                    fault: live_fault(error),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Disk::Absent,
+                Err(error) => Disk::Unreadable {
+                    fault: disk_fault(error),
                 },
             },
         };
     }
     match driver::fs::open(&target) {
-        Ok(file) => Live::Present {
+        Ok(file) => Disk::Present {
             reader: Box::new(file),
             mode: file_mode(&target),
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Live::Absent,
-        Err(error) => Live::Unreadable {
-            fault: live_fault(error),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Disk::Absent,
+        Err(error) => Disk::Unreadable {
+            fault: disk_fault(error),
         },
     }
 }
 
 /// Open one tree destination into relative member readers.
-pub fn live_tree(document: &Document) -> BTreeMap<String, LiveMember> {
+pub fn disk_tree(document: &Document) -> BTreeMap<String, DiskMember> {
     let dir = document.destination.expand();
     let mut out = BTreeMap::new();
     walk_tree(&dir, &dir, &mut out);
@@ -136,7 +136,7 @@ pub fn remove(path: &Path) -> std::io::Result<bool> {
 /// Walk one folder into relative member readers.
 ///
 /// - Missing folders are empty.
-fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
+fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, DiskMember>) {
     let children = match driver::fs::read_dir(dir) {
         Ok(children) => children,
         Err(_) => return,
@@ -158,7 +158,7 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
         if let Ok(bytes) = driver::fs::read_link_bytes(&child) {
             out.insert(
                 name.to_string(),
-                LiveMember::Present {
+                DiskMember::Present {
                     reader: Box::new(std::io::Cursor::new(bytes)),
                     mode: None,
                 },
@@ -169,7 +169,7 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
             Ok(file) => {
                 out.insert(
                     name.to_string(),
-                    LiveMember::Present {
+                    DiskMember::Present {
                         reader: Box::new(file),
                         mode: file_mode(&child),
                     },
@@ -181,8 +181,8 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, LiveMember>) {
             Err(error) => {
                 out.insert(
                     name.to_string(),
-                    LiveMember::Unreadable {
-                        fault: live_fault(error),
+                    DiskMember::Unreadable {
+                        fault: disk_fault(error),
                     },
                 );
             }
@@ -311,11 +311,11 @@ fn map_pool(error: BlobError, dest: &Path, target: &Path) -> RuntimeError {
     }
 }
 
-/// Interpret one live read failure into its fault cause.
-fn live_fault(error: std::io::Error) -> AccessFault {
+/// Interpret one disk read failure into its fault cause.
+fn disk_fault(error: std::io::Error) -> AccessFault {
     let kind = error.kind();
     let message = error.to_string();
-    log::error!("live read failed: {message}");
+    log::error!("disk read failed: {message}");
     match AccessFault::interpret(kind) {
         Some(fault) => fault,
         None => AccessFault::Unknown { message },
@@ -323,7 +323,7 @@ fn live_fault(error: std::io::Error) -> AccessFault {
 }
 
 #[cfg(test)]
-mod live_tests {
+mod disk_tests {
     use super::*;
     use confit_driver::fs::TestGuard;
     use confit_model::routes::{Route, RouteBase};
@@ -336,7 +336,7 @@ mod live_tests {
         Document::new(
             literal(path),
             Data::Text {
-                content: "live bytes".into(),
+                content: "disk bytes".into(),
                 mode: None,
                 unmanaged: false,
             },
@@ -347,10 +347,10 @@ mod live_tests {
     fn absent_doc_reads_absent() {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
-        match live_doc(&text_doc(&dir.path().join("absent.txt"))) {
-            Live::Absent => {}
-            Live::Present { .. } => panic!("never-written path is present"),
-            Live::Unreadable { fault } => {
+        match disk_doc(&text_doc(&dir.path().join("absent.txt"))) {
+            Disk::Absent => {}
+            Disk::Present { .. } => panic!("never-written path is present"),
+            Disk::Unreadable { fault } => {
                 panic!("never-written path is unreadable: {fault}")
             }
         }
@@ -362,17 +362,17 @@ mod live_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("present.txt");
         driver::fs::create_parent(&path).unwrap();
-        driver::fs::write(&path, b"live bytes").unwrap();
+        driver::fs::write(&path, b"disk bytes").unwrap();
         driver::fs::set_mode(&path, 0o755).unwrap();
-        match live_doc(&text_doc(&path)) {
-            Live::Present { mut reader, mode } => {
+        match disk_doc(&text_doc(&path)) {
+            Disk::Present { mut reader, mode } => {
                 let mut seen = Vec::new();
                 reader.read_to_end(&mut seen).unwrap();
-                assert_eq!(seen, b"live bytes".to_vec());
-                assert_eq!(mode, Some(0o755), "live mode matches the reader");
+                assert_eq!(seen, b"disk bytes".to_vec());
+                assert_eq!(mode, Some(0o755), "disk mode matches the reader");
             }
-            Live::Absent => panic!("written path is absent"),
-            Live::Unreadable { fault } => {
+            Disk::Absent => panic!("written path is absent"),
+            Disk::Unreadable { fault } => {
                 panic!("written path is unreadable: {fault}")
             }
         }
@@ -384,13 +384,13 @@ mod live_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blocked.txt");
         driver::fs::create_dir_all(&path).unwrap();
-        match live_doc(&text_doc(&path)) {
-            Live::Unreadable { fault } => assert!(
+        match disk_doc(&text_doc(&path)) {
+            Disk::Unreadable { fault } => assert!(
                 !fault.cause().is_empty(),
                 "unreadable carries the fault cause"
             ),
-            Live::Absent => panic!("directory path is absent"),
-            Live::Present { .. } => panic!("directory path is present"),
+            Disk::Absent => panic!("directory path is absent"),
+            Disk::Present { .. } => panic!("directory path is present"),
         }
     }
 
@@ -408,14 +408,14 @@ mod live_tests {
                 members: Vec::new(),
             },
         );
-        let mut found = live_tree(&document);
+        let mut found = disk_tree(&document);
         match found.get_mut("present.txt") {
-            Some(LiveMember::Present { reader, .. }) => {
+            Some(DiskMember::Present { reader, .. }) => {
                 let mut seen = Vec::new();
                 reader.as_mut().read_to_end(&mut seen).unwrap();
                 assert_eq!(seen, b"member bytes".to_vec());
             }
-            Some(LiveMember::Unreadable { fault }) => {
+            Some(DiskMember::Unreadable { fault }) => {
                 panic!("written member is unreadable: {fault}");
             }
             None => panic!("written member is map miss"),

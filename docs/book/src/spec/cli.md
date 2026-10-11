@@ -9,7 +9,7 @@ confit plan PROFILE [-o PATH | -o @name] [--root DIR] [--plugins DIR] [--re-fetc
 ```
 
 `confit plan` evaluates one profile file into documents and
-hooks and diffs drift against the fixed slot. The run previews
+hooks and diffs difference against the fixed slot. The run previews
 by default. The positional holds the profile path.
 
 `-o PATH` writes a bundle file, adding `.cb` to names missing
@@ -21,7 +21,7 @@ the run previews only.
 Stdout carries the summary every run. Stderr carries a `log: {path}` line. Failures exit 1.
 Plan-shaped failures print `confit: plan error: {message}` on
 stderr; remaining failures print `confit: {message}`. The
-prefix wraps command messages from every subcommand. Drift
+prefix wraps command messages from every subcommand. Difference
 leaves the exit at 0.
 
 ### apply
@@ -44,13 +44,13 @@ apply reads no profile '{path}'
 Slot failures carry the command name as an `apply: ` prefix.
 The preview stream and the prompt flow live on the apply
 page. With `--force`, the first confirmation prompt drops out.
-A fresh drift check ahead of writes still asks again.
+A fresh difference check ahead of writes still asks again.
 
 Stdout carries `applied: {written} files, {removed} removed`,
 and `previous: {history path}`. The `previous:` line names
 the fresh history entry. Stderr carries a `log: {path}` line
 on success and failure runs. Failures exit 1 under the same
-`confit: ` shapes as plan. Drift leaves the exit at 0.
+`confit: ` shapes as plan. Difference leaves the exit at 0.
 
 ### export
 
@@ -87,7 +87,7 @@ confit delete @name
 
 The positional names one slot with a leading `@`. Delete
 removes the named manifest first. A pool prune follows and
-drops blobs orphaned by the removal. The prune keeps blobs
+drops blobs unreferenced by the removal. The prune keeps blobs
 still referenced by remaining slots.
 
 Stdout prints the slot name and the pruned count:

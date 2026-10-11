@@ -271,11 +271,11 @@ mod tests {
         }
     }
 
-    fn land(writer: &Writer, document: &Document) -> BTreeSet<Route> {
+    fn write_doc(writer: &Writer, document: &Document) -> BTreeSet<Route> {
         let changed = BTreeSet::from([document.destination.clone()]);
         match writer.write_documents(std::slice::from_ref(document), &changed) {
             Ok(_) => changed,
-            Err(error) => panic!("documents land: {error}"),
+            Err(error) => panic!("documents write: {error}"),
         }
     }
 
@@ -308,7 +308,7 @@ mod tests {
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
         let writer = writer_in(dir.path());
-        let changed = land(&writer, &text_doc(&binary, Some(0o755)));
+        let changed = write_doc(&writer, &text_doc(&binary, Some(0o755)));
         let decided = match runner().decide_all(std::slice::from_ref(&mise_hook(&bindir)), &changed)
         {
             Ok(decided) => decided,
@@ -344,7 +344,7 @@ mod tests {
             "missing sentinel closes the gate"
         );
         let writer = writer_in(dir.path());
-        let changed = land(&writer, &text_doc(&sentinel, None));
+        let changed = write_doc(&writer, &text_doc(&sentinel, None));
         let decided = match runner().decide_all(std::slice::from_ref(&hook), &changed) {
             Ok(decided) => decided,
             Err(error) => panic!("hooks decide: {error}"),

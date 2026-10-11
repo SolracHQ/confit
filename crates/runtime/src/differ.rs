@@ -5,17 +5,17 @@ use std::collections::BTreeMap;
 
 use confit_driver::sha::Sha;
 use confit_model::document::{Data, Document, StructuredFormat, Table, render_mode};
-use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
 
-use crate::disk::{Live, LiveMember, live_doc, live_tree, open_member};
+use crate::disk::{Disk, DiskMember, disk_doc, disk_tree, open_member};
+use crate::manifest::Manifest;
 use crate::render::render_document;
 
 /// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Drift {
+pub enum Difference {
     /// Leaf difference between recorded and disk.
     Key {
         /// The recorded destination route.
@@ -37,11 +37,11 @@ pub enum Drift {
         new: Table,
     },
     /// Text difference between recorded and disk.
-    Hunk {
+    Diff {
         /// The recorded destination route.
         path: Route,
         /// The unified diff from recorded to disk.
-        hunks: String,
+        diff: String,
     },
     /// Absent recorded destination on disk.
     Missing {
@@ -57,16 +57,16 @@ pub enum Drift {
     },
 }
 
-/// One drift side order.
+/// One difference side order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DriftOrder {
+pub enum DifferenceOrder {
     /// Recorded bytes as old with disk as new.
     RecordedFirst,
     /// Disk bytes as old with recorded as new.
     DiskFirst,
 }
 
-/// Recorded against disk drift reader.
+/// Recorded against disk difference reader.
 pub struct Differ {
     /// Read capabilities for one run.
     pub stores: Stores,
@@ -78,27 +78,27 @@ impl Differ {
     /// Link documents compare target text.
     ///
     /// - Entries follow recorded destination order.
-    pub fn drift(&self, manifest: &Manifest, order: DriftOrder) -> Vec<Drift> {
+    pub fn differences(&self, manifest: &Manifest, order: DifferenceOrder) -> Vec<Difference> {
         let mut out = Vec::new();
         for document in &manifest.documents {
             if let Some(members) = document.data.tree_members() {
-                out.extend(self.tree_drift(
+                out.extend(self.tree_difference(
                     &document.destination,
                     members,
-                    &live_tree(document),
+                    &disk_tree(document),
                     order,
                 ));
                 continue;
             }
-            match live_doc(document) {
-                Live::Absent => out.push(Drift::Missing {
+            match disk_doc(document) {
+                Disk::Absent => out.push(Difference::Missing {
                     path: document.destination.clone(),
                 }),
-                Live::Unreadable { fault } => out.push(Drift::Unreadable {
+                Disk::Unreadable { fault } => out.push(Difference::Unreadable {
                     path: document.destination.clone(),
                     reason: unreadable_reason(&fault),
                 }),
-                Live::Present { mut reader, mode } => {
+                Disk::Present { mut reader, mode } => {
                     if !matches!(&document.data, Data::Opaque { .. }) {
                         let Some(recorded_bytes) = render_document(document).ok() else {
                             continue;
@@ -107,7 +107,7 @@ impl Differ {
                         if reader.read_to_end(&mut disk_bytes).is_err() {
                             continue;
                         }
-                        out.extend(disk_drift(
+                        out.extend(disk_difference(
                             document,
                             &recorded_bytes,
                             &disk_bytes,
@@ -135,16 +135,16 @@ impl Differ {
                                 && wanted != seen
                             {
                                 let (old, new) = match order {
-                                    DriftOrder::RecordedFirst => (
+                                    DifferenceOrder::RecordedFirst => (
                                         serde_json::Value::String(render_mode(wanted)),
                                         serde_json::Value::String(render_mode(seen)),
                                     ),
-                                    DriftOrder::DiskFirst => (
+                                    DifferenceOrder::DiskFirst => (
                                         serde_json::Value::String(render_mode(seen)),
                                         serde_json::Value::String(render_mode(wanted)),
                                     ),
                                 };
-                                out.push(Drift::Key {
+                                out.push(Difference::Key {
                                     path: document.destination.clone(),
                                     key: "mode".to_string(),
                                     old: Some(old),
@@ -153,7 +153,7 @@ impl Differ {
                             }
                             continue;
                         }
-                        out.push(opaque_content_drift(
+                        out.push(opaque_content_difference(
                             &document.destination,
                             "content",
                             &recorded_label,
@@ -168,26 +168,26 @@ impl Differ {
         out
     }
 
-    /// Collect drift entries for one tree destination walk.
+    /// Collect difference entries for one tree destination walk.
     ///
     /// - Only manifest members produce entries.
-    fn tree_drift(
+    fn tree_difference(
         &self,
         destination: &Route,
         members: &[confit_model::document::ManifestMember],
-        disk: &BTreeMap<String, LiveMember>,
-        order: DriftOrder,
-    ) -> Vec<Drift> {
+        disk: &BTreeMap<String, DiskMember>,
+        order: DifferenceOrder,
+    ) -> Vec<Difference> {
         let mut out = Vec::new();
         for member in members {
             let member_path = destination.join(&member.relative);
             match disk.get(&member.relative) {
-                None => out.push(Drift::Missing { path: member_path }),
-                Some(LiveMember::Unreadable { fault }) => out.push(Drift::Unreadable {
+                None => out.push(Difference::Missing { path: member_path }),
+                Some(DiskMember::Unreadable { fault }) => out.push(Difference::Unreadable {
                     path: member_path,
                     reason: unreadable_reason(fault),
                 }),
-                Some(LiveMember::Present { mode, .. }) => {
+                Some(DiskMember::Present { mode, .. }) => {
                     let seen_mode = *mode;
                     let store = self.stores.blobs();
                     let Ok(handle) = store.resolve(&member.blob) else {
@@ -202,7 +202,7 @@ impl Differ {
                         continue;
                     };
                     if recorded_label != disk_label {
-                        out.push(opaque_content_drift(
+                        out.push(opaque_content_difference(
                             destination,
                             &member.relative,
                             &recorded_label,
@@ -214,16 +214,16 @@ impl Differ {
                         && seen != member.mode
                     {
                         let (old, new) = match order {
-                            DriftOrder::RecordedFirst => (
+                            DifferenceOrder::RecordedFirst => (
                                 serde_json::Value::String(render_mode(member.mode)),
                                 serde_json::Value::String(render_mode(seen)),
                             ),
-                            DriftOrder::DiskFirst => (
+                            DifferenceOrder::DiskFirst => (
                                 serde_json::Value::String(render_mode(seen)),
                                 serde_json::Value::String(render_mode(member.mode)),
                             ),
                         };
-                        out.push(Drift::Key {
+                        out.push(Difference::Key {
                             path: destination.clone(),
                             key: format!("{}:mode", member.relative),
                             old: Some(old),
@@ -238,12 +238,12 @@ impl Differ {
 
     /// Label one disk document with its content hash and byte count.
     fn disk_label(document: &Document) -> Option<String> {
-        match live_doc(document) {
-            Live::Present { mut reader, .. } => {
+        match disk_doc(document) {
+            Disk::Present { mut reader, .. } => {
                 let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
                 Some(sha.label(len))
             }
-            Live::Absent | Live::Unreadable { .. } => None,
+            Disk::Absent | Disk::Unreadable { .. } => None,
         }
     }
 
@@ -255,45 +255,45 @@ impl Differ {
     }
 }
 
-/// Collect drift entries for one present disk path.
+/// Collect difference entries for one present disk path.
 ///
 /// - Unmanaged documents stay quiet.
-fn disk_drift(
+fn disk_difference(
     document: &Document,
     recorded: &[u8],
     disk: &[u8],
     disk_mode: Option<u32>,
-    order: DriftOrder,
-) -> Vec<Drift> {
+    order: DifferenceOrder,
+) -> Vec<Difference> {
     let (first, second) = match order {
-        DriftOrder::RecordedFirst => (recorded, disk),
-        DriftOrder::DiskFirst => (disk, recorded),
+        DifferenceOrder::RecordedFirst => (recorded, disk),
+        DifferenceOrder::DiskFirst => (disk, recorded),
     };
     let mut out = match &document.data {
         Data::Structured { format, data } => {
             if let Some(disk_table) = parse_disk_table(*format, disk) {
                 match order {
-                    DriftOrder::RecordedFirst => {
-                        structured_drift(&document.destination, data, &disk_table)
+                    DifferenceOrder::RecordedFirst => {
+                        structured_difference(&document.destination, data, &disk_table)
                     }
-                    DriftOrder::DiskFirst => {
-                        structured_drift(&document.destination, &disk_table, data)
+                    DifferenceOrder::DiskFirst => {
+                        structured_difference(&document.destination, &disk_table, data)
                     }
                 }
             } else {
-                push_hunk(&document.destination, first, second)
+                push_diff(&document.destination, first, second)
             }
         }
         Data::Text { unmanaged, .. } => {
             if *unmanaged || recorded == disk {
                 Vec::new()
             } else {
-                push_hunk(&document.destination, first, second)
+                push_diff(&document.destination, first, second)
             }
         }
         Data::Rc(_) => {
             if recorded != disk {
-                push_hunk(&document.destination, first, second)
+                push_diff(&document.destination, first, second)
             } else {
                 Vec::new()
             }
@@ -302,16 +302,16 @@ fn disk_drift(
             let disk_target = String::from_utf8_lossy(disk);
             if disk_target.as_ref() != target {
                 let (old, new) = match order {
-                    DriftOrder::RecordedFirst => (
+                    DifferenceOrder::RecordedFirst => (
                         serde_json::Value::String(target.clone()),
                         serde_json::Value::String(disk_target.into_owned()),
                     ),
-                    DriftOrder::DiskFirst => (
+                    DifferenceOrder::DiskFirst => (
                         serde_json::Value::String(disk_target.into_owned()),
                         serde_json::Value::String(target.clone()),
                     ),
                 };
-                vec![Drift::Key {
+                vec![Difference::Key {
                     path: document.destination.clone(),
                     key: "target".to_string(),
                     old: Some(old),
@@ -326,16 +326,16 @@ fn disk_drift(
                 Vec::new()
             } else {
                 let (old, new) = match order {
-                    DriftOrder::RecordedFirst => (
+                    DifferenceOrder::RecordedFirst => (
                         serde_json::Value::String(Sha::hash(recorded).label(recorded.len() as u64)),
                         serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
                     ),
-                    DriftOrder::DiskFirst => (
+                    DifferenceOrder::DiskFirst => (
                         serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
                         serde_json::Value::String(Sha::hash(recorded).label(recorded.len() as u64)),
                     ),
                 };
-                vec![Drift::Key {
+                vec![Difference::Key {
                     path: document.destination.clone(),
                     key: "content".to_string(),
                     old: Some(old),
@@ -350,16 +350,16 @@ fn disk_drift(
         && wanted != seen
     {
         let (old, new) = match order {
-            DriftOrder::RecordedFirst => (
+            DifferenceOrder::RecordedFirst => (
                 serde_json::Value::String(render_mode(wanted)),
                 serde_json::Value::String(render_mode(seen)),
             ),
-            DriftOrder::DiskFirst => (
+            DifferenceOrder::DiskFirst => (
                 serde_json::Value::String(render_mode(seen)),
                 serde_json::Value::String(render_mode(wanted)),
             ),
         };
-        out.push(Drift::Key {
+        out.push(Difference::Key {
             path: document.destination.clone(),
             key: "mode".to_string(),
             old: Some(old),
@@ -369,8 +369,8 @@ fn disk_drift(
     out
 }
 
-/// Build render-ready hunk content from first text to second text.
-fn content_hunk(first: &str, second: &str) -> String {
+/// Build render-ready diff content from first text to second text.
+fn content_diff(first: &str, second: &str) -> String {
     diffy::create_patch(first, second)
         .to_string()
         .lines()
@@ -381,14 +381,14 @@ fn content_hunk(first: &str, second: &str) -> String {
         .join("\n")
 }
 
-/// Build one hunk from first bytes to second bytes.
-fn push_hunk(path: &Route, first: &[u8], second: &[u8]) -> Vec<Drift> {
+/// Build one diff from first bytes to second bytes.
+fn push_diff(path: &Route, first: &[u8], second: &[u8]) -> Vec<Difference> {
     let old = String::from_utf8_lossy(first);
     let new = String::from_utf8_lossy(second);
-    let hunks = content_hunk(&old, &new);
-    vec![Drift::Hunk {
+    let diff = content_diff(&old, &new);
+    vec![Difference::Diff {
         path: path.clone(),
-        hunks,
+        diff,
     }]
 }
 
@@ -403,11 +403,11 @@ fn parse_disk_table(format: StructuredFormat, disk: &[u8]) -> Option<Table> {
 }
 
 /// Report one path-level entry for differing structured tables.
-fn structured_drift(path: &Route, old: &Table, new: &Table) -> Vec<Drift> {
+fn structured_difference(path: &Route, old: &Table, new: &Table) -> Vec<Difference> {
     if old == new {
         Vec::new()
     } else {
-        vec![Drift::Structured {
+        vec![Difference::Structured {
             path: path.clone(),
             old: old.clone(),
             new: new.clone(),
@@ -416,18 +416,18 @@ fn structured_drift(path: &Route, old: &Table, new: &Table) -> Vec<Drift> {
 }
 
 /// Build one opaque content key from two labels.
-fn opaque_content_drift(
+fn opaque_content_difference(
     path: &Route,
     key: &str,
     recorded: &str,
     disk: &str,
-    order: DriftOrder,
-) -> Drift {
+    order: DifferenceOrder,
+) -> Difference {
     let (old, new) = match order {
-        DriftOrder::RecordedFirst => (recorded, disk),
-        DriftOrder::DiskFirst => (disk, recorded),
+        DifferenceOrder::RecordedFirst => (recorded, disk),
+        DifferenceOrder::DiskFirst => (disk, recorded),
     };
-    Drift::Key {
+    Difference::Key {
         path: path.clone(),
         key: key.to_string(),
         old: Some(serde_json::Value::String(old.to_string())),
@@ -435,7 +435,7 @@ fn opaque_content_drift(
     }
 }
 
-/// Show one unreadable fault for drift lines.
+/// Show one unreadable fault for difference lines.
 fn unreadable_reason(fault: &AccessFault) -> String {
     match fault {
         AccessFault::Unknown { .. } => "unknown failure, see log".to_owned(),
@@ -449,8 +449,9 @@ mod tests {
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
     use confit_model::document::{Data, Document, RcData, RcEntry, RcOp};
-    use confit_model::manifest::MANIFEST_VERSION;
     use confit_model::routes::{Route, RouteBase};
+
+    use crate::manifest::MANIFEST_VERSION;
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
@@ -458,7 +459,7 @@ mod tests {
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "confit-runtime-drift-{}-{name}",
+            "confit-runtime-difference-{}-{name}",
             std::process::id()
         ));
         driver::fs::create_dir_all(&dir).unwrap();
@@ -466,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn drift_renders_routes_expanded_like_for_like() {
+    fn difference_renders_routes_expanded_like_for_like() {
         let _guard = TestGuard::install();
         let dir = scratch("rc");
         let dest = dir.join("shellrc");
@@ -495,7 +496,7 @@ mod tests {
             "rendered bytes carry no display alias"
         );
         driver::fs::write(&dest, &recorded).unwrap();
-        let manifest = confit_model::manifest::Manifest {
+        let manifest = crate::manifest::Manifest {
             version: MANIFEST_VERSION,
             documents: vec![document.clone()],
             hooks: Vec::new(),
@@ -504,8 +505,11 @@ mod tests {
         let differ = Differ {
             stores: confit_store::Stores::new(confit_store::StoreRoots::default(), sender),
         };
-        let found = differ.drift(&manifest, DriftOrder::RecordedFirst);
-        assert!(found.is_empty(), "matching expanded bytes are zero drift");
+        let found = differ.differences(&manifest, DifferenceOrder::RecordedFirst);
+        assert!(
+            found.is_empty(),
+            "matching expanded bytes are zero difference"
+        );
         assert_eq!(
             document.destination.display(),
             dest.to_str().unwrap(),

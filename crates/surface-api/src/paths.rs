@@ -33,7 +33,7 @@ pub(crate) fn decode_route(value: &Value, field: &str) -> Result<Route> {
     )
 }
 
-/// Build one live route table from its route.
+/// Build one current route table from its route.
 ///
 /// # Errors
 ///

@@ -17,7 +17,7 @@ pub enum AccessFault {
     Denied,
     /// Full disk.
     StorageFull,
-    /// Sealed disk.
+    /// Read-only disk.
     ReadOnlyFilesystem,
     /// Capped disk.
     QuotaExceeded,

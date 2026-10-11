@@ -51,7 +51,7 @@ confit apply @laptop
 confit apply @server
 ```
 
-Every switch diffs against the same applied result, so drift stays honest. Empty names and separators fail, so keep slot names to simple words.
+Every switch diffs against the same applied result, so difference stays honest. Empty names and separators fail, so keep slot names to simple words.
 
 ## Reinstall from scratch
 
@@ -81,4 +81,4 @@ The bundle carries the full desired state. The new machine converges from that f
 
 For the exact contract see [spec storage](../spec/storage.md).
 
-The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, drift, and history.
+The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, difference, and history.

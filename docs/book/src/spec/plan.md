@@ -104,8 +104,8 @@ in the file and read trusted, so loads skip rendering.
 ### Disk comparison
 
 First runs compare desired documents against disk with disk
-values leading. Steady runs compare recorded documents against
-disk with recorded values leading. Drift entries arrive in
+values leading. Repeat runs compare recorded documents against
+disk with recorded values leading. Difference entries arrive in
 recorded path order.
 
 ### Lifecycle counts

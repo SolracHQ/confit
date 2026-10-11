@@ -1,10 +1,10 @@
 //! Sha
-//! Sealed content hashes.
+//! Verified content hashes.
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-/// Sealed hash failure shapes.
+/// Verified hash failure shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShaError {
     /// Parse failure.
@@ -26,7 +26,7 @@ impl std::fmt::Display for ShaError {
 
 impl std::error::Error for ShaError {}
 
-/// Sealed hash result alias.
+/// Verified hash result alias.
 pub type Result<T> = std::result::Result<T, ShaError>;
 
 /// Byte count for a SHA-256 digest.
@@ -38,14 +38,14 @@ const SHA_HEX_LEN: usize = 64;
 /// Read chunk size for streaming hashes.
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 
-/// Sealed SHA-256 digest.
+/// Verified SHA-256 digest.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Sha {
     inner: [u8; SHA_BYTE_LEN],
 }
 
 impl Sha {
-    /// Seal one content hash.
+    /// Build one content hash.
     ///
     /// # Errors
     ///
@@ -63,7 +63,7 @@ impl Sha {
         Ok(Self { inner })
     }
 
-    /// Hash bytes into a sealed digest.
+    /// Hash bytes into a verified digest.
     pub fn hash(bytes: &[u8]) -> Self {
         let digest = sha2::Sha256::digest(bytes);
         Self {
@@ -71,14 +71,14 @@ impl Sha {
         }
     }
 
-    /// Seal a streaming hash.
+    /// Finish a streaming hash.
     pub fn finish(hasher: sha2::Sha256) -> Self {
         Self {
             inner: hasher.finalize().into(),
         }
     }
 
-    /// Hash a byte stream into a sealed digest with its byte count.
+    /// Hash a byte stream into a verified digest with its byte count.
     ///
     /// # Errors
     ///
@@ -98,7 +98,7 @@ impl Sha {
         Ok((Self::finish(hasher), len))
     }
 
-    /// Hash a byte stream into a sealed digest.
+    /// Hash a byte stream into a verified digest.
     ///
     /// # Errors
     ///
@@ -174,7 +174,7 @@ impl<W: std::io::Write> ShaWriter<W> {
         }
     }
 
-    /// Seal the running hash over every byte written.
+    /// Finish the running hash over every byte written.
     pub fn digest(self) -> Sha {
         Sha::finish(self.hasher)
     }

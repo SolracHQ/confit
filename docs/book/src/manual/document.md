@@ -12,7 +12,7 @@ The demo uses this shape for tool data files like the mise TOML in a later chapt
 confit.document.structured("toml", { path = path, data = data })
 ```
 
-Drift compares key by key. One changed value reports its dotted key with old and new. A disk file that no longer parses falls back to a text hunk.
+Difference compares key by key. One changed value reports its dotted key with old and new. A disk file that no longer parses falls back to a text diff.
 
 ## Text
 
@@ -22,7 +22,7 @@ The demo kitty config uses this shape for `kitty.conf` and the desktop list. Raw
 confit.document.text(path, content)
 ```
 
-Drift compares full bytes and reports a text hunk around the changed lines.
+Difference compares full bytes and reports a text diff around the changed lines.
 
 ## Opaque
 
@@ -36,7 +36,7 @@ confit.document.opaque(path, source, { unmanaged = true })
 
 Text documents take the same opts. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes. `unmanaged` marks existence-only files like self-updating tools: present bytes read as already in place, missing ones land from the source file, rewritten declarations land once.
 
-Drift compares bytes and reports sha and size. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
+Difference compares bytes and reports sha and size. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
 
 ## Rc
 
@@ -55,7 +55,7 @@ confit.document.rc.new({
 })
 ```
 
-Drift compares the rendered file as full bytes with a text hunk, same as text documents.
+Difference compares the rendered file as full bytes with a text diff, same as text documents.
 
 ## Link
 
@@ -65,7 +65,7 @@ The demo kitty config uses this shape for its binary and desktop links. A symlin
 confit.document.link(path, target)
 ```
 
-Drift compares the target string. A moved link reports old target and new target.
+Difference compares the target string. A moved link reports old target and new target.
 
 ## Compressed
 

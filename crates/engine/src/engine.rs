@@ -1,14 +1,23 @@
 //! Engine
-//! Evaluate Lua profiles into finished manifests.
+//! Evaluate Lua profiles into documents with hooks.
 
 use std::path::Path;
 
 use mlua::Lua;
 
-use confit_model::manifest::Manifest;
+use confit_model::document::Document as ModelDocument;
+use confit_model::hook::Hook;
 use confit_store::Stores;
 
 use crate::error::Result;
+
+/// Evaluated profile documents with hooks.
+pub struct Evaluated {
+    /// Finished documents with filled hashes.
+    pub documents: Vec<ModelDocument>,
+    /// Collected hooks in first-seen order.
+    pub hooks: Vec<Hook>,
+}
 
 /// Profile evaluator.
 pub struct Engine {
@@ -27,7 +36,7 @@ impl Engine {
         }
     }
 
-    /// Evaluate one profile file into a finished manifest.
+    /// Evaluate one profile file into documents with hooks.
     ///
     /// - Documents finish with filled hashes in destination display order.
     /// - Patches merge in rank-descending level order over structured maps
@@ -48,13 +57,14 @@ impl Engine {
     /// - [`crate::error::EngineError::Read`] for unreadable files.
     /// - [`crate::error::EngineError::Utf8`] for non-UTF8 files.
     /// - [`crate::error::EngineError::Lua`] for Lua failures.
-    pub fn evaluate(&self, profile: &Path) -> Result<Manifest> {
+    pub fn evaluate(&self, profile: &Path) -> Result<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
         crate::loader::install(&self.lua)?;
         let value = crate::loader::load_chunk(&self.lua, profile)?;
         let decoded = confit_surface_api::Profile::decode(&self.lua, value)?;
-        let documents = crate::assembly::assemble(&self.lua, &self.stores, &decoded)?;
+        let mut documents = crate::assembly::assemble(&self.lua, &self.stores, &decoded)?;
         let hooks = crate::assembly::collect_hooks(&decoded, &documents)?;
-        Ok(Manifest::build(documents, hooks)?)
+        documents.sort_by_key(|document| document.destination.display());
+        Ok(Evaluated { documents, hooks })
     }
 }

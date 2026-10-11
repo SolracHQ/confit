@@ -5,8 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::{BlobRef, DocumentStatus};
-use crate::manifest::Manifest;
+use super::{BlobRef, Document, DocumentStatus};
 
 /// One persisted tree member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,29 +19,29 @@ pub struct ManifestMember {
     pub mode: u32,
 }
 
-/// Lifecycle counts for one bundle against a previous manifest.
+/// Lifecycle counts for one bundle against previous documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
-    /// Documents absent from the previous manifest.
+    /// Documents absent from previous documents.
     pub create: usize,
     /// Documents with a differing data hash.
     pub update: usize,
-    /// Previous documents missing from the manifest.
+    /// Previous documents missing from the built documents.
     pub delete: usize,
 }
 
-/// Count lifecycle states against a previous manifest.
+/// Count lifecycle states against previous documents.
 ///
 /// - Opaque kind changes count as updates, other kind changes count as create
 ///   and delete.
-pub fn summary(built: &Manifest, previous: &Manifest) -> Summary {
+pub fn summary(built: &[Document], previous: &[Document]) -> Summary {
     let mut counts = Summary {
         create: 0,
         update: 0,
         delete: 0,
     };
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    for document in &built.documents {
+    for document in built {
         seen.insert(document.key());
         match document.status(previous) {
             DocumentStatus::Create => counts.create += 1,
@@ -50,8 +49,8 @@ pub fn summary(built: &Manifest, previous: &Manifest) -> Summary {
             DocumentStatus::Unchanged => {}
         }
     }
-    for recorded in &previous.documents {
-        if !seen.contains(&recorded.key()) && !recorded.superseded_by(&built.documents) {
+    for recorded in previous {
+        if !seen.contains(&recorded.key()) && !recorded.superseded_by(built) {
             counts.delete += 1;
         }
     }
@@ -106,11 +105,10 @@ pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::document::{Data, Document};
-    use crate::manifest::MANIFEST_VERSION;
     use crate::routes::{Route, RouteBase};
     use confit_driver::sha::Sha;
 
-    fn sealed(content: &str, stored: &str) -> BlobRef {
+    fn verified_blob(content: &str, stored: &str) -> BlobRef {
         BlobRef::new(Sha::new(content).unwrap(), Sha::new(stored).unwrap())
     }
 
@@ -129,16 +127,8 @@ mod tests {
 
     #[test]
     fn summary_counts_create_and_delete() {
-        let built = Manifest {
-            version: MANIFEST_VERSION,
-            documents: vec![text_doc("fresh", "hi")],
-            hooks: Vec::new(),
-        };
-        let previous = Manifest {
-            version: MANIFEST_VERSION,
-            documents: vec![text_doc("stale", "hi")],
-            hooks: Vec::new(),
-        };
+        let built = vec![text_doc("fresh", "hi")];
+        let previous = vec![text_doc("stale", "hi")];
         let counts = summary(&built, &previous);
         assert_eq!(
             (counts.create, counts.update, counts.delete),
@@ -149,7 +139,7 @@ mod tests {
 
     #[test]
     fn tree_changed_counts_mode_change_and_removal() {
-        let blob = sealed(&"aa".repeat(32), &"bb".repeat(32));
+        let blob = verified_blob(&"aa".repeat(32), &"bb".repeat(32));
         let old = vec![
             ManifestMember {
                 relative: "a".into(),
