@@ -75,8 +75,6 @@ impl FetchCache {
 
     /// Serve one cached hit with the cached progress event.
     ///
-    /// - Misses return none.
-    ///
     /// # Errors
     ///
     /// - [`FetchError::DigestMismatch`] for cached hits failing the user sha.

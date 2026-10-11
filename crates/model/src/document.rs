@@ -112,16 +112,6 @@ impl BlobRef {
     pub fn new(sha256: Sha, stored: Sha) -> Self {
         Self { sha256, stored }
     }
-
-    /// Return the content hash.
-    pub fn sha(&self) -> &Sha {
-        &self.sha256
-    }
-
-    /// Return the pool-bytes hash.
-    pub fn stored(&self) -> &Sha {
-        &self.stored
-    }
 }
 
 /// Persisted document payload with binary bytes as refs.
@@ -316,7 +306,7 @@ impl Document {
     pub fn fill_hash(&mut self) -> Result<()> {
         match &self.data {
             Data::Opaque { blob, .. } => {
-                self.data_hash = blob.sha().hex();
+                self.data_hash = blob.sha256.hex();
                 Ok(())
             }
             Data::Tree { members } => {
@@ -433,7 +423,7 @@ mod tests {
             crate::sha::Sha::new("aa".repeat(32)).unwrap(),
             crate::sha::Sha::new("bb".repeat(32)).unwrap(),
         );
-        let expected = blob.sha().hex();
+        let expected = blob.sha256.hex();
         let hash = fill(Data::Opaque {
             blob,
             size: 2,

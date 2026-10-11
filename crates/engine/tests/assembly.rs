@@ -259,14 +259,14 @@ fn structured_patches_apply_in_priority_order() {
         "config.json",
         StructuredFormat::Json,
         Level::Minor,
-        r#"return function(document) document.data.winner = "minor" end"#,
+        r#"return function(_, document) document.data.winner = "minor" end"#,
     );
     let major = structured_patch_of(
         &lua,
         "config.json",
         StructuredFormat::Json,
         Level::Major,
-        r#"return function(document) document.data.winner = "major" end"#,
+        r#"return function(_, document) document.data.winner = "major" end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -298,13 +298,13 @@ fn rc_patches_apply_in_priority_order() {
         &lua,
         ".bashrc",
         Level::Low,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "LOW", value = "1" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "LOW", value = "1" } } end"#,
     );
     let high = rc_patch_of(
         &lua,
         ".bashrc",
         Level::High,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "HIGH", value = "2" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "HIGH", value = "2" } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -332,14 +332,14 @@ fn equal_priorities_keep_declaration_order() {
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.winner = "first" end"#,
+        r#"return function(_, document) document.data.winner = "first" end"#,
     );
     let second = structured_patch_of(
         &lua,
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.winner = "second" end"#,
+        r#"return function(_, document) document.data.winner = "second" end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -371,13 +371,13 @@ fn rc_first_write_wins_shared_slots() {
         &lua,
         ".bashrc",
         Level::Low,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "DUP", value = "1" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "DUP", value = "1" } } end"#,
     );
     let high = rc_patch_of(
         &lua,
         ".bashrc",
         Level::High,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "DUP", value = "2" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "DUP", value = "2" } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -410,7 +410,7 @@ fn structured_base_beats_every_patch() {
         "config.json",
         StructuredFormat::Json,
         Level::Major,
-        r#"return function(document) document.data.seed = 99 end"#,
+        r#"return function(_, document) document.data.seed = 99 end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -442,7 +442,7 @@ fn rc_base_beats_every_patch() {
         &lua,
         ".bashrc",
         Level::Major,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SEED", value = "1" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "SEED", value = "1" } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -474,13 +474,13 @@ fn rc_patches_merge_entries() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "FIRST", value = "1" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "FIRST", value = "1" } } end"#,
     );
     let second = rc_patch_of(
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SECOND", value = "2" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "SECOND", value = "2" } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -504,27 +504,25 @@ fn rc_patches_merge_entries() {
 }
 
 #[test]
-fn rc_patches_seed_missing_targets() {
+fn rc_missing_targets_fail_naming_targets() {
     let lua = Lua::new();
     let (_held, stores) = test_stores();
     let patch = rc_patch_of(
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "MADE", value = "yes" } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "MADE", value = "yes" } } end"#,
     );
     let profile = profile_of(vec![], vec![Patch::Rc(patch)]);
     match assemble(&lua, &stores, &profile) {
-        Ok(documents) => {
-            assert_eq!(documents.len(), 1);
-            assert_eq!(documents[0].destination.display(), "home('.bashrc')");
-            assert_eq!(rc_names(&documents[0]), vec!["MADE".to_owned()]);
+        Ok(_) => panic!("missing rc target passes"),
+        Err(error) => {
+            let text = error.to_string();
             assert!(
-                !documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
+                text.contains("home('.bashrc')"),
+                "the text shows the target: {text}"
             );
         }
-        Err(error) => panic!("missing rc target seeds: {error}"),
     }
 }
 
@@ -537,14 +535,14 @@ fn structured_patches_merge_data() {
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.alpha = "one" end"#,
+        r#"return function(_, document) document.data.alpha = "one" end"#,
     );
     let second = structured_patch_of(
         &lua,
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.beta = "two" end"#,
+        r#"return function(_, document) document.data.beta = "two" end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -576,7 +574,7 @@ fn structured_patches_merge_data() {
 }
 
 #[test]
-fn structured_patches_seed_missing_targets() {
+fn structured_missing_targets_fail_naming_targets() {
     let lua = Lua::new();
     let (_held, stores) = test_stores();
     let patch = structured_patch_of(
@@ -584,26 +582,18 @@ fn structured_patches_seed_missing_targets() {
         "fresh.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.made = "yes" end"#,
+        r#"return function(_, document) document.data.made = "yes" end"#,
     );
     let profile = profile_of(vec![], vec![Patch::Structured(patch)]);
     match assemble(&lua, &stores, &profile) {
-        Ok(documents) => {
-            assert_eq!(documents.len(), 1);
-            assert_eq!(documents[0].destination.display(), "home('fresh.json')");
-            match &documents[0].data {
-                Data::Structured { format, data } => {
-                    assert_eq!(*format, StructuredFormat::Json);
-                    assert_eq!(data.get("made").and_then(|item| item.as_str()), Some("yes"));
-                }
-                _ => panic!("seeded patch stays structured"),
-            }
+        Ok(_) => panic!("missing structured target passes"),
+        Err(error) => {
+            let text = error.to_string();
             assert!(
-                !documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
+                text.contains("home('fresh.json')"),
+                "the text shows the target: {text}"
             );
         }
-        Err(error) => panic!("missing structured target seeds: {error}"),
     }
 }
 
@@ -616,17 +606,17 @@ fn structured_mixed_formats_fail_naming_formats() {
         "fresh.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let second = structured_patch_of(
         &lua,
         "fresh.json",
         StructuredFormat::Toml,
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let profile = profile_of(
-        vec![],
+        vec![placed_structured("fresh.json")],
         vec![Patch::Structured(first), Patch::Structured(second)],
     );
     match assemble(&lua, &stores, &profile) {
@@ -658,7 +648,7 @@ fn structured_patches_refuse_text_bases() {
         "note.txt",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let profile = profile_of(
         vec![placed_text("note.txt", "hi")],
@@ -686,7 +676,7 @@ fn rc_patches_refuse_structured_bases() {
         &lua,
         "config.json",
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -714,7 +704,7 @@ fn rc_patches_refuse_text_bases() {
         &lua,
         "note.txt",
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let profile = profile_of(vec![placed_text("note.txt", "hi")], vec![Patch::Rc(patch)]);
     match assemble(&lua, &stores, &profile) {
@@ -740,7 +730,7 @@ fn format_patches_gap_on_rc_bases() {
         ".bashrc",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) return document end"#,
+        r#"return function(_, document) return document end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -768,7 +758,7 @@ fn rc_failing_callbacks_fail() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) error("rc boom") end"#,
+        r#"return function(_, document) error("rc boom") end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -791,7 +781,7 @@ fn rc_broken_bodies_fail_naming_entries() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile = 1 end"#,
+        r#"return function(_, document) document.profile = 1 end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -924,7 +914,7 @@ fn rc_changed_guards_from_patches_fail() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SMUGGLED", value = "1" }, when = { changed = { route = { base = "home", relative = ".bashrc" } } } } end"#,
+        r#"return function(_, document) document.profile[#document.profile + 1] = { env = { name = "SMUGGLED", value = "1" }, when = { changed = { route = { base = "home", relative = ".bashrc" } } } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -967,5 +957,264 @@ fn rc_plain_guards_pass() {
             "guards without changed pass through",
         ),
         Err(error) => panic!("plain rc guard fails: {error}"),
+    }
+}
+
+#[test]
+fn structured_filters_reach_every_match_in_order() {
+    let lua = Lua::new();
+    lua.globals()
+        .set("order", lua.create_table().unwrap())
+        .unwrap();
+    let (_held, stores) = test_stores();
+    let patch = structured_filter_of(
+        &lua,
+        r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
+        StructuredFormat::Json,
+        Level::Normal,
+        r#"return function(route, document) table.insert(order, route.relative) document.data.touched = true end"#,
+    );
+    let profile = profile_of(
+        vec![
+            placed_structured("zebra.json"),
+            placed_structured("apple.json"),
+            placed_rc(".bashrc", vec![rc_entry("SEED", "0")]),
+        ],
+        vec![Patch::Structured(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 3);
+            for document in &documents {
+                match &document.data {
+                    Data::Structured { data, .. }
+                        if document.destination.display().contains(".json") =>
+                    {
+                        assert_eq!(
+                            data.get("touched").and_then(|item| item.as_bool()),
+                            Some(true),
+                            "every matched document takes the patch"
+                        );
+                    }
+                    _ => continue,
+                }
+            }
+            let order: String = lua
+                .load("return table.concat(order, ',')")
+                .call(())
+                .unwrap();
+            assert_eq!(order, "apple.json,zebra.json");
+        }
+        Err(error) => panic!("filter fan-out merges: {error}"),
+    }
+}
+
+#[test]
+fn rc_filters_reach_every_match_in_order() {
+    let lua = Lua::new();
+    lua.globals()
+        .set("order", lua.create_table().unwrap())
+        .unwrap();
+    let (_held, stores) = test_stores();
+    let patch = rc_filter_of(
+        &lua,
+        r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
+        Level::Normal,
+        r#"return function(route, document) table.insert(order, route.relative) document.profile[#document.profile + 1] = { env = { name = "TOUCHED", value = "1" } } end"#,
+    );
+    let profile = profile_of(
+        vec![
+            placed_rc("zebra.sh", vec![rc_entry("SEED", "0")]),
+            placed_rc("apple.sh", vec![rc_entry("SEED", "0")]),
+            placed_structured("config.json"),
+        ],
+        vec![Patch::Rc(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 3);
+            for document in &documents {
+                if document.destination.display().contains(".sh") {
+                    assert!(
+                        rc_names(document).contains(&"TOUCHED".to_owned()),
+                        "every matched rc takes the patch"
+                    );
+                }
+            }
+            let order: String = lua
+                .load("return table.concat(order, ',')")
+                .call(())
+                .unwrap();
+            assert_eq!(order, "apple.sh,zebra.sh");
+        }
+        Err(error) => panic!("rc fan-out merges: {error}"),
+    }
+}
+
+#[test]
+fn structured_apply_receives_route_first() {
+    let lua = Lua::new();
+    let (_held, stores) = test_stores();
+    let patch = structured_patch_of(
+        &lua,
+        "config.json",
+        StructuredFormat::Json,
+        Level::Normal,
+        r#"return function(route, document) document.data.seen_base = route.base document.data.seen_relative = route.relative end"#,
+    );
+    let profile = profile_of(
+        vec![placed_structured("config.json")],
+        vec![Patch::Structured(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 1);
+            match &documents[0].data {
+                Data::Structured { data, .. } => {
+                    assert_eq!(
+                        data.get("seen_base").and_then(|item| item.as_str()),
+                        Some("home")
+                    );
+                    assert_eq!(
+                        data.get("seen_relative").and_then(|item| item.as_str()),
+                        Some("config.json")
+                    );
+                }
+                _ => panic!("route patch stays structured"),
+            }
+        }
+        Err(error) => panic!("route arg merges: {error}"),
+    }
+}
+
+#[test]
+fn rc_apply_receives_route_first() {
+    let lua = Lua::new();
+    let (_held, stores) = test_stores();
+    let patch = rc_patch_of(
+        &lua,
+        ".bashrc",
+        Level::Normal,
+        r#"return function(route, document) document.profile[#document.profile + 1] = { env = { name = "SEEN", value = route.base .. ":" .. route.relative } } end"#,
+    );
+    let profile = profile_of(
+        vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
+        vec![Patch::Rc(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 1);
+            assert_eq!(
+                rc_value(&documents[0], "SEEN").as_deref(),
+                Some("home:.bashrc")
+            );
+        }
+        Err(error) => panic!("rc route arg merges: {error}"),
+    }
+}
+
+#[test]
+fn absent_filter_matches_cover_all_of_kind() {
+    let lua = Lua::new();
+    let (_held, stores) = test_stores();
+    let patch = structured_filter_of(
+        &lua,
+        r#"return function(route) return true end"#,
+        StructuredFormat::Json,
+        Level::Normal,
+        r#"return function(route, document) document.data.touched = true end"#,
+    );
+    let profile = profile_of(
+        vec![
+            placed_structured("zebra.json"),
+            placed_structured("apple.json"),
+            placed_rc(".bashrc", vec![rc_entry("SEED", "0")]),
+        ],
+        vec![Patch::Structured(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 3);
+            for document in &documents {
+                if document.destination.display().contains(".json") {
+                    match &document.data {
+                        Data::Structured { data, .. } => {
+                            assert_eq!(
+                                data.get("touched").and_then(|item| item.as_bool()),
+                                Some(true),
+                                "default match covers every document of the kind"
+                            );
+                        }
+                        _ => panic!("default filter stays structured"),
+                    }
+                }
+            }
+        }
+        Err(error) => panic!("default filter merges: {error}"),
+    }
+}
+
+#[test]
+fn false_filters_leave_documents_untouched() {
+    let lua = Lua::new();
+    let (_held, stores) = test_stores();
+    let patch = structured_filter_of(
+        &lua,
+        r#"return function(route) return false end"#,
+        StructuredFormat::Json,
+        Level::Normal,
+        r#"return function(route, document) document.data.touched = true end"#,
+    );
+    let profile = profile_of(
+        vec![
+            placed_structured("zebra.json"),
+            placed_structured("apple.json"),
+        ],
+        vec![Patch::Structured(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(documents) => {
+            assert_eq!(documents.len(), 2);
+            for document in &documents {
+                match &document.data {
+                    Data::Structured { data, .. } => {
+                        assert!(
+                            data.get("touched").is_none(),
+                            "refused documents skip the patch"
+                        );
+                        assert_eq!(
+                            data.get("seed").and_then(|item| item.as_u64()),
+                            Some(0),
+                            "refused documents keep their base"
+                        );
+                    }
+                    _ => panic!("untouched documents stay structured"),
+                }
+            }
+        }
+        Err(error) => panic!("false filter merges: {error}"),
+    }
+}
+
+#[test]
+fn failing_rc_filters_fail() {
+    let lua = Lua::new();
+    let (_held, stores) = test_stores();
+    let patch = rc_filter_of(
+        &lua,
+        r#"return function(route) error("filter boom") end"#,
+        Level::Normal,
+        r#"return function(route, document) return document end"#,
+    );
+    let profile = profile_of(
+        vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
+        vec![Patch::Rc(patch)],
+    );
+    match assemble(&lua, &stores, &profile) {
+        Ok(_) => panic!("failing filter passes"),
+        Err(error) => {
+            let text = error.to_string();
+            assert!(text.contains("filter boom"), "carries the cause: {text}");
+        }
     }
 }

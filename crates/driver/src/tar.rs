@@ -141,8 +141,6 @@ struct Probed<R> {
 
 /// Sniff gzip magic off one stream and chain bytes back.
 ///
-/// - Short reads chain what they hold.
-///
 /// # Errors
 ///
 /// - Stream reads fail as io errors.

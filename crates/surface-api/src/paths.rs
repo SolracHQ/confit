@@ -2,12 +2,22 @@
 //! Route decode helpers over host bases.
 
 use mlua::{Lua, Value};
+use mlua_extras::typed::{Type, Typed};
 
 use confit_model::routes::Route;
 
 pub use confit_model::routes::{SegmentFault, split_checked};
 
 use crate::error::{ApiError, Result};
+
+/// One route marker for function faces.
+pub struct RouteMarker;
+
+impl Typed for RouteMarker {
+    fn ty() -> Type {
+        Type::named("Route")
+    }
+}
 
 /// Decode one route table into its route.
 ///
@@ -28,7 +38,7 @@ pub(crate) fn decode_route(value: &Value, field: &str) -> Result<Route> {
 /// # Errors
 ///
 /// - [`mlua::Error`] for table build failures.
-pub(crate) fn route_value(lua: &Lua, route: &Route) -> mlua::Result<Value> {
+pub fn route_value(lua: &Lua, route: &Route) -> mlua::Result<Value> {
     let table = lua.create_table()?;
     table.set("base", route.base().name())?;
     table.set("relative", route.relative().display().to_string())?;

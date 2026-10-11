@@ -21,7 +21,6 @@ diffy = "0.5.2"
 dirs = "7.0.0"
 flate2 = "1.1.10"
 log = "0.4.34"
-minijinja = "2.24.0"
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "serde"] }
 noyalib = "0.0.51"
 serde = { version = "1.0.229", features = ["derive"] }

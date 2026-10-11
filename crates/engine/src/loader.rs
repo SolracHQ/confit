@@ -123,7 +123,6 @@ fn read_text(path: &Path) -> Result<String> {
 /// Build one sandboxed environment with audited globals and require.
 ///
 /// - Unknown globals are nil.
-/// - The require closes over its caller folder for audit.
 ///
 /// # Errors
 ///
@@ -250,7 +249,6 @@ fn canonical_root(root: &Path) -> Result<PathBuf> {
 /// Resolve one file module name to its contained canonical path.
 ///
 /// - Dots map to slashes with empty components collapsing.
-/// - Missing entries miss as unknown modules.
 ///
 /// # Errors
 ///

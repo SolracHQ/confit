@@ -119,9 +119,6 @@ impl Assembler<'_> {
 
 /// Reject rc guards with hooks-only changed leaves.
 ///
-/// - Placed and patched entries share the finished map, so one
-///   pass covers base guards with patch-smuggled guards.
-///
 /// # Errors
 ///
 /// - [`EngineError::ChangedInRc`] for guards with changed leaves.
@@ -151,6 +148,7 @@ pub(super) fn check_rc_guards(finished: &BTreeMap<Route, ModelDocument>) -> Resu
 
 /// Fill hashes over finished documents.
 ///
+/// # Errors
 ///
 /// - [`EngineError::Model`] for documents failing hashes.
 pub(super) fn fill_hashes(finished: &mut BTreeMap<Route, ModelDocument>) -> Result<()> {

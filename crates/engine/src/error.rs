@@ -50,6 +50,12 @@ pub enum EngineError {
         /// The patch format name.
         patch: String,
     },
+    /// Missing patch target.
+    #[error("patch target '{display}' matches no document")]
+    UnknownTarget {
+        /// The missing target display.
+        display: String,
+    },
     /// File read failure.
     #[error("cannot read '{path}': {reason}")]
     Read {

@@ -136,8 +136,6 @@ impl Live {
     }
 
     /// Clear the widget and join the renderer at run end.
-    ///
-    /// - Cleared line with a dead thread.
     pub fn finish(&self) {
         if self.done.swap(true, Ordering::SeqCst) {
             return;

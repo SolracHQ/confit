@@ -30,7 +30,7 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
             log::error!(
                 "opaque '{}' uses blob '{}'",
                 document.destination.display(),
-                blob.sha().hex()
+                blob.sha256.hex()
             );
             Err(RuntimeError::Refusal {
                 route: document.destination.clone(),

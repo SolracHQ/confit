@@ -108,13 +108,12 @@ impl<'a> ApplyRunner<'a> {
         })
     }
 
-    /// Apply desired documents with preview, prompts, and rotation.
+    /// Apply desired documents with preview, drift prompts, and rotation.
     ///
     /// Success with the state file and one stored manifest with rotation.
     /// Report with the write counts.
     ///
     /// - Literal `yes` for progress, anything else for an abort without writes.
-    /// - Fresh snapshot before writing with re-prompt on drift.
     ///
     /// # Errors
     ///
@@ -175,11 +174,8 @@ impl<'a> ApplyRunner<'a> {
         Ok(ApplyReport { written, removed })
     }
 
-    /// Run built hooks after files, state, and history land.
-    ///
-    /// - Closed Requires gates abort the run.
-    /// - Closed When gates and passing checks stay silent.
-    /// - Failures abort the rest.
+    /// Run built hooks after files, state, and history land, aborting on
+    /// closed Requires gates and hook failures.
     fn run_hooks(&self) -> Result<()> {
         let runner = HookRunner {
             progress: self.sinks.progress.clone(),
@@ -217,9 +213,6 @@ impl<'a> ApplyRunner<'a> {
 }
 
 /// Build one hook log file name from its slug and hash.
-///
-/// - Slugs hold lowercase alphanumeric runs joined with dashes.
-/// - Hashes disambiguate hooks sharing one slug.
 fn hook_file_name(argv: &str) -> String {
     let mut slug = argv
         .split(|cell: char| !cell.is_ascii_alphanumeric())
@@ -237,9 +230,8 @@ fn hook_file_name(argv: &str) -> String {
     format!("{slug}-{hash}.log")
 }
 
-/// Write one hook header and captured bytes into its own log file.
-///
-/// - Missing parent folders start fresh.
+/// Write one hook header and captured bytes into its own log file, with
+/// parent folders created as needed.
 ///
 /// # Errors
 ///

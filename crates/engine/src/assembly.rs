@@ -19,9 +19,6 @@ use confit_surface_api::Profile;
 use crate::error::Result;
 
 /// Validated profile assembly into finished documents.
-///
-/// - Lua callbacks run through the shared instance with first writes winning.
-/// - Blob handles open through shared stores with hashes filled last.
 pub struct Assembler<'a> {
     lua: &'a Lua,
     stores: &'a Stores,
@@ -47,13 +44,15 @@ impl<'a> Assembler<'a> {
     ///
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
-    /// - Missing targets seed empty maps and empty sections, foreign bases
-    ///   fail with format gaps.
+    /// - Filters fan out over matched destinations in destination order.
+    /// - Callbacks run with the target route beside live data.
+    /// - Unknown targets fail the plan.
     ///
     /// # Errors
     ///
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
+    /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
     /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
     /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
     ///   hooks-only changed leaves.
@@ -66,10 +65,14 @@ impl<'a> Assembler<'a> {
         let mut finished = BTreeMap::new();
         self.apply_structured(
             &placed,
-            &patches::grouped_structured(&structured),
+            &patches::grouped_structured(self.lua, &placed, &structured)?,
             &mut finished,
         )?;
-        self.apply_rc(&placed, &patches::grouped_rc(&rc), &mut finished)?;
+        self.apply_rc(
+            &placed,
+            &patches::grouped_rc(self.lua, &placed, &rc)?,
+            &mut finished,
+        )?;
         for (destination, body) in placed {
             if finished.contains_key(&destination) {
                 continue;
@@ -103,13 +106,15 @@ impl<'a> Assembler<'a> {
 ///
 /// - Patches merge in rank-descending level order over structured maps and rc
 ///   sections with first writes winning.
-/// - Missing targets seed empty maps and empty sections, foreign bases fail
-///   with format gaps.
+/// - Filters fan out over matched destinations in destination order.
+/// - Callbacks run with the target route beside live data.
+/// - Unknown targets fail the plan.
 ///
 /// # Errors
 ///
 /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
 /// - [`crate::error::EngineError::Defined`] for repeated config names.
+/// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
 /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
 /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
 ///   hooks-only changed leaves.

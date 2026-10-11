@@ -187,8 +187,8 @@ mod tests {
     fn blob_handle_converts_to_manifest_ref() {
         let handle = BlobHandle::new(fixture_sha(), fixture_sha());
         let blob = handle.to_ref();
-        assert_eq!(blob.sha(), &fixture_sha());
-        assert_eq!(blob.stored(), &fixture_sha());
+        assert_eq!(blob.sha256, fixture_sha());
+        assert_eq!(blob.stored, fixture_sha());
     }
 
     #[test]

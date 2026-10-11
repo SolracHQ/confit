@@ -16,8 +16,8 @@ use crate::error::{EngineError, Result};
 /// - [`EngineError::ChangedUnknown`] for gates showing unbuilt routes.
 pub(super) fn collect_hooks(profile: &Profile, documents: &[ModelDocument]) -> Result<Vec<Hook>> {
     let mut declared = Vec::new();
-    for config in profile.configs() {
-        declared.extend(config.hooks().iter().cloned());
+    for config in &profile.configs {
+        declared.extend(config.hooks.iter().cloned());
     }
     let merged = merge_hooks(declared);
     validate_changed(&merged, documents)?;

@@ -191,8 +191,8 @@ impl HookRunner {
 ///
 /// Route slots map against host folders, text unchanged.
 ///
-/// - Hook path entries before runtime dirs.
-/// - Pick of the first existing executable.
+/// - Hook path entries precede runtime dirs.
+/// - The first existing executable wins.
 fn resolve_binary(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
     let head = hook
         .argv

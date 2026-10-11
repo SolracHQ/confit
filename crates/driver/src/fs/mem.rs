@@ -210,7 +210,9 @@ pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
 
 /// Report whether one path holds any entry.
 ///
-/// - Require a guard.
+/// # Panics
+///
+/// Panics when no guard holds.
 pub fn exists(path: &Path) -> bool {
     let Some(root) = parked() else {
         panic!("confit driver: no test guard installed");
@@ -330,8 +332,6 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 }
 
 /// Resolve one path lexically with symlink-free memory.
-///
-/// - Memory backends hold files as plain entries, so parent steps fold.
 ///
 /// # Errors
 ///

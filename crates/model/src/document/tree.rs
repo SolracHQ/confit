@@ -94,9 +94,7 @@ pub(crate) fn tree_manifest_bytes(members: &[ManifestMember]) -> Vec<u8> {
         out.extend_from_slice(
             format!(
                 "{:o} {} {}\n",
-                member.mode,
-                member.relative,
-                member.blob.sha()
+                member.mode, member.relative, member.blob.sha256
             )
             .as_bytes(),
         );

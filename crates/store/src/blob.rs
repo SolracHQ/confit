@@ -72,11 +72,11 @@ impl BlobStore {
     ///
     /// - [`BlobError::Read`] for missing blobs.
     pub fn resolve(&self, blob: &BlobRef) -> Result<BlobHandle> {
-        if self.present(blob.stored()) {
-            Ok(BlobHandle::new(blob.sha().clone(), blob.stored().clone()))
+        if self.present(&blob.stored) {
+            Ok(BlobHandle::new(blob.sha256.clone(), blob.stored.clone()))
         } else {
             Err(BlobError::Read {
-                sha: blob.sha().clone(),
+                sha: blob.sha256.clone(),
                 fault: AccessFault::Missing,
             })
         }
@@ -250,7 +250,7 @@ impl BlobStore {
 
     /// Derive the live file for one handle.
     ///
-    /// - Cache copy with pool fallback.
+    /// - The cache copy wins over the pool.
     fn live_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.stored().hex());
         if driver::fs::exists(&cached) {

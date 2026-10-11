@@ -15,6 +15,25 @@ use confit_surface_face::module::Named;
 use crate::document::{RcDocument, StructuredDocument, decode_named_shape};
 use crate::error::ApiError;
 use crate::error::api_of;
+use crate::paths::RouteMarker;
+
+confit_surface_face::function_face! {
+    /// Face for patch apply callbacks.
+    pub struct ApplyArgs<Document> {
+        /// Target route of the patched document.
+        route: RouteMarker,
+        /// Live document under patching.
+        document: Document,
+    }
+}
+
+confit_surface_face::function_face! {
+    /// Face for patch filter callbacks.
+    pub struct FilterArgs {
+        /// Target route of the candidate document.
+        route: RouteMarker,
+    }
+}
 
 /// Patch merge level.
 ///
@@ -75,12 +94,29 @@ impl<'de> Deserialize<'de> for Level {
     }
 }
 
+/// One patch destination over a single route or a filter.
+#[derive(Debug, Clone)]
+pub enum PatchTarget {
+    /// Single destination route.
+    Target(Route),
+    /// Callback over routes.
+    Filter(Callback<FilterArgs>),
+}
+
+impl PatchTarget {
+    /// Build one filter destination from its callback.
+    pub fn from_filter(filter: Function) -> Self {
+        Self::Filter(Callback::new(filter))
+    }
+}
+
 /// One patch shape.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PatchShape {
     /// The patch target route.
-    target: Route,
+    #[serde(default)]
+    target: Option<Route>,
     /// The structured format under patching with an rc default.
     #[serde(default)]
     format: Option<String>,
@@ -92,12 +128,12 @@ struct PatchShape {
 /// One structured patch declaration.
 #[derive(Debug, Clone)]
 pub struct StructuredPatch {
-    /// The patch target route.
-    pub target: Route,
+    /// The patch destination over a route or a filter.
+    pub target: PatchTarget,
     /// The structured format under patching.
     pub format: StructuredFormat,
     /// The patch callback over live data.
-    pub apply: Callback<StructuredDocument>,
+    pub apply: Callback<ApplyArgs<StructuredDocument>>,
     /// The patch merge level. Higher ranks apply first.
     pub priority: Level,
     /// The owner config name.
@@ -105,16 +141,17 @@ pub struct StructuredPatch {
 }
 
 confit_surface_face::table_face!(StructuredPatch, {
-    required target: Named::<Route>::ty(),
+    optional target: Named::<Route>::ty(),
+    optional filter: Callback::<FilterArgs>::ty(),
     required format: Named::<StructuredFormat>::ty(),
-    required apply: Callback::<StructuredDocument>::ty(),
+    required apply: Callback::<ApplyArgs<StructuredDocument>>::ty(),
     optional priority: Level::ty(),
 });
 
 impl StructuredPatch {
     /// Build one structured patch.
     pub fn new(
-        target: Route,
+        target: PatchTarget,
         format: StructuredFormat,
         apply: Function,
         priority: Level,
@@ -128,41 +165,18 @@ impl StructuredPatch {
             owner,
         }
     }
-
-    /// Return the patch target route.
-    pub fn target(&self) -> &Route {
-        &self.target
-    }
-
-    /// Return the structured format under patching.
-    pub fn format(&self) -> StructuredFormat {
-        self.format
-    }
-
-    /// Return the patch callback over live data.
-    pub fn apply(&self) -> &Function {
-        self.apply.as_function()
-    }
-
-    /// Return the patch merge level.
-    pub fn priority(&self) -> Level {
-        self.priority
-    }
-
-    /// Return the owner config name.
-    pub fn owner(&self) -> Option<&str> {
-        self.owner.as_deref()
-    }
 }
 
 impl FromLua for StructuredPatch {
     fn from_lua(value: Value, lua: &Lua) -> mlua::Result<Self> {
         let table = patch_table(&value)?;
         let shape: PatchShape = decode_stripped_shape(lua, &table)?;
+        let filter = patch_optional_filter(&table, lua)?;
+        let target = decode_destination(shape.target, filter)?;
         let format = patch_format(shape.format.as_deref()).map_err(mlua::Error::from)?;
         let apply = patch_required_apply(lua, &table)?;
         Ok(Self {
-            target: shape.target,
+            target,
             format,
             apply,
             priority: shape.priority,
@@ -174,10 +188,10 @@ impl FromLua for StructuredPatch {
 /// One rc patch declaration.
 #[derive(Debug, Clone)]
 pub struct RcPatch {
-    /// The patch target route.
-    pub target: Route,
+    /// The patch destination over a route or a filter.
+    pub target: PatchTarget,
     /// The patch callback over live sections.
-    pub apply: Callback<RcDocument>,
+    pub apply: Callback<ApplyArgs<RcDocument>>,
     /// The patch merge level. Higher ranks apply first.
     pub priority: Level,
     /// The owner config name.
@@ -185,40 +199,26 @@ pub struct RcPatch {
 }
 
 confit_surface_face::table_face!(RcPatch, {
-    required target: Named::<Route>::ty(),
-    required apply: Callback::<RcDocument>::ty(),
+    optional target: Named::<Route>::ty(),
+    optional filter: Callback::<FilterArgs>::ty(),
+    required apply: Callback::<ApplyArgs<RcDocument>>::ty(),
     optional priority: Level::ty(),
 });
 
 impl RcPatch {
     /// Build one rc patch.
-    pub fn new(target: Route, apply: Function, priority: Level, owner: Option<String>) -> Self {
+    pub fn new(
+        target: PatchTarget,
+        apply: Function,
+        priority: Level,
+        owner: Option<String>,
+    ) -> Self {
         Self {
             target,
             apply: Callback::new(apply),
             priority,
             owner,
         }
-    }
-
-    /// Return the patch target route.
-    pub fn target(&self) -> &Route {
-        &self.target
-    }
-
-    /// Return the patch callback over live sections.
-    pub fn apply(&self) -> &Function {
-        self.apply.as_function()
-    }
-
-    /// Return the patch merge level.
-    pub fn priority(&self) -> Level {
-        self.priority
-    }
-
-    /// Return the owner config name.
-    pub fn owner(&self) -> Option<&str> {
-        self.owner.as_deref()
     }
 }
 
@@ -229,14 +229,16 @@ impl FromLua for RcPatch {
         if shape.format.is_some() {
             return Err(ApiError::mismatch(
                 "patch key",
-                "one of 'target', 'apply' or 'priority'",
+                "one of 'target', 'filter', 'apply' or 'priority'",
                 "'format'",
             )
             .into());
         }
+        let filter = patch_optional_filter(&table, lua)?;
+        let target = decode_destination(shape.target, filter)?;
         let apply = patch_required_apply(lua, &table)?;
         Ok(Self {
-            target: shape.target,
+            target,
             apply,
             priority: shape.priority,
             owner: None,
@@ -263,38 +265,6 @@ impl FromLua for Patch {
 }
 
 impl Patch {
-    /// Return the patch target route.
-    pub fn target(&self) -> &Route {
-        match self {
-            Self::Structured(found) => found.target(),
-            Self::Rc(found) => found.target(),
-        }
-    }
-
-    /// Return the patch callback over live data.
-    pub fn apply(&self) -> &Function {
-        match self {
-            Self::Structured(found) => found.apply(),
-            Self::Rc(found) => found.apply(),
-        }
-    }
-
-    /// Return the patch merge level.
-    pub fn priority(&self) -> Level {
-        match self {
-            Self::Structured(found) => found.priority(),
-            Self::Rc(found) => found.priority(),
-        }
-    }
-
-    /// Return the owner config name.
-    pub fn owner(&self) -> Option<&str> {
-        match self {
-            Self::Structured(found) => found.owner(),
-            Self::Rc(found) => found.owner(),
-        }
-    }
-
     /// Stamp one owner config name over the patch.
     fn set_owner(&mut self, owner: &str) {
         match self {
@@ -307,10 +277,12 @@ impl Patch {
 /// Decode one patch table into its declaration.
 ///
 /// - Config names stamp the patch owner.
+/// - Patches take a target or a filter with both failing.
 ///
 /// # Errors
 ///
-/// - [`ApiError::Mismatch`] for misshaped targets, formats and callbacks.
+/// - [`ApiError::Mismatch`] for misshaped targets, filters, formats
+///   and callbacks.
 /// - [`ApiError::Lua`] for Lua read failures.
 pub(crate) fn decode_patch(
     lua: &Lua,
@@ -327,6 +299,30 @@ pub(crate) fn decode_patch(
         patch.set_owner(name);
     }
     Ok(patch)
+}
+
+/// Decode one patch destination over a route or a filter.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for missing and doubled destinations.
+fn decode_destination(
+    target: Option<Route>,
+    filter: Option<Callback<FilterArgs>>,
+) -> mlua::Result<PatchTarget> {
+    match (target, filter) {
+        (Some(route), None) => Ok(PatchTarget::Target(route)),
+        (None, Some(filter)) => Ok(PatchTarget::Filter(filter)),
+        (Some(_), Some(_)) => Err(ApiError::mismatch(
+            "patch target",
+            "either 'target' or 'filter'",
+            "'target' with 'filter'",
+        )
+        .into()),
+        (None, None) => {
+            Err(ApiError::mismatch("patch target", "either 'target' or 'filter'", "nil").into())
+        }
+    }
 }
 
 /// Decode one patch table from its value.
@@ -371,7 +367,7 @@ fn patch_has_format(table: &Table) -> crate::error::Result<bool> {
     Ok(false)
 }
 
-/// Decode one patch shape past its function callback.
+/// Decode one patch shape past its function callbacks.
 ///
 /// # Errors
 ///
@@ -383,7 +379,10 @@ fn decode_stripped_shape(lua: &Lua, table: &Table) -> mlua::Result<PatchShape> {
     for pair in table.pairs::<Value, Value>() {
         let (key, found) = pair?;
         let skip = match &key {
-            Value::String(text) => text.to_string_lossy() == "apply",
+            Value::String(text) => {
+                let name = text.to_string_lossy();
+                name == "apply" || name == "filter"
+            }
             _ => false,
         };
         if !skip {
@@ -391,6 +390,21 @@ fn decode_stripped_shape(lua: &Lua, table: &Table) -> mlua::Result<PatchShape> {
         }
     }
     decode_named_shape(Value::Table(probe), "patch")
+}
+
+/// Decode one optional patch filter callback.
+///
+/// # Errors
+///
+/// - [`ApiError::Mismatch`] for non-function filters.
+fn patch_optional_filter(table: &Table, lua: &Lua) -> mlua::Result<Option<Callback<FilterArgs>>> {
+    let item: Value = table.get("filter")?;
+    match item {
+        Value::Nil => Ok(None),
+        _ => Callback::from_lua(item.clone(), lua)
+            .map(Some)
+            .map_err(|_| ApiError::mismatch("patch filter", "a function", received(&item)).into()),
+    }
 }
 
 /// Decode one required patch callback over its live document type.
@@ -401,7 +415,7 @@ fn decode_stripped_shape(lua: &Lua, table: &Table) -> mlua::Result<PatchShape> {
 fn patch_required_apply<Document: Typed>(
     lua: &Lua,
     table: &Table,
-) -> mlua::Result<Callback<Document>> {
+) -> mlua::Result<Callback<ApplyArgs<Document>>> {
     let item: Value = table.get("apply")?;
     Callback::from_lua(item.clone(), lua)
         .map_err(|_| ApiError::mismatch("patch apply", "a function", received(&item)).into())
@@ -482,8 +496,13 @@ mod tests {
         );
         match decode_patch(&lua, &value, None) {
             Ok(Patch::Structured(found)) => {
-                assert_eq!(found.target().display(), "home('app.json')");
-                assert_eq!(found.format(), StructuredFormat::Toml);
+                match &found.target {
+                    PatchTarget::Target(route) => {
+                        assert_eq!(route.display(), "home('app.json')");
+                    }
+                    PatchTarget::Filter(_) => panic!("target means route"),
+                }
+                assert_eq!(found.format, StructuredFormat::Toml);
             }
             Ok(Patch::Rc(_)) => panic!("format presence means structured"),
             Err(error) => panic!("patch decodes: {error}"),
@@ -493,9 +512,12 @@ mod tests {
             r#"return { target = { base = "home", relative = "app.sh" }, apply = function(d) return d end }"#,
         );
         match decode_patch(&lua, &bare, None) {
-            Ok(Patch::Rc(found)) => {
-                assert_eq!(found.target().display(), "home('app.sh')");
-            }
+            Ok(Patch::Rc(found)) => match &found.target {
+                PatchTarget::Target(route) => {
+                    assert_eq!(route.display(), "home('app.sh')");
+                }
+                PatchTarget::Filter(_) => panic!("target means route"),
+            },
             Ok(Patch::Structured(_)) => panic!("format absence means rc"),
             Err(error) => panic!("rc patch decodes: {error}"),
         }
@@ -573,7 +595,8 @@ mod tests {
             r#"return { target = { base = "home", relative = "app.json" }, format = "json", apply = function(d) return d end }"#,
         );
         match decode_patch(&lua, &structured, None) {
-            Ok(patch) => assert_eq!(patch.priority(), Level::Normal),
+            Ok(Patch::Structured(found)) => assert_eq!(found.priority, Level::Normal),
+            Ok(Patch::Rc(found)) => assert_eq!(found.priority, Level::Normal),
             Err(error) => panic!("absent priority decodes: {error}"),
         }
         let bare = config_of(
@@ -581,7 +604,8 @@ mod tests {
             r#"return { target = { base = "home", relative = "app.sh" }, apply = function(d) return d end }"#,
         );
         match decode_patch(&lua, &bare, None) {
-            Ok(patch) => assert_eq!(patch.priority(), Level::Normal),
+            Ok(Patch::Structured(found)) => assert_eq!(found.priority, Level::Normal),
+            Ok(Patch::Rc(found)) => assert_eq!(found.priority, Level::Normal),
             Err(error) => panic!("absent rc priority decodes: {error}"),
         }
         let ranked = config_of(
@@ -589,7 +613,8 @@ mod tests {
             r#"return { target = { base = "home", relative = "app.json" }, format = "json", apply = function(d) return d end, priority = "HIGH" }"#,
         );
         match decode_patch(&lua, &ranked, None) {
-            Ok(patch) => assert_eq!(patch.priority(), Level::High),
+            Ok(Patch::Structured(found)) => assert_eq!(found.priority, Level::High),
+            Ok(Patch::Rc(found)) => assert_eq!(found.priority, Level::High),
             Err(error) => panic!("ranked priority decodes: {error}"),
         }
     }
@@ -651,12 +676,114 @@ mod tests {
             r#"return { target = { base = "home", relative = "a" }, apply = function(d) return d end }"#,
         );
         match decode_patch(&lua, &value, None) {
-            Ok(patch) => assert_eq!(patch.owner(), None),
+            Ok(Patch::Structured(found)) => assert_eq!(found.owner.as_deref(), None),
+            Ok(Patch::Rc(found)) => assert_eq!(found.owner.as_deref(), None),
             Err(error) => panic!("patch decodes: {error}"),
         }
         match decode_patch(&lua, &value, Some("config")) {
-            Ok(patch) => assert_eq!(patch.owner(), Some("config")),
+            Ok(Patch::Structured(found)) => assert_eq!(found.owner.as_deref(), Some("config")),
+            Ok(Patch::Rc(found)) => assert_eq!(found.owner.as_deref(), Some("config")),
             Err(error) => panic!("config owner stamps: {error}"),
+        }
+    }
+
+    #[test]
+    fn filters_decode_callbacks() {
+        let lua = test_lua();
+        let structured = config_of(
+            &lua,
+            r#"return { filter = function(route) return true end, format = "json", apply = function(d) return d end }"#,
+        );
+        match decode_patch(&lua, &structured, None) {
+            Ok(Patch::Structured(found)) => match &found.target {
+                PatchTarget::Filter(filter) => {
+                    let _: &Function = filter.as_function();
+                }
+                PatchTarget::Target(_) => panic!("filter means many"),
+            },
+            Ok(Patch::Rc(_)) => panic!("format presence means structured"),
+            Err(error) => panic!("filter decodes: {error}"),
+        }
+        let bare = config_of(
+            &lua,
+            r#"return { filter = function(route) return true end, apply = function(d) return d end }"#,
+        );
+        match decode_patch(&lua, &bare, None) {
+            Ok(Patch::Rc(found)) => match &found.target {
+                PatchTarget::Filter(filter) => {
+                    let _: &Function = filter.as_function();
+                }
+                PatchTarget::Target(_) => panic!("filter means many"),
+            },
+            Ok(Patch::Structured(_)) => panic!("format absence means rc"),
+            Err(error) => panic!("rc filter decodes: {error}"),
+        }
+    }
+
+    #[test]
+    fn foreign_filters_fail() {
+        let lua = test_lua();
+        let value = config_of(
+            &lua,
+            r#"return { filter = { kind = "structured" }, format = "json", apply = function(d) return d end }"#,
+        );
+        match decode_patch(&lua, &value, None) {
+            Ok(_) => panic!("table filter passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(
+                    text.contains("a function"),
+                    "the text shows the want: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn doubled_destinations_fail() {
+        let lua = test_lua();
+        let cases = [
+            r#"return { target = { base = "home", relative = "a" }, filter = function(route) return true end, format = "json", apply = function(d) return d end }"#,
+            r#"return { target = { base = "home", relative = "a" }, filter = function(route) return true end, apply = function(d) return d end }"#,
+        ];
+        for source in cases {
+            let value = config_of(&lua, source);
+            match decode_patch(&lua, &value, None) {
+                Ok(_) => panic!("doubled destination passes: {source}"),
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(
+                        text.contains("either 'target' or 'filter'"),
+                        "the text shows the want: {text}"
+                    );
+                    assert!(
+                        text.contains("'target' with 'filter'"),
+                        "the text shows the fault: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_destinations_fail() {
+        let lua = test_lua();
+        let cases = [
+            r#"return { format = "json", apply = function(d) return d end }"#,
+            r#"return { apply = function(d) return d end }"#,
+        ];
+        for source in cases {
+            let value = config_of(&lua, source);
+            match decode_patch(&lua, &value, None) {
+                Ok(_) => panic!("missing destination passes: {source}"),
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(
+                        text.contains("either 'target' or 'filter'"),
+                        "the text shows the want: {text}"
+                    );
+                }
+            }
         }
     }
 }

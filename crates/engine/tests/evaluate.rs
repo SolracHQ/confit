@@ -193,31 +193,20 @@ fn two_patches_merge_both_keys() {
 }
 
 #[test]
-fn missing_targets_seed_documents() {
+fn missing_targets_fail_naming_targets() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MISSING_TARGET);
     match engine.evaluate(&profile) {
-        Ok(found) => {
-            assert_eq!(found.documents.len(), 1);
-            assert_eq!(
-                found.documents[0].destination.display(),
-                "home('fresh.json')"
-            );
-            match &found.documents[0].data {
-                Data::Structured { format, data } => {
-                    assert_eq!(*format, StructuredFormat::Json);
-                    assert_eq!(data.get("made").and_then(|item| item.as_str()), Some("yes"));
-                }
-                _ => panic!("seeded document stays structured"),
-            }
+        Ok(_) => panic!("missing target passes"),
+        Err(error) => {
+            let text = error.to_string();
             assert!(
-                !found.documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
+                text.contains("home('fresh.json')"),
+                "the text shows the target: {text}"
             );
         }
-        Err(error) => panic!("missing target evaluates: {error}"),
     }
 }
 
@@ -305,22 +294,20 @@ fn rc_two_patches_merge_entries() {
 }
 
 #[test]
-fn rc_missing_targets_seed_documents() {
+fn rc_missing_targets_fail_naming_targets() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_MISSING);
     match engine.evaluate(&profile) {
-        Ok(found) => {
-            assert_eq!(found.documents.len(), 1);
-            assert_eq!(found.documents[0].destination.display(), "home('.bashrc')");
-            assert_eq!(rc_names(&found.documents[0]), vec!["MADE".to_owned()]);
+        Ok(_) => panic!("missing rc target passes"),
+        Err(error) => {
+            let text = error.to_string();
             assert!(
-                !found.documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
+                text.contains("home('.bashrc')"),
+                "the text shows the target: {text}"
             );
         }
-        Err(error) => panic!("missing rc target evaluates: {error}"),
     }
 }
 
@@ -387,7 +374,7 @@ fn mixed_sides_merge_live_targets() {
     let (_, profile) = profile_with(dir.path(), MIXED_SPLIT);
     match engine.evaluate(&profile) {
         Ok(found) => {
-            assert_eq!(found.documents.len(), 4);
+            assert_eq!(found.documents.len(), 2);
             match &found.documents[0].data {
                 Data::Rc(_) => {
                     assert_eq!(found.documents[0].destination.display(), "home('.bashrc')")
@@ -410,32 +397,6 @@ fn mixed_sides_merge_live_targets() {
             }
         }
         Err(error) => panic!("split profile evaluates: {error}"),
-    }
-}
-
-#[test]
-fn seeded_areas_merge_each_side() {
-    let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
-    let engine = test_engine(dir.path());
-    let (_, profile) = profile_with(dir.path(), MIXED_SPLIT);
-    match engine.evaluate(&profile) {
-        Ok(found) => {
-            match &found.documents[2].data {
-                Data::Structured { format, data } => {
-                    assert_eq!(
-                        found.documents[2].destination.display(),
-                        "home('fresh.json')"
-                    );
-                    assert_eq!(*format, StructuredFormat::Json);
-                    assert_eq!(data.get("made").and_then(|item| item.as_str()), Some("yes"));
-                }
-                _ => panic!("seeded structured merges"),
-            }
-            assert_eq!(found.documents[3].destination.display(), "home('fresh.sh')");
-            assert_eq!(rc_names(&found.documents[3]), vec!["MADE".to_owned()]);
-        }
-        Err(error) => panic!("seeded areas evaluate: {error}"),
     }
 }
 

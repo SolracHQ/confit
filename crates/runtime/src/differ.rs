@@ -64,7 +64,7 @@ impl Differ {
                             continue;
                         };
                         let recorded_label = match store.len(&handle) {
-                            Ok(len) => blob.sha().label(len),
+                            Ok(len) => blob.sha256.label(len),
                             Err(_) => continue,
                         };
                         let disk_label = match Self::disk_label(document) {
@@ -112,7 +112,7 @@ impl Differ {
 
     /// Collect drift entries for one tree destination walk.
     ///
-    /// - Extra disk files stay out of the entries.
+    /// - Only manifest members produce entries.
     fn tree_drift(
         &self,
         destination: &Route,
@@ -136,7 +136,7 @@ impl Differ {
                         continue;
                     };
                     let recorded_label = match store.len(&handle) {
-                        Ok(len) => member.blob.sha().label(len),
+                        Ok(len) => member.blob.sha256.label(len),
                         Err(_) => continue,
                     };
                     let Some(disk_label) = Self::tree_member_label(destination, &member.relative)

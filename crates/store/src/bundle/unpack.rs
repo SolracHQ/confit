@@ -37,12 +37,9 @@ impl BundleStore {
         let manifest = self.read_manifest(&handle, path)?;
         let refs = manifest.refs();
         for blob in &refs {
-            if !wanted
-                .iter()
-                .any(|name| name == blob.stored().hex().as_str())
-            {
+            if !wanted.iter().any(|name| name == blob.stored.hex().as_str()) {
                 return Err(BundleError::Missing {
-                    sha: blob.sha().clone(),
+                    sha: blob.sha256.clone(),
                 });
             }
         }

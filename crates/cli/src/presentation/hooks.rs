@@ -79,9 +79,6 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 }
 
 /// Render full gate lines for one added hook.
-///
-/// - Requires and when print once while present, checks print once per member,
-///   all marked new in slot order.
 fn full_gates(hook: &Hook, out: &mut Vec<String>) {
     if let Some(gate) = hook.requires.as_ref() {
         out.push(format!(
@@ -115,9 +112,6 @@ fn gate_slot_text(slot: GateSlot) -> &'static str {
 }
 
 /// Render one gate change line per slot while text differs.
-///
-/// - Absent-to-present is added, present-to-absent is removed, changed
-///   is old-to-new.
 fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
     for change in gates {
         let slot = gate_slot_text(change.slot);

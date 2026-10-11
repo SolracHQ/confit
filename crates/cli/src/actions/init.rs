@@ -72,7 +72,7 @@ impl InitRunner<'_> {
     /// Report with the scaffolded profile path and the written file
     /// count.
     ///
-    /// - Present profile or stubs abort with nothing written.
+    /// - Present scaffolds leave nothing written.
     ///
     /// # Errors
     ///

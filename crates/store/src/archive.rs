@@ -358,7 +358,7 @@ fn read_head(source: &Path) -> Result<Vec<u8>> {
 
 /// Collect born handles back for one present spill.
 ///
-/// - Names sort.
+/// - Names sort in ascending order.
 ///
 /// # Errors
 ///
@@ -392,9 +392,7 @@ fn spill_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
     Sha::read(&mut file).map_err(|error| spill_read_error(error, source, name))
 }
 
-/// Collect archive-relative member names under one spill folder.
-///
-/// - Folders skip.
+/// Collect archive-relative file names under one spill folder.
 ///
 /// # Errors
 ///

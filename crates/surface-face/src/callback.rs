@@ -1,31 +1,29 @@
 //! Callback
-//! Lua callbacks over one live document type.
+//! Lua callbacks over one face.
 
 use std::marker::PhantomData;
 
 use mlua::{FromLua, Function, Lua, Value};
-use mlua_extras::typed::{Param, Type, Typed};
+use mlua_extras::typed::{Type, Typed};
 
-use crate::module::Named;
-
-/// One Lua callback over its live document type.
+/// One Lua callback over its face.
 ///
-/// Document types show the face and functions take the calls.
-pub struct Callback<Document>(Function, PhantomData<Document>);
+/// Face shows the shape and functions take the calls.
+pub struct Callback<Face>(Function, PhantomData<Face>);
 
-impl<Document> Clone for Callback<Document> {
+impl<Face> Clone for Callback<Face> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
 
-impl<Document> std::fmt::Debug for Callback<Document> {
+impl<Face> std::fmt::Debug for Callback<Face> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.debug_tuple("Callback").field(&self.0).finish()
     }
 }
 
-impl<Document> Callback<Document> {
+impl<Face> Callback<Face> {
     /// Wrap one function as its callback.
     pub fn new(function: Function) -> Self {
         Self(function, PhantomData)
@@ -42,20 +40,13 @@ impl<Document> Callback<Document> {
     }
 }
 
-impl<Document: Typed> Typed for Callback<Document> {
+impl<Face: Typed> Typed for Callback<Face> {
     fn ty() -> Type {
-        Type::Function {
-            params: vec![Param {
-                name: Some("document".into()),
-                doc: None,
-                ty: Named::<Document>::ty(),
-            }],
-            returns: vec![],
-        }
+        Face::ty()
     }
 }
 
-impl<Document: Typed> FromLua for Callback<Document> {
+impl<Face> FromLua for Callback<Face> {
     fn from_lua(value: Value, _lua: &Lua) -> mlua::Result<Self> {
         match value {
             Value::Function(found) => Ok(Self(found, PhantomData)),
@@ -72,34 +63,24 @@ impl<Document: Typed> FromLua for Callback<Document> {
 mod tests {
     use super::*;
 
-    struct Doc;
+    struct Sample;
 
-    impl Typed for Doc {
+    impl Typed for Sample {
         fn ty() -> Type {
             Type::string()
         }
     }
 
     #[test]
-    fn face_names_one_document_param_without_returns() {
-        assert_eq!(
-            Callback::<Doc>::ty(),
-            Type::Function {
-                params: vec![Param {
-                    name: Some("document".into()),
-                    doc: None,
-                    ty: Named::<Doc>::ty(),
-                }],
-                returns: vec![],
-            }
-        );
+    fn face_returns_marker_face() {
+        assert_eq!(Callback::<Sample>::ty(), Sample::ty());
     }
 
     #[test]
     fn lua_read_accepts_functions() {
         let lua = Lua::new();
         let func = lua.create_function(|_, value: String| Ok(value)).unwrap();
-        let callback = Callback::<Doc>::from_lua(Value::Function(func), &lua).unwrap();
+        let callback = Callback::<Sample>::from_lua(Value::Function(func), &lua).unwrap();
         let back: String = callback.as_function().call("hi").unwrap();
         assert_eq!(back, "hi");
     }
@@ -112,7 +93,7 @@ mod tests {
             Value::Integer(1),
         ];
         for value in cases {
-            match Callback::<Doc>::from_lua(value, &lua) {
+            match Callback::<Sample>::from_lua(value, &lua) {
                 Ok(_) => panic!("non-function passes"),
                 Err(mlua::Error::FromLuaConversionError { to, .. }) => {
                     assert_eq!(to, "function");

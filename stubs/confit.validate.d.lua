@@ -72,9 +72,9 @@ local _CLASS_Archive_ = {
 
 --- @alias Document TextDocument | StructuredDocument | LinkDocument | RcDocument | OpaqueDocument | TreeDocument
 
---- @alias StructuredPatch { apply: fun(document: StructuredDocument), format: StructuredFormat, priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route }
+--- @alias StructuredPatch { apply: fun(route: Route, document: { data: { [string]: SerializableValue }, format: StructuredFormat }), filter: fun(route: Route) | nil, format: StructuredFormat, priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route | nil }
 
---- @alias RcPatch { apply: fun(document: RcDocument), priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route }
+--- @alias RcPatch { apply: fun(route: Route, document: { config: RcEntry[] | nil, final: RcEntry[] | nil, profile: RcEntry[] | nil }), filter: fun(route: Route) | nil, priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route | nil }
 
 --- @alias Patch StructuredPatch | RcPatch
 

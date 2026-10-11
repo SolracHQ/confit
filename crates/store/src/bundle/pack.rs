@@ -95,7 +95,7 @@ impl BundleStore {
                     },
                 },
             })?;
-        let name = [BUNDLE_BLOBS_PREFIX, &blob.stored().to_string()].concat();
+        let name = [BUNDLE_BLOBS_PREFIX, &blob.stored.to_string()].concat();
         Ok((name, len, reader))
     }
 }
@@ -106,7 +106,7 @@ impl BundleStore {
 fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
     let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
     for blob in manifest.refs() {
-        unique.entry(blob.stored().hex()).or_insert(blob);
+        unique.entry(blob.stored.hex()).or_insert(blob);
     }
     unique.into_values().collect()
 }

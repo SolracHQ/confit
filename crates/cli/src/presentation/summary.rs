@@ -426,8 +426,6 @@ fn status_header(document: &Document, status: DocumentStatus) -> String {
 }
 
 /// Append one titled section for a body with lines.
-///
-/// - Empty bodies render no title.
 fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: Vec<String>) {
     if body.is_empty() {
         return;
@@ -437,8 +435,6 @@ fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: V
 }
 
 /// Count lifecycle entries by change.
-///
-/// - Triple over hook records in the bundle.
 fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
     let mut counts = HookCounts {
         added: 0,
@@ -787,8 +783,8 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     &format!(
                         "  {} content = {} -> {}",
                         Sigil::Update.mark(),
-                        opaque_ref_label(old_blob.sha(), *old_size),
-                        opaque_ref_label(new_blob.sha(), *new_size)
+                        opaque_ref_label(&old_blob.sha256, *old_size),
+                        opaque_ref_label(&new_blob.sha256, *new_size)
                     ),
                 )]
             }
@@ -842,9 +838,8 @@ fn recorded_hunk(old: &str, new: &str) -> String {
         .join("\n")
 }
 
-/// Render one rc update as a recorded to desired text hunk.
-///
-/// - Render failures fall back to desired entry bodies under the update sigil.
+/// Render one rc update as a recorded to desired text hunk with desired-body
+/// fallback.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match inline_bytes(&recorded.data) {
         Ok(bytes) => bytes,

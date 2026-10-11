@@ -66,21 +66,6 @@ impl Profile {
         }
     }
 
-    /// Return the shell names in profile order.
-    pub fn shells(&self) -> &[String] {
-        &self.shells
-    }
-
-    /// Return the configs in profile order.
-    pub fn configs(&self) -> &[Config] {
-        &self.configs
-    }
-
-    /// Return the documents keyed by destination route.
-    pub fn documents(&self) -> &HashMap<Route, Document> {
-        &self.documents
-    }
-
     /// Decode one profile table into shells with configs and documents.
     ///
     /// - Missing sections are empty.
@@ -278,9 +263,9 @@ mod tests {
     #[test]
     fn single_profile_decodes_shells_with_configs_and_documents() {
         let found = decoded(SINGLE);
-        assert_eq!(found.shells(), &["bash".to_owned()]);
-        assert_eq!(found.configs().len(), 1);
-        let documents = found.configs()[0].documents();
+        assert_eq!(found.shells, ["bash".to_owned()]);
+        assert_eq!(found.configs.len(), 1);
+        let documents = &found.configs[0].documents;
         assert_eq!(documents.len(), 1);
         let (destination, body) = documents.iter().next().unwrap();
         assert_eq!(destination.display(), "home('.bashrc')");
@@ -288,17 +273,17 @@ mod tests {
             crate::document::Document::Text(found) => assert_eq!(found.text, "hi"),
             _ => panic!("text body decodes"),
         }
-        assert_eq!(found.documents().len(), 1);
-        let (destination, _) = found.documents().iter().next().unwrap();
+        assert_eq!(found.documents.len(), 1);
+        let (destination, _) = found.documents.iter().next().unwrap();
         assert_eq!(destination.display(), "home('top.txt')");
     }
 
     #[test]
     fn configs_decode_in_list_order() {
         let found = decoded(PAIR);
-        assert_eq!(found.configs().len(), 2);
+        assert_eq!(found.configs.len(), 2);
         for (config, want) in [(0, "home('zebra')"), (1, "home('apple')")] {
-            let documents = found.configs()[config].documents();
+            let documents = &found.configs[config].documents;
             assert_eq!(documents.len(), 1);
             let (destination, _) = documents.iter().next().unwrap();
             assert_eq!(destination.display(), want);
@@ -308,9 +293,9 @@ mod tests {
     #[test]
     fn missing_sections_read_empty() {
         let found = decoded("return {}");
-        assert!(found.shells().is_empty());
-        assert!(found.configs().is_empty());
-        assert!(found.documents().is_empty());
+        assert!(found.shells.is_empty());
+        assert!(found.configs.is_empty());
+        assert!(found.documents.is_empty());
     }
 
     #[test]
@@ -334,17 +319,27 @@ mod tests {
             }
         "#;
         let found = decoded(source);
-        assert_eq!(found.configs().len(), 2);
-        assert_eq!(found.configs()[0].patches().len(), 1);
-        assert_eq!(
-            found.configs()[0].patches()[0].target().display(),
-            "home('one.json')"
-        );
-        assert_eq!(found.configs()[1].patches().len(), 1);
-        assert_eq!(
-            found.configs()[1].patches()[0].target().display(),
-            "home('two.json')"
-        );
+        assert_eq!(found.configs.len(), 2);
+        assert_eq!(found.configs[0].patches.len(), 1);
+        let target = match &found.configs[0].patches[0] {
+            crate::patch::Patch::Structured(found) => &found.target,
+            crate::patch::Patch::Rc(found) => &found.target,
+        };
+        let route = match target {
+            crate::patch::PatchTarget::Target(route) => route,
+            crate::patch::PatchTarget::Filter(_) => panic!("target means route"),
+        };
+        assert_eq!(route.display(), "home('one.json')");
+        assert_eq!(found.configs[1].patches.len(), 1);
+        let target = match &found.configs[1].patches[0] {
+            crate::patch::Patch::Structured(found) => &found.target,
+            crate::patch::Patch::Rc(found) => &found.target,
+        };
+        let route = match target {
+            crate::patch::PatchTarget::Target(route) => route,
+            crate::patch::PatchTarget::Filter(_) => panic!("target means route"),
+        };
+        assert_eq!(route.display(), "home('two.json')");
     }
 
     #[test]
@@ -358,9 +353,9 @@ mod tests {
             }
         "#;
         let found = decoded(source);
-        assert_eq!(found.configs().len(), 2);
-        assert_eq!(found.configs()[0].name(), "same");
-        assert_eq!(found.configs()[1].name(), "same");
+        assert_eq!(found.configs.len(), 2);
+        assert_eq!(found.configs[0].name, "same");
+        assert_eq!(found.configs[1].name, "same");
     }
 
     #[test]
@@ -386,25 +381,24 @@ mod tests {
             }
         "#;
         let found = decoded(source);
-        assert_eq!(found.configs().len(), 2);
-        assert_eq!(found.configs()[0].patches().len(), 2);
-        assert_eq!(
-            found.configs()[0].patches()[0].target().display(),
-            "home('one.json')"
-        );
-        assert_eq!(
-            found.configs()[0].patches()[1].target().display(),
-            "home('first.sh')"
-        );
-        assert_eq!(found.configs()[1].patches().len(), 2);
-        assert_eq!(
-            found.configs()[1].patches()[0].target().display(),
-            "home('two.json')"
-        );
-        assert_eq!(
-            found.configs()[1].patches()[1].target().display(),
-            "home('second.sh')"
-        );
+        assert_eq!(found.configs.len(), 2);
+        assert_eq!(found.configs[0].patches.len(), 2);
+        for (patch, want) in [
+            (&found.configs[0].patches[0], "home('one.json')"),
+            (&found.configs[0].patches[1], "home('first.sh')"),
+            (&found.configs[1].patches[0], "home('two.json')"),
+            (&found.configs[1].patches[1], "home('second.sh')"),
+        ] {
+            let target = match patch {
+                crate::patch::Patch::Structured(found) => &found.target,
+                crate::patch::Patch::Rc(found) => &found.target,
+            };
+            let route = match target {
+                crate::patch::PatchTarget::Target(route) => route,
+                crate::patch::PatchTarget::Filter(_) => panic!("target means route"),
+            };
+            assert_eq!(route.display(), want);
+        }
     }
 
     #[test]

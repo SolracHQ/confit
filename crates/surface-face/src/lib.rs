@@ -2,6 +2,7 @@
 //! Pure declaration machinery for the Lua surface.
 
 pub mod callback;
+pub mod function;
 pub mod mismatch;
 pub mod module;
 pub mod proxy;

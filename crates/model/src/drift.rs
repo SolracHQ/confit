@@ -42,18 +42,6 @@ pub enum Drift {
     },
 }
 
-impl Drift {
-    /// Return the drift destination.
-    pub fn path(&self) -> &Route {
-        match self {
-            Self::Key { path, .. }
-            | Self::Hunk { path, .. }
-            | Self::Missing { path }
-            | Self::Unreadable { path, .. } => path,
-        }
-    }
-}
-
 /// One drift side order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriftOrder {

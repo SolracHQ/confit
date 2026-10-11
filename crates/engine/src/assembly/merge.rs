@@ -10,6 +10,7 @@ use confit_model::document::{
 use confit_model::routes::Route;
 use confit_surface_api::{
     Document, RcDocument, RcPatch, SerializableValue, StructuredDocument, StructuredPatch,
+    route_value,
 };
 
 use super::Assembler;
@@ -20,9 +21,11 @@ impl Assembler<'_> {
     /// Apply structured patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
+    /// - Callbacks run with the target route beside live data.
     ///
     /// # Errors
     ///
+    /// - [`EngineError::UnknownTarget`] for missing targets.
     /// - [`EngineError::Structured`] for foreign bases with gaps.
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_structured(
@@ -37,7 +40,7 @@ impl Assembler<'_> {
             };
             let display = target.display();
             let (destination, format, data) = structured_base_of(placed, target, first, patches)?;
-            let data = self.run_callbacks(&display, &format, data, patches)?;
+            let data = self.run_callbacks(target, &display, &format, data, patches)?;
             let document = ModelDocument::new(destination, Data::Structured { format, data });
             finished.insert(target.clone(), document);
         }
@@ -47,9 +50,11 @@ impl Assembler<'_> {
     /// Apply rc patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
+    /// - Callbacks run with the target route beside live sections.
     ///
     /// # Errors
     ///
+    /// - [`EngineError::UnknownTarget`] for missing targets.
     /// - [`EngineError::Structured`] for foreign bases with gaps.
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_rc(
@@ -59,12 +64,9 @@ impl Assembler<'_> {
         finished: &mut BTreeMap<Route, ModelDocument>,
     ) -> Result<()> {
         for (target, patches) in grouped {
-            let Some(first) = patches.first() else {
-                continue;
-            };
-            let (destination, document) = rc_base_of(placed, target, first)?;
+            let (destination, document) = rc_base_of(placed, target)?;
             let display = target.display();
-            let patched = self.run_rc_callbacks(&display, document, patches)?;
+            let patched = self.run_rc_callbacks(target, &display, document, patches)?;
             let data = RcData::new(patched.profile, patched.config, patched.final_entries);
             let document = ModelDocument::new(destination, Data::Rc(data));
             finished.insert(target.clone(), document);
@@ -72,11 +74,10 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Run patch callbacks over base data through live documents.
+    /// Run patch callbacks over base data through live documents keeping
+    /// first writes.
     ///
-    /// - Owned keys keep their values against later writes.
-    /// - Fresh keys take the writing patch owner.
-    /// - Blocked writes log the target with the key and the losing owner.
+    /// - Callbacks run with the target route beside live data.
     ///
     /// # Errors
     ///
@@ -84,6 +85,7 @@ impl Assembler<'_> {
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn run_callbacks(
         &self,
+        destination: &Route,
         display: &str,
         format: &StructuredFormat,
         data: Table,
@@ -99,8 +101,12 @@ impl Assembler<'_> {
                     .map(|(key, value)| (key.clone(), SerializableValue(value.clone())))
                     .collect(),
             };
+            let route = route_value(self.lua(), destination)?;
             let table: Value = self.lua().to_value(&body)?;
-            patch.apply().call::<()>(table.clone())?;
+            patch
+                .apply
+                .as_function()
+                .call::<()>((route, table.clone()))?;
             let found = StructuredDocument::from_lua(table, self.lua())?;
             if found.format != *format {
                 return Err(EngineError::Structured {
@@ -109,22 +115,28 @@ impl Assembler<'_> {
                     patch: found.format.name().to_owned(),
                 });
             }
-            data = merge_first_wins(display, data, &mut owners, found.data, patch.owner());
+            data = merge(
+                display,
+                data,
+                &mut owners,
+                found.data,
+                patch.owner.as_deref(),
+            );
         }
         Ok(data)
     }
 
-    /// Run patch callbacks over rc sections through live tables.
+    /// Run patch callbacks over rc sections through live tables keeping
+    /// first entries.
     ///
-    /// - Owned slots keep their first entry against later duplicates.
-    /// - Fresh slots take the writing patch owner.
-    /// - Dropped duplicates log the target with the section, the slot and the losing owner.
+    /// - Callbacks run with the target route beside live sections.
     ///
     /// # Errors
     ///
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn run_rc_callbacks(
         &self,
+        destination: &Route,
         display: &str,
         document: RcDocument,
         patches: &[&RcPatch],
@@ -132,31 +144,50 @@ impl Assembler<'_> {
         let mut document = document;
         let mut owned = seed_slot_owners(&document);
         for patch in patches {
+            let route = route_value(self.lua(), destination)?;
             let table: Value = Value::Table(document.live_table(self.lua())?);
-            patch.apply().call::<()>(table.clone())?;
+            patch
+                .apply
+                .as_function()
+                .call::<()>((route, table.clone()))?;
             let next = RcDocument::from_lua(table, self.lua())?;
-            document = merge_rc_first_wins(display, &document, next, &mut owned, patch.owner());
+            document = merge_rc(display, &document, next, &mut owned, patch.owner.as_deref());
         }
         Ok(document)
     }
 }
 
 /// Seed key owners from base data under the base name.
-///
-/// - Every base key is owned by the base.
 fn seed_key_owners(data: &Table) -> BTreeMap<String, String> {
-    data.keys()
-        .map(|key| (key.clone(), "base".to_owned()))
-        .collect()
+    let mut owners = BTreeMap::new();
+    for (key, value) in data {
+        seed_leaves(value, key, "base", &mut owners);
+    }
+    owners
+}
+
+/// Seed leaf owners under one path with one holder.
+fn seed_leaves(
+    value: &serde_json::Value,
+    path: &str,
+    holder: &str,
+    owners: &mut BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                let child = format!("{path}.{key}");
+                seed_leaves(item, &child, holder, owners);
+            }
+        }
+        _ => {
+            owners.insert(path.to_owned(), holder.to_owned());
+        }
+    }
 }
 
 /// Merge patch data over live data keeping first writes.
-///
-/// - Unchanged keys pass through silently.
-/// - Owned keys keep their values against later writes.
-/// - Fresh keys take the writing patch owner.
-/// - Blocked writes log the target with the key and the losing owner.
-fn merge_first_wins(
+fn merge(
     display: &str,
     live: Table,
     owners: &mut BTreeMap<String, String>,
@@ -171,33 +202,142 @@ fn merge_first_wins(
         .cloned()
         .collect();
     for (key, value) in next {
-        if merged.get(&key) == Some(&value.0) {
-            continue;
-        }
-        match owners.get(&key) {
-            Some(winner) => {
-                log::warn!(
-                    "collision on {display} \"{key}\": \"{loser}\" loses, \"{winner}\" wins"
-                );
-            }
-            None => {
-                owners.insert(key.clone(), loser.to_owned());
-                merged.insert(key, value.0);
-            }
-        }
+        fold_entry(display, &mut merged, owners, key, value.0, loser);
     }
     for key in missing {
-        if let Some(winner) = owners.get(&key) {
-            log::warn!("collision on {display} \"{key}\": \"{loser}\" loses, \"{winner}\" wins");
+        if let Some(found) = merged.get(&key).cloned() {
+            log_removed(display, &found, &key, owners, loser);
         }
     }
     merged
 }
 
+/// Fold one top-level entry into merged data with leaf owners.
+fn fold_entry(
+    display: &str,
+    merged: &mut Table,
+    owners: &mut BTreeMap<String, String>,
+    key: String,
+    next_value: serde_json::Value,
+    loser: &str,
+) {
+    let Some(slot) = merged.get_mut(&key) else {
+        seed_leaves(&next_value, &key, loser, owners);
+        merged.insert(key, next_value);
+        return;
+    };
+    if *slot == next_value {
+        return;
+    }
+    fold_value(display, &key, slot, next_value, owners, loser);
+}
+
+/// Fold one patch value over one live slot keeping first writes.
+fn fold_value(
+    display: &str,
+    path: &str,
+    live: &mut serde_json::Value,
+    next: serde_json::Value,
+    owners: &mut BTreeMap<String, String>,
+    loser: &str,
+) {
+    if *live == next {
+        return;
+    }
+    let live_empty = live.as_object().map(|map| map.is_empty()).unwrap_or(false);
+    match (live, next) {
+        (serde_json::Value::Object(live_map), serde_json::Value::Object(next_map)) => {
+            fold_maps(display, path, live_map, next_map, owners, loser);
+        }
+        (slot, found) => {
+            if live_empty {
+                seed_leaves(&found, path, loser, owners);
+                *slot = found;
+                return;
+            }
+            if let Some(winner) = winner_for(path, owners) {
+                log::warn!(
+                    "collision on {display} \"{path}\": \"{loser}\" loses, \"{winner}\" wins"
+                );
+            }
+        }
+    }
+}
+
+/// Fold one patch table over one live table keeping first writes.
+fn fold_maps(
+    display: &str,
+    path: &str,
+    live_map: &mut serde_json::Map<String, serde_json::Value>,
+    next_map: serde_json::Map<String, serde_json::Value>,
+    owners: &mut BTreeMap<String, String>,
+    loser: &str,
+) {
+    let removed: Vec<String> = live_map
+        .keys()
+        .filter(|key| !next_map.contains_key(*key))
+        .cloned()
+        .collect();
+    for (key, next_value) in next_map {
+        let child = format!("{path}.{key}");
+        if let Some(slot) = live_map.get_mut(&key) {
+            if *slot == next_value {
+                continue;
+            }
+            fold_value(display, &child, slot, next_value, owners, loser);
+        } else {
+            seed_leaves(&next_value, &child, loser, owners);
+            live_map.insert(key, next_value);
+        }
+    }
+    for key in removed {
+        if let Some(found) = live_map.get(&key).cloned() {
+            let child = format!("{path}.{key}");
+            log_removed(display, &found, &child, owners, loser);
+        }
+    }
+}
+
+/// Log owned leaves under one removed path with the losing owner.
+fn log_removed(
+    display: &str,
+    live: &serde_json::Value,
+    path: &str,
+    owners: &BTreeMap<String, String>,
+    loser: &str,
+) {
+    match live {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                let child = format!("{path}.{key}");
+                log_removed(display, item, &child, owners, loser);
+            }
+        }
+        _ => {
+            if let Some(winner) = owners.get(path) {
+                log::warn!(
+                    "collision on {display} \"{path}\": \"{loser}\" loses, \"{winner}\" wins"
+                );
+            }
+        }
+    }
+}
+
+/// Return the winning owner for one collision path.
+fn winner_for(path: &str, owners: &BTreeMap<String, String>) -> Option<String> {
+    if let Some(winner) = owners.get(path) {
+        return Some(winner.clone());
+    }
+    let prefix = format!("{path}.");
+    for (key, winner) in owners {
+        if key.starts_with(&prefix) {
+            return Some(winner.clone());
+        }
+    }
+    None
+}
+
 /// Winner owner per rc slot feeding first-writer wins.
-///
-/// - Base entries seed every map under the base name.
-/// - Later duplicates drop with a log line.
 #[derive(Default)]
 struct SlotOwners {
     /// Slot owners in the profile section.
@@ -208,9 +348,7 @@ struct SlotOwners {
     final_entries: BTreeMap<String, String>,
 }
 
-/// Seed slot owners from base entries under the base name.
-///
-/// - Slot-free entries skip the sets.
+/// Seed slot owners from base entries with slots under the base name.
 fn seed_slot_owners(document: &RcDocument) -> SlotOwners {
     let mut owned = SlotOwners::default();
     seed_section(&document.profile, &mut owned.profile);
@@ -219,9 +357,7 @@ fn seed_slot_owners(document: &RcDocument) -> SlotOwners {
     owned
 }
 
-/// Seed one section map from its entries under the base name.
-///
-/// - Slot-free entries skip the map.
+/// Seed one section map from its entries with slots under the base name.
 fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     for entry in entries {
         if let Some(name) = entry.slot_name() {
@@ -231,12 +367,7 @@ fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
 }
 
 /// Merge patch sections over live sections keeping first entries.
-///
-/// - Carried entries pass through silently.
-/// - Owned slots keep their first entry against later duplicates.
-/// - Fresh slots take the writing patch owner.
-/// - Dropped duplicates log the target with the section, the slot and the losing owner.
-fn merge_rc_first_wins(
+fn merge_rc(
     display: &str,
     live: &RcDocument,
     next: RcDocument,
@@ -273,11 +404,6 @@ fn merge_rc_first_wins(
 }
 
 /// Merge one patch section over its live entries keeping first entries.
-///
-/// - Carried entries pass through silently.
-/// - Owned slots keep their first entry against later duplicates.
-/// - Fresh slots take the writing patch owner.
-/// - Dropped duplicates log the target with the section, the slot and the losing owner.
 fn merge_section(
     display: &str,
     section: &str,
@@ -311,4 +437,129 @@ fn merge_section(
         }
     }
     kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn distinct_nested_keys_merge_side_by_side() {
+        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "latest"}))]);
+        let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
+        let next = BTreeMap::from([(
+            "tools".to_owned(),
+            SerializableValue(json!({"bat": "latest", "ripgrep": "latest"})),
+        )]);
+        let merged = merge(
+            "home('config.json')",
+            live,
+            &mut owners,
+            next,
+            Some("second"),
+        );
+        let tools = merged.get("tools").unwrap();
+        assert_eq!(
+            tools.get("bat").and_then(|item| item.as_str()),
+            Some("latest")
+        );
+        assert_eq!(
+            tools.get("ripgrep").and_then(|item| item.as_str()),
+            Some("latest")
+        );
+        assert_eq!(
+            owners.get("tools.ripgrep").map(String::as_str),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn same_leaf_twice_keeps_first_write() {
+        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "first"}))]);
+        let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
+        let next = BTreeMap::from([(
+            "tools".to_owned(),
+            SerializableValue(json!({"bat": "second"})),
+        )]);
+        let merged = merge(
+            "home('config.json')",
+            live,
+            &mut owners,
+            next,
+            Some("second"),
+        );
+        let tools = merged.get("tools").unwrap();
+        assert_eq!(
+            tools.get("bat").and_then(|item| item.as_str()),
+            Some("first")
+        );
+        assert_eq!(owners.get("tools.bat").map(String::as_str), Some("first"));
+    }
+
+    #[test]
+    fn table_against_scalar_keeps_first_write() {
+        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "kept"}))]);
+        let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
+        let next = BTreeMap::from([("tools".to_owned(), SerializableValue(json!("flat")))]);
+        let merged = merge(
+            "home('config.json')",
+            live,
+            &mut owners,
+            next,
+            Some("second"),
+        );
+        let tools = merged.get("tools").unwrap();
+        assert_eq!(
+            tools.get("bat").and_then(|item| item.as_str()),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn lists_stay_whole_value_first_wins() {
+        let live: Table = BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
+        let mut owners = BTreeMap::from([("items".to_owned(), "first".to_owned())]);
+        let next = BTreeMap::from([("items".to_owned(), SerializableValue(json!([3])))]);
+        let merged = merge(
+            "home('config.json')",
+            live,
+            &mut owners,
+            next,
+            Some("second"),
+        );
+        assert_eq!(merged.get("items"), Some(&json!([1, 2])));
+        assert_eq!(owners.get("items").map(String::as_str), Some("first"));
+    }
+
+    #[test]
+    fn seeded_base_leaves_beat_patch_writes() {
+        let base: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "base"}))]);
+        let mut owners = seed_key_owners(&base);
+        let next = BTreeMap::from([(
+            "tools".to_owned(),
+            SerializableValue(json!({"bat": "patch", "ripgrep": "latest"})),
+        )]);
+        let merged = merge(
+            "home('config.json')",
+            base,
+            &mut owners,
+            next,
+            Some("patch"),
+        );
+        let tools = merged.get("tools").unwrap();
+        assert_eq!(
+            tools.get("bat").and_then(|item| item.as_str()),
+            Some("base")
+        );
+        assert_eq!(
+            tools.get("ripgrep").and_then(|item| item.as_str()),
+            Some("latest")
+        );
+        assert_eq!(owners.get("tools.bat").map(String::as_str), Some("base"));
+        assert_eq!(
+            owners.get("tools.ripgrep").map(String::as_str),
+            Some("patch")
+        );
+    }
 }

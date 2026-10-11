@@ -24,5 +24,6 @@ pub use document::{
 pub use error::{ApiError, Result};
 pub use handles::{Archive, Handle};
 pub use hook::HookFace;
-pub use patch::{Level, Patch, RcPatch, StructuredPatch};
+pub use patch::{FilterArgs, Level, Patch, PatchTarget, RcPatch, StructuredPatch};
+pub use paths::route_value;
 pub use version::API_VERSION;

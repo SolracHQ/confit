@@ -224,8 +224,8 @@ impl SlotStore {
 
     /// Gather stored refs for a sweep.
     ///
-    /// - Every stored manifest for the keep set, with missing,
-    ///   unparsable, and stale files outside the set.
+    /// - Every stored manifest feeds the keep set. Missing, unparsable,
+    ///   and stale files add no refs.
     ///
     /// # Errors
     ///
@@ -356,7 +356,7 @@ fn write_text(path: &Path, text: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - system time errors for clock readings before the epoch.
+/// - [`std::time::SystemTimeError`] for clock readings before the epoch.
 fn system_nanos() -> std::result::Result<u128, std::time::SystemTimeError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -411,7 +411,7 @@ fn collect_manifest_refs(path: &Path, keep: &mut BTreeSet<Sha>) {
     if stored.version != MANIFEST_VERSION {
         return;
     }
-    keep.extend(stored.refs().iter().map(|blob| blob.stored().clone()));
+    keep.extend(stored.refs().iter().map(|blob| blob.stored.clone()));
 }
 
 /// Collect blob refs from every manifest file in one folder.
@@ -698,7 +698,7 @@ mod tests {
         match slots.keep_set() {
             Ok(keep) => assert_eq!(
                 keep,
-                BTreeSet::from([blob.stored().clone()]),
+                BTreeSet::from([blob.stored.clone()]),
                 "unparsable and stale files lend no refs"
             ),
             Err(error) => panic!("keep set gathers: {error}"),

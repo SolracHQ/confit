@@ -33,8 +33,6 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 
 /// Spill one decoded member stream under staging with a hash.
 ///
-/// - Parents arrive created.
-///
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping member names.

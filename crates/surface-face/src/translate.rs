@@ -273,8 +273,8 @@ mod tests {
             Type::union(vec![Type::string(), Type::integer()])
         );
         assert_eq!(
-            translate(&json!({"$ref": "#/$defs/TextDocument"})),
-            Type::named("TextDocument".to_owned())
+            translate(&json!({"$ref": "#/$defs/Sample"})),
+            Type::named("Sample".to_owned())
         );
     }
 

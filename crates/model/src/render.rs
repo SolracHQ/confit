@@ -26,7 +26,7 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
         Data::Link { target } => Ok(target.as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
         Data::Opaque { blob, .. } => Err(Error::Parse {
-            input: blob.sha().hex(),
+            input: blob.sha256.hex(),
             want: "blob bytes through the blob store".to_owned(),
         }),
         Data::Tree { .. } => Err(Error::Parse {

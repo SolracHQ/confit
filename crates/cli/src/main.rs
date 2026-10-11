@@ -15,9 +15,6 @@ fn main() {
 }
 
 /// Run the selected subcommand to completion.
-///
-/// - Log path after the summary.
-/// - Drift notes lead with success.
 fn run() -> confit_cli::error::Result<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);

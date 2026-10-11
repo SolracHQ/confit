@@ -12,8 +12,8 @@ use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::{StoreRoots, Stores};
 use confit_surface_api::{
-    Config, Document, Handle, Level, Mode, OpaqueDocument, Patch, Profile, RcDocument, RcPatch,
-    SerializableValue, StructuredDocument, StructuredPatch, TextDocument,
+    Config, Document, Handle, Level, Mode, OpaqueDocument, Patch, PatchTarget, Profile, RcDocument,
+    RcPatch, SerializableValue, StructuredDocument, StructuredPatch, TextDocument,
 };
 use mlua::{Function, Lua};
 
@@ -86,12 +86,12 @@ pub const MERGED_PATCHES: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) d.data.alpha = "one" end,
+                            apply = function(_, d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) d.data.beta = "two" end,
+                            apply = function(_, d) d.data.beta = "two" end,
                         },
                     },
                 },
@@ -109,7 +109,7 @@ pub const MISSING_TARGET: &str = r#"
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "json",
-                            apply = function(d) d.data.made = "yes" end,
+                            apply = function(_, d) d.data.made = "yes" end,
                         },
                     },
                 },
@@ -128,7 +128,7 @@ pub const TEXT_BASE: &str = r#"
                         {
                             target = { base = "home", relative = "note.txt" },
                             format = "json",
-                            apply = function(d) d.data.x = 1 end,
+                            apply = function(_, d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -152,7 +152,7 @@ pub const FAILING_CALLBACK: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) error("patch boom") end,
+                            apply = function(_, d) error("patch boom") end,
                         },
                     },
                 },
@@ -174,11 +174,11 @@ pub const RC_MERGED: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
+                            apply = function(_, d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
                         },
                     },
                 },
@@ -195,7 +195,7 @@ pub const RC_MISSING: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -213,7 +213,7 @@ pub const RC_TEXT_BASE: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = "note.txt" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -235,7 +235,7 @@ pub const RC_FAILING: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(d) error("rc boom") end,
+                            apply = function(_, d) error("rc boom") end,
                         },
                     },
                 },
@@ -258,7 +258,7 @@ pub const RC_FORMAT_GAP: &str = r#"
                         {
                             target = { base = "home", relative = ".bashrc" },
                             format = "json",
-                            apply = function(d) d.data.x = 1 end,
+                            apply = function(_, d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -282,7 +282,7 @@ pub const FORMAT_GAP: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "toml",
-                            apply = function(d) d.data.x = 1 end,
+                            apply = function(_, d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -320,7 +320,7 @@ pub const PATCHED: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) d.data.count = 2 d.data.extra = "yes" end,
+                            apply = function(_, d) d.data.count = 2 d.data.extra = "yes" end,
                         },
                     },
                 },
@@ -328,7 +328,7 @@ pub const PATCHED: &str = r#"
         }
     "#;
 
-/// Lua profile mixing structured and rc patches over live and missing targets.
+/// Lua profile mixing structured and rc patches over live targets.
 pub const MIXED_SPLIT: &str = r#"
         return {
             configs = {
@@ -347,20 +347,11 @@ pub const MIXED_SPLIT: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) d.data.alpha = "one" end,
-                        },
-                        {
-                            target = { base = "home", relative = "fresh.json" },
-                            format = "json",
-                            apply = function(d) d.data.made = "yes" end,
+                            apply = function(_, d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
-                        },
-                        {
-                            target = { base = "home", relative = "fresh.sh" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                     },
                 },
@@ -383,7 +374,7 @@ pub const RC_OVER_STRUCTURED: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = "config.json" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -391,22 +382,28 @@ pub const RC_OVER_STRUCTURED: &str = r#"
         }
     "#;
 
-/// Lua profile with mixed structured formats over one missing target.
+/// Lua profile with mixed structured formats over one live target.
 pub const MIXED_FORMATS: &str = r#"
         return {
             configs = {
                 {
                     name = "tools/app",
+                    documents = {
+                        [{ base = "home", relative = "fresh.json" }] = {
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
                     patches = {
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "json",
-                            apply = function(d) d.data.a = 1 end,
+                            apply = function(_, d) d.data.a = 1 end,
                         },
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "toml",
-                            apply = function(d) d.data.b = 2 end,
+                            apply = function(_, d) d.data.b = 2 end,
                         },
                     },
                 },
@@ -430,11 +427,11 @@ pub const MIXED_SAME_TARGET: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) d.data.alpha = "one" end,
+                            apply = function(_, d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = "config.json" },
-                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -452,7 +449,7 @@ pub const FOREIGN_PATCH_KEY: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(d) return d end,
+                            apply = function(_, d) return d end,
                             nope = 1,
                         },
                     },
@@ -586,7 +583,7 @@ pub fn structured_patch_of(
 ) -> StructuredPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
     StructuredPatch::new(
-        Route::new(RouteBase::Home, relative).unwrap(),
+        PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
         format,
         apply,
         priority,
@@ -598,11 +595,37 @@ pub fn structured_patch_of(
 pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
     RcPatch::new(
-        Route::new(RouteBase::Home, relative).unwrap(),
+        PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
         apply,
         priority,
         None,
     )
+}
+
+/// Build one structured filter patch over its Lua callback source.
+pub fn structured_filter_of(
+    lua: &Lua,
+    filter_source: &str,
+    format: StructuredFormat,
+    priority: Level,
+    source: &str,
+) -> StructuredPatch {
+    let filter: Function = lua.load(filter_source).call(()).unwrap();
+    let apply: Function = lua.load(source).call(()).unwrap();
+    StructuredPatch::new(
+        PatchTarget::from_filter(filter),
+        format,
+        apply,
+        priority,
+        None,
+    )
+}
+
+/// Build one rc filter patch over its Lua callback source.
+pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &str) -> RcPatch {
+    let filter: Function = lua.load(filter_source).call(()).unwrap();
+    let apply: Function = lua.load(source).call(()).unwrap();
+    RcPatch::new(PatchTarget::from_filter(filter), apply, priority, None)
 }
 
 /// Collect profile slot names from one finished rc document.

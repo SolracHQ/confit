@@ -32,6 +32,8 @@ impl Engine {
     /// - Documents finish with filled hashes in destination display order.
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
+    /// - Filters fan out over matched destinations in destination order.
+    /// - Unknown targets fail the plan.
     ///
     /// # Errors
     ///
@@ -39,6 +41,7 @@ impl Engine {
     /// - [`crate::error::EngineError::Model`] for unhashable documents.
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
+    /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
     /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
     /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
     ///   hooks-only changed leaves.

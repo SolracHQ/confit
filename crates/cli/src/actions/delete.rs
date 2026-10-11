@@ -17,8 +17,7 @@ pub struct DeleteReport {
 
 /// Remove one named manifest, then prune orphan pool blobs.
 ///
-/// - Single `@name` value.
-/// - Blobs shared with remaining slots stay kept through the prune.
+/// - Blobs shared with remaining slots survive the prune.
 ///
 /// # Errors
 ///

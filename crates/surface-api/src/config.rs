@@ -43,26 +43,6 @@ impl Config {
             hooks,
         }
     }
-
-    /// Return the config name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Return the documents keyed by destination route.
-    pub fn documents(&self) -> &HashMap<Route, Document> {
-        &self.documents
-    }
-
-    /// Return the patches in profile return order.
-    pub fn patches(&self) -> &[Patch] {
-        &self.patches
-    }
-
-    /// Return the hooks in profile return order.
-    pub fn hooks(&self) -> &[Hook] {
-        &self.hooks
-    }
 }
 
 /// Decode one config table into its name with documents, patches and hooks.
@@ -253,10 +233,18 @@ mod tests {
                 let key = decoded.documents.keys().next().unwrap();
                 assert_eq!(key.display(), "home('.bashrc')");
                 assert_eq!(decoded.patches.len(), 1);
-                assert_eq!(decoded.patches[0].target().display(), "home('config.json')");
+                let target = match &decoded.patches[0] {
+                    Patch::Structured(found) => &found.target,
+                    Patch::Rc(found) => &found.target,
+                };
+                let route = match target {
+                    crate::patch::PatchTarget::Target(route) => route,
+                    crate::patch::PatchTarget::Filter(_) => panic!("target means route"),
+                };
+                assert_eq!(route.display(), "home('config.json')");
                 match &decoded.patches[0] {
                     Patch::Structured(found) => {
-                        assert_eq!(found.format(), StructuredFormat::Json);
+                        assert_eq!(found.format, StructuredFormat::Json);
                     }
                     Patch::Rc(_) => panic!("format presence means structured"),
                 }
@@ -283,13 +271,25 @@ mod tests {
         match decode_config(&lua, &value) {
             Ok(decoded) => {
                 assert_eq!(decoded.patches.len(), 4);
-                assert_eq!(decoded.patches[0].target().display(), "home('one.json')");
+                for (patch, want) in [
+                    (&decoded.patches[0], "home('one.json')"),
+                    (&decoded.patches[1], "home('first.sh')"),
+                    (&decoded.patches[2], "home('two.json')"),
+                    (&decoded.patches[3], "home('second.sh')"),
+                ] {
+                    let target = match patch {
+                        Patch::Structured(found) => &found.target,
+                        Patch::Rc(found) => &found.target,
+                    };
+                    let route = match target {
+                        crate::patch::PatchTarget::Target(route) => route,
+                        crate::patch::PatchTarget::Filter(_) => panic!("target means route"),
+                    };
+                    assert_eq!(route.display(), want);
+                }
                 assert!(matches!(decoded.patches[0], Patch::Structured(_)));
-                assert_eq!(decoded.patches[1].target().display(), "home('first.sh')");
                 assert!(matches!(decoded.patches[1], Patch::Rc(_)));
-                assert_eq!(decoded.patches[2].target().display(), "home('two.json')");
                 assert!(matches!(decoded.patches[2], Patch::Structured(_)));
-                assert_eq!(decoded.patches[3].target().display(), "home('second.sh')");
                 assert!(matches!(decoded.patches[3], Patch::Rc(_)));
             }
             Err(error) => panic!("patches decode: {error}"),
@@ -328,7 +328,11 @@ mod tests {
             Ok(decoded) => {
                 assert_eq!(decoded.patches.len(), 2);
                 for patch in &decoded.patches {
-                    assert_eq!(patch.owner(), Some("tools/bat"));
+                    let owner = match patch {
+                        Patch::Structured(found) => found.owner.as_deref(),
+                        Patch::Rc(found) => found.owner.as_deref(),
+                    };
+                    assert_eq!(owner, Some("tools/bat"));
                 }
             }
             Err(error) => panic!("named config decodes: {error}"),

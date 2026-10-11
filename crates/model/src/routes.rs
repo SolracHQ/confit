@@ -282,9 +282,6 @@ impl Route {
     }
 
     /// Render the portable route display in sugar call form.
-    ///
-    /// - Named bases render as `base('relative')`.
-    /// - Literal renders its bare path.
     pub fn display(&self) -> String {
         match self.base {
             RouteBase::Literal => self.relative.display().to_string(),

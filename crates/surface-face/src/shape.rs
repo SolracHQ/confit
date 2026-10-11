@@ -1,29 +1,29 @@
 //! Shape
-//! Lua tables validated inside verb bodies.
+//! Lua tables validated inside function bodies.
 
 use std::marker::PhantomData;
 
 use mlua::{FromLua, Lua, Table, Value};
 use mlua_extras::typed::{Type, Typed};
 
-/// One Lua table validated inside the verb body.
+/// One Lua table validated inside the function body.
 ///
-/// Data types show the face and tables hold the field reads.
-pub struct Shape<Data>(Table, PhantomData<Data>);
+/// Face types show the face and tables hold the field reads.
+pub struct Shape<Face>(Table, PhantomData<Face>);
 
-impl<Data> Clone for Shape<Data> {
+impl<Face> Clone for Shape<Face> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
 
-impl<Data> std::fmt::Debug for Shape<Data> {
+impl<Face> std::fmt::Debug for Shape<Face> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.debug_tuple("Shape").field(&self.0).finish()
     }
 }
 
-impl<Data> Shape<Data> {
+impl<Face> Shape<Face> {
     /// Return the stored table reference.
     pub fn as_table(&self) -> &Table {
         &self.0
@@ -35,13 +35,13 @@ impl<Data> Shape<Data> {
     }
 }
 
-impl<Data: Typed> Typed for Shape<Data> {
+impl<Face: Typed> Typed for Shape<Face> {
     fn ty() -> Type {
-        Data::ty()
+        Face::ty()
     }
 }
 
-impl<Data: Typed> FromLua for Shape<Data> {
+impl<Face: Typed> FromLua for Shape<Face> {
     fn from_lua(value: Value, _lua: &Lua) -> mlua::Result<Self> {
         match value {
             Value::Table(found) => Ok(Self(found, PhantomData)),

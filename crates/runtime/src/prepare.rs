@@ -100,7 +100,13 @@ fn changed_paths(
     for document in &built.documents {
         let prefix = format!("{}/", document.destination.display());
         for drift in drifts {
-            let path = drift.path().display();
+            let path = match drift {
+                Drift::Key { path, .. }
+                | Drift::Hunk { path, .. }
+                | Drift::Missing { path }
+                | Drift::Unreadable { path, .. } => path,
+            }
+            .display();
             if path == document.destination.display() || path.starts_with(&prefix) {
                 out.insert(document.destination.clone());
                 break;
