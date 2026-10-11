@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, Table, summary};
+use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, summary};
 use confit_model::hook::HookLifecycle;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
@@ -639,7 +639,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
                 content.split('\n').map(str::to_string).collect()
             }
         }
-        Data::Link { target } => vec![target.clone()],
+        Data::Link { target } => vec![target.display()],
         Data::Opaque { size, .. } => {
             vec![format!("opaque ({size} bytes)")]
         }
@@ -690,7 +690,12 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
             } else {
                 vec![painter.paint(
                     Sigil::Update,
-                    &format!("  {} target = {old} -> {new}", Sigil::Update.mark()),
+                    &format!(
+                        "  {} target = {} -> {}",
+                        Sigil::Update.mark(),
+                        old.display(),
+                        new.display()
+                    ),
                 )]
             }
         }
@@ -798,7 +803,11 @@ fn split_key(key: &str) -> (&str, &str) {
 }
 
 /// Collect structured leaf changes with old to new values.
-fn structured_update_lines(painter: &Painter, new: &Table, old: &Table) -> Vec<String> {
+fn structured_update_lines(
+    painter: &Painter,
+    new: &serde_json::Value,
+    old: &serde_json::Value,
+) -> Vec<String> {
     let mut out = Vec::new();
     for change in leaf_changes(old, new) {
         out.extend(paint_key_line(

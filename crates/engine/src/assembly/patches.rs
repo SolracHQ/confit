@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use mlua::{Function, Lua};
 
-use confit_model::document::{StructuredFormat, Table};
+use confit_model::document::StructuredFormat;
 use confit_model::routes::Route;
 use confit_surface_api::{
     Document, Patch, PatchTarget, Profile, RcDocument, RcPatch, StructuredPatch, route_value,
@@ -152,7 +152,7 @@ pub(super) fn structured_base_of(
     target: &Route,
     first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(Route, StructuredFormat, Table)> {
+) -> Result<(Route, StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match placed.get(target) {
         Some(body) => {
             let display = target.display();
@@ -175,7 +175,7 @@ fn structured_declared_base(
     display: &str,
     first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(Route, StructuredFormat, Table)> {
+) -> Result<(Route, StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match body {
         Document::Structured(found) => {
             for patch in patches {
@@ -183,7 +183,7 @@ fn structured_declared_base(
                     return Err(gap(display, found.format.name(), patch.format.name()));
                 }
             }
-            let mut data = Table::new();
+            let mut data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
             for (key, value) in &found.data {
                 data.insert(key.clone(), value.0.clone());
             }

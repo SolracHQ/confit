@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use confit_driver::sha::Sha;
-use confit_model::document::BlobRef;
+use serde::{Deserialize, Serialize};
 
 use crate::archive::error::ArchiveError;
 use crate::resources::error::ResourceError;
@@ -21,6 +21,15 @@ pub struct ResourceHandle {
 pub struct BlobHandle {
     sha256: Sha,
     stored: Sha,
+}
+
+/// Content-addressed bytes ref for manifests.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BlobRef {
+    /// Content hash for payload bytes.
+    pub sha256: Sha,
+    /// Pool-bytes hash for gzip bytes.
+    pub stored: Sha,
 }
 
 /// Handle to a verified compressed archive.
@@ -88,6 +97,13 @@ impl BlobHandle {
     /// Build the manifest ref with both hashes.
     pub fn to_ref(&self) -> BlobRef {
         BlobRef::new(self.sha256.clone(), self.stored.clone())
+    }
+}
+
+impl BlobRef {
+    /// Build one blob ref from verified content and stored hashes.
+    pub fn new(sha256: Sha, stored: Sha) -> Self {
+        Self { sha256, stored }
     }
 }
 

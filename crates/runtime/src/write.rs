@@ -75,8 +75,11 @@ impl Writer {
                 continue;
             }
             let outcome = match &document.data {
-                Data::Link { target } => driver::fs::write_link(&expanded, Path::new(target))
-                    .map_err(|error| RuntimeError::from_write_io(&expanded, error)),
+                Data::Link { target } => {
+                    let link = target.display();
+                    driver::fs::write_link(&expanded, Path::new(&link))
+                        .map_err(|error| RuntimeError::from_write_io(&expanded, error))
+                }
                 Data::Text { .. } | Data::Structured { .. } | Data::Rc(_) => {
                     if let Err(error) = driver::fs::remove_link(&expanded) {
                         return Err(RuntimeError::from_write_io(&expanded, error));
@@ -214,7 +217,7 @@ mod tests {
             literal(path),
             Data::Text {
                 content: "deleted bytes".into(),
-                mode: None,
+                mode: 0o644,
                 unmanaged: false,
             },
         )

@@ -8,3 +8,6 @@ mlua = { workspace = true, features = ["lua54", "vendored"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+confit-binding-macros = { path = "../binding-macros" }

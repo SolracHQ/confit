@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_driver as driver;
-use confit_model::document::{BlobRef, Data, Document, ManifestMember};
+use confit_model::document::{Data, Document, ManifestMember};
 use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
+use confit_store::handles::BlobRef;
 
 use crate::error::{Result, RuntimeError};
 
@@ -337,7 +338,7 @@ mod disk_tests {
             literal(path),
             Data::Text {
                 content: "disk bytes".into(),
-                mode: None,
+                mode: 0o644,
                 unmanaged: false,
             },
         )

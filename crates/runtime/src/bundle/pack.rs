@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_driver::{self as driver};
-use confit_model::document::BlobRef;
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
 use confit_store::handles::ArchiveHandle;
+use confit_store::handles::BlobRef;
 
 use super::Bundler;
 use super::ensure_bundle_extension;
@@ -179,7 +179,7 @@ mod tests {
                 Data::Opaque {
                     blob: handle.to_ref(),
                     size: body.len() as u64,
-                    mode: None,
+                    mode: 0o644,
                     unmanaged: false,
                 },
             ));

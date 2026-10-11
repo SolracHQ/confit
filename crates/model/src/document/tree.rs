@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::{BlobRef, Document, DocumentStatus};
+use super::{Document, DocumentStatus};
+use confit_store::handles::BlobRef;
 
 /// One persisted tree member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,7 +118,7 @@ mod tests {
             Route::new(RouteBase::Home, name).unwrap(),
             Data::Text {
                 content: content.into(),
-                mode: None,
+                mode: 0o644,
                 unmanaged: false,
             },
         );

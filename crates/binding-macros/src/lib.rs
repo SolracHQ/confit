@@ -20,6 +20,8 @@ mod untagged;
 /// - Field docs plus variant docs read `///` lines.
 /// - Optional fields hold Option values with inner content.
 /// - Opaque fields pass Lua functions plus handles through.
+/// - Proxy fields face as the proxy type and decode through the convert
+///   function with Lua access.
 /// - Userdata faces carry Clone handles.
 #[proc_macro_derive(Face, attributes(face))]
 pub fn derive_face(input: TokenStream) -> TokenStream {

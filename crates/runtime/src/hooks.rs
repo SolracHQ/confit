@@ -242,7 +242,7 @@ mod tests {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
-    fn text_doc(path: &std::path::Path, mode: Option<u32>) -> Document {
+    fn text_doc(path: &std::path::Path, mode: u32) -> Document {
         Document::new(
             literal(path),
             Data::Text {
@@ -308,7 +308,7 @@ mod tests {
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
         let writer = writer_in(dir.path());
-        let changed = write_doc(&writer, &text_doc(&binary, Some(0o755)));
+        let changed = write_doc(&writer, &text_doc(&binary, 0o755));
         let decided = match runner().decide_all(std::slice::from_ref(&mise_hook(&bindir)), &changed)
         {
             Ok(decided) => decided,
@@ -344,7 +344,7 @@ mod tests {
             "missing sentinel closes the gate"
         );
         let writer = writer_in(dir.path());
-        let changed = write_doc(&writer, &text_doc(&sentinel, None));
+        let changed = write_doc(&writer, &text_doc(&sentinel, 0o644));
         let decided = match runner().decide_all(std::slice::from_ref(&hook), &changed) {
             Ok(decided) => decided,
             Err(error) => panic!("hooks decide: {error}"),

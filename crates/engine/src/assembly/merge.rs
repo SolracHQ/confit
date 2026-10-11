@@ -4,9 +4,7 @@ use std::collections::BTreeMap;
 
 use mlua::{FromLua, LuaSerdeExt, Value};
 
-use confit_model::document::{
-    Data, Document as ModelDocument, RcData, RcEntry, StructuredFormat, Table,
-};
+use confit_model::document::{Data, Document as ModelDocument, RcData, RcEntry, StructuredFormat};
 use confit_model::routes::Route;
 use confit_surface_api::{
     Document, RcDocument, RcPatch, SerializableValue, StructuredDocument, StructuredPatch,
@@ -41,7 +39,13 @@ impl Assembler<'_> {
             let display = target.display();
             let (destination, format, data) = structured_base_of(placed, target, first, patches)?;
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
-            let document = ModelDocument::new(destination, Data::Structured { format, data });
+            let document = ModelDocument::new(
+                destination,
+                Data::Structured {
+                    format,
+                    data: serde_json::Value::Object(data.into_iter().collect()),
+                },
+            );
             finished.insert(target.clone(), document);
         }
         Ok(())
@@ -88,9 +92,9 @@ impl Assembler<'_> {
         destination: &Route,
         display: &str,
         format: &StructuredFormat,
-        data: Table,
+        data: BTreeMap<String, serde_json::Value>,
         patches: &[&StructuredPatch],
-    ) -> Result<Table> {
+    ) -> Result<BTreeMap<String, serde_json::Value>> {
         let mut data = data;
         let mut owners = seed_key_owners(&data);
         for patch in patches {
@@ -158,7 +162,7 @@ impl Assembler<'_> {
 }
 
 /// Seed key owners from base data under the base name.
-fn seed_key_owners(data: &Table) -> BTreeMap<String, String> {
+fn seed_key_owners(data: &BTreeMap<String, serde_json::Value>) -> BTreeMap<String, String> {
     let mut owners = BTreeMap::new();
     for (key, value) in data {
         seed_leaves(value, key, "base", &mut owners);
@@ -189,11 +193,11 @@ fn seed_leaves(
 /// Merge patch data over live data keeping first writes.
 fn merge(
     display: &str,
-    live: Table,
+    live: BTreeMap<String, serde_json::Value>,
     owners: &mut BTreeMap<String, String>,
     next: BTreeMap<String, SerializableValue>,
     owner: Option<&str>,
-) -> Table {
+) -> BTreeMap<String, serde_json::Value> {
     let loser = owner.unwrap_or("unknown");
     let mut merged = live;
     let missing: Vec<String> = merged
@@ -215,7 +219,7 @@ fn merge(
 /// Fold one top-level entry into merged data with leaf owners.
 fn fold_entry(
     display: &str,
-    merged: &mut Table,
+    merged: &mut BTreeMap<String, serde_json::Value>,
     owners: &mut BTreeMap<String, String>,
     key: String,
     next_value: serde_json::Value,
@@ -446,7 +450,8 @@ mod tests {
 
     #[test]
     fn distinct_nested_keys_merge_side_by_side() {
-        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "latest"}))]);
+        let live: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("tools".to_owned(), json!({"bat": "latest"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([(
             "tools".to_owned(),
@@ -476,7 +481,8 @@ mod tests {
 
     #[test]
     fn same_leaf_twice_keeps_first_write() {
-        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "first"}))]);
+        let live: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("tools".to_owned(), json!({"bat": "first"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([(
             "tools".to_owned(),
@@ -499,7 +505,8 @@ mod tests {
 
     #[test]
     fn table_against_scalar_keeps_first_write() {
-        let live: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "kept"}))]);
+        let live: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("tools".to_owned(), json!({"bat": "kept"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([("tools".to_owned(), SerializableValue(json!("flat")))]);
         let merged = merge(
@@ -518,7 +525,8 @@ mod tests {
 
     #[test]
     fn lists_stay_whole_value_first_wins() {
-        let live: Table = BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
+        let live: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
         let mut owners = BTreeMap::from([("items".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([("items".to_owned(), SerializableValue(json!([3])))]);
         let merged = merge(
@@ -534,7 +542,8 @@ mod tests {
 
     #[test]
     fn seeded_base_leaves_beat_patch_writes() {
-        let base: Table = BTreeMap::from([("tools".to_owned(), json!({"bat": "base"}))]);
+        let base: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("tools".to_owned(), json!({"bat": "base"}))]);
         let mut owners = seed_key_owners(&base);
         let next = BTreeMap::from([(
             "tools".to_owned(),

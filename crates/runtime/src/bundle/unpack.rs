@@ -201,7 +201,7 @@ mod tests {
                 Data::Opaque {
                     blob: handle.to_ref(),
                     size: body.len() as u64,
-                    mode: None,
+                    mode: 0o644,
                     unmanaged: false,
                 },
             ));
@@ -318,7 +318,7 @@ mod tests {
                 Data::Opaque {
                     blob: handle.to_ref(),
                     size: 12,
-                    mode: None,
+                    mode: 0o644,
                     unmanaged: false,
                 },
             )],

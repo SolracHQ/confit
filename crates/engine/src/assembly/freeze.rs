@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use confit_model::document::{Data, Document as ModelDocument, ManifestMember, RcData};
+use confit_model::document::{
+    DEFAULT_FILE_MODE, Data, Document as ModelDocument, ManifestMember, RcData,
+};
 use confit_model::routes::Route;
 use confit_store::blob::BlobSource;
 use confit_surface_api::{ApiError, Document, Tree, TreeSlot};
@@ -24,19 +26,21 @@ impl Assembler<'_> {
         let data = match body {
             Document::Text(found) => Data::Text {
                 content: found.text.clone(),
-                mode: found.mode.clone().into_inner(),
+                mode: found.mode.clone().into_inner().unwrap_or(DEFAULT_FILE_MODE),
                 unmanaged: found.unmanaged.unwrap_or(false),
             },
             Document::Structured(found) => Data::Structured {
                 format: found.format,
-                data: found
-                    .data
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.0.clone()))
-                    .collect(),
+                data: serde_json::Value::Object(
+                    found
+                        .data
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.0.clone()))
+                        .collect(),
+                ),
             },
             Document::Link(found) => Data::Link {
-                target: found.target.display(),
+                target: found.target.clone(),
             },
             Document::Rc(found) => Data::Rc(RcData::new(
                 found.profile.clone(),
@@ -59,7 +63,7 @@ impl Assembler<'_> {
                 Data::Opaque {
                     blob: opened.to_ref(),
                     size,
-                    mode: found.mode.clone().into_inner(),
+                    mode: found.mode.clone().into_inner().unwrap_or(DEFAULT_FILE_MODE),
                     unmanaged: found.unmanaged,
                 }
             }

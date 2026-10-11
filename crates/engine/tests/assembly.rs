@@ -199,7 +199,7 @@ fn placed_documents_convert_every_kind() {
                     unmanaged,
                 } => {
                     assert_eq!(content, "hi");
-                    assert_eq!(*mode, None);
+                    assert_eq!(*mode, 0o644);
                     assert!(!unmanaged);
                 }
                 _ => panic!("text stays text"),
@@ -212,7 +212,7 @@ fn placed_documents_convert_every_kind() {
                 _ => panic!("structured stays structured"),
             }
             match &by_display("home('linked')").data {
-                Data::Link { target } => assert_eq!(target, "home('origin')"),
+                Data::Link { target } => assert_eq!(target.display(), "home('origin')"),
                 _ => panic!("link stays link"),
             }
             assert_eq!(
@@ -227,7 +227,7 @@ fn placed_documents_convert_every_kind() {
                     ..
                 } => {
                     assert_eq!(*size, 2);
-                    assert_eq!(*mode, Some(0o644));
+                    assert_eq!(*mode, 0o644);
                     assert!(unmanaged);
                 }
                 _ => panic!("opaque stays opaque"),

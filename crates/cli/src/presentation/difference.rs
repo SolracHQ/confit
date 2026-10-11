@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_model::document::Table;
 use confit_model::routes::Route;
 use confit_runtime::Difference;
 
@@ -72,17 +71,19 @@ pub fn leaf_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Flatten one table into dotted leaf entries.
-pub fn flatten_table(table: &Table) -> BTreeMap<String, serde_json::Value> {
+/// Flatten one value into dotted leaf entries.
+pub fn flatten_table(value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
-    for (key, value) in table {
-        flatten_value(key, value, &mut out);
+    if let serde_json::Value::Object(map) = value {
+        for (key, item) in map {
+            flatten_value(key, item, &mut out);
+        }
     }
     out
 }
 
-/// Collect leaf differences between two tables.
-pub fn leaf_changes(old: &Table, new: &Table) -> Vec<LeafChange> {
+/// Collect leaf differences between two values.
+pub fn leaf_changes(old: &serde_json::Value, new: &serde_json::Value) -> Vec<LeafChange> {
     let old_flat = flatten_table(old);
     let new_flat = flatten_table(new);
     let mut keys = BTreeSet::new();

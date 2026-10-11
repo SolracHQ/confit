@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use confit_driver::sha::Sha;
-use confit_model::document::{Data, Document, StructuredFormat, Table, render_mode};
+use confit_model::document::{Data, Document, StructuredFormat, render_mode};
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
@@ -31,10 +31,10 @@ pub enum Difference {
     Structured {
         /// The recorded destination route.
         path: Route,
-        /// The recorded table.
-        old: Table,
-        /// The disk table.
-        new: Table,
+        /// The recorded value.
+        old: serde_json::Value,
+        /// The disk value.
+        new: serde_json::Value,
     },
     /// Text difference between recorded and disk.
     Diff {
@@ -300,15 +300,15 @@ fn disk_difference(
         }
         Data::Link { target } => {
             let disk_target = String::from_utf8_lossy(disk);
-            if disk_target.as_ref() != target {
+            if disk_target.as_ref() != target.display() {
                 let (old, new) = match order {
                     DifferenceOrder::RecordedFirst => (
-                        serde_json::Value::String(target.clone()),
+                        serde_json::Value::String(target.display()),
                         serde_json::Value::String(disk_target.into_owned()),
                     ),
                     DifferenceOrder::DiskFirst => (
                         serde_json::Value::String(disk_target.into_owned()),
-                        serde_json::Value::String(target.clone()),
+                        serde_json::Value::String(target.display()),
                     ),
                 };
                 vec![Difference::Key {
@@ -392,18 +392,23 @@ fn push_diff(path: &Route, first: &[u8], second: &[u8]) -> Vec<Difference> {
     }]
 }
 
-/// Parse disk bytes to a table by format.
-fn parse_disk_table(format: StructuredFormat, disk: &[u8]) -> Option<Table> {
+/// Parse disk bytes to a value by format.
+fn parse_disk_table(format: StructuredFormat, disk: &[u8]) -> Option<serde_json::Value> {
     let text = std::str::from_utf8(disk).ok()?;
-    match format {
-        StructuredFormat::Json => serde_json::from_str(text).ok(),
-        StructuredFormat::Toml => toml::from_str(text).ok(),
-        StructuredFormat::Yaml => noyalib::from_str(text).ok(),
-    }
+    let value: serde_json::Value = match format {
+        StructuredFormat::Json => serde_json::from_str(text).ok()?,
+        StructuredFormat::Toml => toml::from_str(text).ok()?,
+        StructuredFormat::Yaml => noyalib::from_str(text).ok()?,
+    };
+    if value.is_object() { Some(value) } else { None }
 }
 
-/// Report one path-level entry for differing structured tables.
-fn structured_difference(path: &Route, old: &Table, new: &Table) -> Vec<Difference> {
+/// Report one path-level entry for differing structured values.
+fn structured_difference(
+    path: &Route,
+    old: &serde_json::Value,
+    new: &serde_json::Value,
+) -> Vec<Difference> {
     if old == new {
         Vec::new()
     } else {

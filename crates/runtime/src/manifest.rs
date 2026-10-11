@@ -5,10 +5,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use confit_driver::sha::Sha;
-use confit_model::document::{BlobRef, Document, StructuredFormat};
+use confit_model::document::{Document, StructuredFormat};
 use confit_model::error::{Error, Result};
 use confit_model::hook::Hook;
 use confit_store::faults::AccessFault;
+use confit_store::handles::BlobRef;
 use confit_store::handles::StateHandle;
 use confit_store::state::Picker;
 use confit_store::state::StateStore;
@@ -287,7 +288,7 @@ mod tests {
             Data::Opaque {
                 blob,
                 size: 1,
-                mode: None,
+                mode: 0o644,
                 unmanaged: false,
             },
         )

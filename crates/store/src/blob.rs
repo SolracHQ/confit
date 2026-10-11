@@ -10,12 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use confit_driver::progress::{Event, ProgressSender};
 use confit_driver::sha::{Sha, ShaWriter};
-use confit_model::document::BlobRef;
 use sha2::Digest;
 
 use crate::StoreRoots;
 use crate::faults::AccessFault;
-use crate::handles::{BlobHandle, ResourceHandle};
+use crate::handles::{BlobHandle, BlobRef, ResourceHandle};
 use confit_driver::{self as driver};
 use error::{BlobError, Result};
 

@@ -3,7 +3,7 @@
 
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
-use confit_model::document::{Data, Document, RcData, RcEntry, RcOp, StructuredFormat, Table};
+use confit_model::document::{Data, Document, RcData, RcEntry, RcOp, StructuredFormat};
 
 use crate::error::{RefusalShape, Result, RuntimeError};
 
@@ -24,7 +24,7 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
             StructuredFormat::Yaml => Ok(render_yaml(&document.destination, data)?.into_bytes()),
         },
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-        Data::Link { target } => Ok(target.as_bytes().to_vec()),
+        Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
         Data::Opaque { blob, .. } => {
             log::error!(
@@ -44,9 +44,9 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
     }
 }
 
-/// Render a table to TOML text.
-fn render_toml(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
-    toml::to_string(table).map_err(|source| {
+/// Render a value to TOML text.
+fn render_toml(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+    toml::to_string(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as toml failed: {reason}", route.display());
         RuntimeError::Render {
@@ -57,9 +57,9 @@ fn render_toml(route: &confit_model::routes::Route, table: &Table) -> Result<Str
     })
 }
 
-/// Render a table to pretty JSON text.
-fn render_json(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
-    serde_json::to_string_pretty(table).map_err(|source| {
+/// Render a value to pretty JSON text.
+fn render_json(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+    serde_json::to_string_pretty(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as json failed: {reason}", route.display());
         RuntimeError::Render {
@@ -70,9 +70,9 @@ fn render_json(route: &confit_model::routes::Route, table: &Table) -> Result<Str
     })
 }
 
-/// Render a table to YAML text.
-fn render_yaml(route: &confit_model::routes::Route, table: &Table) -> Result<String> {
-    noyalib::to_string(table).map_err(|source| {
+/// Render a value to YAML text.
+fn render_yaml(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+    noyalib::to_string(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as yaml failed: {reason}", route.display());
         RuntimeError::Render {

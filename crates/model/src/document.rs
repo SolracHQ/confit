@@ -4,21 +4,20 @@
 pub mod rc;
 pub mod tree;
 
-use std::collections::BTreeMap;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::routes::Route;
 use confit_driver::sha::Sha;
+use confit_store::handles::BlobRef;
 
 pub use rc::{RcData, RcEntry, RcOp, RcSection};
 pub(crate) use tree::tree_manifest_bytes;
 pub use tree::{ManifestMember, Summary, summary, tree_changed};
 
-/// JSON shaped data table for structured documents.
-pub type Table = BTreeMap<String, serde_json::Value>;
+/// Default unix permission bits for files without explicit modes.
+pub const DEFAULT_FILE_MODE: u32 = 0o644;
 
 /// Serialization format for structured documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -97,22 +96,6 @@ impl std::fmt::Display for DocumentKind {
     }
 }
 
-/// Content-addressed bytes ref for manifests.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BlobRef {
-    /// Content hash for payload bytes.
-    pub sha256: Sha,
-    /// Pool-bytes hash for gzip bytes.
-    pub stored: Sha,
-}
-
-impl BlobRef {
-    /// Build one blob ref from verified content and stored hashes.
-    pub fn new(sha256: Sha, stored: Sha) -> Self {
-        Self { sha256, stored }
-    }
-}
-
 /// Persisted document payload with binary bytes as refs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,23 +105,23 @@ pub enum Data {
         /// The serialization format.
         format: StructuredFormat,
         /// Payload for rendering.
-        data: Table,
+        data: serde_json::Value,
     },
     /// Plain text content.
     Text {
         /// The exact file text.
         content: String,
         /// Unix permission bits.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<u32>,
+        #[serde(default = "default_file_mode")]
+        mode: u32,
         /// Presence-only satisfaction flag.
         #[serde(default)]
         unmanaged: bool,
     },
     /// Symlink placement.
     Link {
-        /// The link target.
-        target: String,
+        /// The link target route.
+        target: Route,
     },
     /// The rc data object.
     Rc(RcData),
@@ -149,8 +132,8 @@ pub enum Data {
         /// Raw byte count of the file content.
         size: u64,
         /// Unix permission bits.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<u32>,
+        #[serde(default = "default_file_mode")]
+        mode: u32,
         /// Presence-only satisfaction flag.
         #[serde(default)]
         unmanaged: bool,
@@ -178,7 +161,7 @@ impl Data {
     /// Return the unix permission bits for this payload.
     pub fn mode(&self) -> Option<u32> {
         match self {
-            Self::Text { mode, .. } | Self::Opaque { mode, .. } => *mode,
+            Self::Text { mode, .. } | Self::Opaque { mode, .. } => Some(*mode),
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
         }
     }
@@ -336,6 +319,11 @@ pub fn render_mode(mode: u32) -> String {
     format!("{mode:o}")
 }
 
+/// Return the default unix permission bits for decode.
+fn default_file_mode() -> u32 {
+    DEFAULT_FILE_MODE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,7 +343,7 @@ mod tests {
     fn fill_hash_pins_text_bytes() {
         let hash = fill(Data::Text {
             content: "pinned text\n".into(),
-            mode: None,
+            mode: 0o644,
             unmanaged: false,
         });
         assert_eq!(
@@ -366,11 +354,10 @@ mod tests {
 
     #[test]
     fn fill_hash_pins_structured_bytes() {
-        let mut table: Table = Table::new();
-        table.insert("key".to_string(), serde_json::Value::String("value".into()));
+        let data = serde_json::json!({"key": "value"});
         let hash = fill(Data::Structured {
             format: StructuredFormat::Json,
-            data: table,
+            data,
         });
         assert_eq!(
             hash, "796a0bdfc73f373f33ec3098a246b3d27a10d75e9f4f3dd4e4630efc0f2d3184",
@@ -425,7 +412,7 @@ mod tests {
         let hash = fill(Data::Opaque {
             blob,
             size: 2,
-            mode: None,
+            mode: 0o644,
             unmanaged: false,
         });
         assert_eq!(

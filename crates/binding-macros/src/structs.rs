@@ -8,13 +8,22 @@ use syn::{Attribute, Meta, Type, ext::IdentExt, punctuated::Punctuated, token::C
 use super::parse::doc_lines;
 
 /// Field flags parsing from one face attribute.
-#[derive(Default, Debug)]
+///
+/// - Proxy names the Lua face.
+/// - Convert names the decode function.
+#[derive(Default)]
 struct FieldFlags {
     optional: bool,
     opaque: bool,
+    proxy: Option<syn::Path>,
+    convert: Option<syn::Path>,
 }
 
 /// Parse field flags from one field attribute list.
+///
+/// # Errors
+///
+/// - `syn::Error` for unknown options and unpaired proxy and convert.
 fn parse_field_flags(
     outer: &str,
     field: &str,
@@ -27,31 +36,99 @@ fn parse_field_flags(
         }
         let items = attr.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)?;
         for item in items {
-            if !matches!(item, Meta::Path(_)) {
-                return Err(syn::Error::new_spanned(
-                    &item,
-                    format!("{outer}.{field}: face field takes flags alone"),
-                ));
-            }
-            let ident = item
-                .path()
-                .get_ident()
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            match ident.as_str() {
-                "optional" => flags.optional = true,
-                "opaque" => flags.opaque = true,
+            match &item {
+                Meta::Path(path) => {
+                    let ident = path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    match ident.as_str() {
+                        "optional" => flags.optional = true,
+                        "opaque" => flags.opaque = true,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &item,
+                                format!(
+                                    "{outer}.{field}: unknown face option '{ident}'; \
+                                     want 'optional', 'opaque', 'proxy', or 'convert'"
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Meta::NameValue(pair) => {
+                    let key = pair
+                        .path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    match key.as_str() {
+                        "proxy" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'proxy' wants a face type"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'proxy' wants a face type"
+                                    ),
+                                ));
+                            }
+                            flags.proxy = Some(found.path.clone());
+                        }
+                        "convert" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                    ),
+                                ));
+                            }
+                            flags.convert = Some(found.path.clone());
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &pair.path,
+                                format!(
+                                    "{outer}.{field}: unknown face option '{key}'; \
+                                     want 'optional', 'opaque', 'proxy', or 'convert'"
+                                ),
+                            ));
+                        }
+                    }
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         &item,
                         format!(
-                            "{outer}.{field}: unknown face option '{ident}'; \
-                             want 'optional' or 'opaque'"
+                            "{outer}.{field}: unknown face shape; want 'optional', \
+                             'opaque', 'proxy', or 'convert'"
                         ),
                     ));
                 }
             }
         }
+    }
+    if flags.proxy.is_some() != flags.convert.is_some() {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face options 'proxy' and 'convert' arrive together"),
+        ));
     }
     Ok(flags)
 }
@@ -125,17 +202,58 @@ pub(crate) fn expand_struct_table(
         } else {
             path.clone()
         };
+        let face_tokens: Tokens = match flags.proxy.as_ref() {
+            Some(proxy) => quote! { #proxy },
+            None => quote! { #ty },
+        };
         descriptors.push(quote! {
             ::confit_binding::face::FieldDescriptor {
                 name: #field_name,
                 documentation: #docs,
                 face: ::std::borrow::Cow::Owned(
-                    <#ty as ::confit_binding::face::Face>::face_name(),
+                    <#face_tokens as ::confit_binding::face::Face>::face_name(),
                 ),
                 optional: #optional,
             }
         });
-        if flags.optional {
+        if let Some(convert) = flags.convert.as_ref() {
+            if flags.optional {
+                decodes.push(quote! {
+                    let raw_value: ::mlua::Value =
+                        ::confit_binding::value::read_field(&table, #outer, #field_name)?;
+                    let #ident = if matches!(raw_value, ::mlua::Value::Nil) {
+                        <#ty as ::std::default::Default>::default()
+                    } else {
+                        ::confit_binding::value::decode_proxy(
+                            lua,
+                            &raw_value,
+                            #flagged,
+                            #convert,
+                        )?
+                    };
+                });
+            } else {
+                decodes.push(quote! {
+                    let raw_value: ::mlua::Value =
+                        ::confit_binding::value::read_field(&table, #outer, #field_name)?;
+                    if matches!(raw_value, ::mlua::Value::Nil) {
+                        return ::std::result::Result::Err(
+                            ::confit_binding::value::Mismatch {
+                                path: #path.to_owned(),
+                                want: <#face_tokens as ::confit_binding::face::Face>::face_name(),
+                                found: "nil".to_owned(),
+                            },
+                        );
+                    }
+                    let #ident = ::confit_binding::value::decode_proxy(
+                        lua,
+                        &raw_value,
+                        #flagged,
+                        #convert,
+                    )?;
+                });
+            }
+        } else if flags.optional {
             decodes.push(quote! {
                 let raw_value: ::mlua::Value =
                     ::confit_binding::value::read_field(&table, #outer, #field_name)?;
@@ -173,7 +291,7 @@ pub(crate) fn expand_struct_table(
             });
         }
         members.push(quote! {
-            <#ty as ::confit_binding::face::Face>::collect(collector)?;
+            <#face_tokens as ::confit_binding::face::Face>::collect(collector)?;
         });
         idents.push(ident);
         keys.push(field_name);

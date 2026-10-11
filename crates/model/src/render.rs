@@ -3,7 +3,7 @@
 
 use crate::arg::{Arg, quote};
 use crate::condition::Condition;
-use crate::document::{Data, RcData, RcEntry, RcOp, StructuredFormat, Table};
+use crate::document::{Data, RcData, RcEntry, RcOp, StructuredFormat};
 use crate::error::{Error, Result};
 
 /// Interactivity guard shared by every shell file.
@@ -23,7 +23,7 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
             StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
         },
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
-        Data::Link { target } => Ok(target.as_bytes().to_vec()),
+        Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
         Data::Opaque { blob, .. } => Err(Error::Parse {
             input: blob.sha256.hex(),
@@ -36,25 +36,25 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
     }
 }
 
-/// Render a table to TOML text.
-fn render_toml(table: &Table) -> Result<String> {
-    toml::to_string(table).map_err(|source| Error::Render {
+/// Render a value to TOML text.
+fn render_toml(value: &serde_json::Value) -> Result<String> {
+    toml::to_string(value).map_err(|source| Error::Render {
         format: StructuredFormat::Toml,
         reason: source.to_string(),
     })
 }
 
-/// Render a table to pretty JSON text.
-fn render_json(table: &Table) -> Result<String> {
-    serde_json::to_string_pretty(table).map_err(|source| Error::Render {
+/// Render a value to pretty JSON text.
+fn render_json(value: &serde_json::Value) -> Result<String> {
+    serde_json::to_string_pretty(value).map_err(|source| Error::Render {
         format: StructuredFormat::Json,
         reason: source.to_string(),
     })
 }
 
-/// Render a table to YAML text.
-fn render_yaml(table: &Table) -> Result<String> {
-    noyalib::to_string(table).map_err(|source| Error::Render {
+/// Render a value to YAML text.
+fn render_yaml(value: &serde_json::Value) -> Result<String> {
+    noyalib::to_string(value).map_err(|source| Error::Render {
         format: StructuredFormat::Yaml,
         reason: source.to_string(),
     })
