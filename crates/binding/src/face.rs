@@ -1,5 +1,5 @@
 //! Face
-//! Declaration traits for Lua table and userdata faces.
+//! Bound face traits for Lua tables and userdata.
 
 use std::borrow::Cow;
 
@@ -40,6 +40,8 @@ pub struct VariantDescriptor {
 pub enum FaceKind {
     /// Table shape.
     Table,
+    /// Function shape.
+    Function,
     /// Userdata handle.
     Userdata,
 }
@@ -107,10 +109,13 @@ macro_rules! primitive_face {
 primitive_face!(String, "string");
 primitive_face!(bool, "boolean");
 primitive_face!(i64, "integer");
+primitive_face!(u32, "integer");
 primitive_face!(u64, "integer");
 primitive_face!(f64, "number");
 primitive_face!(mlua::Function, "fun()");
+primitive_face!(mlua::Table, "table");
 primitive_face!(mlua::Value, "any");
+primitive_face!(serde_json::Value, "any");
 
 impl Face for () {
     fn face_name() -> String {
@@ -188,6 +193,38 @@ impl<T: Face> Face for Box<T> {
     }
 }
 
+impl<K: Face, V: Face> Face for std::collections::HashMap<K, V> {
+    fn face_name() -> String {
+        format!("{{[{}]: {}}}", K::face_name(), V::face_name())
+    }
+    fn face_stub() -> String {
+        String::new()
+    }
+    fn kind() -> FaceKind {
+        V::kind()
+    }
+    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+        K::collect(collector)?;
+        V::collect(collector)
+    }
+}
+
+impl<K: Face, V: Face> Face for std::collections::BTreeMap<K, V> {
+    fn face_name() -> String {
+        format!("{{[{}]: {}}}", K::face_name(), V::face_name())
+    }
+    fn face_stub() -> String {
+        String::new()
+    }
+    fn kind() -> FaceKind {
+        V::kind()
+    }
+    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+        K::collect(collector)?;
+        V::collect(collector)
+    }
+}
+
 fn parenthesized(face: &str) -> String {
     if face.contains(" | ") {
         format!("({face})")
@@ -201,8 +238,55 @@ mod tests {
     use super::*;
     use confit_binding_macros::Face;
     use mlua::{Lua, Value};
+    use std::collections::{BTreeMap, HashMap};
 
-    use crate::value::Decode;
+    use crate::value::{Decode, Encode, Mismatch};
+
+    /// Holder face for map convert tests.
+    #[derive(Debug, Face)]
+    #[face(table)]
+    struct MapHolder {
+        /// Entries keyed by name.
+        #[face(key_convert = upper_key, value_convert = exclaim_value, default)]
+        entries: HashMap<String, String>,
+    }
+
+    /// Read one map key into its uppercase shape.
+    fn upper_key(lua: &Lua, value: &Value) -> Result<String, Mismatch> {
+        String::decode(value, lua).map(|key| key.to_uppercase())
+    }
+
+    /// Read one map value into its exclaimed shape.
+    fn exclaim_value(lua: &Lua, value: &Value) -> Result<String, Mismatch> {
+        String::decode(value, lua).map(|item| format!("{item}!"))
+    }
+
+    /// Holder face with one Rust-filled field beside its Lua shape.
+    #[derive(Debug, Face)]
+    #[face(table)]
+    struct IgnoredHolder {
+        /// The kept Lua field.
+        kept: String,
+        /// The Rust-filled field missing from Lua.
+        #[face(ignore)]
+        filled: std::time::Duration,
+    }
+
+    /// Union with one Rust-filled inline field.
+    #[derive(Face)]
+    #[face(table, untagged)]
+    enum IgnoredUnion {
+        /// Text payload with a Rust-filled count.
+        Text {
+            /// The exact file text.
+            content: String,
+            /// The Rust-filled count.
+            #[face(ignore)]
+            count: u64,
+        },
+        /// Plain sequence payload.
+        Shaped(Vec<String>),
+    }
 
     /// Union of inline and tuple arms.
     #[derive(Face)]
@@ -326,5 +410,114 @@ mod tests {
         sequence.set(1, table).unwrap();
         let nested = NoDocs::decode(&Value::Table(sequence), &lua).unwrap();
         assert!(matches!(&nested, NoDocs::Many(items) if items.len() == 1));
+    }
+
+    #[test]
+    fn map_faces_read_member_faces() {
+        assert_eq!(
+            HashMap::<String, String>::face_name(),
+            "{[string]: string}".to_owned()
+        );
+        assert_eq!(
+            BTreeMap::<String, NoDocs>::face_name(),
+            "{[string]: NoDocs}".to_owned()
+        );
+        let mut collector = Registry::new();
+        MapHolder::collect(&mut collector).unwrap();
+        assert!(collector.contains("MapHolder"));
+        assert!(MapHolder::face_stub().contains("{[string]: string}"));
+    }
+
+    #[test]
+    fn map_converts_decode_entries() {
+        let lua = Lua::new();
+        let entries = lua.create_table().unwrap();
+        entries.set("alpha", "one").unwrap();
+        let table = lua.create_table().unwrap();
+        table.set("entries", entries).unwrap();
+        let decoded = MapHolder::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(
+            decoded.entries.get("ALPHA").map(String::as_str),
+            Some("one!")
+        );
+        let bare = lua.create_table().unwrap();
+        let decoded = MapHolder::decode(&Value::Table(bare), &lua).unwrap();
+        assert!(decoded.entries.is_empty());
+    }
+
+    #[test]
+    fn map_convert_failures_keep_dotted_paths() {
+        let lua = Lua::new();
+        let entries = lua.create_table().unwrap();
+        entries.set("alpha", 1).unwrap();
+        let table = lua.create_table().unwrap();
+        table.set("entries", entries).unwrap();
+        let failure = MapHolder::decode(&Value::Table(table), &lua).unwrap_err();
+        let text = failure.to_string();
+        assert!(
+            text.contains("MapHolder.entries"),
+            "the text shows the field: {text}"
+        );
+        assert!(text.contains("a string"), "the text shows the want: {text}");
+    }
+
+    #[test]
+    fn ignored_fields_skip_stubs_with_defaults_through_codecs() {
+        let stub = IgnoredHolder::face_stub();
+        assert!(stub.contains("kept"), "the stub shows the Lua field");
+        assert!(
+            !stub.contains("@field filled"),
+            "the stub skips the Rust field"
+        );
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("kept", "hi").unwrap();
+        let decoded = IgnoredHolder::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(decoded.kept, "hi");
+        assert_eq!(decoded.filled, std::time::Duration::default());
+        let encoded = decoded.encode(&lua).unwrap();
+        let Value::Table(back) = encoded else {
+            panic!("holder encodes a table");
+        };
+        let kept: String = back.get("kept").unwrap();
+        assert_eq!(kept, "hi");
+        assert!(
+            !back.contains_key("filled").unwrap(),
+            "the encoding skips the Rust field"
+        );
+        let round = IgnoredHolder::decode(&Value::Table(back), &lua).unwrap();
+        assert_eq!(round.filled, std::time::Duration::default());
+    }
+
+    #[test]
+    fn ignored_fields_reject_foreign_keys() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("kept", "hi").unwrap();
+        table.set("filled", 1).unwrap();
+        let failure = IgnoredHolder::decode(&Value::Table(table), &lua).unwrap_err();
+        let text = failure.to_string();
+        assert!(text.contains("filled"), "the text shows the key: {text}");
+    }
+
+    #[test]
+    fn ignored_inline_fields_skip_stubs_with_defaults() {
+        let stub = IgnoredUnion_Text::face_stub();
+        assert!(stub.contains("content"), "the stub shows the Lua field");
+        assert!(
+            !stub.contains("@field count"),
+            "the stub skips the Rust field"
+        );
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("content", "hi").unwrap();
+        let decoded = IgnoredUnion::decode(&Value::Table(table), &lua).unwrap();
+        match decoded {
+            IgnoredUnion::Text { content, count } => {
+                assert_eq!(content, "hi");
+                assert_eq!(count, 0);
+            }
+            IgnoredUnion::Shaped(_) => panic!("content routes to the text arm"),
+        }
     }
 }

@@ -3,6 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_binding::value::{Decode, Mismatch};
+use confit_binding_macros::Face;
+use mlua::{Lua, Value};
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -10,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 /// Portable standard folders enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Face, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[schemars(rename_all = "lowercase")]
+#[face(table, string)]
 pub enum RouteBase {
     /// User home folder.
     Home,
@@ -27,14 +31,19 @@ pub enum RouteBase {
 }
 
 /// Portable route over standard folders.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Face, JsonSchema)]
+#[face(table, validate = check_route)]
 pub struct Route {
+    /// The destination base.
     base: RouteBase,
+    /// The relative path.
+    #[face(proxy = String, convert = decode_relative)]
     relative: PathBuf,
 }
 
 /// One jailed segment offense.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
+#[face(table, string)]
 pub enum SegmentFault {
     /// Empty segment string.
     Empty,
@@ -235,6 +244,29 @@ fn check_relative(base: RouteBase, relative: &str) -> Result<Route> {
             input: relative.to_owned(),
             fault,
         }),
+    }
+}
+
+/// Decode one relative string into its path.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside the string shape.
+fn decode_relative(lua: &Lua, value: &Value) -> std::result::Result<PathBuf, Mismatch> {
+    String::decode(value, lua).map(PathBuf::from)
+}
+
+/// Check one route keeps its relative path inside its base jail.
+///
+/// # Errors
+///
+/// - [`mlua::Error`] for escaping or empty shapes.
+fn check_route(route: &Route) -> mlua::Result<()> {
+    let absolute_ok = route.base == RouteBase::Literal;
+    let text = route.relative.display().to_string();
+    match split_checked(&text, absolute_ok) {
+        Ok(_) => Ok(()),
+        Err(fault) => Err(mlua::Error::external(Error::Segment { input: text, fault })),
     }
 }
 

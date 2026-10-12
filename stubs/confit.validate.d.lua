@@ -1,112 +1,203 @@
 --- @meta confit.validate
-
---- @alias TextDocument { mode: string | nil, text: string, unmanaged: boolean | nil }
-
---- @alias StructuredFormat "json" | "toml" | "yaml"
-
---- @alias Route { base: RouteBase, relative: string }
-
---- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
-
---- @alias StructuredDocument { data: { [string]: SerializableValue }, format: StructuredFormat }
-
---- @alias LinkDocument { target: Route }
-
---- @alias RcDocument { config: RcEntry[] | nil, final: RcEntry[] | nil, profile: RcEntry[] | nil }
-
---- @alias OpaqueDocument { handle: Handle, mode: string | nil, unmanaged: boolean }
-
---- @alias TreeDocument { members: Tree }
-
---- Handle to an opened input.
---- @class Handle
-local _CLASS_Handle_ = {
-	--- Seal the opened input as its archive, else nil with reason.
-	--- 
-	--- - Non-archives produce nil with reason.
-	--- @param self Handle
-	--- @return Archive | nil
-	--- @return string | nil
-	archive = function(self) end,
-	--- Read file content into its table, else nil with reason.
-	--- 
-	--- - Inputs without a table shape produce nil with reason.
-	--- @param self Handle
-	--- @return table | nil
-	--- @return string | nil
-	load = function(self) end,
-	--- Render the opened content hash.
-	--- @param self Handle
-	--- @return string
-	sha = function(self) end,
-	--- Read file text, else nil with reason.
-	--- @param self Handle
-	--- @return string | nil
-	--- @return string | nil
-	text = function(self) end,
-}
-
---- Handle to a verified compressed archive.
---- @class Archive
-local _CLASS_Archive_ = {
-	--- Open one archive member as its handle, else nil with reason.
-	--- 
-	--- - Names are archive-relative with forward slashes.
-	--- @param self Archive
-	--- @param name string
-	--- @return Handle | nil
-	--- @return string | nil
-	member = function(self, name) end,
-	--- List the archive member names, else nil with reason.
-	--- 
-	--- - Members are archive-relative with forward slashes.
-	--- @param self Archive
-	--- @return string[] | nil
-	--- @return string | nil
-	members = function(self) end,
-}
-
---- @alias Tree { [string]: TreeSlot }
-
---- @alias TreeSlot Handle | Tree
-
---- @alias Document TextDocument | StructuredDocument | LinkDocument | RcDocument | OpaqueDocument | TreeDocument
-
---- @alias StructuredPatch { apply: fun(route: Route, document: { data: { [string]: SerializableValue }, format: StructuredFormat }), filter: fun(route: Route) | nil, format: StructuredFormat, priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route | nil }
-
---- @alias RcPatch { apply: fun(route: Route, document: { config: RcEntry[] | nil, final: RcEntry[] | nil, profile: RcEntry[] | nil }), filter: fun(route: Route) | nil, priority: "minor" | "low" | "normal" | "high" | "major" | nil, target: Route | nil }
-
---- @alias Patch StructuredPatch | RcPatch
-
---- @alias HookFace { argv: Arg[], checks: Condition[] | nil, path: Arg[] | nil, requires: Condition | nil, timeout: string | nil, when: Condition | nil }
-
---- @alias SerializableValue nil | boolean | integer | number | string | table
-
---- @alias StrictString string
-
---- @alias RcEntry { env: { name: string, value: string }, when: Condition | nil } | { path: { dir: Route, name: string }, when: Condition | nil } | { alias: { expansion: string, name: string }, when: Condition | nil } | { eval: { argv: Arg[] }, when: Condition | nil } | { cmd: { argv: Arg[] }, when: Condition | nil } | { source: { path: Route }, when: Condition | nil }
-
---- @alias Condition { env_eq: { key: string, value: string } } | { env_set: { key: string } } | { in_path: { name: string } } | { exists: { route: Route } } | { changed: { route: Route } } | { all: Condition[] } | { any: Condition[] } | { nop: Condition }
-
---- @alias Arg string | Route
-
 --- Checks one body table.
---- @param body Document The body table under checking.
---- @return boolean #1: True with nil, else false with the reason.
---- @return string | nil
+--- @param body any The body table under checking.
+--- @return Document? The decoded body, else nil.
+--- @return string? The failure reason, else nil.
 function document(body) end
 
+--- Persisted document payload.
+--- @alias Document Document_Structured | Document_Text | Document_Link | RcData | Document_Opaque | Document_Tree
+
+--- Structured Text Document.
+--- @class Document_Structured
+--- @field format StructuredFormat The serialization format.
+--- @field data {[string]: any} Structured content for the file.
+
+--- Serialization format for structured documents.
+--- @alias StructuredFormat "json" | "toml" | "yaml"
+
+--- Plain Text Document.
+--- @class Document_Text
+--- @field text string The exact file text.
+--- @field mode string? Unix permission bits.
+--- @field unmanaged boolean? Existence-only document flag.
+
+--- Symbolic Link Document.
+--- @class Document_Link
+--- @field target Route The link target route.
+
+--- Portable route over standard folders.
+--- @class Route
+--- @field base RouteBase The destination base.
+--- @field relative string The relative path.
+
+--- Portable standard folders enum.
+--- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
+
+--- Shell RC Document.
+--- @class RcData
+--- @field profile RcEntry[]? Entries before the guard.
+--- @field config RcEntry[]? Entries after the guard.
+--- @field final RcEntry[]? Entries last.
+
+--- One rc entry in any section.
+--- @alias RcEntry { env: RcEntry_Env } | { path: RcEntry_Path } | { alias: RcEntry_Alias } | { eval: RcEntry_Eval } | { cmd: RcEntry_Cmd } | { source: RcEntry_Source }
+
+--- Plain value export.
+--- @class RcEntry_Env
+--- @field name string The variable name, like `EDITOR`.
+--- @field value string The value under export.
+--- @field when Condition? The shell session guard.
+
+--- Shell session predicate.
+--- @alias Condition { env_eq: Condition_EnvEq } | { env_set: Condition_EnvSet } | { in_path: Condition_InPath } | { exists: Condition_Exists } | { changed: Condition_Changed } | { all: Condition[] } | { any: Condition[] } | { nop: Condition }
+
+--- Equality between a shell variable and a value.
+--- @class Condition_EnvEq
+--- @field key string The variable name.
+--- @field value string The expected value.
+
+--- Non-empty variable assertion.
+--- @class Condition_EnvSet
+--- @field key string The variable name.
+
+--- A binary on PATH assertion.
+--- @class Condition_InPath
+--- @field name string The binary name.
+
+--- A path existence assertion.
+--- @class Condition_Exists
+--- @field route Route The route under testing.
+
+--- A changed document assertion.
+--- @class Condition_Changed
+--- @field route Route The document route under testing.
+
+--- PATH like variable around its current value.  The directory always prepends to the existing entries.
+--- @class RcEntry_Path
+--- @field name string The variable name, like `PATH`.
+--- @field dir Route The directory route for placement.
+--- @field when Condition? The shell session guard.
+
+--- Interactive alias.
+--- @class RcEntry_Alias
+--- @field name string The alias name, like `ll`.
+--- @field expansion string The alias expansion.
+--- @field when Condition? The shell session guard.
+
+--- Command output evaluation through eval.
+--- @class RcEntry_Eval
+--- @field argv Arg[] Eval command.
+--- @field when Condition? The shell session guard.
+
+--- Text or route for command arguments.
+--- @alias Arg string | Route
+
+--- Plain command line.
+--- @class RcEntry_Cmd
+--- @field argv Arg[] Plain command.
+--- @field when Condition? The shell session guard.
+
+--- File source for the shell.
+--- @class RcEntry_Source
+--- @field path Route File route for sourcing.
+--- @field when Condition? The shell session guard.
+
+--- Binary Document.
+--- @class Document_Opaque
+--- @field handle ResourceHandle The resource handle holding the file bytes.
+--- @field mode string? Unix permission bits.
+--- @field unmanaged boolean? Existence-only document flag.
+
+--- Handle to a project resource.
+--- @class ResourceHandle
+ResourceHandle = {}
+
+--- Read file text, else nil with reason.
+--- @return string?
+--- @return string?
+function ResourceHandle:text() end
+
+--- Render the opened content hash.
+--- @return string
+function ResourceHandle:sha() end
+
+--- Read file content into its table, else nil with reason.  - Inputs without a table shape produce nil with reason.
+--- @return table?
+--- @return string?
+function ResourceHandle:load() end
+
+--- Open the input as its archive, else nil with reason.  - Non-archives produce nil with reason.
+--- @return ArchiveHandle?
+--- @return string?
+function ResourceHandle:archive() end
+
+--- Handle to a verified compressed archive.
+--- @class ArchiveHandle
+ArchiveHandle = {}
+
+--- List the archive member names, else nil with reason.  - Members are archive-relative with forward slashes.
+--- @return string[]?
+--- @return string?
+function ArchiveHandle:members() end
+
+--- Open one archive member as its handle, else nil with reason.  - Names are archive-relative with forward slashes.
+--- @param name string
+--- @return ResourceHandle?
+--- @return string?
+function ArchiveHandle:member(name) end
+
+--- File Tree Document.
+--- @class Document_Tree
+--- @field members {[string]: ResourceHandle} Tree members keyed by relative path.
+
 --- Checks one config table.
---- @param config { documents: { [Route]: Document } | nil, hooks: HookFace[] | nil, name: string, patches: StructuredPatch | RcPatch[] | nil } The config table under checking.
---- @return boolean #1: True with nil, else false with the reason.
---- @return string | nil
+--- @param config any The config table under checking.
+--- @return Config? The decoded config, else nil.
+--- @return string? The failure reason, else nil.
 function config(config) end
 
---- Checks one patch table.
---- @param patch StructuredPatch | RcPatch The patch table under checking.
---- @return boolean #1: True with nil, else false with the reason.
---- @return string | nil
-function patch(patch) end
+--- One decoded config.
+--- @class Config
+--- @field name string The config name.
+--- @field documents {[Route]: Document}? Documents keyed by destination route.
+--- @field patches Patch[]? Patches in profile return order.
+--- @field hooks Hook[]? Hooks in profile return order.
 
+--- One patch table in either shape.
+--- @alias Patch StructuredPatch | RcPatch
+
+--- One structured patch table.
+--- @class StructuredPatch
+--- @field target Route? The patch target route.
+--- @field filter fun()? The patch filter callback.
+--- @field format StructuredFormat The structured format under patching.
+--- @field apply fun() The patch callback over current data.
+--- @field priority Level? The patch merge level. Higher levels apply first.
+
+--- Patch merge level.  - Names parse case-insensitively.
+--- @alias Level "minor" | "low" | "normal" | "high" | "major"
+
+--- One rc patch table.
+--- @class RcPatch
+--- @field target Route? The patch target route.
+--- @field filter fun()? The patch filter callback.
+--- @field apply fun() The patch callback over current sections.
+--- @field priority Level? The patch merge level. Higher levels apply first.
+
+--- One post-config step with conditions and checks.
+--- @class Hook
+--- @field argv Arg[] Command for the subprocess.
+--- @field path Arg[]? PATH entries for the subprocess alone.
+--- @field requires Condition? The capability condition.
+--- @field when Condition? The need condition.
+--- @field checks Condition[]? AND conditions for the run.
+--- @field timeout string? The run cap in seconds.
+
+--- Checks one patch table.
+--- @param patch any The patch table under checking.
+--- @return Patch? The decoded patch, else nil.
+--- @return string? The failure reason, else nil.
+function patch(patch) end
 
 return {document = document, config = config, patch = patch}

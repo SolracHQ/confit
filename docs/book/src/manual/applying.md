@@ -21,11 +21,11 @@ and removals.
 The run writes every document to its path. Files land with
 their rendered content, symlinks point at their targets,
 missing parent folders appear. Shell lines land in the
-startup files from the profile shells. Post-config steps run
+startup files from the shell documents. Post-config steps run
 after the files land. Each hook prints one line naming its
 place in the order, and its output lands in the run log.
 The log path prints after the run. Passing checks skip the
-hook, closed gates skip it, failures stop the rest.
+hook, failed conditions skip it, and failures stop the rest.
 
 `require` resolves under the root, so profiles, tools,
 and resources travel as one folder. The root defaults to

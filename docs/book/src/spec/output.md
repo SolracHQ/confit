@@ -62,9 +62,9 @@ bodies:
 ## Hooks section
 
 Plan hooks render as lifecycle data. Added hooks print `+`
-with full gates. Modified hooks print `~` with gate diffs.
-Removed hooks print `-` with zero detail. Unchanged hooks
-render zero lines:
+with full conditions. Modified hooks print `~` with
+condition diffs. Removed hooks print `-` with zero
+detail. Unchanged hooks render zero lines:
 
 ```
 + mise install

@@ -1,4 +1,4 @@
-//! Hook runs with gates and post-checks.
+//! Hook runs with conditions and post-checks.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -16,9 +16,9 @@ use crate::error::{Result, RuntimeError};
 /// One hook run decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// Closed capability gate with its condition.
+    /// Unmet capability condition.
     RequiresClosed(Condition),
-    /// Closed need gate with its condition.
+    /// Unmet need condition.
     WhenClosed(Condition),
     /// Passing checks with done work.
     ChecksPass,
@@ -37,7 +37,7 @@ pub struct Spawned {
     pub code: i32,
 }
 
-/// Hook gates with spawns and post-checks.
+/// One hook runner with spawns and post-checks.
 pub struct HookRunner {
     /// Hook events.
     pub progress: ProgressSender,
@@ -47,7 +47,7 @@ pub struct HookRunner {
 pub struct DecidedHooks {
     /// Hook verdicts in plan order.
     pub decisions: Vec<HookDecision>,
-    /// Host facts behind hook gates and post-checks.
+    /// Host facts behind hook conditions and post-checks.
     pub checks: Checks,
 }
 
@@ -68,7 +68,7 @@ impl HookRunner {
 
     /// Decide one hook outcome.
     ///
-    /// - Requires, when, and checks gates run before resolving.
+    /// - Requires, when, and checks evaluate before resolving.
     ///
     /// # Errors
     ///
@@ -79,15 +79,15 @@ impl HookRunner {
         checks: &Checks,
         changed: &BTreeSet<Route>,
     ) -> Result<HookDecision> {
-        if let Some(gate) = hook.requires.as_ref()
-            && !checks.check(gate, changed)
+        if let Some(condition) = hook.requires.as_ref()
+            && !checks.check(condition, changed)
         {
-            return Ok(HookDecision::RequiresClosed(gate.clone()));
+            return Ok(HookDecision::RequiresClosed(condition.clone()));
         }
-        if let Some(gate) = hook.when.as_ref()
-            && !checks.check(gate, changed)
+        if let Some(condition) = hook.when.as_ref()
+            && !checks.check(condition, changed)
         {
-            return Ok(HookDecision::WhenClosed(gate.clone()));
+            return Ok(HookDecision::WhenClosed(condition.clone()));
         }
         if !hook.checks.is_empty() && hook.checks.iter().all(|check| checks.check(check, changed)) {
             return Ok(HookDecision::ChecksPass);
@@ -232,10 +232,11 @@ mod tests {
 
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
-    use confit_model::document::{Data, Document};
+    use confit_model::document::Data;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
+    use crate::manifest::Document;
     use crate::write::Writer;
 
     fn literal(path: &std::path::Path) -> Route {
@@ -322,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn exists_gate_sees_just_written_file() {
+    fn exists_condition_sees_just_written_file() {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
@@ -341,7 +342,7 @@ mod tests {
         };
         assert!(
             matches!(closed.decisions[0], HookDecision::RequiresClosed(_)),
-            "missing sentinel closes the gate"
+            "missing sentinel fails the condition"
         );
         let writer = writer_in(dir.path());
         let changed = write_doc(&writer, &text_doc(&sentinel, 0o644));
@@ -352,7 +353,7 @@ mod tests {
         assert_eq!(
             decided.decisions,
             vec![HookDecision::Run(binary)],
-            "written sentinel opens the gate"
+            "written sentinel meets the condition"
         );
     }
 }

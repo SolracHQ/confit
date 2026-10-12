@@ -1,17 +1,25 @@
 [package]
 name = "confit-store"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 
 [lints]
 workspace = true
 
 [dependencies]
-confit-driver = { version = "0.8.0", path = "../driver" }
+confit-driver = { version = "0.9.0", path = "../driver" }
 dirs.workspace = true
+mlua = { workspace = true, features = ["lua54", "vendored"] }
 sha2.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+confit-binding = { version = "0.9.0", path = "../binding" }
+confit-binding-macros = { version = "0.9.0", path = "../binding-macros" }
+file-format = { version = "0.29.0", features = ["reader-txt"] }
+serde_json.workspace = true
+toml.workspace = true
+noyalib.workspace = true
+serini = "0.3.0"
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

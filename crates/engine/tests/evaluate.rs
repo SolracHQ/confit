@@ -3,6 +3,7 @@ mod common;
 use common::*;
 use confit_driver::fs::TestGuard;
 use confit_model::document::{Data, StructuredFormat};
+use confit_model::routes::{Route, RouteBase};
 
 #[test]
 fn evaluates_text_in_destination_order() {
@@ -13,14 +14,19 @@ fn evaluates_text_in_destination_order() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 2);
-            assert_eq!(found.documents[0].destination.display(), "home('apple')");
-            assert_eq!(found.documents[1].destination.display(), "home('zebra')");
-            assert_eq!(text_of(&found.documents[0]), "a");
-            assert_eq!(text_of(&found.documents[1]), "z");
-            assert!(
-                !found.documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
+            let displays: Vec<String> = found
+                .documents
+                .keys()
+                .map(|route| route.display())
+                .collect();
+            assert_eq!(
+                displays,
+                vec!["home('apple')".to_owned(), "home('zebra')".to_owned()]
             );
+            let apple = Route::new(RouteBase::Home, "apple").unwrap();
+            let zebra = Route::new(RouteBase::Home, "zebra").unwrap();
+            assert_eq!(text_of(&found.documents[&apple]), "a");
+            assert_eq!(text_of(&found.documents[&zebra]), "z");
         }
         Err(error) => panic!("profile evaluates: {error}"),
     }
@@ -35,11 +41,9 @@ fn evaluates_structured_with_filled_hash() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(
-                found.documents[0].destination.display(),
-                "home('config.toml')"
-            );
-            match &found.documents[0].data {
+            let (route, data) = found.documents.iter().next().unwrap();
+            assert_eq!(route.display(), "home('config.toml')");
+            match data {
                 Data::Structured { format, data } => {
                     assert_eq!(*format, StructuredFormat::Toml);
                     match data.get("profile").and_then(|item| item.get("shell")) {
@@ -49,10 +53,6 @@ fn evaluates_structured_with_filled_hash() {
                 }
                 _ => panic!("structured document evaluates"),
             }
-            assert!(
-                !found.documents[0].data_hash.is_empty(),
-                "hashes fill past the edge"
-            );
         }
         Err(error) => panic!("structured profile evaluates: {error}"),
     }
@@ -90,7 +90,7 @@ fn root_rides_stores() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(text_of(&found.documents[0]), "hello");
+            assert_eq!(text_of(found.documents.values().next().unwrap()), "hello");
         }
         Err(error) => panic!("stored root evaluates: {error}"),
     }
@@ -108,7 +108,7 @@ fn project_text_flows_into_documents() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(text_of(&found.documents[0]), "hello");
+            assert_eq!(text_of(found.documents.values().next().unwrap()), "hello");
         }
         Err(error) => panic!("project text evaluates: {error}"),
     }
@@ -123,7 +123,7 @@ fn patches_apply_over_declared_documents() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            match &found.documents[0].data {
+            match found.documents.values().next().unwrap() {
                 Data::Structured { data, .. } => {
                     assert_eq!(
                         data.get("count").and_then(|item| item.as_u64()),
@@ -171,11 +171,9 @@ fn two_patches_merge_both_keys() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(
-                found.documents[0].destination.display(),
-                "home('config.json')"
-            );
-            match &found.documents[0].data {
+            let (route, data) = found.documents.iter().next().unwrap();
+            assert_eq!(route.display(), "home('config.json')");
+            match data {
                 Data::Structured { format, data } => {
                     assert_eq!(*format, StructuredFormat::Json);
                     assert_eq!(
@@ -273,18 +271,12 @@ fn rc_two_patches_merge_entries() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(found.documents[0].destination.display(), "home('.bashrc')");
-            assert_eq!(
-                rc_names(&found.documents[0]),
-                vec!["SEED".to_owned(), "FIRST".to_owned()]
-            );
-            match &found.documents[0].data {
+            let (route, data) = found.documents.iter().next().unwrap();
+            assert_eq!(route.display(), "home('.bashrc')");
+            assert_eq!(rc_names(data), vec!["SEED".to_owned(), "FIRST".to_owned()]);
+            match data {
                 Data::Rc(rc) => {
                     assert_eq!(rc.config.len(), 1);
-                    assert!(
-                        !found.documents[0].data_hash.is_empty(),
-                        "hashes fill past the edge"
-                    );
                 }
                 _ => panic!("merged rc stays rc"),
             }
@@ -375,18 +367,16 @@ fn mixed_sides_merge_live_targets() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 2);
-            match &found.documents[0].data {
+            let ordered: Vec<(&Route, &Data)> = found.documents.iter().collect();
+            match ordered[0].1 {
                 Data::Rc(_) => {
-                    assert_eq!(found.documents[0].destination.display(), "home('.bashrc')")
+                    assert_eq!(ordered[0].0.display(), "home('.bashrc')")
                 }
                 _ => panic!("first document stays rc"),
             }
-            match &found.documents[1].data {
+            match ordered[1].1 {
                 Data::Structured { data, .. } => {
-                    assert_eq!(
-                        found.documents[1].destination.display(),
-                        "home('config.json')"
-                    );
+                    assert_eq!(ordered[1].0.display(), "home('config.json')");
                     assert_eq!(
                         data.get("alpha").and_then(|item| item.as_str()),
                         Some("one")

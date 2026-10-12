@@ -3,14 +3,50 @@
 
 use thiserror::Error;
 
-use confit_surface_api::ApiError;
-
 /// Engine failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum EngineError {
-    /// Surface failure.
+    /// Wrong-type value.
+    #[error("invalid {field} '{received}': want {want}")]
+    Mismatch {
+        /// The value field under reading.
+        field: String,
+        /// The wanted shape.
+        want: String,
+        /// The received type word.
+        received: String,
+    },
+    /// Unknown module.
+    #[error("unknown module '{name}'")]
+    UnknownModule {
+        /// The requested module name.
+        name: String,
+    },
+    /// Require cycle.
+    #[error("require cycle: {loop_}")]
+    Cycle {
+        /// The module loop.
+        loop_: String,
+    },
+    /// Jail escape.
+    #[error("{caller}('{input}'): {reason}")]
+    Escape {
+        /// The calling verb.
+        caller: String,
+        /// The offending input.
+        input: String,
+        /// The escape reason.
+        reason: String,
+    },
+    /// Open failure.
     #[error(transparent)]
-    Surface(#[from] ApiError),
+    Open(#[from] confit_store::resources::error::ResourceError),
+    /// Blob failure.
+    #[error(transparent)]
+    Blob(#[from] confit_store::blob::error::BlobError),
+    /// Fetch failure.
+    #[error(transparent)]
+    Fetch(#[from] confit_store::fetch::error::FetchError),
     /// Model failure.
     #[error(transparent)]
     Model(#[from] confit_model::error::Error),
@@ -26,8 +62,8 @@ pub enum EngineError {
         /// The repeated config name.
         name: String,
     },
-    /// Changed gate.
-    #[error("hook changed gate shows unknown document '{route}'")]
+    /// Changed condition.
+    #[error("hook changed condition shows unknown document '{route}'")]
     ChangedUnknown {
         /// The unknown document display.
         route: String,
@@ -75,11 +111,23 @@ pub enum EngineError {
     Lua(mlua::Error),
 }
 
+impl EngineError {
+    /// Build one mismatch error with its field.
+    pub fn mismatch(
+        field: impl Into<String>,
+        want: impl Into<String>,
+        received: impl Into<String>,
+    ) -> Self {
+        Self::Mismatch {
+            field: field.into(),
+            want: want.into(),
+            received: received.into(),
+        }
+    }
+}
+
 impl From<mlua::Error> for EngineError {
     fn from(error: mlua::Error) -> Self {
-        if let Some(known) = error.downcast_ref::<ApiError>().cloned() {
-            return Self::Surface(known);
-        }
         if let Some(known) = error.downcast_ref::<Self>().cloned() {
             return known;
         }
@@ -87,10 +135,15 @@ impl From<mlua::Error> for EngineError {
     }
 }
 
+impl From<confit_binding::value::Mismatch> for EngineError {
+    fn from(error: confit_binding::value::Mismatch) -> Self {
+        Self::mismatch(error.path, error.want, error.found)
+    }
+}
+
 impl From<EngineError> for mlua::Error {
     fn from(error: EngineError) -> Self {
         match error {
-            EngineError::Surface(inner) => inner.into(),
             EngineError::Lua(inner) => inner,
             other => Self::external(other),
         }

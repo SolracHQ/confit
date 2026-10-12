@@ -6,12 +6,12 @@ use std::collections::BTreeSet;
 
 use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, Document, DocumentKind, DocumentStatus, RcOp, summary};
+use confit_model::document::{Data, DocumentKind, RcEntry};
 use confit_model::hook::HookLifecycle;
 use confit_model::render::inline_bytes;
 use confit_model::routes::Route;
 use confit_runtime::Difference;
-use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::{Document, DocumentStatus, Manifest, summary};
 
 use crate::presentation::difference::{difference_lines, flatten_table, leaf_changes, leaf_text};
 use crate::presentation::hooks::lifecycle_lines;
@@ -461,7 +461,6 @@ fn first_run_entries<'a>(
     differences: &'a [Difference],
     document: &Document,
 ) -> Vec<&'a Difference> {
-    let dest = document.destination.display();
     let is_tree = document.data.tree_members().is_some();
     differences
         .iter()
@@ -471,17 +470,18 @@ fn first_run_entries<'a>(
                 | Difference::Structured { path, .. }
                 | Difference::Diff { path, .. }
                 | Difference::Missing { path }
-                | Difference::Unreadable { path, .. } => path.display(),
+                | Difference::Unreadable { path, .. } => path,
             };
-            if path == dest {
-                return true;
-            }
-            is_tree
-                && path
-                    .strip_prefix(dest.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
+            path == &document.destination || is_tree && member_of(&document.destination, path)
         })
         .collect()
+}
+
+/// Report whether one tree member route nests under its destination.
+fn member_of(destination: &Route, path: &Route) -> bool {
+    path.base() == destination.base()
+        && path.relative() != destination.relative()
+        && path.relative().starts_with(destination.relative())
 }
 
 /// Report whether one first-run group is whole.
@@ -582,46 +582,45 @@ fn paint_diff_line(painter: &Painter, line: &str) -> String {
 
 /// Render one entry's tree member rel under its destination.
 fn member_rel(document: &Document, entry: &Difference) -> String {
-    let dest = document.destination.display();
     match entry {
         Difference::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
         Difference::Structured { path, .. }
         | Difference::Diff { path, .. }
         | Difference::Missing { path }
-        | Difference::Unreadable { path, .. } => {
-            let rendered = path.display();
-            rendered
-                .strip_prefix(dest.as_str())
-                .and_then(|rest| rest.strip_prefix('/'))
-                .unwrap_or(&rendered)
-                .to_string()
-        }
+        | Difference::Unreadable { path, .. } => path
+            .relative()
+            .strip_prefix(document.destination.relative())
+            .map_or_else(|_| path.display(), |rel| rel.display().to_string()),
     }
 }
 
 /// Render one exec payload as shell text.
-fn init_text(op: &RcOp) -> String {
-    match op {
-        RcOp::Eval { argv, .. } => format!("eval \"$({})\"", Arg::join(argv)),
-        RcOp::Cmd { argv, .. } => Arg::join(argv),
-        RcOp::Source { path, .. } => format!("source {}", path.display()),
-        RcOp::Env { name, value } => format!("profile {name} = {value}"),
-        RcOp::Path { name, dir } => {
+fn init_text(entry: &RcEntry) -> String {
+    match entry {
+        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", Arg::join(argv)),
+        RcEntry::Cmd { argv, .. } => Arg::join(argv),
+        RcEntry::Source { path, .. } => format!("source {}", path.display()),
+        RcEntry::Env { name, value, .. } => format!("profile {name} = {value}"),
+        RcEntry::Path { name, dir, .. } => {
             format!("profile {name} = {}", dir.display())
         }
-        RcOp::Alias { name, expansion } => format!("alias {name} = {expansion}"),
+        RcEntry::Alias {
+            name, expansion, ..
+        } => format!("alias {name} = {expansion}"),
     }
 }
 
 /// Render one named rc entry as display text.
-fn named_text(op: &RcOp) -> String {
-    match op {
-        RcOp::Env { name, value } => format!("profile {name} = {value}"),
-        RcOp::Path { name, dir } => {
+fn named_text(entry: &RcEntry) -> String {
+    match entry {
+        RcEntry::Env { name, value, .. } => format!("profile {name} = {value}"),
+        RcEntry::Path { name, dir, .. } => {
             format!("profile {name} = {}", dir.display())
         }
-        RcOp::Alias { name, expansion } => format!("alias {name} = {expansion}"),
-        _ => init_text(op),
+        RcEntry::Alias {
+            name, expansion, ..
+        } => format!("alias {name} = {expansion}"),
+        _ => init_text(entry),
     }
 }
 
@@ -647,19 +646,19 @@ fn entry_bodies(document: &Document) -> Vec<String> {
         Data::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {
-                match &entry.op {
-                    RcOp::Env { .. } | RcOp::Path { .. } | RcOp::Alias { .. } => {
-                        out.push(named_text(&entry.op));
+                match entry {
+                    RcEntry::Env { .. } | RcEntry::Path { .. } | RcEntry::Alias { .. } => {
+                        out.push(named_text(entry));
                     }
-                    op => out.push(init_text(op)),
+                    _ => out.push(init_text(entry)),
                 }
             }
             for (index, entry) in rc.final_entries.iter().enumerate() {
-                match &entry.op {
-                    RcOp::Env { .. } | RcOp::Path { .. } | RcOp::Alias { .. } => {
-                        out.push(named_text(&entry.op));
+                match entry {
+                    RcEntry::Env { .. } | RcEntry::Path { .. } | RcEntry::Alias { .. } => {
+                        out.push(named_text(entry));
                     }
-                    op => out.push(format!("init[{index}] = {}", init_text(op))),
+                    _ => out.push(format!("init[{index}] = {}", init_text(entry))),
                 }
             }
             out
@@ -856,6 +855,8 @@ fn paint_key_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
     use confit_model::hook::Hook;
@@ -875,8 +876,35 @@ mod tests {
     }
 
     #[test]
+    fn tree_first_run_groups_members_under_destination() {
+        use confit_model::routes::RouteBase;
+        use confit_store::handles::BlobRef;
+        let dest = Route::new(RouteBase::Data, "fonts/JetBrainsMono").unwrap();
+        let blob = BlobRef::new(Sha::hash(b"x"), Sha::hash(b"y"));
+        let mut members = BTreeMap::new();
+        members.insert(
+            "a.ttf".to_owned(),
+            confit_model::document::TreeMember { blob, mode: 0o644 },
+        );
+        let document = Document {
+            destination: dest.clone(),
+            data: Data::Tree { members },
+            data_hash: String::new(),
+        };
+        let member_path = dest.join("a.ttf");
+        let differences = vec![confit_runtime::Difference::Missing { path: member_path }];
+        let entries = first_run_entries(&differences, &document);
+        assert_eq!(entries.len(), 1, "tree members group under destinations");
+        assert_eq!(
+            member_rel(&document, entries[0]),
+            "a.ttf",
+            "member lines show the relative path"
+        );
+    }
+
+    #[test]
     fn preview_renders_missing_binaries_without_resolving() {
-        let desired = Manifest::build(Vec::new(), vec![probe_hook()]).unwrap();
+        let desired = Manifest::build(BTreeMap::new(), vec![probe_hook()]).unwrap();
         let prepared = confit_runtime::Prepared {
             desired,
             previous: Manifest::empty(),
@@ -891,7 +919,7 @@ mod tests {
         );
         assert!(
             text.contains("requires (in_path(absent-probe))"),
-            "preview holds gate text"
+            "preview holds condition text"
         );
         assert!(text.contains("Hooks: 1 to add"), "preview counts the hook");
     }

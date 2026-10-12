@@ -66,9 +66,10 @@ progress reports done against total through the run.
 ### Shared runs
 
 Declared hooks merge by shared argv and path. First seen order
-wins each slot. Requires gates join with AND. When gates join
-with OR. Checks concatenate in order. Timeout keeps the max.
-Single hooks pass through with bare shape kept.
+wins each slot. Requires conditions join with AND.
+When conditions join with OR. Checks concatenate in
+order. Timeout keeps the max. Single hooks pass
+through with bare shape kept.
 
 ## Hash
 

@@ -169,9 +169,11 @@ fn from_blob(bundle: &Path, error: BlobError) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
-    use confit_model::document::{Data, Document};
+    use confit_model::document::Data;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -190,13 +192,13 @@ mod tests {
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
-        let mut documents = Vec::new();
+        let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.push(Document::new(
+            documents.insert(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 Data::Opaque {
                     blob: handle.to_ref(),
@@ -204,7 +206,7 @@ mod tests {
                     mode: 0o644,
                     unmanaged: false,
                 },
-            ));
+            );
         }
         match Manifest::build(documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
@@ -313,7 +315,7 @@ mod tests {
             Err(error) => panic!("cache stores: {error}"),
         };
         let manifest = match Manifest::build(
-            vec![Document::new(
+            [(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 Data::Opaque {
                     blob: handle.to_ref(),
@@ -321,7 +323,9 @@ mod tests {
                     mode: 0o644,
                     unmanaged: false,
                 },
-            )],
+            )]
+            .into_iter()
+            .collect(),
             Vec::new(),
         ) {
             Ok(manifest) => manifest,
@@ -333,7 +337,7 @@ mod tests {
         match store.read(&path) {
             Ok(_) => panic!("thin manifest passes"),
             Err(error) => assert!(
-                error.to_string().contains(&handle.sha().hex()),
+                error.to_string().contains(&handle.sha256().hex()),
                 "missing blob shows the hash: {error}"
             ),
         }

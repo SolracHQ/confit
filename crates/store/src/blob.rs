@@ -84,7 +84,7 @@ impl BlobStore {
     ///
     /// - [`BlobError::Read`] for failed blob reads.
     pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
-        let sha = handle.sha().clone();
+        let sha = handle.sha256().clone();
         let path = self.current_path(handle);
         let file = driver::fs::open(&path).map_err(|error| BlobError::from_read_io(&sha, error))?;
         Ok(Box::new(VerifiedBlobReader {
@@ -112,7 +112,7 @@ impl BlobStore {
             ),
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
-                let sha = handle.sha().clone();
+                let sha = handle.sha256().clone();
                 let file =
                     driver::fs::open(path).map_err(|error| BlobError::from_read_io(&sha, error))?;
                 (file as Box<dyn Read>, sha)
@@ -175,10 +175,10 @@ impl BlobStore {
     pub fn open_stored(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
         let path = self.current_path(handle);
         let len = driver::fs::metadata(&path)
-            .map_err(|error| BlobError::from_read_io(handle.sha(), error))?
+            .map_err(|error| BlobError::from_read_io(handle.sha256(), error))?
             .len();
         let file = driver::fs::open(&path)
-            .map_err(|error| BlobError::from_read_io(handle.sha(), error))?;
+            .map_err(|error| BlobError::from_read_io(handle.sha256(), error))?;
         Ok((len, file as Box<dyn std::io::Read>))
     }
 
@@ -189,7 +189,7 @@ impl BlobStore {
     /// - [`BlobError::Read`] for failed blob reads.
     /// - [`BlobError::Corrupt`] for corrupt pool files.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
-        let sha = handle.sha().clone();
+        let sha = handle.sha256().clone();
         let footer = driver::fs::read_tail(&self.current_path(handle), driver::gzip::TRAILER_LEN)
             .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => BlobError::Read {
@@ -412,10 +412,14 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("pool stores: {error}"),
         };
-        assert_eq!(handle.sha(), &Sha::hash(raw), "content hash matches bytes");
+        assert_eq!(
+            handle.sha256(),
+            &Sha::hash(raw),
+            "content hash matches bytes"
+        );
         assert_ne!(
             handle.stored(),
-            handle.sha(),
+            handle.sha256(),
             "stored hash matches encoded bytes"
         );
         assert!(
@@ -560,14 +564,14 @@ mod tests {
         match store.open(&handle) {
             Ok(_) => panic!("absent blob opens"),
             Err(error) => assert!(
-                error.to_string().contains(&handle.sha().hex()),
+                error.to_string().contains(&handle.sha256().hex()),
                 "missing open shows the hash: {error}"
             ),
         }
         match store.len(&handle) {
             Ok(_) => panic!("absent length reads"),
             Err(error) => assert!(
-                error.to_string().contains(&handle.sha().hex()),
+                error.to_string().contains(&handle.sha256().hex()),
                 "missing length shows the hash: {error}"
             ),
         }

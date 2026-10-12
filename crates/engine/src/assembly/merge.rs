@@ -2,16 +2,16 @@
 
 use std::collections::BTreeMap;
 
-use mlua::{FromLua, LuaSerdeExt, Value};
+use mlua::{Lua, Table, Value};
 
-use confit_model::document::{Data, Document as ModelDocument, RcData, RcEntry, StructuredFormat};
+use crate::api::patch::{ApplyArgs, StructuredPatch};
+use confit_binding::callback::Callback;
+use confit_binding::value::{Decode, Encode};
+use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
 use confit_model::routes::Route;
-use confit_surface_api::{
-    Document, RcDocument, RcPatch, SerializableValue, StructuredDocument, StructuredPatch,
-    route_value,
-};
 
 use super::Assembler;
+use super::owned::OwnedPatch;
 use super::patches::{rc_base_of, structured_base_of};
 use crate::error::{EngineError, Result};
 
@@ -28,25 +28,28 @@ impl Assembler<'_> {
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_structured(
         &self,
-        placed: &BTreeMap<Route, Document>,
-        grouped: &BTreeMap<Route, Vec<&StructuredPatch>>,
-        finished: &mut BTreeMap<Route, ModelDocument>,
+        placed: &BTreeMap<Route, Data>,
+        grouped: &BTreeMap<Route, Vec<&OwnedPatch>>,
+        finished: &mut BTreeMap<Route, Data>,
     ) -> Result<()> {
         for (target, patches) in grouped {
-            let Some(first) = patches.first() else {
+            let inners: Vec<&StructuredPatch> = patches
+                .iter()
+                .filter_map(|patch| patch.structured())
+                .collect();
+            let Some(first) = inners.first().copied() else {
                 continue;
             };
             let display = target.display();
-            let (destination, format, data) = structured_base_of(placed, target, first, patches)?;
+            let (format, data) = structured_base_of(placed, target, first, &inners)?;
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
-            let document = ModelDocument::new(
-                destination,
+            finished.insert(
+                target.clone(),
                 Data::Structured {
                     format,
                     data: serde_json::Value::Object(data.into_iter().collect()),
                 },
             );
-            finished.insert(target.clone(), document);
         }
         Ok(())
     }
@@ -63,17 +66,16 @@ impl Assembler<'_> {
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_rc(
         &self,
-        placed: &BTreeMap<Route, Document>,
-        grouped: &BTreeMap<Route, Vec<&RcPatch>>,
-        finished: &mut BTreeMap<Route, ModelDocument>,
+        placed: &BTreeMap<Route, Data>,
+        grouped: &BTreeMap<Route, Vec<&OwnedPatch>>,
+        finished: &mut BTreeMap<Route, Data>,
     ) -> Result<()> {
         for (target, patches) in grouped {
-            let (destination, document) = rc_base_of(placed, target)?;
+            let document = rc_base_of(placed, target)?;
             let display = target.display();
             let patched = self.run_rc_callbacks(target, &display, document, patches)?;
             let data = RcData::new(patched.profile, patched.config, patched.final_entries);
-            let document = ModelDocument::new(destination, Data::Rc(data));
-            finished.insert(target.clone(), document);
+            finished.insert(target.clone(), Data::Rc(data));
         }
         Ok(())
     }
@@ -93,39 +95,58 @@ impl Assembler<'_> {
         display: &str,
         format: &StructuredFormat,
         data: BTreeMap<String, serde_json::Value>,
-        patches: &[&StructuredPatch],
+        patches: &[&OwnedPatch],
     ) -> Result<BTreeMap<String, serde_json::Value>> {
         let mut data = data;
         let mut owners = seed_key_owners(&data);
         for patch in patches {
-            let body = StructuredDocument {
-                format: *format,
-                data: data
-                    .iter()
-                    .map(|(key, value)| (key.clone(), SerializableValue(value.clone())))
-                    .collect(),
+            let Some(found) = patch.structured() else {
+                continue;
             };
-            let route = route_value(self.lua(), destination)?;
-            let table: Value = self.lua().to_value(&body)?;
-            patch
-                .apply
-                .as_function()
-                .call::<()>((route, table.clone()))?;
-            let found = StructuredDocument::from_lua(table, self.lua())?;
-            if found.format != *format {
-                return Err(EngineError::Structured {
-                    display: display.to_owned(),
-                    base: format.name().to_owned(),
-                    patch: found.format.name().to_owned(),
-                });
+            let Value::Table(route) = destination.encode(self.lua())? else {
+                return Err(EngineError::Lua(mlua::Error::runtime(
+                    "route views hold tables",
+                )));
+            };
+            let body = Data::Structured {
+                format: *format,
+                data: serde_json::Value::Object(data.clone().into_iter().collect()),
+            };
+            let table = live_view(self.lua(), &body)?;
+            Callback::<ApplyArgs>::new(found.apply.clone())
+                .call::<()>(self.lua(), (&route, table.clone()))?;
+            let back = Data::decode(&Value::Table(table), self.lua()).map_err(EngineError::from)?;
+            match back {
+                Data::Structured {
+                    format: found_format,
+                    data: serde_json::Value::Object(found_map),
+                } if found_format == *format => {
+                    data = merge(
+                        display,
+                        data,
+                        &mut owners,
+                        found_map.into_iter().collect(),
+                        &patch.owner,
+                    );
+                }
+                Data::Structured {
+                    format: found_format,
+                    ..
+                } => {
+                    return Err(EngineError::Structured {
+                        display: display.to_owned(),
+                        base: format.name().to_owned(),
+                        patch: found_format.name().to_owned(),
+                    });
+                }
+                other => {
+                    return Err(EngineError::Structured {
+                        display: display.to_owned(),
+                        base: format.name().to_owned(),
+                        patch: other.kind().name().to_owned(),
+                    });
+                }
             }
-            data = merge(
-                display,
-                data,
-                &mut owners,
-                found.data,
-                patch.owner.as_deref(),
-            );
         }
         Ok(data)
     }
@@ -142,22 +163,42 @@ impl Assembler<'_> {
         &self,
         destination: &Route,
         display: &str,
-        document: RcDocument,
-        patches: &[&RcPatch],
-    ) -> Result<RcDocument> {
+        document: RcData,
+        patches: &[&OwnedPatch],
+    ) -> Result<RcData> {
         let mut document = document;
         let mut owned = seed_slot_owners(&document);
         for patch in patches {
-            let route = route_value(self.lua(), destination)?;
-            let table: Value = Value::Table(document.live_table(self.lua())?);
-            patch
-                .apply
-                .as_function()
-                .call::<()>((route, table.clone()))?;
-            let next = RcDocument::from_lua(table, self.lua())?;
-            document = merge_rc(display, &document, next, &mut owned, patch.owner.as_deref());
+            let Some(found) = patch.rc() else {
+                continue;
+            };
+            let Value::Table(route) = destination.encode(self.lua())? else {
+                return Err(EngineError::Lua(mlua::Error::runtime(
+                    "route views hold tables",
+                )));
+            };
+            let table = live_view(self.lua(), &document)?;
+            Callback::<ApplyArgs>::new(found.apply.clone())
+                .call::<()>(self.lua(), (&route, table.clone()))?;
+            let next =
+                RcData::decode(&Value::Table(table), self.lua()).map_err(EngineError::from)?;
+            document = merge_rc(display, &document, next, &mut owned, &patch.owner);
         }
         Ok(document)
+    }
+}
+
+/// Build one live view from its face for patch callbacks.
+///
+/// # Errors
+///
+/// - [`EngineError::Lua`] for faces outside the table shape.
+fn live_view(lua: &Lua, body: &impl Encode) -> Result<Table> {
+    match body.encode(lua)? {
+        Value::Table(table) => Ok(table),
+        _ => Err(EngineError::Lua(mlua::Error::runtime(
+            "patch live views hold tables",
+        ))),
     }
 }
 
@@ -195,10 +236,10 @@ fn merge(
     display: &str,
     live: BTreeMap<String, serde_json::Value>,
     owners: &mut BTreeMap<String, String>,
-    next: BTreeMap<String, SerializableValue>,
-    owner: Option<&str>,
+    next: BTreeMap<String, serde_json::Value>,
+    owner: &str,
 ) -> BTreeMap<String, serde_json::Value> {
-    let loser = owner.unwrap_or("unknown");
+    let loser = owner;
     let mut merged = live;
     let missing: Vec<String> = merged
         .keys()
@@ -206,7 +247,7 @@ fn merge(
         .cloned()
         .collect();
     for (key, value) in next {
-        fold_entry(display, &mut merged, owners, key, value.0, loser);
+        fold_entry(display, &mut merged, owners, key, value, loser);
     }
     for key in missing {
         if let Some(found) = merged.get(&key).cloned() {
@@ -353,7 +394,7 @@ struct SlotOwners {
 }
 
 /// Seed slot owners from base entries with slots under the base name.
-fn seed_slot_owners(document: &RcDocument) -> SlotOwners {
+fn seed_slot_owners(document: &RcData) -> SlotOwners {
     let mut owned = SlotOwners::default();
     seed_section(&document.profile, &mut owned.profile);
     seed_section(&document.config, &mut owned.config);
@@ -373,13 +414,13 @@ fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
 /// Merge patch sections over live sections keeping first entries.
 fn merge_rc(
     display: &str,
-    live: &RcDocument,
-    next: RcDocument,
+    live: &RcData,
+    next: RcData,
     owned: &mut SlotOwners,
-    owner: Option<&str>,
-) -> RcDocument {
-    let loser = owner.unwrap_or("unknown");
-    RcDocument {
+    owner: &str,
+) -> RcData {
+    let loser = owner;
+    RcData {
         profile: merge_section(
             display,
             "profile",
@@ -455,15 +496,9 @@ mod tests {
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([(
             "tools".to_owned(),
-            SerializableValue(json!({"bat": "latest", "ripgrep": "latest"})),
+            json!({"bat": "latest", "ripgrep": "latest"}),
         )]);
-        let merged = merge(
-            "home('config.json')",
-            live,
-            &mut owners,
-            next,
-            Some("second"),
-        );
+        let merged = merge("home('config.json')", live, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -484,17 +519,8 @@ mod tests {
         let live: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("tools".to_owned(), json!({"bat": "first"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
-        let next = BTreeMap::from([(
-            "tools".to_owned(),
-            SerializableValue(json!({"bat": "second"})),
-        )]);
-        let merged = merge(
-            "home('config.json')",
-            live,
-            &mut owners,
-            next,
-            Some("second"),
-        );
+        let next = BTreeMap::from([("tools".to_owned(), json!({"bat": "second"}))]);
+        let merged = merge("home('config.json')", live, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -508,14 +534,8 @@ mod tests {
         let live: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("tools".to_owned(), json!({"bat": "kept"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
-        let next = BTreeMap::from([("tools".to_owned(), SerializableValue(json!("flat")))]);
-        let merged = merge(
-            "home('config.json')",
-            live,
-            &mut owners,
-            next,
-            Some("second"),
-        );
+        let next = BTreeMap::from([("tools".to_owned(), json!("flat"))]);
+        let merged = merge("home('config.json')", live, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -528,14 +548,8 @@ mod tests {
         let live: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
         let mut owners = BTreeMap::from([("items".to_owned(), "first".to_owned())]);
-        let next = BTreeMap::from([("items".to_owned(), SerializableValue(json!([3])))]);
-        let merged = merge(
-            "home('config.json')",
-            live,
-            &mut owners,
-            next,
-            Some("second"),
-        );
+        let next = BTreeMap::from([("items".to_owned(), json!([3]))]);
+        let merged = merge("home('config.json')", live, &mut owners, next, "second");
         assert_eq!(merged.get("items"), Some(&json!([1, 2])));
         assert_eq!(owners.get("items").map(String::as_str), Some("first"));
     }
@@ -547,15 +561,9 @@ mod tests {
         let mut owners = seed_key_owners(&base);
         let next = BTreeMap::from([(
             "tools".to_owned(),
-            SerializableValue(json!({"bat": "patch", "ripgrep": "latest"})),
+            json!({"bat": "patch", "ripgrep": "latest"}),
         )]);
-        let merged = merge(
-            "home('config.json')",
-            base,
-            &mut owners,
-            next,
-            Some("patch"),
-        );
+        let merged = merge("home('config.json')", base, &mut owners, next, "patch");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),

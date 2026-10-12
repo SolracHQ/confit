@@ -13,8 +13,11 @@ pub(crate) fn expand_string_enum(
     data: &syn::DataEnum,
     attrs: &[Attribute],
     kind: ContainerKind,
+    validate: &Option<syn::Path>,
+    rename: &Option<String>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
+    let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
     let marker = kind_tokens(kind);
     let mut descriptors = Vec::new();
@@ -63,15 +66,50 @@ pub(crate) fn expand_string_enum(
         .map(|literal| format!("\"{literal}\""))
         .collect::<Vec<_>>()
         .join(" | ");
+    let outer = name.to_string();
+    let validate_arm: Tokens = match validate {
+        Some(hook) => quote! {
+            let result = match text.to_lowercase().as_str() {
+                #(#lowers => Self::#idents,)*
+                _ => {
+                    return ::std::result::Result::Err(
+                        ::confit_binding::value::Mismatch {
+                            path: stringify!(#name).to_owned(),
+                            want: #want.to_owned(),
+                            found: ::std::format!("string \"{text}\""),
+                        },
+                    );
+                }
+            };
+            #hook(&result).map_err(|error: ::mlua::Error| {
+                ::confit_binding::value::Mismatch {
+                    path: #outer.to_owned(),
+                    want: ::std::format!("valid {}", #outer),
+                    found: error.to_string(),
+                }
+            })?;
+            ::std::result::Result::Ok(result)
+        },
+        None => quote! {
+            match text.to_lowercase().as_str() {
+                #(#lowers => ::std::result::Result::Ok(Self::#idents),)*
+                _ => ::std::result::Result::Err(::confit_binding::value::Mismatch {
+                    path: stringify!(#name).to_owned(),
+                    want: #want.to_owned(),
+                    found: ::std::format!("string \"{text}\""),
+                }),
+            }
+        },
+    };
     Ok(quote! {
         impl ::confit_binding::face::Face for #name {
             fn face_name() -> ::std::string::String {
-                stringify!(#name).to_owned()
+                #display.to_owned()
             }
 
             fn face_stub() -> ::std::string::String {
                 ::confit_binding::stub::emit_alias(
-                    stringify!(#name),
+                    #display,
                     #type_docs,
                     &[#(#descriptors),*],
                 )
@@ -105,14 +143,19 @@ pub(crate) fn expand_string_enum(
                         found: error.found,
                     }
                 })?;
-                match text.to_lowercase().as_str() {
-                    #(#lowers => ::std::result::Result::Ok(Self::#idents),)*
-                    _ => ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: #want.to_owned(),
-                        found: ::std::format!("string \"{text}\""),
-                    }),
-                }
+                #validate_arm
+            }
+        }
+
+        impl ::confit_binding::value::Encode for #name {
+            fn encode(
+                &self,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<::mlua::Value, ::mlua::Error> {
+                let text = match self {
+                    #(Self::#idents => #literals,)*
+                };
+                lua.create_string(text).map(::mlua::Value::String)
             }
         }
     })

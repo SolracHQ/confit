@@ -13,8 +13,11 @@ pub(crate) fn expand_probe_enum(
     data: &syn::DataEnum,
     attrs: &[Attribute],
     kind: ContainerKind,
+    validate: &Option<syn::Path>,
+    rename: &Option<String>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
+    let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
     let marker = kind_tokens(kind);
     let count = data.variants.len();
@@ -28,6 +31,7 @@ pub(crate) fn expand_probe_enum(
     let mut faces = Vec::new();
     let mut members = Vec::new();
     let mut dispatch = Vec::new();
+    let mut encodes = Vec::new();
     for (index, variant) in data.variants.iter().enumerate() {
         let variant_name = variant.ident.to_string();
         let ident = variant.ident.clone();
@@ -62,20 +66,49 @@ pub(crate) fn expand_probe_enum(
         members.push(quote! {
             <#payload as ::confit_binding::face::Face>::collect(collector)?;
         });
+        encodes.push(quote! {
+            Self::#ident(inner) => {
+                <#payload as ::confit_binding::value::Encode>::encode(inner, lua)
+            },
+        });
         let last = index + 1 == count;
         if flags.probe.is_empty() {
-            dispatch.push(quote! {
-                return <#payload as ::confit_binding::value::Decode>::decode(
-                    &::mlua::Value::Table(table),
-                    lua,
-                )
-                .map(Self::#ident)
-                .map_err(|error| ::confit_binding::value::Mismatch {
-                    path: #path.to_owned(),
-                    want: error.want,
-                    found: error.found,
-                });
-            });
+            match validate {
+                Some(hook) => dispatch.push(quote! {
+                    {
+                        let result = <#payload as ::confit_binding::value::Decode>::decode(
+                            &::mlua::Value::Table(table),
+                            lua,
+                        )
+                        .map(Self::#ident)
+                        .map_err(|error| ::confit_binding::value::Mismatch {
+                            path: #path.to_owned(),
+                            want: error.want,
+                            found: error.found,
+                        })?;
+                        #hook(&result).map_err(|error: ::mlua::Error| {
+                            ::confit_binding::value::Mismatch {
+                                path: #outer.to_owned(),
+                                want: ::std::format!("valid {}", #outer),
+                                found: error.to_string(),
+                            }
+                        })?;
+                        return ::std::result::Result::Ok(result);
+                    }
+                }),
+                None => dispatch.push(quote! {
+                    return <#payload as ::confit_binding::value::Decode>::decode(
+                        &::mlua::Value::Table(table),
+                        lua,
+                    )
+                    .map(Self::#ident)
+                    .map_err(|error| ::confit_binding::value::Mismatch {
+                        path: #path.to_owned(),
+                        want: error.want,
+                        found: error.found,
+                    });
+                }),
+            }
         } else {
             let mut check: Tokens = {
                 let first = &flags.probe[0];
@@ -89,26 +122,51 @@ pub(crate) fn expand_probe_enum(
             } else {
                 quote! { &::mlua::Value::Table(table.clone()) }
             };
-            dispatch.push(quote! {
-                if #check {
-                    return <#payload as ::confit_binding::value::Decode>::decode(
-                        #table_value,
-                        lua,
-                    )
-                    .map(Self::#ident);
-                }
-            });
+            match validate {
+                Some(hook) => dispatch.push(quote! {
+                    if #check {
+                        let result =
+                            <#payload as ::confit_binding::value::Decode>::decode(
+                                #table_value,
+                                lua,
+                            )
+                            .map(Self::#ident)
+                            .map_err(|error| ::confit_binding::value::Mismatch {
+                                path: #path.to_owned(),
+                                want: error.want,
+                                found: error.found,
+                            })?;
+                        #hook(&result).map_err(|error: ::mlua::Error| {
+                            ::confit_binding::value::Mismatch {
+                                path: #outer.to_owned(),
+                                want: ::std::format!("valid {}", #outer),
+                                found: error.to_string(),
+                            }
+                        })?;
+                        return ::std::result::Result::Ok(result);
+                    }
+                }),
+                None => dispatch.push(quote! {
+                    if #check {
+                        return <#payload as ::confit_binding::value::Decode>::decode(
+                            #table_value,
+                            lua,
+                        )
+                        .map(Self::#ident);
+                    }
+                }),
+            }
         }
     }
     Ok(quote! {
         impl ::confit_binding::face::Face for #name {
             fn face_name() -> ::std::string::String {
-                stringify!(#name).to_owned()
+                #display.to_owned()
             }
 
             fn face_stub() -> ::std::string::String {
                 ::confit_binding::stub::emit_alias(
-                    stringify!(#name),
+                    #display,
                     #type_docs,
                     &[#(#descriptors),*],
                 )
@@ -155,6 +213,17 @@ pub(crate) fn expand_probe_enum(
                     want: [#(#faces),*].join(" | "),
                     found: "an unknown shape".to_owned(),
                 })
+            }
+        }
+
+        impl ::confit_binding::value::Encode for #name {
+            fn encode(
+                &self,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<::mlua::Value, ::mlua::Error> {
+                match self {
+                    #(#encodes)*
+                }
             }
         }
     })

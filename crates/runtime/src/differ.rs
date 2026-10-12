@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 
 use confit_driver::sha::Sha;
-use confit_model::document::{Data, Document, StructuredFormat, render_mode};
+use confit_model::document::{Data, StructuredFormat, TreeMember, render_mode};
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
 
 use crate::disk::{Disk, DiskMember, disk_doc, disk_tree, open_member};
-use crate::manifest::Manifest;
+use crate::manifest::{Document, Manifest};
 use crate::render::render_document;
 
 /// Manual edit at one recorded destination.
@@ -174,14 +174,14 @@ impl Differ {
     fn tree_difference(
         &self,
         destination: &Route,
-        members: &[confit_model::document::ManifestMember],
+        members: &BTreeMap<String, TreeMember>,
         disk: &BTreeMap<String, DiskMember>,
         order: DifferenceOrder,
     ) -> Vec<Difference> {
         let mut out = Vec::new();
-        for member in members {
-            let member_path = destination.join(&member.relative);
-            match disk.get(&member.relative) {
+        for (relative, member) in members {
+            let member_path = destination.join(relative);
+            match disk.get(relative) {
                 None => out.push(Difference::Missing { path: member_path }),
                 Some(DiskMember::Unreadable { fault }) => out.push(Difference::Unreadable {
                     path: member_path,
@@ -197,14 +197,13 @@ impl Differ {
                         Ok(len) => member.blob.sha256.label(len),
                         Err(_) => continue,
                     };
-                    let Some(disk_label) = Self::tree_member_label(destination, &member.relative)
-                    else {
+                    let Some(disk_label) = Self::tree_member_label(destination, relative) else {
                         continue;
                     };
                     if recorded_label != disk_label {
                         out.push(opaque_content_difference(
                             destination,
-                            &member.relative,
+                            relative,
                             &recorded_label,
                             &disk_label,
                             order,
@@ -225,7 +224,7 @@ impl Differ {
                         };
                         out.push(Difference::Key {
                             path: destination.clone(),
-                            key: format!("{}:mode", member.relative),
+                            key: format!("{relative}:mode"),
                             old: Some(old),
                             new: Some(new),
                         });
@@ -453,7 +452,7 @@ mod tests {
     use super::*;
     use confit_driver as driver;
     use confit_driver::fs::TestGuard;
-    use confit_model::document::{Data, Document, RcData, RcEntry, RcOp};
+    use confit_model::document::{Data, RcData, RcEntry};
     use confit_model::routes::{Route, RouteBase};
 
     use crate::manifest::MANIFEST_VERSION;
@@ -480,10 +479,8 @@ mod tests {
         let document = Document::new(
             literal(&dest),
             Data::Rc(RcData::new(
-                vec![RcEntry {
-                    op: RcOp::Source {
-                        path: literal(&sourced),
-                    },
+                vec![RcEntry::Source {
+                    path: literal(&sourced),
                     when: None,
                 }],
                 Vec::new(),

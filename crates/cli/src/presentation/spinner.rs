@@ -1,5 +1,5 @@
 //! Spinner
-//! Tty-gated progress renderer and its sender.
+//! Tty-controlled progress renderer and its sender.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -57,7 +57,7 @@ impl SuspendControl {
     }
 }
 
-/// One tty-gated renderer and its senders.
+/// One tty-controlled renderer and its senders.
 ///
 /// Thread-owned spinner over facts, prints, and shutdown.
 /// Print lines through `println`. Single-line shutdown clear with thread join on finish.

@@ -66,8 +66,8 @@ entry, so history keeps moving forward.
 
 The preview renders the summary through the stderr print sender.
 Lifecycle lines lead
-the hooks section. Added hooks print `+` with full gates.
-Changed hooks print `~` with slot diffs. Removed hooks trail
+the hooks section. Added hooks print `+` with full
+conditions. Changed hooks print `~` with slot diffs. Removed hooks trail
 with `-`. Evaluated lines follow in plan order. Runnable hooks
 print one resolved line each:
 
@@ -75,9 +75,10 @@ print one resolved line each:
 ! run: /opt/tool --flag
 ```
 
-Closed gates print skip lines instead. Requires speaks first,
-when speaks second, passing checks speak third. Unresolvable
-binaries fail the run naming the hook:
+Failed conditions print skip lines instead. Requires
+speaks first, when speaks second, and passing checks
+speak third. Unresolvable binaries fail the run naming
+the hook:
 
 ```
 hook 'absent install' cannot resolve 'absent'
@@ -157,11 +158,12 @@ The report counts the run:
 
 ### Hooks
 
-Hooks run in plan order after the writes land. Changed gates
-read the apply-start set. The first run holds every built path.
-Later runs hold rewritten and difference-touched paths, with tree
-member difference mapping to the parent destination. Each run prints
-its position:
+Hooks run in plan order after the writes land. Changed
+conditions read the apply-start set. The first run
+holds every built path. Later runs hold rewritten
+and difference-touched paths, with tree member
+difference mapping to the parent destination. Each
+run prints its position:
 
 ```
 hook 1 of 2: mise install
@@ -171,15 +173,17 @@ Hook output lands in the run log under that header line.
 
 #### Eval order
 
-Each hook passes three gates in order:
+Each hook meets three conditions in order:
 
-- `requires` holds capability. A closed gate warns and moves on:
+- `requires` holds capability. A failed requires
+  condition warns and moves on:
 
 ```
 warn: mise install cannot run (in_path(mise))
 ```
 
-- `when` holds need. A closed gate skips and moves on:
+- `when` holds need. A failed when condition skips
+  and moves on:
 
 ```
 skipped: mise install (no need: changed(dest))
@@ -197,10 +201,11 @@ order.
 #### Merge rules
 
 Hooks sharing argv and path merge into one run. First-seen
-order wins. Requires gates join with AND, flattening nested AND
-branches. When gates join with OR, flattening nested OR
-branches. An ungated side keeps the merged hook ungated on that
-side. Checks concatenate. The timeout keeps the max. Single
+order wins. Requires conditions join with AND and
+flatten nested AND branches. When conditions join
+with OR and flatten nested OR branches. An absent
+side keeps the merged hook absent on that side.
+Checks concatenate. The timeout keeps the max. Single
 hooks pass through untouched.
 
 #### Timeout parsing and kill
@@ -233,9 +238,9 @@ The failure aborts the rest of the hooks.
 
 #### Still-failing abort
 
-Post checks re-evaluate after each run. Passing checks prove the
-work. Failing checks abort the rest naming the hook and the
-open gates:
+Post checks re-evaluate after each run. Passing checks
+prove the work. Failing checks abort the rest naming
+the hook and the unmet conditions:
 
 ```
 hook 'mise install' failed checks after run: in_path(bat)

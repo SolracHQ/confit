@@ -2,26 +2,35 @@
 //! Desired state payloads reaching disk.
 
 pub mod rc;
-pub mod tree;
 
+use std::collections::BTreeMap;
+
+use confit_binding::value::{Decode, Mismatch};
+use confit_binding_macros::Face;
+use mlua::{Lua, Table, Value};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
 use crate::routes::Route;
-use confit_driver::sha::Sha;
-use confit_store::handles::BlobRef;
+use confit_store::Stores;
+use confit_store::blob::BlobSource;
+use confit_store::handles::{BlobRef, ResourceHandle};
 
-pub use rc::{RcData, RcEntry, RcOp, RcSection};
-pub(crate) use tree::tree_manifest_bytes;
-pub use tree::{ManifestMember, Summary, summary, tree_changed};
+pub use rc::{RcData, RcEntry, RcSection};
 
 /// Default unix permission bits for files without explicit modes.
 pub const DEFAULT_FILE_MODE: u32 = 0o644;
 
+/// Member handles keyed by relative path.
+type MemberHandleMap = BTreeMap<String, ResourceHandle>;
+
+/// Structured data values keyed by field name.
+type DataFieldMap = BTreeMap<String, serde_json::Value>;
+
 /// Serialization format for structured documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Face, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[face(table, string)]
 pub enum StructuredFormat {
     /// JSON format.
     Json,
@@ -59,8 +68,9 @@ impl std::fmt::Display for StructuredFormat {
 }
 
 /// Document materialization kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Face)]
 #[serde(rename_all = "lowercase")]
+#[face(table, string)]
 pub enum DocumentKind {
     /// Structured data file with a serialization format.
     Structured,
@@ -96,52 +106,82 @@ impl std::fmt::Display for DocumentKind {
     }
 }
 
-/// Persisted document payload with binary bytes as refs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One persisted tree member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[serde(deny_unknown_fields)]
+#[face(table)]
+pub struct TreeMember {
+    /// The content-addressed member bytes identity.
+    #[face(proxy = ResourceHandle, convert = decode_opaque_blob, encode = render_blob)]
+    pub blob: BlobRef,
+    /// Unix permission bits for the member file.
+    pub mode: u32,
+}
+
+/// Persisted document payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(rename_all = "snake_case")]
+#[face(table, untagged, rename = "Document")]
 pub enum Data {
-    /// Structured data and its serialization format.
+    /// Structured Text Document.
     Structured {
         /// The serialization format.
         format: StructuredFormat,
-        /// Payload for rendering.
+        /// Structured content for the file.
+        #[face(proxy = DataFieldMap, convert = decode_payload_map)]
         data: serde_json::Value,
     },
-    /// Plain text content.
+    /// Plain Text Document.
     Text {
         /// The exact file text.
+        #[face(rename = "text")]
         content: String,
         /// Unix permission bits.
         #[serde(default = "default_file_mode")]
+        #[face(proxy = String, convert = decode_mode, encode = render_mode, default = default_file_mode)]
         mode: u32,
-        /// Presence-only satisfaction flag.
+        /// Existence-only document flag.
         #[serde(default)]
+        #[face(default)]
         unmanaged: bool,
     },
-    /// Symlink placement.
+    /// Symbolic Link Document.
     Link {
         /// The link target route.
         target: Route,
     },
-    /// The rc data object.
+    /// Shell RC Document.
     Rc(RcData),
-    /// One blob handle and its mode.
+    /// Binary Document.
     Opaque {
-        /// The content-addressed file bytes identity.
+        /// The resource handle holding the file bytes.
+        #[face(
+            rename = "handle",
+            proxy = ResourceHandle,
+            convert = decode_opaque_blob,
+            encode = render_blob
+        )]
         blob: BlobRef,
         /// Raw byte count of the file content.
+        #[face(convert = decode_opaque_size)]
         size: u64,
         /// Unix permission bits.
         #[serde(default = "default_file_mode")]
+        #[face(proxy = String, convert = decode_mode, encode = render_mode, default = default_file_mode)]
         mode: u32,
-        /// Presence-only satisfaction flag.
+        /// Existence-only document flag.
         #[serde(default)]
+        #[face(default)]
         unmanaged: bool,
     },
-    /// One managed file set under a destination folder.
+    /// File Tree Document.
     Tree {
-        /// Tree members in build order.
-        members: Vec<ManifestMember>,
+        /// Tree members keyed by relative path.
+        #[face(
+            proxy = MemberHandleMap,
+            convert = decode_tree_members
+        )]
+        members: BTreeMap<String, TreeMember>,
     },
 }
 
@@ -175,7 +215,7 @@ impl Data {
     }
 
     /// Return the tree members for this payload.
-    pub fn tree_members(&self) -> Option<&[ManifestMember]> {
+    pub fn tree_members(&self) -> Option<&BTreeMap<String, TreeMember>> {
         match self {
             Self::Tree { members } => Some(members),
             _ => None,
@@ -186,7 +226,7 @@ impl Data {
     pub fn blob_refs(&self) -> Vec<&BlobRef> {
         match self {
             Self::Opaque { blob, .. } => vec![blob],
-            Self::Tree { members } => members.iter().map(|member| &member.blob).collect(),
+            Self::Tree { members } => members.values().map(|member| &member.blob).collect(),
             Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
                 Vec::new()
             }
@@ -194,124 +234,26 @@ impl Data {
     }
 }
 
-/// One persisted document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Document {
-    /// The late-bound destination route.
-    pub destination: Route,
-    /// The persisted payload.
-    pub data: Data,
-    /// The hex SHA-256 over rendered bytes.
-    pub data_hash: String,
-}
-
-/// Per-document lifecycle status against previous documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocumentStatus {
-    /// Document absent from previous documents.
-    Create,
-    /// Document present with a differing data hash.
-    Update,
-    /// Document present with an equal data hash.
-    Unchanged,
-}
-
-impl Document {
-    /// Build a document with an empty data hash.
-    pub fn new(destination: Route, data: Data) -> Self {
-        Self {
-            destination,
-            data,
-            data_hash: String::new(),
+/// Count changed members between two tree manifests.
+pub fn tree_changed(
+    old: &BTreeMap<String, TreeMember>,
+    new: &BTreeMap<String, TreeMember>,
+) -> usize {
+    let mut changed = 0;
+    for (relative, member) in new {
+        match old.get(relative) {
+            Some(previous) if previous == member => {
+                continue;
+            }
+            _ => changed += 1,
         }
     }
-
-    /// Return the kind label for this document.
-    pub fn kind(&self) -> DocumentKind {
-        self.data.kind()
-    }
-
-    /// Return the unix permission bits for this document.
-    pub fn mode(&self) -> Option<u32> {
-        self.data.mode()
-    }
-
-    /// Build one kind with display key.
-    pub fn key(&self) -> String {
-        format!("{}:{}", self.data.kind().name(), self.destination.display())
-    }
-
-    /// Report whether the document carries opaque bytes.
-    pub fn is_opaque(&self) -> bool {
-        matches!(self.kind(), DocumentKind::Opaque)
-    }
-}
-
-impl Document {
-    /// Report the lifecycle status against previous documents.
-    pub fn status(&self, previous: &[Document]) -> DocumentStatus {
-        let recorded = previous
-            .iter()
-            .find(|document| document.key() == self.key());
-        match recorded {
-            None => {
-                let opaque = previous.iter().find(|recorded| {
-                    recorded.destination == self.destination
-                        && recorded.key() != self.key()
-                        && (recorded.is_opaque() || self.is_opaque())
-                });
-                match opaque {
-                    Some(_) => DocumentStatus::Update,
-                    None => DocumentStatus::Create,
-                }
-            }
-            Some(recorded)
-                if recorded.data_hash == self.data_hash && recorded.mode() == self.mode() =>
-            {
-                DocumentStatus::Unchanged
-            }
-            Some(_) => DocumentStatus::Update,
+    for relative in old.keys() {
+        if !new.contains_key(relative) {
+            changed += 1;
         }
     }
-
-    /// Fill the data hash by rendering the document.
-    ///
-    /// - The hash covers rendered bytes only.
-    /// - Opaque hashes copy the blob ref.
-    /// - Tree hashes cover canonical manifest bytes over blob refs.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Render`] for serializer failures.
-    pub fn fill_hash(&mut self) -> Result<()> {
-        match &self.data {
-            Data::Opaque { blob, .. } => {
-                self.data_hash = blob.sha256.hex();
-                Ok(())
-            }
-            Data::Tree { members } => {
-                self.data_hash = Sha::hash(&crate::document::tree_manifest_bytes(members)).hex();
-                Ok(())
-            }
-            inline => {
-                let bytes = crate::render::inline_bytes(inline)?;
-                self.data_hash = Sha::hash(&bytes).hex();
-                Ok(())
-            }
-        }
-    }
-
-    /// Report whether a recorded document yields to desired documents.
-    ///
-    /// The flag is true while an opaque same-destination sibling exists in desired.
-    pub fn superseded_by(&self, desired: &[Document]) -> bool {
-        desired.iter().any(|document| {
-            document.destination == self.destination
-                && document.key() != self.key()
-                && (document.is_opaque() || self.is_opaque())
-        })
-    }
+    changed
 }
 
 /// Render mode bits as octal digits.
@@ -319,155 +261,564 @@ pub fn render_mode(mode: u32) -> String {
     format!("{mode:o}")
 }
 
+/// Render one blob ref as its content hash.
+fn render_blob(blob: BlobRef) -> String {
+    blob.sha256.hex()
+}
+
 /// Return the default unix permission bits for decode.
 fn default_file_mode() -> u32 {
     DEFAULT_FILE_MODE
 }
 
+/// Decode mode text into permission bits.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside octal or symbolic text.
+fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, Mismatch> {
+    let text = String::decode(value, lua).map_err(|error| Mismatch {
+        path: "mode".to_owned(),
+        want: "expected a string".to_owned(),
+        found: error.found,
+    })?;
+    parse_mode_bits(text.as_str()).map_or_else(
+        || {
+            Err(Mismatch {
+                path: "mode".to_owned(),
+                want: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
+                found: ["'", text.as_str(), "'"].concat(),
+            })
+        },
+        Ok,
+    )
+}
+
+/// Parse octal or symbolic permission text.
+fn parse_mode_bits(text: &str) -> Option<u32> {
+    if text.starts_with('d') {
+        return None;
+    }
+    match text.len() {
+        9 => {
+            let mut bits: u32 = 0;
+            for (index, byte) in text.as_bytes().iter().enumerate() {
+                let bit: u32 = match (index % 3, byte) {
+                    (0, b'r') => 4,
+                    (1, b'w') => 2,
+                    (2, b'x') => 1,
+                    (_, b'-') => 0,
+                    _ => return None,
+                };
+                bits |= bit << ((2 - index / 3) * 3);
+            }
+            Some(bits)
+        }
+        3 | 4 => {
+            let body = match text.len() {
+                3 => text,
+                _ => text.strip_prefix('0')?,
+            };
+            if text.len() == 4 && !text.starts_with('0') {
+                return None;
+            }
+            if !body.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+                return None;
+            }
+            u32::from_str_radix(body, 8).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Decode one structured payload into its data map.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside data maps.
+fn decode_payload_map(
+    lua: &Lua,
+    value: &Value,
+) -> std::result::Result<serde_json::Value, Mismatch> {
+    let data = serde_json::Value::decode(value, lua).map_err(|error| Mismatch {
+        path: "Document.Structured.data".to_owned(),
+        want: "a data map".to_owned(),
+        found: error.found,
+    })?;
+    if data.is_object() {
+        Ok(data)
+    } else {
+        Err(Mismatch {
+            path: "Document.Structured.data".to_owned(),
+            want: "a data map".to_owned(),
+            found: data.to_string(),
+        })
+    }
+}
+
+/// Register one handle value into its blob ref.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside resource handles and pool failures.
+fn decode_opaque_blob(lua: &Lua, value: &Value) -> std::result::Result<BlobRef, Mismatch> {
+    let handle = decode_handle(lua, value, "handle")?;
+    let stores = stores_of(lua)?;
+    stores
+        .blobs()
+        .put(BlobSource::Handle(&handle))
+        .map(|opened| opened.to_ref())
+        .map_err(|error| Mismatch {
+            path: "handle".to_owned(),
+            want: "a decoded body".to_owned(),
+            found: error.to_string(),
+        })
+}
+
+/// Read one handle value into its raw byte count.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside resource handles and pool failures.
+fn decode_opaque_size(lua: &Lua, table: &Table) -> std::result::Result<u64, Mismatch> {
+    let value = confit_binding::value::read_field(table, "Document_Opaque", "handle")?;
+    let handle = decode_handle(lua, &value, "handle")?;
+    let stores = stores_of(lua)?;
+    let opened = stores.resources().open(&handle).map_err(|error| Mismatch {
+        path: "handle".to_owned(),
+        want: "a decoded body".to_owned(),
+        found: error.to_string(),
+    })?;
+    opened.len().map_err(|error| Mismatch {
+        path: "handle".to_owned(),
+        want: "a decoded body".to_owned(),
+        found: error.to_string(),
+    })
+}
+
+/// Decode one members table into member entries with pool registration.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for misshaped tables, handles, paths and pool failures.
+fn decode_tree_members(
+    lua: &Lua,
+    value: &Value,
+) -> std::result::Result<BTreeMap<String, TreeMember>, Mismatch> {
+    let source = confit_binding::value::table_value(value, "members")?;
+    let mut pairs: Vec<(String, Value)> = Vec::new();
+    for pair in source.pairs::<Value, Value>() {
+        let (key, item) = pair.map_err(|error| Mismatch {
+            path: "members".to_owned(),
+            want: "readable entries".to_owned(),
+            found: error.to_string(),
+        })?;
+        match key {
+            Value::String(text) => pairs.push((text.to_string_lossy(), item)),
+            _ => {
+                return Err(Mismatch {
+                    path: "members".to_owned(),
+                    want: "a string key".to_owned(),
+                    found: key.type_name().to_owned(),
+                });
+            }
+        }
+    }
+    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    let stores = stores_of(lua)?;
+    let mut members = BTreeMap::new();
+    for (relative, item) in &pairs {
+        check_member_key(relative)?;
+        let handle = decode_handle(lua, item, &["members.", relative.as_str()].concat())?;
+        let opened = stores
+            .blobs()
+            .put(BlobSource::Handle(&handle))
+            .map_err(|error| Mismatch {
+                path: ["members.", relative.as_str()].concat(),
+                want: "a decoded body".to_owned(),
+                found: error.to_string(),
+            })?;
+        let mode = stores.resources().mode(&handle).map_err(|error| Mismatch {
+            path: ["members.", relative.as_str()].concat(),
+            want: "a decoded body".to_owned(),
+            found: error.to_string(),
+        })?;
+        members.insert(
+            relative.clone(),
+            TreeMember {
+                blob: opened.to_ref(),
+                mode,
+            },
+        );
+    }
+    Ok(members)
+}
+
+/// Decode one handle value into its resource handle.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside resource handles.
+fn decode_handle(
+    lua: &Lua,
+    value: &Value,
+    path: &str,
+) -> std::result::Result<ResourceHandle, Mismatch> {
+    ResourceHandle::decode(value, lua).map_err(|error| Mismatch {
+        path: path.to_owned(),
+        want: "a resource handle".to_owned(),
+        found: error.found,
+    })
+}
+
+/// Reject tree keys outside relative member paths.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for empty, absolute, and dot-dot keys.
+fn check_member_key(relative: &str) -> std::result::Result<(), Mismatch> {
+    if relative.is_empty() || relative.starts_with('/') {
+        return Err(Mismatch {
+            path: "tree files key".to_owned(),
+            want: "a relative member path".to_owned(),
+            found: ["'", relative, "'"].concat(),
+        });
+    }
+    for segment in relative.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+            return Err(Mismatch {
+                path: "tree files key".to_owned(),
+                want: "a relative member path".to_owned(),
+                found: ["'", relative, "'"].concat(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Read the shared stores from one Lua instance.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for an uninstalled api.
+fn stores_of(lua: &Lua) -> std::result::Result<Stores, Mismatch> {
+    match lua.app_data_ref::<Stores>() {
+        Some(stores) => Ok(stores.clone()),
+        None => Err(Mismatch {
+            path: "Document".to_owned(),
+            want: "a decoded body".to_owned(),
+            found: "confit api is not installed".to_owned(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::{Route, RouteBase};
+    use confit_binding::value::{Decode, Encode};
 
-    fn literal(relative: &str) -> Route {
-        Route::new(RouteBase::Literal, relative).unwrap()
+    use crate::routes::RouteBase;
+
+    fn test_lua() -> Lua {
+        Lua::new()
     }
 
-    fn fill(data: Data) -> String {
-        let mut document = Document::new(literal("pinned/subject"), data);
-        document.fill_hash().unwrap();
-        document.data_hash
+    fn body_of(lua: &Lua, body: &str) -> Value {
+        let source = format!("return {body}");
+        lua.load(&source).call(()).unwrap()
     }
 
-    #[test]
-    fn fill_hash_pins_text_bytes() {
-        let hash = fill(Data::Text {
-            content: "pinned text\n".into(),
-            mode: 0o644,
-            unmanaged: false,
-        });
-        assert_eq!(
-            hash, "f007767c80150f15e9cacf96dc8d24ac3b6b3094c9b727d1534b175910968f2a",
-            "text hash differs only when rendered bytes change"
-        );
+    fn documents_of(lua: &Lua, body: &str) -> (Route, Data) {
+        let route = Route::new(RouteBase::Home, "subject").unwrap();
+        let value = body_of(lua, body);
+        match Data::decode(&value, lua) {
+            Ok(decoded) => (route, decoded),
+            Err(error) => panic!("body decodes: {error}"),
+        }
     }
 
-    #[test]
-    fn fill_hash_pins_structured_bytes() {
-        let data = serde_json::json!({"key": "value"});
-        let hash = fill(Data::Structured {
-            format: StructuredFormat::Json,
-            data,
-        });
-        assert_eq!(
-            hash, "796a0bdfc73f373f33ec3098a246b3d27a10d75e9f4f3dd4e4630efc0f2d3184",
-            "structured hash differs only when rendered bytes change"
-        );
+    fn body_error(lua: &Lua, body: &str) -> String {
+        let value = body_of(lua, body);
+        match Data::decode(&value, lua) {
+            Ok(_) => panic!("foreign body passes: {body}"),
+            Err(error) => error.to_string(),
+        }
     }
 
     #[test]
-    fn fill_hash_pins_rc_display_alias_bytes() {
-        let data = Data::Rc(RcData::new(
-            vec![RcEntry {
-                op: RcOp::Env {
-                    name: "EDITOR".into(),
-                    value: "hx".into(),
-                },
-                when: None,
-            }],
-            vec![RcEntry {
-                op: RcOp::Source {
-                    path: Route::new(RouteBase::Literal, "/pinned/sourced.sh").unwrap(),
-                },
-                when: None,
-            }],
-            vec![RcEntry {
-                op: RcOp::Alias {
-                    name: "ll".into(),
-                    expansion: "ls -l".into(),
-                },
-                when: None,
-            }],
-        ));
-        let bytes = crate::render::inline_bytes(&data).unwrap();
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+    fn text_decodes_mode_with_unmanaged() {
+        let lua = test_lua();
+        let documents = documents_of(&lua, r#"{ text = "hi", mode = "644", unmanaged = true }"#);
+        match documents.1 {
+            Data::Text {
+                content,
+                mode,
+                unmanaged,
+            } => {
+                assert_eq!(content, "hi");
+                assert_eq!(mode, 0o644);
+                assert!(unmanaged);
+            }
+            _ => panic!("text body decodes"),
+        }
+        let symbolic = documents_of(&lua, r#"{ text = "hi", mode = "rwxr-xr-x" }"#);
+        match symbolic.1 {
+            Data::Text {
+                mode, unmanaged, ..
+            } => {
+                assert_eq!(mode, 0o755);
+                assert!(!unmanaged);
+            }
+            _ => panic!("symbolic mode decodes"),
+        }
+        let refused = body_error(&lua, r#"{ text = "hi", mode = 644 }"#);
         assert!(
-            text.contains("/pinned/sourced.sh"),
-            "rc inline bytes carry the display alias: {text}"
+            refused.contains("expected a string"),
+            "the error shows the fault: {refused}"
         );
-        assert_eq!(
-            fill(data),
-            "4e0bb0e9341fc39990d9a6f3476e68a3d2c49e75102ccb2daa7ba7bfcf275f97",
-            "rc hash differs only when rendered bytes change"
-        );
+        for (body, want) in [
+            (r#"{ text = 1 }"#, "a string"),
+            (r#"{ text = "hi", mode = "zzz" }"#, "octal like '755'"),
+            (r#"{ text = "hi", unmanaged = 1 }"#, "a boolean"),
+            (r#"{ text = "hi", bogus = 1 }"#, "bogus"),
+        ] {
+            let text = body_error(&lua, body);
+            assert!(text.contains(want), "the text shows the fault: {text}");
+        }
     }
 
     #[test]
-    fn fill_hash_copies_opaque_blob_sha() {
-        let blob = BlobRef::new(
-            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
-        );
-        let expected = blob.sha256.hex();
-        let hash = fill(Data::Opaque {
-            blob,
-            size: 2,
+    fn structured_decodes_format_with_data() {
+        let lua = test_lua();
+        let documents = documents_of(&lua, r#"{ format = "json", data = { alpha = "one" } }"#);
+        match documents.1 {
+            Data::Structured { format, data } => {
+                assert_eq!(format, StructuredFormat::Json);
+                assert_eq!(
+                    data.get("alpha").and_then(|item| item.as_str()),
+                    Some("one")
+                );
+            }
+            _ => panic!("structured body decodes"),
+        }
+        let text = body_error(&lua, r#"{ format = "json" }"#);
+        assert!(text.contains("data"), "the text shows the field: {text}");
+    }
+
+    #[test]
+    fn structured_live_views_keep_payload_maps_through_encode() {
+        let lua = test_lua();
+        let source = Data::Structured {
+            format: StructuredFormat::Json,
+            data: serde_json::json!({"tools": {"bat": "latest"}, "count": 2}),
+        };
+        let encoded = source.encode(&lua).unwrap();
+        let back = Data::decode(&encoded, &lua).unwrap();
+        assert_eq!(back, source);
+    }
+
+    #[test]
+    fn text_mode_round_trips_through_strings() {
+        let lua = test_lua();
+        for (mode, text) in [(0o644, "644"), (0o755, "755")] {
+            let source = Data::Text {
+                content: "hi".to_owned(),
+                mode,
+                unmanaged: true,
+            };
+            let encoded = source.encode(&lua).unwrap();
+            let Value::Table(table) = encoded else {
+                panic!("text encodes a table");
+            };
+            let rendered: String = table.get("mode").unwrap();
+            assert_eq!(rendered, text);
+            let back = Data::decode(&Value::Table(table), &lua).unwrap();
+            assert_eq!(back, source);
+        }
+    }
+
+    #[test]
+    fn opaque_mode_encodes_strings() {
+        let lua = test_lua();
+        let digest = confit_driver::sha::Sha::hash(b"confit opaque fixture");
+        let source = Data::Opaque {
+            blob: BlobRef::new(digest.clone(), digest),
+            size: 5,
             mode: 0o644,
             unmanaged: false,
-        });
-        assert_eq!(
-            hash, expected,
-            "opaque hash copies content sha without pool bytes"
-        );
+        };
+        let encoded = source.encode(&lua).unwrap();
+        let Value::Table(table) = encoded else {
+            panic!("opaque encodes a table");
+        };
+        let rendered: String = table.get("mode").unwrap();
+        assert_eq!(rendered, "644");
     }
 
     #[test]
-    fn fill_hash_sorts_tree_members_for_stable_hash() {
-        let first = BlobRef::new(
-            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
+    fn link_decodes_target_route() {
+        let lua = test_lua();
+        let documents = documents_of(
+            &lua,
+            r#"{ target = { base = "home", relative = "linked" } }"#,
         );
-        let second = BlobRef::new(
-            confit_driver::sha::Sha::new("cc".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("dd".repeat(32)).unwrap(),
+        assert_eq!(documents.0.display(), "home('subject')");
+        match documents.1 {
+            Data::Link { target } => assert_eq!(target.display(), "home('linked')"),
+            _ => panic!("link body decodes"),
+        }
+        let text = body_error(&lua, r#"{ target = "linked" }"#);
+        assert!(text.contains("a table"), "the text shows the want: {text}");
+    }
+
+    #[test]
+    fn mixed_markers_fail_naming_keys() {
+        let lua = test_lua();
+        let text = body_error(
+            &lua,
+            r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
         );
-        let ordered = vec![
-            ManifestMember {
-                relative: "a".into(),
-                blob: first.clone(),
-                mode: 0o644,
-            },
-            ManifestMember {
-                relative: "b".into(),
-                blob: second.clone(),
-                mode: 0o755,
-            },
-        ];
-        let shuffled = vec![
-            ManifestMember {
-                relative: "b".into(),
-                blob: second,
-                mode: 0o755,
-            },
-            ManifestMember {
-                relative: "a".into(),
-                blob: first,
-                mode: 0o644,
-            },
-        ];
-        let expected =
-            confit_driver::sha::Sha::hash(&crate::document::tree_manifest_bytes(&ordered)).hex();
-        assert_eq!(
-            fill(Data::Tree {
-                members: shuffled.clone()
-            }),
-            expected,
-            "tree hash covers sorted manifest bytes"
+        assert!(
+            text.contains("Document_Text"),
+            "the text shows the arm: {text}"
         );
-        assert_eq!(
-            fill(Data::Tree { members: ordered }),
-            fill(Data::Tree { members: shuffled }),
-            "member order leaves tree hash unchanged"
+        assert!(
+            text.contains("Document_Link"),
+            "the text shows the arm: {text}"
         );
+        let bare = body_error(&lua, r#"{ nope = 1 }"#);
+        assert!(bare.contains("nope"), "the error shows the key: {bare}");
+    }
+
+    fn opened_lua() -> (tempfile::TempDir, Lua, Stores) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("project");
+        confit_driver::fs::create_dir_all(&root).unwrap();
+        confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
+        confit_driver::fs::write(&root.join("other.txt"), b"world").unwrap();
+        let (sender, _) = crossbeam_channel::unbounded();
+        let stores = Stores::new(
+            confit_store::StoreRoots {
+                config_base: directory.path().join("config"),
+                temp_base: directory.path().join("temp"),
+                project_root: directory.path().join("project"),
+            },
+            sender,
+        );
+        let lua = Lua::new();
+        let _ = lua.set_app_data(stores.clone());
+        (directory, lua, stores)
+    }
+
+    fn handle_of(lua: &Lua, stores: &Stores, directory: &tempfile::TempDir, name: &str) -> String {
+        let global = format!("handle_{}", name.replace('.', "_"));
+        let path = directory.path().join("project").join(name);
+        let handle = match stores.resources().resource(&path) {
+            Ok(handle) => handle,
+            Err(error) => panic!("project opens: {error}"),
+        };
+        lua.globals().set(global.clone(), handle).unwrap();
+        global
+    }
+
+    #[test]
+    fn opaque_decodes_from_handles() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let documents = documents_of(
+            &lua,
+            &format!(r#"{{ handle = {note}, mode = "644", unmanaged = true }}"#),
+        );
+        match documents.1 {
+            Data::Opaque {
+                mode, unmanaged, ..
+            } => {
+                assert_eq!(mode, 0o644);
+                assert!(unmanaged, "unmanaged flag carries");
+            }
+            _ => panic!("opaque body decodes"),
+        }
+        let refused = body_error(&lua, &format!(r#"{{ handle = {note}, mode = 644 }}"#));
+        assert!(
+            refused.contains("expected a string"),
+            "the error shows the fault: {refused}"
+        );
+        for (body, want) in [
+            (
+                format!(r#"{{ handle = {note}, mode = "zzz" }}"#),
+                "octal like '755'".to_owned(),
+            ),
+            (
+                r#"{ handle = "note.txt" }"#.to_owned(),
+                "a resource handle".to_owned(),
+            ),
+        ] {
+            let text = body_error(&lua, &body);
+            assert!(
+                text.contains(want.as_str()),
+                "the text shows the fault: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_decodes_flat_paths_into_members() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let other = handle_of(&lua, &stores, &directory, "other.txt");
+        let body = format!(
+            r#"{{
+            members = {{
+                ["top.txt"] = {note},
+                ["sub/nested.txt"] = {other},
+            }},
+        }}"#
+        );
+        let documents = documents_of(&lua, &body);
+        match documents.1 {
+            Data::Tree { members } => {
+                assert_eq!(members.len(), 2);
+                let relatives: Vec<&str> = members.keys().map(String::as_str).collect();
+                assert_eq!(relatives, vec!["sub/nested.txt", "top.txt"]);
+            }
+            _ => panic!("tree body decodes"),
+        }
+        let bare = documents_of(&lua, r#"{ members = {} }"#);
+        match bare.1 {
+            Data::Tree { members } => assert!(members.is_empty(), "empty builds bare"),
+            _ => panic!("bare folder decodes"),
+        }
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        for (body, want) in [
+            (
+                format!(r#"{{ members = {{ [""] = {note} }} }}"#),
+                "a relative member path",
+            ),
+            (
+                format!(r#"{{ members = {{ ["/top.txt"] = {note} }} }}"#),
+                "a relative member path",
+            ),
+            (
+                format!(r#"{{ members = {{ ["sub//nested.txt"] = {note} }} }}"#),
+                "a relative member path",
+            ),
+            (
+                format!(r#"{{ members = {{ ["sub/../nested.txt"] = {note} }} }}"#),
+                "a relative member path",
+            ),
+            (
+                r#"{ members = { ["top.txt"] = "hi" } }"#.to_owned(),
+                "a resource handle",
+            ),
+            (
+                format!(r#"{{ members = {{ ["sub"] = {{ ["nested.txt"] = {note} }} }} }}"#),
+                "a resource handle",
+            ),
+        ] {
+            let text = body_error(&lua, &body);
+            assert!(text.contains(want), "the text shows the fault: {text}");
+        }
     }
 }

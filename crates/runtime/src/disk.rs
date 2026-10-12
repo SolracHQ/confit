@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_driver as driver;
-use confit_model::document::{Data, Document, ManifestMember};
+use confit_model::document::{Data, TreeMember};
 use confit_model::routes::Route;
 use confit_store::blob::BlobStore;
 use confit_store::blob::error::BlobError;
@@ -12,6 +12,7 @@ use confit_store::faults::AccessFault;
 use confit_store::handles::BlobRef;
 
 use crate::error::{Result, RuntimeError};
+use crate::manifest::Document;
 
 /// Disk state.
 pub enum Disk {
@@ -115,9 +116,13 @@ pub fn open_member(destination: &Route, relative: &str) -> Option<Box<dyn std::i
 ///   and mode failures.
 /// - [`RuntimeError::WriteUnknown`] for unmapped
 ///   member failures.
-pub fn write_tree(dest: &Path, members: &[ManifestMember], blobs: &BlobStore) -> Result<usize> {
-    for member in members {
-        let path = dest.join(&member.relative);
+pub fn write_tree(
+    dest: &Path,
+    members: &BTreeMap<String, TreeMember>,
+    blobs: &BlobStore,
+) -> Result<usize> {
+    for (relative, member) in members {
+        let path = dest.join(relative);
         copy_blob(dest, &path, &member.blob, blobs)?;
         driver::fs::set_mode(&path, member.mode)
             .map_err(|error| RuntimeError::from_write_io(&path, error))?;
@@ -406,7 +411,7 @@ mod disk_tests {
         let document = Document::new(
             literal(&root),
             Data::Tree {
-                members: Vec::new(),
+                members: BTreeMap::new(),
             },
         );
         let mut found = disk_tree(&document);

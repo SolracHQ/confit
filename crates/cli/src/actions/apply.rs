@@ -131,7 +131,7 @@ impl<'a> ApplyRunner<'a> {
     /// - [`CliError::Runtime`] for state stores.
     /// - [`CliError::Blob`] for blob resolves with persists and prunes.
     /// - [`CliError::Resolve`] for unresolvable hooks.
-    /// - [`CliError::HookRequires`] for closed Requires gates.
+    /// - [`CliError::HookRequires`] for unmet Requires conditions.
     pub fn execute(self) -> Result<ApplyReport> {
         self.sinks.print_line(render_prepared(&self.prepared));
         if !self.force && !self.sinks.confirm(self.input)? {
@@ -183,8 +183,8 @@ impl<'a> ApplyRunner<'a> {
         Ok(ApplyReport { written, removed })
     }
 
-    /// Run built hooks after files, state, and history land, aborting on
-    /// closed Requires gates and hook failures.
+    /// Run built hooks after files, state, and history land.
+    /// Unmet Requires conditions and hook failures abort the run.
     fn run_hooks(&self) -> Result<()> {
         let runner = HookRunner {
             progress: self.sinks.progress.clone(),
@@ -195,10 +195,10 @@ impl<'a> ApplyRunner<'a> {
         for (index, hook) in prepared.desired.hooks.iter().enumerate() {
             let position = index + 1;
             match &decided.decisions[index] {
-                HookDecision::RequiresClosed(gate) => {
+                HookDecision::RequiresClosed(condition) => {
                     return Err(CliError::HookRequires {
                         argv: Arg::join(&hook.argv),
-                        condition: describe_condition(gate),
+                        condition: describe_condition(condition),
                     });
                 }
                 HookDecision::WhenClosed(_) | HookDecision::ChecksPass => {}

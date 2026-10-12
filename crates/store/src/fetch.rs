@@ -84,7 +84,7 @@ impl FetchCache {
             url: url.to_string(),
             bytes: file_len(hit.canonical()),
         });
-        match check_sha(url, hit.sha(), expected_sha) {
+        match check_sha(url, hit.sha256(), expected_sha) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
         }
@@ -704,7 +704,7 @@ mod tests {
         assert!(cache.lookup(URL).is_some());
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
-                assert_eq!(handle.sha(), &Sha::hash(&raw));
+                assert_eq!(handle.sha256(), &Sha::hash(&raw));
                 let found = driver::fs::read(handle.canonical()).unwrap();
                 assert_eq!(found, raw);
             }
@@ -994,8 +994,8 @@ mod tests {
         let large_source = ResourceHandle::new(dir.path(), large_path, Sha::hash(&large)).unwrap();
         let large_sourced = store.put(BlobSource::Handle(&large_source)).unwrap();
         assert_eq!(
-            large_sourced.sha(),
-            large_put.sha(),
+            large_sourced.sha256(),
+            large_put.sha256(),
             "sourced bytes keep content hash"
         );
         assert_eq!(

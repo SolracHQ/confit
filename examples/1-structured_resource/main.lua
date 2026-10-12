@@ -1,8 +1,13 @@
-local mise = confit.plugin.solrachq.mise
+local mise = require("plugins._.mise")
+local sugar = require("plugins._.sugar")
 
 local installer = mise.init("2026.9.10")
 local starship = require("tools.starship")({ command_timeout = 10000 })
+
 return {
-  shells = { "bash" },
-  configs = { installer, starship },
+	configs = { installer, starship },
+	documents = {
+		[sugar.home(".bashrc")] = sugar.rc(),
+		[sugar.home(".zshrc")] = sugar.rc(),
+	},
 }

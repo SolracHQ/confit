@@ -30,24 +30,12 @@ const STUB_FILES: &[(&str, &str)] = &[
         include_str!("../../../../stubs/confit.validate.d.lua"),
     ),
     (
-        "stubs/confit.version.d.lua",
-        include_str!("../../../../stubs/confit.version.d.lua"),
+        "stubs/confit.fact.d.lua",
+        include_str!("../../../../stubs/confit.fact.d.lua"),
     ),
     (
-        "plugins/solrachq/mise/plugin.d.lua",
-        include_str!("../../../engine-old/plugins/solrachq/mise/plugin.d.lua"),
-    ),
-    (
-        "plugins/solrachq/nerd_fonts/plugin.d.lua",
-        include_str!("../../../engine-old/plugins/solrachq/nerd_fonts/plugin.d.lua"),
-    ),
-    (
-        "plugins/solrachq/merge/plugin.d.lua",
-        include_str!("../../../engine-old/plugins/solrachq/merge/plugin.d.lua"),
-    ),
-    (
-        "plugins/solrachq/template/plugin.d.lua",
-        include_str!("../../../engine-old/plugins/solrachq/template/plugin.d.lua"),
+        "plugins/_/sugar/init.lua",
+        include_str!("../../../../plugins/_/sugar/init.lua"),
     ),
 ];
 

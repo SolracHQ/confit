@@ -80,7 +80,7 @@ impl ArchiveStore {
     pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
         let path = source.canonical();
         check_compressed_source(path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha().clone())
+        ArchiveHandle::new(path.to_path_buf(), source.sha256().clone())
     }
 
     /// Register one file path as a verified archive.
@@ -132,7 +132,10 @@ impl ArchiveStore {
     /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
-        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
+        let dest = self
+            .temp_base
+            .join(EXTRACT_DIR)
+            .join(archive.sha256().hex());
         if driver::fs::is_dir(&dest) {
             return extracted_handles(&dest, source, &self.resources);
         }
@@ -222,7 +225,10 @@ impl ArchiveStore {
     /// - [`ArchiveError::UnknownMember`] for unknown members.
     pub fn extract_member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
         let members = self.extract(archive)?;
-        let dest = self.temp_base.join(EXTRACT_DIR).join(archive.sha().hex());
+        let dest = self
+            .temp_base
+            .join(EXTRACT_DIR)
+            .join(archive.sha256().hex());
         let wanted = dest.join(name);
         members
             .into_iter()
@@ -558,14 +564,12 @@ mod tests {
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with(name))
             .unwrap()
-            .sha()
+            .sha256()
             .clone()
     }
 
     #[test]
-    fn create_registers_proof_for_compressed_source() {
-        use crate::handles::ArchiveProof;
-
+    fn create_registers_compressed_source() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
@@ -575,8 +579,7 @@ mod tests {
         match store.archive(&source) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
-                assert_eq!(handle.sha(), &Sha::hash(&raw));
-                assert_eq!(handle.proof(), ArchiveProof::Compressed);
+                assert_eq!(handle.sha256(), &Sha::hash(&raw));
             }
             Err(error) => panic!("source registers: {error}"),
         }
@@ -645,7 +648,7 @@ mod tests {
             ),
         );
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        let expected_extract = extract_base.join(archive.sha().hex());
+        let expected_extract = extract_base.join(archive.sha256().hex());
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
             Err(error) => panic!("archive extracts: {error}"),
@@ -711,7 +714,7 @@ mod tests {
             .path()
             .join("temp")
             .join(EXTRACT_DIR)
-            .join(archive.sha().hex());
+            .join(archive.sha256().hex());
         let missing = match resources.cache(&extract_dir, "absent.txt", Sha::hash(b"absent")) {
             Ok(handle) => handle,
             Err(error) => panic!("absent creates: {error}"),
@@ -754,7 +757,7 @@ mod tests {
             .path()
             .join("temp")
             .join(EXTRACT_DIR)
-            .join(archive.sha().hex());
+            .join(archive.sha256().hex());
         assert!(!handles.is_empty(), "extract creates handles");
         match resources.cache(&extract_dir, "../evil.txt", Sha::hash(b"x")) {
             Ok(_) => panic!("escaping member passes"),
@@ -843,7 +846,7 @@ mod tests {
             Err(error) => panic!("gzip extracts: {error}"),
         };
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].sha(), &Sha::hash(b"plain"));
+        assert_eq!(handles[0].sha256(), &Sha::hash(b"plain"));
         match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
@@ -891,8 +894,8 @@ mod tests {
             Ok(handle) => handle,
             Err(error) => panic!("second source registers: {error}"),
         };
-        assert_eq!(first.sha(), &sha_a);
-        assert_eq!(second.sha(), &sha_b);
+        assert_eq!(first.sha256(), &sha_a);
+        assert_eq!(second.sha256(), &sha_b);
         let first_handles = match store.extract(&first) {
             Ok(handles) => handles,
             Err(error) => panic!("first archive extracts: {error}"),
@@ -905,14 +908,14 @@ mod tests {
         assert!(
             first_handles[0]
                 .canonical()
-                .starts_with(extract_base.join(first.sha().hex())),
+                .starts_with(extract_base.join(first.sha256().hex())),
             "first extract follows its handle: {}",
             first_handles[0].canonical().display()
         );
         assert!(
             second_handles[0]
                 .canonical()
-                .starts_with(extract_base.join(second.sha().hex())),
+                .starts_with(extract_base.join(second.sha256().hex())),
             "second extract follows its handle: {}",
             second_handles[0].canonical().display()
         );
@@ -1023,8 +1026,6 @@ mod tests {
 
     #[test]
     fn zip_create_registers_and_rejects_plain() {
-        use crate::handles::ArchiveProof;
-
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
@@ -1034,8 +1035,7 @@ mod tests {
         match store.archive(&source) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
-                assert_eq!(handle.sha(), &Sha::hash(&raw));
-                assert_eq!(handle.proof(), ArchiveProof::Compressed);
+                assert_eq!(handle.sha256(), &Sha::hash(&raw));
             }
             Err(error) => panic!("zip source registers: {error}"),
         }
@@ -1099,7 +1099,7 @@ mod tests {
             Err(ArchiveError::Escape { .. }) => {}
             Err(error) => panic!("wrong escape variant: {error}"),
         }
-        let evil_extract = extract_base.join(evil.sha().hex());
+        let evil_extract = extract_base.join(evil.sha256().hex());
         assert!(!driver::fs::exists(&evil_extract));
         let extracted = driver::fs::read_dir(&extract_base).unwrap();
         assert_eq!(extracted.len(), 1, "the failed unpack leaves no pending");
@@ -1121,7 +1121,7 @@ mod tests {
         };
         assert!(handles.is_empty());
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        let extract_dir = extract_base.join(archive.sha().hex());
+        let extract_dir = extract_base.join(archive.sha256().hex());
         if driver::fs::exists(&extract_dir) {
             let left = driver::fs::read_dir(&extract_dir).unwrap().len();
             assert_eq!(left, 0);

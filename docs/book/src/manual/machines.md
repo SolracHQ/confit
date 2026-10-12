@@ -16,13 +16,12 @@ Keep the demo folder with one profile per machine and shared tool files beside t
     shared.lua
 ```
 
-Each profile returns shells, documents, and configs. Shared tools load through `require` under the root. The root defaults to the profile folder, so sibling files resolve out of the box. The demo laptop profile reads:
+Each profile returns documents and configs. Shared tools load through `require` under the root. The root defaults to the profile folder, so sibling files resolve out of the box. The demo laptop profile reads:
 
 ```lua
 local shared = require("tools.shared")
 
 return {
-  shells = { "bash" },
   documents = {},
   configs = { shared },
 }

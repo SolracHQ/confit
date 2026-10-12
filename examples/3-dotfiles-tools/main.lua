@@ -8,6 +8,5 @@ local shell = require("tools.shell")
 local fonts = require("tools.fonts")
 
 return {
-	shells = { "bash" },
 	configs = { installer, bat, eza, ripgrep, zoxide, starship, shell, fonts },
 }

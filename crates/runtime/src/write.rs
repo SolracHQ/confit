@@ -5,12 +5,13 @@ use std::path::Path;
 
 use confit_driver as driver;
 use confit_driver::progress::{Event, ProgressSender};
-use confit_model::document::{Data, Document};
+use confit_model::document::Data;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
 use crate::disk::{copy_blob, remove, write_tree};
 use crate::error::{Result, RuntimeError};
+use crate::manifest::Document;
 use crate::render::render_document;
 
 /// Destination writer.
@@ -173,17 +174,17 @@ impl Writer {
                 .iter()
                 .filter(|document| document.destination == old.destination)
                 .filter_map(|document| document.data.tree_members())
-                .flat_map(|members| members.iter().map(|member| member.relative.as_str()))
+                .flat_map(|members| members.keys().map(String::as_str))
                 .collect();
             let dest = old.destination.expand();
-            for member in old_members {
-                if new_rels.contains(member.relative.as_str()) {
+            for relative in old_members.keys() {
+                if new_rels.contains(relative.as_str()) {
                     continue;
                 }
-                let path = dest.join(&member.relative);
+                let path = dest.join(relative);
                 if remove(&path).map_err(|error| RuntimeError::from_remove_io(&path, error))? {
                     done += 1;
-                    self.emit_removed(&old.destination.join(&member.relative), done, total);
+                    self.emit_removed(&old.destination.join(relative), done, total);
                     removed += 1;
                 }
             }

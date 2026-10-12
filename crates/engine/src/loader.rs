@@ -8,7 +8,8 @@ use mlua::{Lua, Table, Value};
 
 use confit_driver as driver;
 use confit_store::Stores;
-use confit_surface_api::ApiError;
+
+use crate::api::builtin;
 
 use crate::error::{EngineError, Result};
 
@@ -161,9 +162,9 @@ fn compile<'chunk>(
 ///
 /// # Errors
 ///
-/// - [`ApiError::UnknownModule`] for unknown names.
-/// - [`ApiError::Escape`] for escaping names.
-/// - [`ApiError::Cycle`] for require cycles.
+/// - [`EngineError::UnknownModule`] for unknown names.
+/// - [`EngineError::Escape`] for escaping names.
+/// - [`EngineError::Cycle`] for require cycles.
 /// - [`EngineError::Read`] for unreadable files.
 /// - [`EngineError::Utf8`] for non-UTF8 files.
 /// - [`EngineError::Lua`] for loader and chunk failures.
@@ -178,8 +179,8 @@ fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::UnknownModule`] for unknown names.
-/// - [`ApiError::Cycle`] for require cycles.
+/// - [`EngineError::UnknownModule`] for unknown names.
+/// - [`EngineError::Cycle`] for require cycles.
 /// - [`EngineError::Lua`] for module build failures.
 fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
     let key = CacheKey::Builtin(name.to_owned());
@@ -187,10 +188,10 @@ fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
         return Ok(hit);
     }
     if let Some(loop_) = with_session(lua, |session| session.cycle(name))? {
-        return Err(ApiError::Cycle { loop_ }.into());
+        return Err(EngineError::Cycle { loop_ });
     }
     with_session(lua, |session| session.push(name.to_owned()))?;
-    let built = confit_surface_api::builtin(lua, name);
+    let built = builtin(lua, name);
     with_session(lua, |session| session.pop())?;
     let value = built?;
     with_session(lua, |session| session.store(key, value.clone()))?;
@@ -204,10 +205,10 @@ fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::Escape`] for escaping names.
-/// - [`ApiError::Escape`] for plugin callers outside the tree.
-/// - [`ApiError::Cycle`] for require cycles.
-/// - [`ApiError::UnknownModule`] for missing files.
+/// - [`EngineError::Escape`] for escaping names.
+/// - [`EngineError::Escape`] for plugin callers outside the tree.
+/// - [`EngineError::Cycle`] for require cycles.
+/// - [`EngineError::UnknownModule`] for missing files.
 /// - [`EngineError::Read`] for unreadable files.
 /// - [`EngineError::Utf8`] for non-UTF8 files.
 /// - [`EngineError::Lua`] for read and chunk failures.
@@ -222,7 +223,7 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
     }
     let tag = path.display().to_string();
     if let Some(loop_) = with_session(lua, |session| session.cycle(&tag))? {
-        return Err(ApiError::Cycle { loop_ }.into());
+        return Err(EngineError::Cycle { loop_ });
     }
     with_session(lua, |session| session.push(tag))?;
     let loaded = load_file(lua, &path, name);
@@ -252,16 +253,15 @@ fn canonical_root(root: &Path) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::Escape`] for escaping names.
-/// - [`ApiError::UnknownModule`] for missing files.
+/// - [`EngineError::Escape`] for escaping names.
+/// - [`EngineError::UnknownModule`] for missing files.
 /// - [`EngineError::Read`] for unreadable files.
 fn resolve(root: &Path, root_real: &Path, name: &str) -> Result<PathBuf> {
     let parts = map_name(name)?;
     if parts.is_empty() {
-        return Err(ApiError::UnknownModule {
+        return Err(EngineError::UnknownModule {
             name: name.to_owned(),
-        }
-        .into());
+        });
     }
     let mut direct = root.to_path_buf();
     for part in &parts {
@@ -277,10 +277,9 @@ fn resolve(root: &Path, root_real: &Path, name: &str) -> Result<PathBuf> {
         Ok(hit) => hit,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             driver::fs::canonicalize(&entry).map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => ApiError::UnknownModule {
+                std::io::ErrorKind::NotFound => EngineError::UnknownModule {
                     name: name.to_owned(),
-                }
-                .into(),
+                },
                 _ => EngineError::Read {
                     path: entry.display().to_string(),
                     reason: error.to_string(),
@@ -303,7 +302,7 @@ fn resolve(root: &Path, root_real: &Path, name: &str) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::Escape`] for escaping names.
+/// - [`EngineError::Escape`] for escaping names.
 fn map_name(name: &str) -> Result<Vec<String>> {
     if name.contains('\\') {
         return Err(refuse(name, "backslashes escape"));
@@ -328,7 +327,7 @@ fn map_name(name: &str) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::Escape`] for plugin callers outside the tree.
+/// - [`EngineError::Escape`] for plugin callers outside the tree.
 fn audit(root_real: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Result<()> {
     const CALLER: &str = "require";
     let plugins = root_real.join(PLUGIN_ROOT);
@@ -339,40 +338,37 @@ fn audit(root_real: &Path, caller: Option<&Path>, target: &Path, name: &str) -> 
         return Ok(());
     };
     if caller_real.starts_with(&plugins) && !target.starts_with(&plugins) {
-        return Err(ApiError::Escape {
+        return Err(EngineError::Escape {
             caller: CALLER.to_owned(),
             input: name.to_owned(),
             reason: format!("'{name}' escapes '{}'", plugins.display()),
-        }
-        .into());
+        });
     }
     Ok(())
 }
 
 /// Refuse one require name with its scope reason.
 fn refuse(name: &str, reason: &str) -> EngineError {
-    ApiError::Escape {
+    EngineError::Escape {
         caller: "require".to_owned(),
         input: name.to_owned(),
         reason: reason.to_owned(),
     }
-    .into()
 }
 
 /// Hold one canonical path inside its canonical scope.
 ///
 /// # Errors
 ///
-/// - [`ApiError::Escape`] for escaping names.
+/// - [`EngineError::Escape`] for escaping names.
 fn scoped(scope: &Path, full: PathBuf, name: &str) -> Result<PathBuf> {
     const CALLER: &str = "require";
     if !full.starts_with(scope) {
-        return Err(ApiError::Escape {
+        return Err(EngineError::Escape {
             caller: CALLER.to_owned(),
             input: name.to_owned(),
             reason: format!("'{name}' is outside '{}'", scope.display()),
-        }
-        .into());
+        });
     }
     Ok(full)
 }
@@ -381,17 +377,16 @@ fn scoped(scope: &Path, full: PathBuf, name: &str) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [`ApiError::UnknownModule`] for missing files.
+/// - [`EngineError::UnknownModule`] for missing files.
 /// - [`EngineError::Read`] for unreadable files.
 /// - [`EngineError::Utf8`] for non-UTF8 files.
 /// - [`EngineError::Lua`] for Lua syntax and runtime failures.
 fn load_file(lua: &Lua, path: &Path, name: &str) -> Result<Value> {
     let display = path.display().to_string();
     let bytes = driver::fs::read(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => ApiError::UnknownModule {
+        std::io::ErrorKind::NotFound => EngineError::UnknownModule {
             name: name.to_owned(),
-        }
-        .into(),
+        },
         _ => EngineError::Read {
             path: display.clone(),
             reason: error.to_string(),

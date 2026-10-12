@@ -74,7 +74,7 @@ Bundle: 1 to add, 0 already in place.
 Apply these changes? Type 'yes' to continue: yes
 ```
 
-Type `yes` and the files land. Shell lines land in the startup files from the profile shells.
+Type `yes` and the files land. Shell lines land in the shell startup files.
 
 ## Verify the files
 

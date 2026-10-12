@@ -3,7 +3,7 @@
 The framework exposes one `confit` global. Each namespace
 holds constructors. Constructors return tables or handles.
 Configs collect documents, patches, and hooks. The
-profile returns shells, configs, and documents.
+profile returns configs and documents.
 
 ```lua
 local c = confit.config("bat")
@@ -291,8 +291,8 @@ HIGH, MAJOR. Plan errors name unknown levels.
 
 Constructors return condition tables. Conditions ride
 `when`, `requires` and `checks`. Shell sessions
-evaluate rc guards. Apply evaluates hook gates against
-the changed set.
+evaluate rc guards. Apply evaluates hook conditions
+against the changed set.
 
 #### `confit.runtime.env_eq`
 
@@ -301,7 +301,8 @@ confit.runtime.env_eq({ key = "SHELL", value = "bash" })
 ```
 
 The call takes an opts table with `key` and `value`.
-The gate reads true while the variable equals the value.
+The condition reads true while the variable equals
+the value.
 
 Preconditions hold string leaves and known keys only.
 Plan errors name unknown opts fields and non-string
@@ -313,8 +314,8 @@ leaves.
 confit.runtime.env_set({ key = "SHELL" })
 ```
 
-The call takes an opts table with `key`. The gate reads
-true while the variable holds a non-empty value.
+The call takes an opts table with `key`. The condition
+reads true while the variable holds a non-empty value.
 
 Preconditions hold a string key and known keys only.
 Plan errors name unknown opts fields and non-string
@@ -326,9 +327,9 @@ leaves.
 confit.runtime.in_path("mise")
 ```
 
-The call takes one binary name. The gate reads true
-while the binary resolves executable across the hook
-path dirs and the process PATH.
+The call takes one binary name. The condition reads
+true while the binary resolves executable across
+the hook path dirs and the process PATH.
 
 Preconditions hold a string name. Plan errors name
 non-string names.
@@ -339,9 +340,9 @@ non-string names.
 confit.runtime.exists("/opt/probe")
 ```
 
-The call takes one path. The gate reads true while the
-path stats. A leading tilde expands through the home
-folder.
+The call takes one path. The condition reads true
+while the path stats. A leading tilde expands
+through the home folder.
 
 Preconditions hold a string path. Plan errors name
 non-string paths.
@@ -352,9 +353,9 @@ non-string paths.
 confit.runtime.changed("~/.config/mise/config.toml")
 ```
 
-The call takes one document path. The gate reads true
-while the path sits in the changed set. Hooks only. Rc
-guards holding it fail.
+The call takes one document path. The condition reads
+true while the path sits in the changed set. Hooks
+only. Rc guards holding it fail.
 
 Preconditions hold a string path naming a built
 document. Plan errors name unknown documents.
@@ -365,8 +366,9 @@ document. Plan errors name unknown documents.
 confit.runtime.all({ cond_a, cond_b })
 ```
 
-The call takes a dense condition array. The gate reads
-true while every member holds. An empty list reads true.
+The call takes a dense condition array. The condition
+reads true while every member holds. An empty list
+reads true.
 
 Preconditions hold dense condition tables from index 1.
 Plan errors name sparse lists and bad nested shapes.
@@ -377,8 +379,9 @@ Plan errors name sparse lists and bad nested shapes.
 confit.runtime.any({ cond_a, cond_b })
 ```
 
-The call takes a dense condition array. The gate reads
-true while some member holds. An empty list reads false.
+The call takes a dense condition array. The condition
+reads true while some member holds. An empty list
+reads false.
 
 Preconditions hold dense condition tables from index 1.
 Plan errors name sparse lists and bad nested shapes.
@@ -389,8 +392,8 @@ Plan errors name sparse lists and bad nested shapes.
 confit.runtime.nop(cond)
 ```
 
-The call takes one nested condition. The gate reads true
-while the nested gate reads false.
+The call takes one nested condition. The condition
+reads true while the nested condition reads false.
 
 Preconditions hold one condition table. Plan errors name
 bad nested shapes.
@@ -610,11 +613,12 @@ directly with no shell in between. Opts holds `path`
 path dirs search first. Runtime dirs follow. The preview
 prints the resolved absolute binary.
 
-`requires` gates the run on capability. A closed gate
-warns and excuses the hook. `when` gates the run on
-need. A closed gate skips it as unneeded. `requires`
-and `when` each take a condition table or a builder
-function over the runtime namespace.
+`requires` holds the capability condition. A failed
+requires condition warns and excuses the hook. `when`
+holds the need condition. A failed when condition
+skips the hook as unneeded. `requires` and `when` each
+take a condition table or a builder function over
+the runtime namespace.
 
 `checks` prove the run with condition tables. Passing
 checks skip the hook. Failing checks run it. Checks
@@ -626,15 +630,15 @@ Lua-shaped durations like `1h10m10s`. Bare digits read
 as seconds. The default reads `10m`.
 
 Preconditions hold dense argv, known opts keys and
-well shaped gates. Plan errors name empty argv, 
-sparse argv, non-string keys, unknown opts
-fields, bad gates, and bad timeouts.
+well shaped conditions. Plan errors name empty argv,
+sparse argv, non-string keys, unknown opts fields,
+bad conditions, and bad timeouts.
 
 Hooks sharing argv and path merge into one run.
-First-seen order wins. Requires join with AND. Whens
-join with OR. An ungated side keeps the merged hook
-ungated on that slot. Checks concatenate. Timeout takes
-the max.
+First-seen order wins. Requires conditions join with
+AND. When conditions join with OR. An absent side
+keeps the merged hook absent on that slot. Checks
+concatenate. Timeout takes the max.
 
 ### Config
 
@@ -843,10 +847,12 @@ sources and render failures.
 function over the runtime namespace. The engine calls
 the builder during evaluation and validates the returned
 table. Hook `requires`, hook `when` and rc `when`
-share this shape.
+share this shape. Rc entries hold `when` inside the
+entry operation.
 
 ```lua
 { when = confit.runtime.in_path("bat") }
+{ env = { name = "A", value = "B", when = confit.runtime.in_path("bat") } }
 { when = function(rt) return rt.in_path("bat") end }
 ```
 
@@ -857,11 +863,11 @@ shapes and builder failures.
 #### `changed` first-run and hooks-only
 
 `changed` reads membership in the changed set. First
-runs hold every built path in the set, so every gate
-reads true. Later runs hold rewritten documents and
-differenced documents. Tree member difference maps to the parent
-destination. Unknown paths fail the plan naming the
-path.
+runs hold every built path in the set, so every
+condition reads true. Later runs hold rewritten
+documents and differenced documents. Tree member
+difference maps to the parent destination. Unknown
+paths fail the plan naming the path.
 
 `changed` rides hooks alone. Rc guards holding it fail
 with a hooks-only plan error. The refusal names the
@@ -900,7 +906,6 @@ end
 ```lua
 local starship = require("tools.starship")({ command_timeout = 10000 })
 return {
-  shells = { "bash" },
   configs = { installer, starship },
 }
 ```

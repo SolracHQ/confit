@@ -2,8 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::api::profile::Profile;
+use confit_model::document::Data;
 use confit_model::routes::Route;
-use confit_surface_api::{Document, Profile};
 
 use crate::error::{EngineError, Result};
 
@@ -32,7 +33,7 @@ pub(super) fn check_names(profile: &Profile) -> Result<()> {
 /// # Errors
 ///
 /// - [`EngineError::Duplicate`] for repeated destinations.
-pub(super) fn dedupe(profile: &Profile) -> Result<BTreeMap<Route, Document>> {
+pub(super) fn dedupe(profile: &Profile) -> Result<BTreeMap<Route, Data>> {
     let mut placed = BTreeMap::new();
     for (destination, body) in &profile.documents {
         placed.insert(destination.clone(), body.clone());

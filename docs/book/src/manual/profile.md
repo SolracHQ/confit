@@ -2,7 +2,7 @@
 
 You stand at `~/confit-demo` with one shell and one alias. This chapter adds a second shell and a shared tool file.
 
-A profile composes a shared pool of configs into one user. Three fields compose a profile. `shells` lists the startup files to render. `documents` holds user-owned base files. `configs` holds the tool contributions.
+A profile composes a shared pool of configs into one user. Two fields compose a profile. `documents` holds user-owned base files. `configs` holds the tool contributions.
 
 The demo profile starts with `bash` alone. Add `zsh` beside it. Add one shared tool file under the root and require it. The demo layout reads:
 
@@ -13,13 +13,12 @@ The demo profile starts with `bash` alone. Add `zsh` beside it. Add one shared t
     tools.lua
 ```
 
-`profile.lua` now returns two shells and two configs:
+`profile.lua` now covers two shells with two configs:
 
 ```lua
 local tools = require("tools.tools")
 
 return {
-  shells = { "bash", "zsh" },
   documents = { base },
   configs = { shell, tools },
 }

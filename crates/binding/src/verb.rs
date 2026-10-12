@@ -61,15 +61,86 @@ pub trait Verb {
     fn collect(collector: &mut Registry) -> crate::error::Result<()>;
 }
 
-/// Declare one Lua verb with its mocked call.
+/// Declare one Lua verb with its call.
 ///
 /// - The verb name reads the function ident.
 /// - Verb plus parameter plus return docs read `///` lines.
 /// - Parameter plus return faces read declared bounds.
 /// - The optional marker follows the parameter docs.
-/// - The mock answers the declared returns with String faults.
+/// - An optional leading `lua: &Lua` param passes the Lua context
+///   through and stays out of the stub.
+/// - The call runs per invocation with params decoded through
+///   Decode and returns encoded through Encode.
+/// - The function closes over nothing.
 #[macro_export]
 macro_rules! verb {
+    (
+        $(#[doc = $verb_documentation:literal])+
+        fn $verb:ident (
+            $lua:ident : &Lua
+            $(,
+                $(#[doc = $parameter_documentation:literal])+
+                $(#[face($marker:ident)])?
+                $parameter:ident : $parameter_type:ty
+            )*
+            $(,)?
+        ) -> (
+            $(
+                $(#[doc = $return_documentation:literal])*
+                $return_type:ty
+            ),* $(,)?
+        ) [call = $call:path]
+    ) => {
+        $(#[doc = $verb_documentation])*
+        pub mod $verb {
+            use super::*;
+
+            $crate::__verb_face! {
+                $(#[doc = $verb_documentation])+
+                fn $verb
+                [$( $(#[doc = $parameter_documentation])+ $(#[face($marker)])? $parameter : $parameter_type ),*]
+                [$( $(#[doc = $return_documentation])* $return_type ),*]
+            }
+
+            /// Build the verb function closing over nothing.
+            ///
+            /// # Errors
+            ///
+            /// - [`::mlua::Error`] for Lua failures.
+            pub fn function(lua: &::mlua::Lua) -> ::mlua::Result<::mlua::Function> {
+                lua.create_function(
+                    |$lua, arguments: ::mlua::Variadic<::mlua::Value>| {
+                        let mut next = 0usize;
+                        $(
+                            let $parameter: $parameter_type = match $crate::value::take_arg(
+                                &arguments,
+                                &mut next,
+                            ) {
+                                ::std::option::Option::Some(raw) => {
+                                    <$parameter_type as $crate::value::Decode>::decode(
+                                        &raw, $lua,
+                                    )
+                                    .map_err(|error| {
+                                        ::mlua::Error::runtime(format!(
+                                            "{}: {error}",
+                                            stringify!($parameter),
+                                        ))
+                                    })?
+                                }
+                                ::std::option::Option::None => $crate::__verb_missing!(
+                                    $parameter : $parameter_type $(, $marker)?
+                                ),
+                            };
+                        )*
+                        let _ = &mut next;
+                        let outcome: ($($return_type,)*) =
+                            $call($lua, $($parameter,)*)?;
+                        Ok($crate::__verb_encode!($lua, outcome, $($return_type),*))
+                    },
+                )
+            }
+        }
+    };
     (
         $(#[doc = $verb_documentation:literal])+
         fn $verb:ident (
@@ -83,103 +154,161 @@ macro_rules! verb {
                 $(#[doc = $return_documentation:literal])*
                 $return_type:ty
             ),* $(,)?
-        ) [mock = $mock:path]
+        ) [call = $call:path]
     ) => {
         $(#[doc = $verb_documentation])*
         pub mod $verb {
             use super::*;
 
-            /// Marker carrying the verb face.
-            pub struct Verb;
-
-            impl $crate::verb::Verb for Verb {
-                fn descriptor() -> $crate::verb::VerbDescriptor {
-                    $crate::verb::VerbDescriptor {
-                        name: stringify!($verb),
-                        documentation: concat!($($verb_documentation),*),
-                    }
-                }
-
-                fn stub() -> String {
-                    $crate::stub::emit_function(
-                        &Self::descriptor(),
-                        &[
-                            $($crate::verb::ParameterDescriptor {
-                                name: stringify!($parameter),
-                                documentation: concat!($($parameter_documentation),*),
-                                face: ::std::borrow::Cow::Owned(
-                                    <$parameter_type as $crate::face::Face>::face_name(),
-                                ),
-                                optional: $crate::__verb_optional!($($marker)?),
-                            },)*
-                        ],
-                        &[
-                            $($crate::verb::ReturnDescriptor {
-                                face: ::std::borrow::Cow::Owned(
-                                    <$return_type as $crate::face::Face>::face_name(),
-                                ),
-                                documentation: concat!($($return_documentation),*),
-                            },)*
-                        ],
-                    )
-                }
-
-                fn collect(
-                    collector: &mut $crate::registry::Registry,
-                ) -> $crate::error::Result<()> {
-                    if collector.register(Self::descriptor().name.to_owned(), Self::stub()) {
-                        $(<$parameter_type as $crate::face::Face>::collect(collector)?;)*
-                        $(<$return_type as $crate::face::Face>::collect(collector)?;)*
-                    }
-                    Ok(())
-                }
+            $crate::__verb_face! {
+                $(#[doc = $verb_documentation])+
+                fn $verb
+                [$( $(#[doc = $parameter_documentation])+ $(#[face($marker)])? $parameter : $parameter_type ),*]
+                [$( $(#[doc = $return_documentation])* $return_type ),*]
             }
 
-            /// Register the verb on one Lua table.
+            /// Build the verb function closing over nothing.
             ///
             /// # Errors
             ///
             /// - [`::mlua::Error`] for Lua failures.
-            pub fn register(
-                lua: &::mlua::Lua,
-                table: &::mlua::Table,
-            ) -> ::mlua::Result<()> {
-                table.set(
-                    stringify!($verb),
-                    lua.create_function(
-                        |lua, arguments: ::mlua::Variadic<::mlua::Value>| {
-                            let mut next = 0usize;
-                            $(
-                                let $parameter: $parameter_type = match $crate::value::take_arg(
-                                    &arguments,
-                                    &mut next,
-                                ) {
-                                    ::std::option::Option::Some(raw) => {
-                                        <$parameter_type as $crate::value::Decode>::decode(
-                                            &raw, lua,
-                                        )
-                                        .map_err(|error| {
-                                            ::mlua::Error::runtime(format!(
-                                                "{}: {error}",
-                                                stringify!($parameter),
-                                            ))
-                                        })?
-                                    }
-                                    ::std::option::Option::None => $crate::__verb_missing!(
-                                        $parameter : $parameter_type $(, $marker)?
-                                    ),
-                                };
-                            )*
-                            let _ = &mut next;
-                            let outcome: ($($return_type,)*) =
-                                $mock(lua, $($parameter,)*).map_err(::mlua::Error::runtime)?;
-                            Ok(outcome)
-                        },
-                    )?,
+            pub fn function(lua: &::mlua::Lua) -> ::mlua::Result<::mlua::Function> {
+                lua.create_function(
+                    |lua, arguments: ::mlua::Variadic<::mlua::Value>| {
+                        let mut next = 0usize;
+                        $(
+                            let $parameter: $parameter_type = match $crate::value::take_arg(
+                                &arguments,
+                                &mut next,
+                            ) {
+                                ::std::option::Option::Some(raw) => {
+                                    <$parameter_type as $crate::value::Decode>::decode(
+                                        &raw, lua,
+                                    )
+                                    .map_err(|error| {
+                                        ::mlua::Error::runtime(format!(
+                                            "{}: {error}",
+                                            stringify!($parameter),
+                                        ))
+                                    })?
+                                }
+                                ::std::option::Option::None => $crate::__verb_missing!(
+                                    $parameter : $parameter_type $(, $marker)?
+                                ),
+                            };
+                        )*
+                        let _ = &mut next;
+                        let outcome: ($($return_type,)*) =
+                            $call($($parameter,)*)?;
+                        Ok($crate::__verb_encode!(lua, outcome, $($return_type),*))
+                    },
                 )
             }
         }
     };
+}
+
+/// Expand one verb declaration into its face with its registration.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __verb_face {
+    (
+        $(#[doc = $verb_documentation:literal])+
+        fn $verb:ident
+        [$( $(#[doc = $parameter_documentation:literal])+ $(#[face($marker:ident)])? $parameter:ident : $parameter_type:ty ),*]
+        [$( $(#[doc = $return_documentation:literal])* $return_type:ty ),*]
+    ) => {
+        /// Marker carrying the verb face.
+        pub struct Verb;
+
+        impl $crate::verb::Verb for Verb {
+            fn descriptor() -> $crate::verb::VerbDescriptor {
+                $crate::verb::VerbDescriptor {
+                    name: stringify!($verb),
+                    documentation: concat!($($verb_documentation),*),
+                }
+            }
+
+            fn stub() -> String {
+                $crate::stub::emit_function(
+                    &Self::descriptor(),
+                    &[
+                        $($crate::verb::ParameterDescriptor {
+                            name: stringify!($parameter),
+                            documentation: concat!($($parameter_documentation),*),
+                            face: ::std::borrow::Cow::Owned(
+                                <$parameter_type as $crate::face::Face>::face_name(),
+                            ),
+                            optional: $crate::__verb_optional!($($marker)?),
+                        },)*
+                    ],
+                    &[
+                        $($crate::verb::ReturnDescriptor {
+                            face: ::std::borrow::Cow::Owned(
+                                <$return_type as $crate::face::Face>::face_name(),
+                            ),
+                            documentation: concat!($($return_documentation),*),
+                        },)*
+                    ],
+                )
+            }
+
+            fn collect(
+                collector: &mut $crate::registry::Registry,
+            ) -> $crate::error::Result<()> {
+                if collector.register(Self::descriptor().name.to_owned(), Self::stub()) {
+                    $(<$parameter_type as $crate::face::Face>::collect(collector)?;)*
+                    $(<$return_type as $crate::face::Face>::collect(collector)?;)*
+                }
+                Ok(())
+            }
+        }
+
+        /// Register the verb on one Lua table.
+        ///
+        /// # Errors
+        ///
+        /// - [`::mlua::Error`] for Lua failures.
+        pub fn register(
+            lua: &::mlua::Lua,
+            table: &::mlua::Table,
+        ) -> ::mlua::Result<()> {
+            table.set(stringify!($verb), function(lua)?)
+        }
+    };
+}
+
+/// Encode one verb outcome into its Lua returns.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __verb_encode {
+    ($lua:ident, $outcome:ident $(,)?) => {
+        ::mlua::MultiValue::new()
+    };
+    ($lua:ident, $outcome:ident, $first:ty $(,)?) => {{
+        let mut returns = ::mlua::MultiValue::new();
+        returns.push_back(<$first as $crate::value::Encode>::encode(
+            &$outcome.0,
+            $lua,
+        )?);
+        returns
+    }};
+    ($lua:ident, $outcome:ident, $first:ty, $second:ty $(,)?) => {{
+        let mut returns = ::mlua::MultiValue::new();
+        returns.push_back(<$first as $crate::value::Encode>::encode(
+            &$outcome.0,
+            $lua,
+        )?);
+        returns.push_back(<$second as $crate::value::Encode>::encode(
+            &$outcome.1,
+            $lua,
+        )?);
+        returns
+    }};
+    ($lua:ident, $outcome:ident, $($rest:ty),+) => {{
+        compile_error!("verbs answer up to two returns");
+        ::mlua::MultiValue::new()
+    }};
 }
 
 /// Answer the optional flag for one verb marker.

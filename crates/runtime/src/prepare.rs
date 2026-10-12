@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use confit_model::document::DocumentStatus;
+use crate::manifest::DocumentStatus;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -100,7 +100,6 @@ fn changed_paths(
         }
     }
     for document in &built.documents {
-        let prefix = format!("{}/", document.destination.display());
         for difference in differences {
             let path = match difference {
                 Difference::Key { path, .. }
@@ -108,15 +107,21 @@ fn changed_paths(
                 | Difference::Diff { path, .. }
                 | Difference::Missing { path }
                 | Difference::Unreadable { path, .. } => path,
-            }
-            .display();
-            if path == document.destination.display() || path.starts_with(&prefix) {
+            };
+            if path == &document.destination || tree_member_of(&document.destination, path) {
                 out.insert(document.destination.clone());
                 break;
             }
         }
     }
     out
+}
+
+/// Report whether one tree member route nests under its destination.
+fn tree_member_of(destination: &Route, path: &Route) -> bool {
+    path.base() == destination.base()
+        && path.relative() != destination.relative()
+        && path.relative().starts_with(destination.relative())
 }
 
 /// Log finished documents with lifecycle status.

@@ -90,7 +90,7 @@ confit.runtime.all({ ... })  any({ ... })
 ```lua
 confit.hook.run({ "mise", "install" }, {
   path = { "/home/ada/.local/bin" },          -- extra PATH dirs for the run alone
-  when = confit.runtime.in_path("mise"),      -- closed gate warns and excuses
+  when = confit.runtime.in_path("mise"),      -- failed condition warns and excuses
   checks = { confit.runtime.in_path("bat") }, -- pass skips, fail runs, still-fail aborts
   timeout = "10m",                             -- h m s shapes, default 10m
 })

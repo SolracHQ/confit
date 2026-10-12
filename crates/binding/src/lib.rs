@@ -3,8 +3,11 @@
 
 #![deny(missing_docs)]
 
+pub mod callback;
+pub mod encode;
 pub mod error;
 pub mod face;
+pub mod module;
 pub mod registry;
 pub mod stub;
 pub mod userdata;

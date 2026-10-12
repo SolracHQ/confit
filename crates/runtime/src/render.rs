@@ -3,9 +3,10 @@
 
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
-use confit_model::document::{Data, Document, RcData, RcEntry, RcOp, StructuredFormat};
+use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
 
 use crate::error::{RefusalShape, Result, RuntimeError};
+use crate::manifest::Document;
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -116,28 +117,30 @@ fn section_lines(entries: &[RcEntry]) -> Vec<String> {
 
 /// Render one rc entry as shell lines.
 fn render_entry(entry: &RcEntry) -> Vec<String> {
-    let line = match &entry.op {
-        RcOp::Env { name, value } => {
+    let line = match entry {
+        RcEntry::Env { name, value, .. } => {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
-        RcOp::Path { name, dir } => {
+        RcEntry::Path { name, dir, .. } => {
             let expanded = dir.expand().to_string_lossy().into_owned();
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")
         }
-        RcOp::Alias { name, expansion } => {
+        RcEntry::Alias {
+            name, expansion, ..
+        } => {
             let expanded = escape_argv(std::slice::from_ref(expansion));
             format!("alias {name}={expanded}")
         }
-        RcOp::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)),
-        RcOp::Cmd { argv, .. } => escape_args(argv),
-        RcOp::Source { path, .. } => {
+        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)),
+        RcEntry::Cmd { argv, .. } => escape_args(argv),
+        RcEntry::Source { path, .. } => {
             let expanded = path.expand().to_string_lossy().into_owned();
             format!("source {}", quote(&expanded))
         }
     };
-    match entry.when.as_ref() {
+    match entry.when() {
         None => vec![line],
         Some(guard) => vec![
             format!("if {}; then", render_guard(guard)),

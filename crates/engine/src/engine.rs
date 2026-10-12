@@ -1,20 +1,26 @@
 //! Engine
 //! Evaluate Lua profiles into documents with hooks.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use mlua::Lua;
 
-use confit_model::document::Document as ModelDocument;
+use confit_model::document::Data;
 use confit_model::hook::Hook;
+use confit_model::routes::Route;
 use confit_store::Stores;
 
+use confit_binding::value::Decode;
+
+use crate::api::profile::Profile;
+use crate::assembly::Assembler;
 use crate::error::Result;
 
 /// Evaluated profile documents with hooks.
 pub struct Evaluated {
-    /// Finished documents with filled hashes.
-    pub documents: Vec<ModelDocument>,
+    /// Placed payloads keyed by destination route with empty hashes.
+    pub documents: BTreeMap<Route, Data>,
     /// Collected hooks in first-seen order.
     pub hooks: Vec<Hook>,
 }
@@ -38,7 +44,7 @@ impl Engine {
 
     /// Evaluate one profile file into documents with hooks.
     ///
-    /// - Documents finish with filled hashes in destination display order.
+    /// - Documents hold placed payloads keyed by route with empty hashes.
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
     /// - Filters fan out over matched destinations in destination order.
@@ -46,8 +52,7 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// - [`crate::error::EngineError::Surface`] for surface failures.
-    /// - [`crate::error::EngineError::Model`] for unhashable documents.
+    /// - [`crate::error::EngineError::Mismatch`] for misshaped profiles.
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
     /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
@@ -61,10 +66,10 @@ impl Engine {
         self.lua.set_app_data(self.stores.clone());
         crate::loader::install(&self.lua)?;
         let value = crate::loader::load_chunk(&self.lua, profile)?;
-        let decoded = confit_surface_api::Profile::decode(&self.lua, value)?;
-        let mut documents = crate::assembly::assemble(&self.lua, &self.stores, &decoded)?;
-        let hooks = crate::assembly::collect_hooks(&decoded, &documents)?;
-        documents.sort_by_key(|document| document.destination.display());
+        let decoded = Profile::decode(&value, &self.lua)?;
+        let assembler = Assembler::new(&self.lua);
+        let documents = assembler.assemble(&decoded)?;
+        let hooks = assembler.collect_hooks(&decoded, &documents)?;
         Ok(Evaluated { documents, hooks })
     }
 }

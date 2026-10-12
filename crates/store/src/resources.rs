@@ -6,6 +6,8 @@ pub mod error;
 use std::path::{Component, Path};
 
 use confit_driver::sha::Sha;
+use file_format::FileFormat;
+use mlua::{Lua, Table};
 
 use crate::StoreRoots;
 use crate::handles::ResourceHandle;
@@ -100,6 +102,20 @@ impl Resources {
         driver::fs::open(path).map_err(|error| ResourceError::from_io(path, error))
     }
 
+    /// Load one handle payload into its Lua table.
+    ///
+    /// - Payloads without a table shape fail with the reason.
+    pub fn load_table(
+        &self,
+        lua: &Lua,
+        handle: &ResourceHandle,
+    ) -> std::result::Result<Table, String> {
+        match sniffed_bytes(self, handle) {
+            Ok(bytes) => table_for(lua, handle, &bytes),
+            Err(reason) => Err(reason),
+        }
+    }
+
     /// Read permission bits for one handle.
     ///
     /// # Errors
@@ -131,6 +147,110 @@ fn read_text(path: &Path) -> Result<String> {
     }
 }
 
+/// Read one handle fully into bytes.
+///
+/// - Binary inputs fail with the reason.
+fn sniffed_bytes(
+    resources: &Resources,
+    handle: &ResourceHandle,
+) -> std::result::Result<Vec<u8>, String> {
+    use std::io::{Read as _, Seek as _};
+    let path = handle.canonical().display().to_string();
+    let mut stream = resources.open(handle).map_err(|error| error.to_string())?;
+    match FileFormat::from_reader(&mut stream) {
+        Ok(FileFormat::PlainText) => {}
+        Ok(format) => {
+            return Err(format!(
+                "cannot load '{path}': unsupported kind '{}'",
+                format.name()
+            ));
+        }
+        Err(error) => {
+            return Err(ResourceError::from_io(handle.canonical(), error).to_string());
+        }
+    }
+    if let Err(error) = stream.rewind() {
+        return Err(ResourceError::from_io(handle.canonical(), error).to_string());
+    }
+    let mut bytes = Vec::new();
+    match stream.read_to_end(&mut bytes) {
+        Ok(_) => Ok(bytes),
+        Err(error) => Err(ResourceError::from_io(handle.canonical(), error).to_string()),
+    }
+}
+
+/// Read one handle payload into its Lua table.
+///
+/// - Payloads without a table shape fail with the reason.
+fn table_for(
+    lua: &Lua,
+    handle: &ResourceHandle,
+    bytes: &[u8],
+) -> std::result::Result<Table, String> {
+    use mlua::Value;
+    let path = handle.canonical().display().to_string();
+    let text = match std::str::from_utf8(bytes) {
+        Ok(found) => found,
+        Err(_) => return Err(format!("cannot load '{path}'")),
+    };
+    if let Some(value) = parse_json(text)
+        .or_else(|| parse_toml(text))
+        .or_else(|| parse_yaml(text))
+        .or_else(|| parse_ini(text))
+    {
+        use mlua::LuaSerdeExt as _;
+        match lua.to_value(&value) {
+            Ok(Value::Table(table)) => return Ok(table),
+            _ => return Err(format!("cannot load '{path}'")),
+        }
+    }
+    Err(format!("cannot load '{path}'"))
+}
+
+/// Read one JSON payload with its object shape.
+fn parse_json(text: &str) -> Option<serde_json::Value> {
+    match serde_json::from_str::<serde_json::Value>(text).ok()? {
+        serde_json::Value::Object(_) => serde_json::from_str(text).ok(),
+        _ => None,
+    }
+}
+
+/// Read one TOML payload with its object shape.
+fn parse_toml(text: &str) -> Option<serde_json::Value> {
+    let found = toml::from_str::<toml::Value>(text).ok()?;
+    match serde_json::to_value(&found).ok()? {
+        serde_json::Value::Object(_) => serde_json::to_value(&found).ok(),
+        _ => None,
+    }
+}
+
+/// Read one YAML payload with its object shape.
+fn parse_yaml(text: &str) -> Option<serde_json::Value> {
+    let found = noyalib::from_str::<noyalib::Value>(text).ok()?;
+    match serde_json::to_value(&found).ok()? {
+        serde_json::Value::Object(_) => serde_json::to_value(&found).ok(),
+        _ => None,
+    }
+}
+
+/// Read one INI payload with its object shape.
+fn parse_ini(text: &str) -> Option<serde_json::Value> {
+    match serini::from_str::<serde_json::Value>(text).ok()? {
+        serde_json::Value::Object(mut map) => {
+            if let Some(serde_json::Value::Object(root)) = map.remove("") {
+                for (key, value) in root {
+                    map.insert(key, value);
+                }
+            }
+            if map.is_empty() {
+                return None;
+            }
+            Some(serde_json::Value::Object(map))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,7 +276,7 @@ mod tests {
         match store.resource(&path) {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
-                assert_eq!(handle.sha(), &Sha::hash(b"return {}"));
+                assert_eq!(handle.sha256(), &Sha::hash(b"return {}"));
                 match store.read_text(&handle) {
                     Ok(found) => assert_eq!(found, "return {}"),
                     Err(error) => panic!("trusted text reads: {error}"),

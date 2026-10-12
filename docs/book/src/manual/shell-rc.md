@@ -2,10 +2,10 @@
 
 You stand at `~/confit-demo` with named file shapes behind you. This chapter shows how the demo renders startup files.
 
-Shell setup means lines in a startup file. `bash` renders `~/.bashrc`, `zsh` renders `~/.zshrc`, every other name renders `~/.<name>rc`. The demo profile lists both shells:
+Shell setup means lines in a startup file. `bash` renders `~/.bashrc`, `zsh` renders `~/.zshrc`, every other name renders `~/.<name>rc`. The demo profile declares both shell documents:
 
 ```lua
-return { shells = { "bash", "zsh" }, configs = { tools } }
+return { documents = { base }, configs = { tools } }
 ```
 
 One rc document renders once per shell. `{{shell}}` inside `eval` and `source` entries resolves per shell.

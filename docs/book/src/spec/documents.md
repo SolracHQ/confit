@@ -11,7 +11,7 @@ Apply writes each document to its expanded path.
 | `rc` | three section buckets | one base fans out per shell |
 | `link` | link target | one path holds one document |
 | `opaque` | raw bytes by blob ref | one path holds one document |
-| `tree` | member list under one folder | one path holds one file set |
+| `tree` | member map under one folder | one path holds one file set |
 
 ### Structured
 

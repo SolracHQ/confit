@@ -3,7 +3,7 @@
 
 use crate::arg::{Arg, quote};
 use crate::condition::Condition;
-use crate::document::{Data, RcData, RcEntry, RcOp, StructuredFormat};
+use crate::document::{Data, RcData, RcEntry, StructuredFormat};
 use crate::error::{Error, Result};
 
 /// Interactivity guard shared by every shell file.
@@ -17,11 +17,14 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 /// - [`Error::Render`] for serializer failures.
 pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
     match data {
-        Data::Structured { format, data } => match format {
-            StructuredFormat::Toml => Ok(render_toml(data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(data)?.into_bytes()),
-        },
+        Data::Structured { format, data } => {
+            let ordered = canonical_data(data);
+            match format {
+                StructuredFormat::Toml => Ok(render_toml(&ordered)?.into_bytes()),
+                StructuredFormat::Json => Ok(render_json(&ordered)?.into_bytes()),
+                StructuredFormat::Yaml => Ok(render_yaml(&ordered)?.into_bytes()),
+            }
+        }
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
         Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
@@ -60,6 +63,28 @@ fn render_yaml(value: &serde_json::Value) -> Result<String> {
     })
 }
 
+/// Sort one structured value into canonical key order.
+///
+/// - Objects sort by key at every depth.
+/// - Arrays keep declaration order.
+fn canonical_data(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            pairs.sort_by(|left, right| left.0.cmp(right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, item) in pairs {
+                sorted.insert(key.clone(), canonical_data(item));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonical_data).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
 /// Render rc data to shell text with trailing newline.
 fn render_rc(data: &RcData) -> String {
     let profile = section_lines(&data.profile);
@@ -93,28 +118,30 @@ fn section_lines(entries: &[RcEntry]) -> Vec<String> {
 
 /// Render one rc entry as shell lines.
 fn render_entry(entry: &RcEntry) -> Vec<String> {
-    let line = match &entry.op {
-        RcOp::Env { name, value } => {
+    let line = match entry {
+        RcEntry::Env { name, value, .. } => {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
-        RcOp::Path { name, dir } => {
+        RcEntry::Path { name, dir, .. } => {
             let expanded = dir.display();
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")
         }
-        RcOp::Alias { name, expansion } => {
+        RcEntry::Alias {
+            name, expansion, ..
+        } => {
             let expanded = escape_argv(std::slice::from_ref(expansion));
             format!("alias {name}={expanded}")
         }
-        RcOp::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)),
-        RcOp::Cmd { argv, .. } => escape_args(argv),
-        RcOp::Source { path, .. } => {
+        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)),
+        RcEntry::Cmd { argv, .. } => escape_args(argv),
+        RcEntry::Source { path, .. } => {
             let expanded = path.display();
             format!("source {}", quote(&expanded))
         }
     };
-    match entry.when.as_ref() {
+    match entry.when() {
         None => vec![line],
         Some(guard) => vec![
             format!("if {}; then", render_guard(guard)),
@@ -197,5 +224,41 @@ fn escape_slot(slot: &Arg) -> String {
             let expanded = route.display();
             quote(&expanded).into_owned()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::StructuredFormat;
+
+    fn payload(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    fn structured(format: StructuredFormat, data: serde_json::Value) -> Data {
+        Data::Structured { format, data }
+    }
+
+    #[test]
+    fn structured_bytes_ignore_key_order() {
+        let first = payload(r#"{"beta": {"delta": 1, "gamma": [1, 2]}, "alpha": "one"}"#);
+        let second = payload(r#"{"alpha": "one", "beta": {"gamma": [1, 2], "delta": 1}}"#);
+        for format in [
+            StructuredFormat::Json,
+            StructuredFormat::Toml,
+            StructuredFormat::Yaml,
+        ] {
+            let one = inline_bytes(&structured(format, first.clone())).unwrap();
+            let two = inline_bytes(&structured(format, second.clone())).unwrap();
+            assert_eq!(one, two, "key order leaves structured bytes steady");
+        }
+        let changed = payload(r#"{"alpha": "two", "beta": {"gamma": [1, 2], "delta": 1}}"#);
+        let before = inline_bytes(&structured(StructuredFormat::Json, first.clone())).unwrap();
+        let after = inline_bytes(&structured(StructuredFormat::Json, changed)).unwrap();
+        assert_ne!(before, after, "content change moves structured bytes");
+        let flipped = payload(r#"{"alpha": "one", "beta": {"gamma": [2, 1], "delta": 1}}"#);
+        let reordered = inline_bytes(&structured(StructuredFormat::Json, flipped)).unwrap();
+        assert_ne!(before, reordered, "array order moves structured bytes");
     }
 }

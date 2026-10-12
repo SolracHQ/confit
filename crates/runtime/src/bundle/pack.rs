@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use confit_driver::sha::Sha;
     use confit_driver::{self as driver, fs::TestGuard};
-    use confit_model::document::{Data, Document};
+    use confit_model::document::Data;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -168,13 +168,13 @@ mod tests {
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
-        let mut documents = Vec::new();
+        let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
             let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.push(Document::new(
+            documents.insert(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 Data::Opaque {
                     blob: handle.to_ref(),
@@ -182,7 +182,7 @@ mod tests {
                     mode: 0o644,
                     unmanaged: false,
                 },
-            ));
+            );
         }
         match Manifest::build(documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
@@ -257,7 +257,7 @@ mod tests {
         );
         let raw = driver::fs::read(written.canonical()).unwrap();
         assert_eq!(
-            written.sha(),
+            written.sha256(),
             &Sha::hash(&raw),
             "write hashes the finished bytes"
         );

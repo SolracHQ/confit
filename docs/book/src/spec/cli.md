@@ -135,7 +135,7 @@ The three flags ride plan and apply only.
 paths resolve to a per-process file named `confit-{pid}.log`
 under the OS temp folder. Collision lines land in the log
 file; the run prints the path after the summary. `--log-level
-LEVEL` gates verbosity. Levels span `off`, `error`, `warn`,
+LEVEL` controls verbosity. Levels span `off`, `error`, `warn`,
 `info`, `debug`, `trace`, matched in any letter case. Omitted
 levels mean `warn`. Version output answers `-V` and
 `--version` with `confit {version}`.

@@ -3,11 +3,11 @@
 
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
-use confit_model::hook::{GateChange, GateSlot, Hook, HookChange, HookLifecycle};
+use confit_model::hook::{ConditionChange, ConditionSlot, Hook, HookChange, HookLifecycle};
 
 use crate::presentation::summary::Sigil;
 
-/// Render one condition in compact form for gate text.
+/// Render one condition in compact form for condition text.
 pub fn describe_condition(cond: &Condition) -> String {
     fn render(cond: &Condition) -> String {
         match cond {
@@ -43,7 +43,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
                     Sigil::Add.mark(),
                     Arg::join(&entry.hook.argv)
                 ));
-                full_gates(entry.hook, &mut lines);
+                full_conditions(entry.hook, &mut lines);
             }
             HookChange::Removed => {
                 lines.push(format!(
@@ -61,7 +61,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
                     Sigil::Update.mark(),
                     Arg::join(&entry.hook.argv)
                 ));
-                render_gate_changes(&edits.gates, &mut lines);
+                render_condition_changes(&edits.conditions, &mut lines);
                 render_check_changes(&edits.removed_checks, &edits.added_checks, &mut lines);
                 if let Some(timeout) = &edits.timeout {
                     lines.push(format!(
@@ -78,20 +78,20 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     lines
 }
 
-/// Render full gate lines for one added hook.
-fn full_gates(hook: &Hook, out: &mut Vec<String>) {
-    if let Some(gate) = hook.requires.as_ref() {
+/// Render full condition lines for one added hook.
+fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
+    if let Some(condition) = hook.requires.as_ref() {
         out.push(format!(
             "  {} requires ({})",
             Sigil::Add.mark(),
-            describe_condition(gate)
+            describe_condition(condition)
         ));
     }
-    if let Some(gate) = hook.when.as_ref() {
+    if let Some(condition) = hook.when.as_ref() {
         out.push(format!(
             "  {} when ({})",
             Sigil::Add.mark(),
-            describe_condition(gate)
+            describe_condition(condition)
         ));
     }
     for check in &hook.checks {
@@ -103,18 +103,18 @@ fn full_gates(hook: &Hook, out: &mut Vec<String>) {
     }
 }
 
-/// Return one gate slot name for detail lines.
-fn gate_slot_text(slot: GateSlot) -> &'static str {
+/// Return one condition slot name for detail lines.
+fn condition_slot_text(slot: ConditionSlot) -> &'static str {
     match slot {
-        GateSlot::Requires => "requires",
-        GateSlot::When => "when",
+        ConditionSlot::Requires => "requires",
+        ConditionSlot::When => "when",
     }
 }
 
-/// Render one gate change line per slot while text differs.
-fn render_gate_changes(gates: &[GateChange], out: &mut Vec<String>) {
-    for change in gates {
-        let slot = gate_slot_text(change.slot);
+/// Render one condition change line per slot while text differs.
+fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String>) {
+    for change in conditions {
+        let slot = condition_slot_text(change.slot);
         let prior = change.before.as_ref().map(describe_condition);
         let next = change.after.as_ref().map(describe_condition);
         match (prior, next) {
@@ -206,12 +206,12 @@ mod tests {
         second.requires = Some(in_path("mise"));
         let merged = merge_hooks(vec![first, second]);
         assert_eq!(merged.len(), 1);
-        let gate = match merged[0].requires.clone() {
-            Some(gate) => gate,
+        let condition = match merged[0].requires.clone() {
+            Some(condition) => condition,
             None => panic!("requires survives the merge"),
         };
-        assert_eq!(gate.simplified(), in_path("mise"));
-        assert_eq!(describe_condition(&gate).as_str(), "in_path(mise)");
+        assert_eq!(condition.simplified(), in_path("mise"));
+        assert_eq!(describe_condition(&condition).as_str(), "in_path(mise)");
     }
 
     fn changed(path: &str) -> Condition {
@@ -222,9 +222,16 @@ mod tests {
     }
 
     #[test]
-    fn describe_collapses_merged_duplicate_gates() {
-        let gate = || Condition::All(vec![in_path("mise"), changed("~/.config/mise/config.toml")]);
-        let merged = Condition::Any(vec![gate(), gate(), gate(), gate(), gate()]);
+    fn describe_collapses_merged_duplicate_conditions() {
+        let condition =
+            || Condition::All(vec![in_path("mise"), changed("~/.config/mise/config.toml")]);
+        let merged = Condition::Any(vec![
+            condition(),
+            condition(),
+            condition(),
+            condition(),
+            condition(),
+        ]);
         assert_eq!(
             describe_condition(&merged).as_str(),
             "(in_path(mise) and changed(~/.config/mise/config.toml))"
@@ -233,21 +240,21 @@ mod tests {
 
     #[test]
     fn describe_absorbs_redundant_branches() {
-        let gate = Condition::All(vec![
+        let condition = Condition::All(vec![
             in_path("mise"),
             Condition::Any(vec![in_path("mise"), changed("dest")]),
         ]);
-        assert_eq!(describe_condition(&gate).as_str(), "in_path(mise)");
+        assert_eq!(describe_condition(&condition).as_str(), "in_path(mise)");
     }
 
     #[test]
     fn describe_nests_compounds_with_full_parens() {
-        let gate = Condition::Any(vec![
+        let condition = Condition::Any(vec![
             Condition::All(vec![in_path("a"), in_path("b")]),
             Condition::Not(Box::new(in_path("c"))),
         ]);
         assert_eq!(
-            describe_condition(&gate).as_str(),
+            describe_condition(&condition).as_str(),
             "((in_path(a) and in_path(b)) or (not in_path(c)))"
         );
     }
@@ -265,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn added_hook_prints_plus_with_full_gates() {
+    fn added_hook_prints_plus_with_full_conditions() {
         let mut added = hook(
             &["mise", "install"],
             &[],
@@ -302,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_gate_prints_tilde_with_slot_diff() {
+    fn modified_condition_prints_tilde_with_slot_diff() {
         let mut before = hook(&["mise", "install"], &[], None, vec![], 60);
         before.requires = Some(in_path("a"));
         let mut after = hook(&["mise", "install"], &[], None, vec![], 60);
@@ -342,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_absent_to_present_reads_added() {
+    fn condition_absent_to_present_reads_added() {
         let before = hook(&["mise"], &[], None, vec![], 60);
         let after = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
         assert_eq!(
@@ -352,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_present_to_absent_reads_removed() {
+    fn condition_present_to_absent_reads_removed() {
         let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
         let after = hook(&["mise"], &[], None, vec![], 60);
         assert_eq!(
@@ -362,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_changed_single_reads_old_to_new() {
+    fn condition_changed_single_reads_old_to_new() {
         let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
         let after = hook(&["mise"], &[], Some(in_path("b")), vec![], 60);
         assert_eq!(

@@ -122,12 +122,12 @@ pub enum CliError {
         /// The unmet check names.
         failed: String,
     },
-    /// Blocked hook gate.
+    /// Unmet hook requires condition.
     #[error("hook '{argv}' cannot run ({condition})")]
     HookRequires {
         /// The joined argv under blocking.
         argv: String,
-        /// The closed gate condition.
+        /// The unmet requires condition.
         condition: String,
     },
     /// Aborted apply.

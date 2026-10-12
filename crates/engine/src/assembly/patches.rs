@@ -4,29 +4,25 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use mlua::{Function, Lua};
+use mlua::{Lua, Value};
 
-use confit_model::document::StructuredFormat;
+use crate::api::patch::{FilterArgs, Patch, PatchTarget, StructuredPatch, join_destination};
+use crate::api::profile::Profile;
+use confit_binding::callback::Callback;
+use confit_binding::value::Encode;
+use confit_model::document::{Data, RcData, StructuredFormat};
 use confit_model::routes::Route;
-use confit_surface_api::{
-    Document, Patch, PatchTarget, Profile, RcDocument, RcPatch, StructuredPatch, route_value,
-};
 
+use super::owned::{OwnedPatch, assemble_config};
 use crate::error::{EngineError, Result};
 
-/// Split one profile's patches into structured and rc lists in return order.
-pub(super) fn split_patches(profile: &Profile) -> (Vec<StructuredPatch>, Vec<RcPatch>) {
-    let mut structured = Vec::new();
-    let mut rc = Vec::new();
+/// Split one profile's patches into owned patches in return order.
+pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
+    let mut owned = Vec::new();
     for config in &profile.configs {
-        for patch in &config.patches {
-            match patch {
-                Patch::Structured(found) => structured.push(found.clone()),
-                Patch::Rc(found) => rc.push(found.clone()),
-            }
-        }
+        owned.extend(assemble_config(config));
     }
-    (structured, rc)
+    owned
 }
 
 /// Group structured patches over matched destinations in rank order.
@@ -34,25 +30,30 @@ pub(super) fn split_patches(profile: &Profile) -> (Vec<StructuredPatch>, Vec<RcP
 /// - Target patches group under their route.
 /// - Filter patches fan out over structured matches.
 /// - Fan-out follows destination order.
-/// - Declaration order follows the input vecs, and the stable sort
+/// - Vec order feeds the groups, and the stable sort
 ///   keeps it for equal levels.
 ///
 /// # Errors
 ///
+/// - [`crate::error::EngineError::Mismatch`] for doubled and missing destinations.
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 pub(super) fn grouped_structured<'a>(
     lua: &Lua,
-    placed: &BTreeMap<Route, Document>,
-    patches: &'a [StructuredPatch],
-) -> Result<BTreeMap<Route, Vec<&'a StructuredPatch>>> {
-    let mut grouped: BTreeMap<Route, Vec<&StructuredPatch>> = BTreeMap::new();
+    placed: &BTreeMap<Route, Data>,
+    patches: &'a [OwnedPatch],
+) -> Result<BTreeMap<Route, Vec<&'a OwnedPatch>>> {
+    let mut grouped: BTreeMap<Route, Vec<&OwnedPatch>> = BTreeMap::new();
     for patch in patches {
-        for destination in expanded_destinations(lua, placed, &patch.target, is_structured)? {
+        let Some(found) = patch.structured() else {
+            continue;
+        };
+        let target = join_destination(found.target.clone(), found.filter.clone())?;
+        for destination in expanded_destinations(lua, placed, &target, is_structured)? {
             grouped.entry(destination).or_default().push(patch);
         }
     }
     for group in grouped.values_mut() {
-        group.sort_by_key(|patch| Reverse(patch.priority.rank()));
+        group.sort_by_key(|patch| Reverse(rank_of(patch)));
     }
     Ok(grouped)
 }
@@ -62,27 +63,40 @@ pub(super) fn grouped_structured<'a>(
 /// - Target patches group under their route.
 /// - Filter patches fan out over rc matches.
 /// - Fan-out follows destination order.
-/// - Declaration order follows the input vecs, and the stable sort
+/// - Vec order feeds the groups, and the stable sort
 ///   keeps it for equal levels.
 ///
 /// # Errors
 ///
+/// - [`crate::error::EngineError::Mismatch`] for doubled and missing destinations.
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 pub(super) fn grouped_rc<'a>(
     lua: &Lua,
-    placed: &BTreeMap<Route, Document>,
-    patches: &'a [RcPatch],
-) -> Result<BTreeMap<Route, Vec<&'a RcPatch>>> {
-    let mut grouped: BTreeMap<Route, Vec<&RcPatch>> = BTreeMap::new();
+    placed: &BTreeMap<Route, Data>,
+    patches: &'a [OwnedPatch],
+) -> Result<BTreeMap<Route, Vec<&'a OwnedPatch>>> {
+    let mut grouped: BTreeMap<Route, Vec<&OwnedPatch>> = BTreeMap::new();
     for patch in patches {
-        for destination in expanded_destinations(lua, placed, &patch.target, is_rc)? {
+        let Some(found) = patch.rc() else {
+            continue;
+        };
+        let target = join_destination(found.target.clone(), found.filter.clone())?;
+        for destination in expanded_destinations(lua, placed, &target, is_rc)? {
             grouped.entry(destination).or_default().push(patch);
         }
     }
     for group in grouped.values_mut() {
-        group.sort_by_key(|patch| Reverse(patch.priority.rank()));
+        group.sort_by_key(|patch| Reverse(rank_of(patch)));
     }
     Ok(grouped)
+}
+
+/// Return the merge rank of one owned patch.
+fn rank_of(patch: &OwnedPatch) -> u8 {
+    match &patch.patch {
+        Patch::Structured(found) => found.priority.rank(),
+        Patch::Rc(found) => found.priority.rank(),
+    }
 }
 
 /// Collect patch destinations over its target.
@@ -92,15 +106,13 @@ pub(super) fn grouped_rc<'a>(
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 fn expanded_destinations(
     lua: &Lua,
-    placed: &BTreeMap<Route, Document>,
+    placed: &BTreeMap<Route, Data>,
     target: &PatchTarget,
-    area_matches: fn(&Document) -> bool,
+    area_matches: fn(&Data) -> bool,
 ) -> Result<Vec<Route>> {
     match target {
         PatchTarget::Target(route) => Ok(vec![route.clone()]),
-        PatchTarget::Filter(filter) => {
-            matched_destinations(lua, placed, filter.as_function(), area_matches)
-        }
+        PatchTarget::Filter(filter) => matched_destinations(lua, placed, filter, area_matches),
     }
 }
 
@@ -113,17 +125,21 @@ fn expanded_destinations(
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 fn matched_destinations(
     lua: &Lua,
-    placed: &BTreeMap<Route, Document>,
-    filter: &Function,
-    area_matches: fn(&Document) -> bool,
+    placed: &BTreeMap<Route, Data>,
+    filter: &Callback<FilterArgs>,
+    area_matches: fn(&Data) -> bool,
 ) -> Result<Vec<Route>> {
     let mut matched = Vec::new();
     for (destination, body) in placed {
         if !area_matches(body) {
             continue;
         }
-        let route = route_value(lua, destination)?;
-        let keep: bool = filter.call(route)?;
+        let Value::Table(route) = destination.encode(lua)? else {
+            return Err(EngineError::Lua(mlua::Error::runtime(
+                "route views hold tables",
+            )));
+        };
+        let keep = filter.call::<bool>(lua, (&route,))?;
         if keep {
             matched.push(destination.clone());
         }
@@ -132,31 +148,31 @@ fn matched_destinations(
 }
 
 /// Report whether one document holds structured data.
-fn is_structured(body: &Document) -> bool {
-    matches!(body, Document::Structured(_))
+fn is_structured(body: &Data) -> bool {
+    matches!(body, Data::Structured { .. })
 }
 
 /// Report whether one document holds rc sections.
-fn is_rc(body: &Document) -> bool {
-    matches!(body, Document::Rc(_))
+fn is_rc(body: &Data) -> bool {
+    matches!(body, Data::Rc(_))
 }
 
-/// Build one structured patch base with its destination and live data.
+/// Build one structured patch base with its live data.
 ///
 /// # Errors
 ///
 /// - [`EngineError::UnknownTarget`] for missing targets.
 /// - [`EngineError::Structured`] for foreign bases with gaps.
 pub(super) fn structured_base_of(
-    placed: &BTreeMap<Route, Document>,
+    placed: &BTreeMap<Route, Data>,
     target: &Route,
     first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(Route, StructuredFormat, BTreeMap<String, serde_json::Value>)> {
+) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match placed.get(target) {
         Some(body) => {
             let display = target.display();
-            structured_declared_base(target, body, &display, first, patches)
+            structured_declared_base(body, &display, first, patches)
         }
         None => Err(EngineError::UnknownTarget {
             display: target.display(),
@@ -164,51 +180,49 @@ pub(super) fn structured_base_of(
     }
 }
 
-/// Build one declared structured patch base with its destination and live data.
+/// Build one declared structured patch base with its live data.
 ///
 /// # Errors
 ///
 /// - [`EngineError::Structured`] for foreign bases with gaps.
 fn structured_declared_base(
-    destination: &Route,
-    body: &Document,
+    body: &Data,
     display: &str,
     first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(Route, StructuredFormat, BTreeMap<String, serde_json::Value>)> {
+) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match body {
-        Document::Structured(found) => {
+        Data::Structured { format, data } => {
             for patch in patches {
-                if patch.format != found.format {
-                    return Err(gap(display, found.format.name(), patch.format.name()));
+                if patch.format != *format {
+                    return Err(gap(display, format.name(), patch.format.name()));
                 }
             }
-            let mut data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-            for (key, value) in &found.data {
-                data.insert(key.clone(), value.0.clone());
+            let mut live: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+            if let Some(map) = data.as_object() {
+                for (key, value) in map {
+                    live.insert(key.clone(), value.clone());
+                }
             }
-            Ok((destination.clone(), found.format, data))
+            Ok((*format, live))
         }
-        Document::Rc(_) => Err(gap(display, "rc", first.format.name())),
-        _ => Err(gap(display, body.kind_name(), first.format.name())),
+        Data::Rc(_) => Err(gap(display, "rc", first.format.name())),
+        _ => Err(gap(display, body.kind().name(), first.format.name())),
     }
 }
 
-/// Build one rc patch base with its destination and live sections.
+/// Build one rc patch base with its live sections.
 ///
 /// # Errors
 ///
 /// - [`EngineError::UnknownTarget`] for missing targets.
 /// - [`EngineError::Structured`] for foreign bases with gaps.
-pub(super) fn rc_base_of(
-    placed: &BTreeMap<Route, Document>,
-    target: &Route,
-) -> Result<(Route, RcDocument)> {
+pub(super) fn rc_base_of(placed: &BTreeMap<Route, Data>, target: &Route) -> Result<RcData> {
     match placed.get(target) {
         Some(body) => match body {
-            Document::Rc(found) => Ok((target.clone(), found.clone())),
-            Document::Structured(found) => Err(gap(&target.display(), found.format.name(), "rc")),
-            _ => Err(gap(&target.display(), body.kind_name(), "rc")),
+            Data::Rc(found) => Ok(found.clone()),
+            Data::Structured { format, .. } => Err(gap(&target.display(), format.name(), "rc")),
+            _ => Err(gap(&target.display(), body.kind().name(), "rc")),
         },
         None => Err(EngineError::UnknownTarget {
             display: target.display(),
@@ -228,16 +242,14 @@ fn gap(display: &str, base: &str, patch: &str) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::config::Config;
+    use crate::api::patch::{Level, Patch, RcPatch, StructuredPatch};
     use confit_model::routes::RouteBase;
-    use confit_surface_api::{
-        Config, Level, Mode, SerializableValue, StructuredDocument, TextDocument,
-    };
     use mlua::{Function, Lua};
     use std::collections::BTreeMap;
 
-    fn profile_of(documents: Vec<(Route, Document)>, patches: Vec<Patch>) -> Profile {
+    fn profile_of(documents: Vec<(Route, Data)>, patches: Vec<Patch>) -> Profile {
         Profile::new(
-            Vec::new(),
             vec![Config::new(
                 "tools/test".to_owned(),
                 documents.into_iter().collect(),
@@ -256,79 +268,80 @@ mod tests {
         source: &str,
     ) -> StructuredPatch {
         let apply: Function = lua.load(source).call(()).unwrap();
-        StructuredPatch::new(
-            PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
+        StructuredPatch {
+            target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+            filter: None,
             format,
             apply,
             priority,
-            None,
-        )
+        }
     }
 
     fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
         let apply: Function = lua.load(source).call(()).unwrap();
-        RcPatch::new(
-            PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
+        RcPatch {
+            target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+            filter: None,
             apply,
             priority,
-            None,
-        )
+        }
     }
 
-    fn placed_structured(relative: &str) -> (Route, Document) {
-        let body = StructuredDocument {
-            format: StructuredFormat::Json,
-            data: [(
-                "seed".to_owned(),
-                SerializableValue(serde_json::Value::from(0)),
-            )]
-            .into_iter()
-            .collect(),
-        };
+    fn placed_structured(relative: &str) -> (Route, Data) {
         (
             Route::new(RouteBase::Home, relative).unwrap(),
-            Document::Structured(body),
+            Data::Structured {
+                format: StructuredFormat::Json,
+                data: serde_json::json!({"seed": 0}),
+            },
         )
     }
 
-    fn placed_rc(relative: &str) -> (Route, Document) {
+    fn placed_rc(relative: &str) -> (Route, Data) {
         (
             Route::new(RouteBase::Home, relative).unwrap(),
-            Document::Rc(RcDocument {
-                profile: Vec::new(),
-                config: Vec::new(),
-                final_entries: Vec::new(),
-            }),
+            Data::Rc(RcData::new(Vec::new(), Vec::new(), Vec::new())),
         )
     }
 
-    fn placed_text(relative: &str) -> (Route, Document) {
+    fn placed_text(relative: &str) -> (Route, Data) {
         (
             Route::new(RouteBase::Home, relative).unwrap(),
-            Document::Text(TextDocument {
-                text: "hi".to_owned(),
-                mode: Mode::default(),
-                unmanaged: None,
-            }),
+            Data::Text {
+                content: "hi".to_owned(),
+                mode: 0o644,
+                unmanaged: false,
+            },
         )
     }
 
-    fn structured_filter_of(lua: &Lua, filter_source: &str, source: &str) -> StructuredPatch {
+    fn structured_filter_of(lua: &Lua, filter_source: &str, source: &str) -> OwnedPatch {
         let filter: Function = lua.load(filter_source).call(()).unwrap();
         let apply: Function = lua.load(source).call(()).unwrap();
-        StructuredPatch::new(
-            PatchTarget::from_filter(filter),
-            StructuredFormat::Json,
-            apply,
-            Level::Normal,
-            None,
+        OwnedPatch::join_patch(
+            Patch::Structured(StructuredPatch {
+                target: None,
+                filter: Some(filter),
+                format: StructuredFormat::Json,
+                apply,
+                priority: Level::Normal,
+            }),
+            "tools/test",
         )
     }
 
-    fn rc_filter_of(lua: &Lua, filter_source: &str, source: &str) -> RcPatch {
+    fn rc_filter_of(lua: &Lua, filter_source: &str, source: &str) -> OwnedPatch {
         let filter: Function = lua.load(filter_source).call(()).unwrap();
         let apply: Function = lua.load(source).call(()).unwrap();
-        RcPatch::new(PatchTarget::from_filter(filter), apply, Level::Normal, None)
+        OwnedPatch::join_patch(
+            Patch::Rc(RcPatch {
+                target: None,
+                filter: Some(filter),
+                apply,
+                priority: Level::Normal,
+            }),
+            "tools/test",
+        )
     }
 
     #[test]
@@ -369,32 +382,39 @@ mod tests {
                 Patch::Rc(fourth),
             ],
         );
-        let (structured, rc) = split_patches(&profile);
-        assert_eq!(structured.len(), 2);
-        for (patch, want) in [
-            (&structured[0], "home('one.json')"),
-            (&structured[1], "home('two.json')"),
-        ] {
-            let route = match &patch.target {
-                PatchTarget::Target(route) => route,
-                PatchTarget::Filter(_) => panic!("target means route"),
-            };
-            assert_eq!(route.display(), want);
+        let owned = split_patches(&profile);
+        assert_eq!(owned.len(), 4);
+        for item in &owned {
+            assert_eq!(item.owner, "tools/test");
         }
-        assert_eq!(rc.len(), 2);
-        for (patch, want) in [(&rc[0], "home('first.sh')"), (&rc[1], "home('second.sh')")] {
-            let route = match &patch.target {
-                PatchTarget::Target(route) => route,
-                PatchTarget::Filter(_) => panic!("target means route"),
-            };
-            assert_eq!(route.display(), want);
-        }
+        let displays: Vec<String> = owned
+            .iter()
+            .map(|item| {
+                let target = match &item.patch {
+                    Patch::Structured(found) => &found.target,
+                    Patch::Rc(found) => &found.target,
+                };
+                match target {
+                    Some(route) => route.display(),
+                    None => panic!("target means route"),
+                }
+            })
+            .collect();
+        assert_eq!(
+            displays,
+            vec![
+                "home('one.json')".to_owned(),
+                "home('first.sh')".to_owned(),
+                "home('two.json')".to_owned(),
+                "home('second.sh')".to_owned(),
+            ]
+        );
     }
 
     #[test]
     fn structured_filters_fan_out_in_destination_order() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Document> = [
+        let placed: BTreeMap<Route, Data> = [
             placed_structured("zebra.json"),
             placed_structured("apple.json"),
             placed_rc(".bashrc"),
@@ -425,7 +445,7 @@ mod tests {
     #[test]
     fn absent_structured_matches_cover_all_of_kind() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Document> = [
+        let placed: BTreeMap<Route, Data> = [
             placed_structured("zebra.json"),
             placed_structured("apple.json"),
             placed_rc(".bashrc"),
@@ -453,7 +473,7 @@ mod tests {
     #[test]
     fn rc_filters_fan_out_in_destination_order() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Document> = [
+        let placed: BTreeMap<Route, Data> = [
             placed_rc("zebra.sh"),
             placed_rc("apple.sh"),
             placed_structured("config.json"),
@@ -480,7 +500,7 @@ mod tests {
     #[test]
     fn false_structured_filters_keep_documents_out() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Document> = [
+        let placed: BTreeMap<Route, Data> = [
             placed_structured("zebra.json"),
             placed_structured("apple.json"),
         ]
@@ -502,7 +522,7 @@ mod tests {
     #[test]
     fn failing_structured_filters_fail() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Document> =
+        let placed: BTreeMap<Route, Data> =
             [placed_structured("config.json")].into_iter().collect();
         let patch = structured_filter_of(
             &lua,

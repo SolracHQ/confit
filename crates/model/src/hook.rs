@@ -1,52 +1,62 @@
 //! Hook
 //! Post-config steps follow plans beside documents.
 
+use confit_binding::value::{Decode, Mismatch};
+use confit_binding_macros::Face;
+use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::arg::Arg;
 use crate::condition::Condition;
 
-/// One post-config step with gates and checks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One post-config step with conditions and checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(deny_unknown_fields)]
+#[face(table, validate = reject_empty_argv)]
 pub struct Hook {
     /// Command for the subprocess.
     pub argv: Vec<Arg>,
     /// PATH entries for the subprocess alone.
+    #[face(default)]
     pub path: Vec<Arg>,
-    /// The capability gate.
+    /// The capability condition.
     #[serde(default)]
     pub requires: Option<Condition>,
-    /// The need gate.
+    /// The need condition.
     pub when: Option<Condition>,
     /// AND conditions for the run.
+    #[face(default)]
     pub checks: Vec<Condition>,
     /// The run cap in seconds.
+    #[face(rename = "timeout", proxy = String, convert = decode_timeout, encode = render_timeout, default = default_timeout_secs)]
     pub timeout_secs: u64,
 }
 
-/// One gate slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GateSlot {
-    /// The capability gate.
+/// One condition slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
+#[face(table, string)]
+pub enum ConditionSlot {
+    /// The capability condition.
     Requires,
-    /// The need gate.
+    /// The need condition.
     When,
 }
 
-/// One gate change.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GateChange {
+/// One condition change.
+#[derive(Debug, Clone, PartialEq, Eq, Face)]
+#[face(table)]
+pub struct ConditionChange {
     /// The slot under diffing.
-    pub slot: GateSlot,
-    /// The recorded gate.
+    pub slot: ConditionSlot,
+    /// The recorded condition.
     pub before: Option<Condition>,
-    /// The desired gate.
+    /// The desired condition.
     pub after: Option<Condition>,
 }
 
 /// One timeout change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
+#[face(table)]
 pub struct TimeoutChange {
     /// The recorded cap in seconds.
     pub before: u64,
@@ -55,10 +65,11 @@ pub struct TimeoutChange {
 }
 
 /// One hook modification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Face)]
+#[face(table)]
 pub struct HookModification {
-    /// Gate edits in slot order.
-    pub gates: Vec<GateChange>,
+    /// Condition edits in slot order.
+    pub conditions: Vec<ConditionChange>,
     /// New checks missing from the recorded order.
     pub added_checks: Vec<Condition>,
     /// Stale checks missing from the desired order.
@@ -70,7 +81,7 @@ pub struct HookModification {
 /// One hook change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookChange {
-    /// Added header with full gates.
+    /// Added header with full conditions.
     Added,
     /// Removed header alone.
     Removed,
@@ -92,7 +103,7 @@ pub struct HookLifecycle<'a> {
 impl HookModification {
     /// Report whether one modification holds no edits.
     pub fn is_empty(&self) -> bool {
-        self.gates.is_empty()
+        self.conditions.is_empty()
             && self.added_checks.is_empty()
             && self.removed_checks.is_empty()
             && self.timeout.is_none()
@@ -164,7 +175,7 @@ pub fn merge_hooks(hooks: Vec<Hook>) -> Vec<Hook> {
             Some(index) => {
                 let current = &mut merged[index];
                 current.requires = join_requires(current.requires.take(), hook.requires);
-                current.when = join_gate(current.when.take(), hook.when);
+                current.when = join_when(current.when.take(), hook.when);
                 current.checks.extend(hook.checks);
                 current.timeout_secs = current.timeout_secs.max(hook.timeout_secs);
             }
@@ -215,7 +226,7 @@ pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<Hook
     out
 }
 
-/// Join two capability gates with AND semantics.
+/// Join two capability conditions with AND semantics.
 fn join_requires(first: Option<Condition>, second: Option<Condition>) -> Option<Condition> {
     match (first, second) {
         (None, _) | (_, None) => None,
@@ -227,7 +238,7 @@ fn join_requires(first: Option<Condition>, second: Option<Condition>) -> Option<
     }
 }
 
-/// Flatten one capability gate into its `All` members.
+/// Flatten one capability condition into its `All` members.
 fn flatten_all(cond: Condition) -> Vec<Condition> {
     match cond {
         Condition::All(items) => items,
@@ -235,8 +246,8 @@ fn flatten_all(cond: Condition) -> Vec<Condition> {
     }
 }
 
-/// Join two gates with OR semantics.
-fn join_gate(first: Option<Condition>, second: Option<Condition>) -> Option<Condition> {
+/// Join two need conditions with OR semantics.
+fn join_when(first: Option<Condition>, second: Option<Condition>) -> Option<Condition> {
     match (first, second) {
         (None, _) | (_, None) => None,
         (Some(left), Some(right)) => {
@@ -247,7 +258,7 @@ fn join_gate(first: Option<Condition>, second: Option<Condition>) -> Option<Cond
     }
 }
 
-/// Flatten one gate into its `Any` members.
+/// Flatten one condition into its `Any` members.
 fn flatten_any(cond: Condition) -> Vec<Condition> {
     match cond {
         Condition::Any(items) => items,
@@ -270,18 +281,18 @@ fn find_current<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
     current.iter().find(|hook| same_identity(hook, recorded))
 }
 
-/// Build one gate change while simplified gates differ.
-fn gate_change(
-    slot: GateSlot,
+/// Build one condition change while simplified conditions differ.
+fn condition_change(
+    slot: ConditionSlot,
     before: Option<&Condition>,
     after: Option<&Condition>,
-) -> Option<GateChange> {
+) -> Option<ConditionChange> {
     let old = before.map(Condition::simplified);
     let next = after.map(Condition::simplified);
     if old == next {
         return None;
     }
-    Some(GateChange {
+    Some(ConditionChange {
         slot,
         before: before.cloned(),
         after: after.cloned(),
@@ -330,27 +341,120 @@ fn added_checks(before: &[Condition], after: &[Condition]) -> Vec<Condition> {
     rest
 }
 
-/// Build one hook modification across gates, checks, and timeout.
+/// Build one hook modification across conditions, checks, and timeout.
 ///
-/// - Gates collect in slot order.
+/// - Conditions collect in slot order.
 fn modify_hook(recorded: &Hook, hook: &Hook) -> HookModification {
-    let mut gates = Vec::new();
-    if let Some(change) = gate_change(
-        GateSlot::Requires,
+    let mut conditions = Vec::new();
+    if let Some(change) = condition_change(
+        ConditionSlot::Requires,
         recorded.requires.as_ref(),
         hook.requires.as_ref(),
     ) {
-        gates.push(change);
+        conditions.push(change);
     }
-    if let Some(change) = gate_change(GateSlot::When, recorded.when.as_ref(), hook.when.as_ref()) {
-        gates.push(change);
+    if let Some(change) = condition_change(
+        ConditionSlot::When,
+        recorded.when.as_ref(),
+        hook.when.as_ref(),
+    ) {
+        conditions.push(change);
     }
     HookModification {
-        gates,
+        conditions,
         removed_checks: removed_checks(&recorded.checks, &hook.checks),
         added_checks: added_checks(&recorded.checks, &hook.checks),
         timeout: timeout_change(recorded.timeout_secs, hook.timeout_secs),
     }
+}
+
+/// Return the run cap for an absent timeout.
+fn default_timeout_secs() -> u64 {
+    600
+}
+
+/// Reject hooks without commands.
+///
+/// # Errors
+///
+/// - [`mlua::Error`] for empty argv.
+fn reject_empty_argv(hook: &Hook) -> mlua::Result<()> {
+    if hook.argv.is_empty() {
+        return Err(mlua::Error::external(
+            "invalid hook argv 'table': want a non-empty string-or-route array",
+        ));
+    }
+    Ok(())
+}
+
+/// Decode one duration string into seconds.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for values outside the duration shape.
+fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, Mismatch> {
+    let text = String::decode(value, lua)?;
+    parse_timeout(&text).ok_or_else(|| Mismatch {
+        path: "timeout".to_owned(),
+        want: "a duration like '10m'".to_owned(),
+        found: ["'", text.as_str(), "'"].concat(),
+    })
+}
+
+/// Render timeout seconds as bare digits.
+fn render_timeout(timeout: u64) -> String {
+    timeout.to_string()
+}
+
+/// Parse one duration string into seconds.
+///
+/// Bare digits read seconds. Suffixed parts read hours, minutes,
+/// and seconds in descending order with each unit at most once.
+fn parse_timeout(text: &str) -> Option<u64> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut total: u64 = 0;
+    let mut rank: u8 = 4;
+    let mut seen: u8 = 0;
+    let mut rest = text;
+    let mut consumed = false;
+    while !rest.is_empty() {
+        let end = rest
+            .find(|part: char| !part.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if end == 0 {
+            return None;
+        }
+        let amount: u64 = rest[..end].parse().ok()?;
+        rest = &rest[end..];
+        match rest.chars().next() {
+            None => {
+                if consumed {
+                    return None;
+                }
+                total = amount;
+                consumed = true;
+            }
+            Some(unit) => {
+                let (unit_rank, unit_bit, factor) = match unit {
+                    'h' => (3, 0b100, 3_600),
+                    'm' => (2, 0b010, 60),
+                    's' => (1, 0b001, 1),
+                    _ => return None,
+                };
+                if unit_rank >= rank || seen & unit_bit != 0 {
+                    return None;
+                }
+                rank = unit_rank;
+                seen |= unit_bit;
+                total = total.checked_add(amount.checked_mul(factor)?)?;
+                rest = &rest[unit.len_utf8()..];
+                consumed = true;
+            }
+        }
+    }
+    if consumed { Some(total) } else { None }
 }
 
 #[cfg(test)]
@@ -405,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn gates_join_with_or_flattening_any() {
+    fn conditions_join_with_or_flattening_any() {
         let merged = merge_hooks(vec![
             hook(
                 &["mise"],
@@ -428,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn ungated_side_keeps_merged_hook_ungated() {
+    fn absent_side_keeps_merged_hook_absent() {
         let merged = merge_hooks(vec![
             hook(&["mise"], &[], Some(in_path("a")), vec![], 60),
             hook(&["mise"], &[], None, vec![], 60),
@@ -449,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn single_gated_hook_passes_through_untouched() {
+    fn single_condition_hook_passes_through_untouched() {
         let single = hook(&["mise"], &[], Some(in_path("a")), vec![in_path("b")], 60);
         let merged = merge_hooks(vec![single.clone()]);
         assert_eq!(merged, vec![single]);
@@ -494,11 +598,11 @@ mod tests {
         second.requires = Some(in_path("mise"));
         let merged = merge_hooks(vec![first, second]);
         assert_eq!(merged.len(), 1);
-        let gate = match merged[0].requires.clone() {
-            Some(gate) => gate,
+        let condition = match merged[0].requires.clone() {
+            Some(condition) => condition,
             None => panic!("requires survives the merge"),
         };
-        assert_eq!(gate.simplified(), in_path("mise"));
+        assert_eq!(condition.simplified(), in_path("mise"));
     }
 
     #[test]
@@ -514,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_reads_simplified_gates_silent() {
+    fn lifecycle_reads_simplified_conditions_silent() {
         let mut before = hook(&["mise"], &[], None, vec![], 60);
         before.requires = Some(Condition::All(vec![in_path("mise"), in_path("mise")]));
         let mut after = hook(&["mise"], &[], None, vec![], 60);
@@ -562,5 +666,21 @@ mod tests {
                 after: 600
             })
         );
+    }
+
+    #[test]
+    fn timeout_round_trips_through_strings() {
+        use confit_binding::value::Encode;
+
+        let lua = Lua::new();
+        let source = hook(&["tool"], &[], None, vec![], 90);
+        let encoded = source.encode(&lua).unwrap();
+        let Value::Table(table) = encoded else {
+            panic!("hook encodes a table");
+        };
+        let rendered: String = table.get("timeout").unwrap();
+        assert_eq!(rendered, "90");
+        let back = Hook::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(back, source);
     }
 }

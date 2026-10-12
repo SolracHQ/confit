@@ -9,6 +9,7 @@ use syn::{Attribute, Fields, Lit, Meta, Type, punctuated::Punctuated, token::Com
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContainerKind {
     Table,
+    CallbackShape,
     Userdata,
 }
 
@@ -29,81 +30,218 @@ pub(crate) struct VariantFlags {
     pub(crate) probe: Vec<String>,
 }
 
-/// Parse the kind marker plus the union annotation.
+/// Container header reading on every derived type.
+#[derive(Default)]
+pub(crate) struct ContainerHeader {
+    /// The kind marker.
+    pub(crate) kind: Option<ContainerKind>,
+    /// The union annotation.
+    pub(crate) union: Option<UnionKind>,
+    /// The stub name override.
+    pub(crate) rename: Option<String>,
+    /// The probe hook path overriding untagged family routing.
+    pub(crate) probe: Option<syn::Path>,
+    /// The validate hook path checking decoded values.
+    pub(crate) validate: Option<syn::Path>,
+}
+
+/// Field flags parsing from one face attribute.
+#[derive(Default)]
+pub(crate) struct FieldFlags {
+    /// The optional marker for plain types.
+    pub(crate) optional: bool,
+    /// The opaque marker for pass-through display.
+    pub(crate) opaque: bool,
+    /// The live marker for borrowed callback tables.
+    pub(crate) live: bool,
+    /// The ignore marker for Rust-filled fields.
+    pub(crate) ignore: bool,
+    /// The Lua key override.
+    pub(crate) rename: Option<String>,
+    /// The Lua face override.
+    pub(crate) proxy: Option<syn::Path>,
+    /// The decode function path.
+    pub(crate) convert: Option<syn::Path>,
+    /// The encode function path.
+    pub(crate) encode: Option<syn::Path>,
+    /// The map key decode function path.
+    pub(crate) key_convert: Option<syn::Path>,
+    /// The map value decode function path.
+    pub(crate) value_convert: Option<syn::Path>,
+    /// The absent-key default with its optional function path.
+    pub(crate) default: Option<Option<syn::Path>>,
+}
+
+/// Parse the kind marker plus the union annotation plus hooks.
 pub(crate) fn parse_header(
     identifier: &syn::Ident,
     attrs: &[Attribute],
     is_enum: bool,
-) -> Result<(ContainerKind, Option<UnionKind>), syn::Error> {
+) -> Result<ContainerHeader, syn::Error> {
     let type_name = identifier.to_string();
-    let mut kind: Option<ContainerKind> = None;
-    let mut union: Option<UnionKind> = None;
+    let mut header = ContainerHeader::default();
     for attr in attrs {
         if !attr.path().is_ident("face") {
             continue;
         }
         let items = attr.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)?;
         for item in &items {
-            if !matches!(item, Meta::Path(_)) {
-                return Err(syn::Error::new_spanned(
-                    item,
-                    format!(
-                        "{type_name}: face header takes markers alone; rename, \
-                         tag, and probe read variant-level"
-                    ),
-                ));
-            }
-            let ident = item
-                .path()
-                .get_ident()
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            let found = match ident.as_str() {
-                "table" => {
-                    if kind.is_some() {
+            match item {
+                Meta::Path(path) => {
+                    let ident = path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let found = match ident.as_str() {
+                        "table" => {
+                            if header.kind.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    item,
+                                    format!("{type_name}: single kind marker alone"),
+                                ));
+                            }
+                            header.kind = Some(ContainerKind::Table);
+                            continue;
+                        }
+                        "userdata" => {
+                            if header.kind.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    item,
+                                    format!("{type_name}: single kind marker alone"),
+                                ));
+                            }
+                            header.kind = Some(ContainerKind::Userdata);
+                            continue;
+                        }
+                        "callback_shape" => {
+                            if header.kind.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    item,
+                                    format!("{type_name}: single kind marker alone"),
+                                ));
+                            }
+                            header.kind = Some(ContainerKind::CallbackShape);
+                            continue;
+                        }
+                        "string" => UnionKind::String,
+                        "untagged" => UnionKind::Untagged,
+                        "tagged" => UnionKind::Tagged,
+                        "probe" => UnionKind::Probe,
+                        "optional" | "opaque" | "default" => {
+                            return Err(syn::Error::new_spanned(
+                                item,
+                                format!(
+                                    "{type_name}: face option '{ident}' reads \
+                                     field-level alone"
+                                ),
+                            ));
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                item,
+                                format!(
+                                    "{type_name}: unknown face marker '{ident}'; want \
+                                     table, userdata, callback_shape, string, \
+                                     untagged, tagged, probe, validate, or probe \
+                                     with a hook path"
+                                ),
+                            ));
+                        }
+                    };
+                    if header.union.is_some() {
                         return Err(syn::Error::new_spanned(
                             item,
-                            format!("{type_name}: single kind marker alone"),
+                            format!("{type_name}: single union annotation alone"),
                         ));
                     }
-                    kind = Some(ContainerKind::Table);
-                    continue;
+                    header.union = Some(found);
                 }
-                "userdata" => {
-                    if kind.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            item,
-                            format!("{type_name}: single kind marker alone"),
-                        ));
+                Meta::NameValue(pair) => {
+                    let key = pair
+                        .path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    match key.as_str() {
+                        "probe" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: face option 'probe' wants a hook path"),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: face option 'probe' wants a hook path"),
+                                ));
+                            }
+                            header.probe = Some(found.path.clone());
+                        }
+                        "validate" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{type_name}: face option 'validate' wants a hook path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{type_name}: face option 'validate' wants a hook path"
+                                    ),
+                                ));
+                            }
+                            header.validate = Some(found.path.clone());
+                        }
+                        "rename" => {
+                            let syn::Expr::Lit(lit) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{type_name}: face option 'rename' wants a string literal"
+                                    ),
+                                ));
+                            };
+                            let Lit::Str(text) = &lit.lit else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{type_name}: face option 'rename' wants a string literal"
+                                    ),
+                                ));
+                            };
+                            header.rename = Some(text.value());
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &pair.path,
+                                format!(
+                                    "{type_name}: unknown face option '{key}'; want \
+                                     probe or validate with a hook path, or rename \
+                                     with a string literal"
+                                ),
+                            ));
+                        }
                     }
-                    kind = Some(ContainerKind::Userdata);
-                    continue;
                 }
-                "string" => UnionKind::String,
-                "untagged" => UnionKind::Untagged,
-                "tagged" => UnionKind::Tagged,
-                "probe" => UnionKind::Probe,
                 _ => {
                     return Err(syn::Error::new_spanned(
                         item,
                         format!(
-                            "{type_name}: unknown face marker '{ident}'; want \
-                             table, userdata, string, untagged, tagged, or \
-                             probe"
+                            "{type_name}: unknown face shape; want markers with \
+                             probe or validate hooks, or rename with a string \
+                             literal"
                         ),
                     ));
                 }
-            };
-            if union.is_some() {
-                return Err(syn::Error::new_spanned(
-                    item,
-                    format!("{type_name}: single union annotation alone"),
-                ));
             }
-            union = Some(found);
         }
     }
-    let Some(kind) = kind else {
+    let Some(kind) = header.kind else {
         return Err(syn::Error::new_spanned(
             identifier,
             format!(
@@ -112,7 +250,8 @@ pub(crate) fn parse_header(
             ),
         ));
     };
-    if is_enum && union.is_none() {
+    header.kind = Some(kind);
+    if is_enum && header.union.is_none() {
         return Err(syn::Error::new_spanned(
             identifier,
             format!(
@@ -122,13 +261,19 @@ pub(crate) fn parse_header(
             ),
         ));
     }
-    if !is_enum && union.is_some() {
+    if !is_enum && header.union.is_some() {
         return Err(syn::Error::new_spanned(
             identifier,
             format!("{type_name}: struct faces take no union annotation"),
         ));
     }
-    Ok((kind, union))
+    if !is_enum && header.probe.is_some() {
+        return Err(syn::Error::new_spanned(
+            identifier,
+            format!("{type_name}: probe hooks read untagged enums alone"),
+        ));
+    }
+    Ok(header)
 }
 
 /// Parse variant flags from one variant attribute list.
@@ -219,6 +364,257 @@ pub(crate) fn parse_variant_flags(
     Ok(flags)
 }
 
+/// Parse field flags from one field attribute list.
+///
+/// # Errors
+///
+/// - `syn::Error` for unknown options and lone proxy markers.
+pub(crate) fn parse_field_flags(
+    outer: &str,
+    field: &str,
+    attrs: &[Attribute],
+) -> Result<FieldFlags, syn::Error> {
+    let mut flags = FieldFlags::default();
+    for attr in attrs {
+        if !attr.path().is_ident("face") {
+            continue;
+        }
+        let items = attr.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)?;
+        for item in items {
+            match &item {
+                Meta::Path(path) => {
+                    let ident = path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    match ident.as_str() {
+                        "optional" => flags.optional = true,
+                        "opaque" => flags.opaque = true,
+                        "live" => flags.live = true,
+                        "ignore" => flags.ignore = true,
+                        "default" => flags.default = Some(None),
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &item,
+                                format!(
+                                    "{outer}.{field}: unknown face option '{ident}'; \
+                                     want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
+                                     'convert', 'encode', 'key_convert', 'value_convert', \
+                                     'rename', or 'default'"
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Meta::NameValue(pair) => {
+                    let key = pair
+                        .path
+                        .get_ident()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    match key.as_str() {
+                        "proxy" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'proxy' wants a face type"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'proxy' wants a face type"
+                                    ),
+                                ));
+                            }
+                            flags.proxy = Some(found.path.clone());
+                        }
+                        "convert" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                    ),
+                                ));
+                            }
+                            flags.convert = Some(found.path.clone());
+                        }
+                        "encode" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'encode' wants a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'encode' wants a function path"
+                                    ),
+                                ));
+                            }
+                            flags.encode = Some(found.path.clone());
+                        }
+                        "key_convert" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'key_convert' wants a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'key_convert' wants a function path"
+                                    ),
+                                ));
+                            }
+                            flags.key_convert = Some(found.path.clone());
+                        }
+                        "value_convert" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'value_convert' wants a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'value_convert' wants a function path"
+                                    ),
+                                ));
+                            }
+                            flags.value_convert = Some(found.path.clone());
+                        }
+                        "rename" => {
+                            let syn::Expr::Lit(lit) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'rename' wants \
+                                         a string literal"
+                                    ),
+                                ));
+                            };
+                            let Lit::Str(text) = &lit.lit else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'rename' wants \
+                                         a string literal"
+                                    ),
+                                ));
+                            };
+                            flags.rename = Some(text.value());
+                        }
+                        "default" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'default' wants \
+                                         a function path"
+                                    ),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!(
+                                        "{outer}.{field}: face option 'default' wants \
+                                         a function path"
+                                    ),
+                                ));
+                            }
+                            flags.default = Some(Some(found.path.clone()));
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &pair.path,
+                                format!(
+                                    "{outer}.{field}: unknown face option '{key}'; \
+                                     want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
+                                     'convert', 'encode', 'key_convert', 'value_convert', \
+                                     'rename', or 'default'"
+                                ),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        &item,
+                        format!(
+                            "{outer}.{field}: unknown face shape; want 'optional', \
+                             'opaque', 'live', 'ignore', 'proxy', 'convert', 'encode', \
+                             'key_convert', \
+                             'value_convert', 'rename', or 'default'"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    if flags.proxy.is_some() && flags.convert.is_none() {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face option 'proxy' arrives with 'convert'"),
+        ));
+    }
+    if flags.encode.is_some() && flags.proxy.is_none() {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face option 'encode' arrives with 'proxy'"),
+        ));
+    }
+    if flags.optional && flags.default.is_some() {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face options 'optional' and 'default' stay apart"),
+        ));
+    }
+    if flags.ignore
+        && (flags.optional
+            || flags.opaque
+            || flags.live
+            || flags.proxy.is_some()
+            || flags.convert.is_some()
+            || flags.encode.is_some()
+            || flags.key_convert.is_some()
+            || flags.value_convert.is_some()
+            || flags.rename.is_some()
+            || flags.default.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face option 'ignore' stays apart from key options"),
+        ));
+    }
+    Ok(flags)
+}
+
 /// Collect trimmed doc lines from one attribute list.
 pub(crate) fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
     let mut lines = Vec::new();
@@ -241,6 +637,9 @@ pub(crate) fn kind_tokens(kind: ContainerKind) -> Tokens {
     match kind {
         ContainerKind::Table => {
             quote! { ::confit_binding::face::FaceKind::Table }
+        }
+        ContainerKind::CallbackShape => {
+            quote! { ::confit_binding::face::FaceKind::Function }
         }
         ContainerKind::Userdata => {
             quote! { ::confit_binding::face::FaceKind::Userdata }

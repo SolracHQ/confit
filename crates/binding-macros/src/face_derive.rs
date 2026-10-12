@@ -4,6 +4,7 @@
 use proc_macro::TokenStream;
 use syn::{Data, DeriveInput, parse_macro_input};
 
+use super::callback_shape::expand_struct_callback;
 use super::literal::expand_string_enum;
 use super::parse::{ContainerKind, UnionKind, parse_header};
 use super::probe::expand_probe_enum;
@@ -17,36 +18,80 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let identifier = declaration.ident.clone();
     let expanded = match &declaration.data {
         Data::Struct(data) => match parse_header(&identifier, &declaration.attrs, false) {
-            Ok((ContainerKind::Table, _)) => {
-                expand_struct_table(&identifier, data, &declaration.attrs)
-            }
-            Ok((ContainerKind::Userdata, _)) => {
-                expand_struct_userdata(&identifier, data, &declaration.attrs)
-            }
+            Ok(header) => match header.kind {
+                Some(ContainerKind::Table) => expand_struct_table(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    &header.validate,
+                    &header.rename,
+                ),
+                Some(ContainerKind::CallbackShape) => expand_struct_callback(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    &header.validate,
+                    &header.rename,
+                ),
+                Some(ContainerKind::Userdata) => expand_struct_userdata(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    &header.validate,
+                    &header.rename,
+                ),
+                None => Err(syn::Error::new_spanned(
+                    &identifier,
+                    format!("{identifier}: Face derive wants one kind marker"),
+                )),
+            },
             Err(error) => Err(error),
         },
         Data::Enum(data) => match parse_header(&identifier, &declaration.attrs, true) {
-            Ok((kind, Some(UnionKind::String))) => {
-                expand_string_enum(&identifier, data, &declaration.attrs, kind)
-            }
-            Ok((kind, Some(UnionKind::Untagged))) => {
-                expand_untagged_enum(&identifier, data, &declaration.attrs, kind)
-            }
-            Ok((kind, Some(UnionKind::Tagged))) => {
-                expand_tagged_enum(&identifier, data, &declaration.attrs, kind)
-            }
-            Ok((kind, Some(UnionKind::Probe))) => {
-                expand_probe_enum(&identifier, data, &declaration.attrs, kind)
-            }
-            Ok((_, None)) => Err(syn::Error::new_spanned(
-                &identifier,
-                format!(
-                    "{}: Face derive wants one union annotation, add \
+            Ok(header) => match (header.kind, header.union) {
+                (Some(kind), Some(UnionKind::String)) => expand_string_enum(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    kind,
+                    &header.validate,
+                    &header.rename,
+                ),
+                (Some(kind), Some(UnionKind::Untagged)) => expand_untagged_enum(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    kind,
+                    &header.probe,
+                    &header.validate,
+                    &header.rename,
+                ),
+                (Some(kind), Some(UnionKind::Tagged)) => expand_tagged_enum(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    kind,
+                    &header.validate,
+                    &header.rename,
+                ),
+                (Some(kind), Some(UnionKind::Probe)) => expand_probe_enum(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    kind,
+                    &header.validate,
+                    &header.rename,
+                ),
+                _ => Err(syn::Error::new_spanned(
+                    &identifier,
+                    format!(
+                        "{}: Face derive wants one union annotation, add \
                          #[face(string)], #[face(untagged)], #[face(tagged)], \
                          or #[face(probe)]",
-                    identifier
-                ),
-            )),
+                        identifier
+                    ),
+                )),
+            },
             Err(error) => Err(error),
         },
         _ => Err(syn::Error::new_spanned(

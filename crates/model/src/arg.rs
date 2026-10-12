@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 
+use confit_binding_macros::Face;
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -13,13 +14,14 @@ use crate::routes::Route;
 const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
-/// Text or late-bound route for command arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
+/// Text or route for command arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Face, JsonSchema)]
 #[serde(untagged)]
+#[face(table, untagged)]
 pub enum Arg {
-    /// Plain string for unchanged use.
+    /// Plain string argument.
     Text(String),
-    /// Destination route with apply-time resolution.
+    /// Destination route argument.
     Route(Route),
 }
 

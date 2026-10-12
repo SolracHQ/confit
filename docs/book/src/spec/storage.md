@@ -97,7 +97,7 @@ Missing versions fail naming the file:
 read state '{file}': missing manifest version
 ```
 
-Bundle reads apply the same gate:
+Bundle reads apply the same check:
 
 ```
 bundle version {v} reads unsupported, want 7

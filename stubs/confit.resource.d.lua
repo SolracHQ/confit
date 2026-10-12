@@ -1,58 +1,46 @@
 --- @meta confit.resource
-
---- Handle to an opened input.
---- @class Handle
-local _CLASS_Handle_ = {
-	--- Seal the opened input as its archive, else nil with reason.
-	--- 
-	--- - Non-archives produce nil with reason.
-	--- @param self Handle
-	--- @return Archive | nil
-	--- @return string | nil
-	archive = function(self) end,
-	--- Read file content into its table, else nil with reason.
-	--- 
-	--- - Inputs without a table shape produce nil with reason.
-	--- @param self Handle
-	--- @return table | nil
-	--- @return string | nil
-	load = function(self) end,
-	--- Render the opened content hash.
-	--- @param self Handle
-	--- @return string
-	sha = function(self) end,
-	--- Read file text, else nil with reason.
-	--- @param self Handle
-	--- @return string | nil
-	--- @return string | nil
-	text = function(self) end,
-}
-
---- Handle to a verified compressed archive.
---- @class Archive
-local _CLASS_Archive_ = {
-	--- Open one archive member as its handle, else nil with reason.
-	--- 
-	--- - Names are archive-relative with forward slashes.
-	--- @param self Archive
-	--- @param name string
-	--- @return Handle | nil
-	--- @return string | nil
-	member = function(self, name) end,
-	--- List the archive member names, else nil with reason.
-	--- 
-	--- - Members are archive-relative with forward slashes.
-	--- @param self Archive
-	--- @return string[] | nil
-	--- @return string | nil
-	members = function(self) end,
-}
-
 --- Opens one project-relative file into its handle.
 --- @param path string Project-relative file path.
---- @return Handle | nil #1: The resource handle, else nil.
---- @return string | nil #2: The failure reason, else nil.
+--- @return ResourceHandle? The resource handle, else nil.
+--- @return string? The failure reason, else nil.
 function resource(path) end
 
+--- Handle to a project resource.
+--- @class ResourceHandle
+ResourceHandle = {}
+
+--- Read file text, else nil with reason.
+--- @return string?
+--- @return string?
+function ResourceHandle:text() end
+
+--- Render the opened content hash.
+--- @return string
+function ResourceHandle:sha() end
+
+--- Read file content into its table, else nil with reason.  - Inputs without a table shape produce nil with reason.
+--- @return table?
+--- @return string?
+function ResourceHandle:load() end
+
+--- Open the input as its archive, else nil with reason.  - Non-archives produce nil with reason.
+--- @return ArchiveHandle?
+--- @return string?
+function ResourceHandle:archive() end
+
+--- Handle to a verified compressed archive.
+--- @class ArchiveHandle
+ArchiveHandle = {}
+
+--- List the archive member names, else nil with reason.  - Members are archive-relative with forward slashes.
+--- @return string[]?
+--- @return string?
+function ArchiveHandle:members() end
+
+--- Open one archive member as its handle, else nil with reason.  - Names are archive-relative with forward slashes.
+--- @param name string
+--- @return ResourceHandle?
+--- @return string?
+function ArchiveHandle:member(name) end
 
 return resource

@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn executable_bit_gates_discovery() {
+    fn executable_bit_controls_discovery() {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let tool = dir.path().join("tool");

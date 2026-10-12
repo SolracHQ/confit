@@ -1,4 +1,4 @@
-//! Bundle input gate for manifest parse and member checks.
+//! Bundle input validation for manifest parse and member checks.
 
 use crate::manifest::{MANIFEST_VERSION, Manifest};
 use thiserror::Error;
@@ -23,7 +23,7 @@ pub enum CodecError {
     },
 }
 
-/// Parse one manifest with the version gate first.
+/// Parse one manifest with the version check first.
 ///
 /// # Errors
 ///

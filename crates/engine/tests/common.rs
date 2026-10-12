@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use confit_engine::Engine;
-use confit_model::document::{Data, Document as ModelDocument, RcEntry, RcOp, StructuredFormat};
+use confit_engine::api::config::Config;
+use confit_engine::api::patch::{Level, Patch, RcPatch, StructuredPatch};
+use confit_engine::api::profile::Profile;
+use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
+use confit_store::blob::BlobSource;
 use confit_store::{StoreRoots, Stores};
-use confit_surface_api::{
-    Config, Document, Handle, Level, Mode, OpaqueDocument, Patch, PatchTarget, Profile, RcDocument,
-    RcPatch, SerializableValue, StructuredDocument, StructuredPatch, TextDocument,
-};
 use mlua::{Function, Lua};
 
 /// Lua profile with two text configs in zebra then apple order.
@@ -476,43 +476,33 @@ pub const HOOKS_THROUGH: &str = r#"
         "#;
 
 /// Build one text document pair under the home base.
-pub fn placed_text(relative: &str, text: &str) -> (Route, Document) {
+pub fn placed_text(relative: &str, text: &str) -> (Route, Data) {
     (
         Route::new(RouteBase::Home, relative).unwrap(),
-        Document::Text(TextDocument {
-            text: text.to_owned(),
-            mode: Mode::default(),
-            unmanaged: None,
-        }),
+        Data::Text {
+            content: text.to_owned(),
+            mode: 0o644,
+            unmanaged: false,
+        },
     )
 }
 
 /// Build one rc document pair with profile entries.
-pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> (Route, Document) {
+pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> (Route, Data) {
     (
         Route::new(RouteBase::Home, relative).unwrap(),
-        Document::Rc(RcDocument {
-            profile: entries,
-            config: Vec::new(),
-            final_entries: Vec::new(),
-        }),
+        Data::Rc(RcData::new(entries, Vec::new(), Vec::new())),
     )
 }
 
 /// Build one seeded json document pair.
-pub fn placed_structured(relative: &str) -> (Route, Document) {
-    let base = StructuredDocument {
-        format: StructuredFormat::Json,
-        data: [(
-            "seed".to_owned(),
-            SerializableValue(serde_json::Value::from(0)),
-        )]
-        .into_iter()
-        .collect(),
-    };
+pub fn placed_structured(relative: &str) -> (Route, Data) {
     (
         Route::new(RouteBase::Home, relative).unwrap(),
-        Document::Structured(base),
+        Data::Structured {
+            format: StructuredFormat::Json,
+            data: serde_json::json!({"seed": 0}),
+        },
     )
 }
 
@@ -532,26 +522,28 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
 }
 
 /// Build one opaque document pair backed by a project blob.
-pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Document) {
+pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Data) {
     let root = stores.resources().roots.project_root.clone();
     confit_driver::fs::create_dir_all(&root).unwrap();
     let full = root.join("blob.bin");
     confit_driver::fs::write(&full, b"hi").unwrap();
-    let handle = stores.resources().resource(&full).unwrap();
+    let resource = stores.resources().resource(&full).unwrap();
+    let opened = stores.blobs().put(BlobSource::Handle(&resource)).unwrap();
+    let size = stores.blobs().len(&opened).unwrap();
     (
         Route::new(RouteBase::Home, relative).unwrap(),
-        Document::Opaque(OpaqueDocument {
-            handle: Handle::new(handle, stores.clone()),
-            mode: Mode::new(Some(0o644)),
+        Data::Opaque {
+            blob: opened.to_ref(),
+            size,
+            mode: 0o644,
             unmanaged: true,
-        }),
+        },
     )
 }
 
 /// Build one profile.
-pub fn profile_of(documents: Vec<(Route, Document)>, patches: Vec<Patch>) -> Profile {
+pub fn profile_of(documents: Vec<(Route, Data)>, patches: Vec<Patch>) -> Profile {
     Profile::new(
-        Vec::new(),
         vec![Config::new(
             "tools/test".to_owned(),
             documents.into_iter().collect(),
@@ -564,11 +556,9 @@ pub fn profile_of(documents: Vec<(Route, Document)>, patches: Vec<Patch>) -> Pro
 
 /// Build one env rc entry with its name and value.
 pub fn rc_entry(name: &str, value: &str) -> RcEntry {
-    RcEntry {
-        op: RcOp::Env {
-            name: name.to_owned(),
-            value: value.to_owned(),
-        },
+    RcEntry::Env {
+        name: name.to_owned(),
+        value: value.to_owned(),
         when: None,
     }
 }
@@ -582,24 +572,24 @@ pub fn structured_patch_of(
     source: &str,
 ) -> StructuredPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
-    StructuredPatch::new(
-        PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
+    StructuredPatch {
+        target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+        filter: None,
         format,
         apply,
         priority,
-        None,
-    )
+    }
 }
 
 /// Build one rc patch over its Lua callback source.
 pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
-    RcPatch::new(
-        PatchTarget::Target(Route::new(RouteBase::Home, relative).unwrap()),
+    RcPatch {
+        target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+        filter: None,
         apply,
         priority,
-        None,
-    )
+    }
 }
 
 /// Build one structured filter patch over its Lua callback source.
@@ -612,25 +602,30 @@ pub fn structured_filter_of(
 ) -> StructuredPatch {
     let filter: Function = lua.load(filter_source).call(()).unwrap();
     let apply: Function = lua.load(source).call(()).unwrap();
-    StructuredPatch::new(
-        PatchTarget::from_filter(filter),
+    StructuredPatch {
+        target: None,
+        filter: Some(filter),
         format,
         apply,
         priority,
-        None,
-    )
+    }
 }
 
 /// Build one rc filter patch over its Lua callback source.
 pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &str) -> RcPatch {
     let filter: Function = lua.load(filter_source).call(()).unwrap();
     let apply: Function = lua.load(source).call(()).unwrap();
-    RcPatch::new(PatchTarget::from_filter(filter), apply, priority, None)
+    RcPatch {
+        target: None,
+        filter: Some(filter),
+        apply,
+        priority,
+    }
 }
 
-/// Collect profile slot names from one finished rc document.
-pub fn rc_names(document: &ModelDocument) -> Vec<String> {
-    match &document.data {
+/// Collect profile slot names from one finished rc payload.
+pub fn rc_names(data: &Data) -> Vec<String> {
+    match data {
         Data::Rc(found) => found
             .profile
             .iter()
@@ -641,10 +636,12 @@ pub fn rc_names(document: &ModelDocument) -> Vec<String> {
 }
 
 /// Collect one env value from the profile section by name.
-pub fn rc_value(document: &ModelDocument, name: &str) -> Option<String> {
-    match &document.data {
-        Data::Rc(found) => found.profile.iter().find_map(|entry| match &entry.op {
-            RcOp::Env { name: key, value } if key == name => Some(value.clone()),
+pub fn rc_value(data: &Data, name: &str) -> Option<String> {
+    match data {
+        Data::Rc(found) => found.profile.iter().find_map(|entry| match entry {
+            RcEntry::Env {
+                name: key, value, ..
+            } if key == name => Some(value.clone()),
             _ => None,
         }),
         _ => panic!("rc patch stays rc"),
@@ -668,7 +665,7 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
 
 /// Build one profile.
 pub fn profile_with_hooks(configs: Vec<Config>) -> Profile {
-    Profile::new(Vec::new(), configs, HashMap::new())
+    Profile::new(configs, HashMap::new())
 }
 
 /// Build one engine over isolated stores under the given dir.
@@ -700,9 +697,9 @@ pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     (root, profile)
 }
 
-/// Collect text content from one finished document.
-pub fn text_of(document: &ModelDocument) -> &str {
-    match &document.data {
+/// Collect text content from one finished payload.
+pub fn text_of(data: &Data) -> &str {
+    match data {
         Data::Text { content, .. } => content,
         _ => panic!("expected a text document"),
     }

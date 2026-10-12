@@ -78,20 +78,10 @@ pub fn emit_field(field: &FieldDescriptor) -> String {
 
 /// Emit one alias block for one union face.
 ///
-/// Unions and scalars alone render aliases. Tables render
-/// classes. Variants with docs add one note line each.
+/// Unions and scalars alone render aliases.
 pub fn emit_alias(name: &str, documentation: &str, variants: &[VariantDescriptor]) -> String {
     let mut block = String::from("--- ");
     block.push_str(documentation.trim());
-    for variant in variants {
-        if !variant.documentation.trim().is_empty() {
-            block.push('\n');
-            block.push_str("--- ");
-            block.push_str(variant.name);
-            block.push_str(": ");
-            block.push_str(variant.documentation.trim());
-        }
-    }
     block.push_str("\n--- @alias ");
     block.push_str(name);
     block.push(' ');
@@ -150,18 +140,41 @@ pub fn emit_function(
     block
 }
 
-/// Emit one method line for one userdata class block.
+/// Emit one method block for one userdata method.
 ///
 /// Docs render trimmed, so raw `///` lines and trimmed
-/// strings share one output shape.
-pub fn emit_method_field(method: &MethodDescriptor) -> String {
-    let mut line = String::from("--- @field ");
-    line.push_str(method.name);
-    line.push(' ');
-    line.push_str(&method.signature);
-    line.push(' ');
-    line.push_str(method.documentation.trim());
-    line
+/// strings share one output shape. The receiver stays out
+/// of the argument list since the colon passes it.
+pub fn emit_method(class: &str, method: &MethodDescriptor) -> String {
+    let mut block = String::from("---");
+    let documentation = method.documentation.trim();
+    if !documentation.is_empty() {
+        block.push(' ');
+        block.push_str(documentation);
+    }
+    for parameter in &method.parameters {
+        block.push_str("\n--- @param ");
+        block.push_str(parameter.name);
+        block.push(' ');
+        block.push_str(parameter.face.trim());
+    }
+    for returned in &method.returns {
+        block.push_str("\n--- @return ");
+        block.push_str(returned.trim());
+    }
+    block.push_str("\nfunction ");
+    block.push_str(class);
+    block.push(':');
+    block.push_str(method.name);
+    block.push('(');
+    let labels: Vec<&str> = method
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name)
+        .collect();
+    block.push_str(&labels.join(", "));
+    block.push_str(") end");
+    block
 }
 
 /// Emit one literal union block for one string enum.
@@ -183,5 +196,41 @@ pub fn emit_optional(face: &str) -> String {
         face.to_owned()
     } else {
         format!("{face}?")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::userdata::MethodParameter;
+
+    #[test]
+    fn method_block_reads_colon_call_without_receiver() {
+        let method = MethodDescriptor {
+            name: "members",
+            documentation: "List the archive member names, else nil with reason.",
+            parameters: vec![],
+            returns: vec![
+                std::borrow::Cow::Borrowed("string[]?"),
+                std::borrow::Cow::Borrowed("string?"),
+            ],
+        };
+        assert_eq!(
+            emit_method("ArchiveHandle", &method),
+            "--- List the archive member names, else nil with reason.\n--- @return string[]?\n--- @return string?\nfunction ArchiveHandle:members() end"
+        );
+        let named = MethodDescriptor {
+            name: "member",
+            documentation: "Open one archive member as its handle, else nil with reason.",
+            parameters: vec![MethodParameter {
+                name: "name",
+                face: std::borrow::Cow::Borrowed("string"),
+            }],
+            returns: vec![std::borrow::Cow::Borrowed("ResourceHandle?")],
+        };
+        let block = emit_method("ArchiveHandle", &named);
+        assert!(block.contains("--- @param name string"));
+        assert!(block.contains("function ArchiveHandle:member(name) end"));
+        assert!(!block.contains("self"));
     }
 }

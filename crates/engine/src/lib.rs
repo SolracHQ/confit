@@ -1,6 +1,7 @@
 //! Engine
 //! Evaluate Lua profiles into documents with hooks.
 
+pub mod api;
 pub mod assembly;
 pub mod engine;
 pub mod error;

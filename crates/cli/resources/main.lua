@@ -1,34 +1,26 @@
 -- Welcome to confit. This profile builds your shell setup.
--- Profiles return three things. Shells select render targets, documents describe
--- file contents, and configs group your changes.
+-- Profiles return configs plus documents. Documents describe
+-- file contents, configs group your changes.
+local sugar = require("plugins._.sugar")
+
+local bashrc = sugar.home(".bashrc")
 
 -- A config groups your changes under one name. Start with one
 -- per tool or area. Configs hold patches, which modify
--- documents.
-local shell = confit.config("shell")
-
--- Documents hold the files confit writes. This one declares
--- your shell startup lines in three sections: profile lines
--- render first, config lines render after them, final lines
--- render last.
-local base = confit.document.rc.new({
-  profile = {
-    confit.document.rc.prepend(confit.path.home(".local/bin")),
-  },
-  config = {},
-  final = {},
-})
-
--- Patches change documents. This one adds an alias to the
--- config section. Add more adds here, or more patches for
--- more tools. Run `confit plan` to preview, `confit apply`
+-- documents. Run `confit plan` to preview, `confit apply`
 -- to write.
-shell:add_patch(confit.patch.rc(function(data)
-  data:add("config", confit.document.rc.alias("ll", "ls -l"))
-end))
+local shell = {
+	name = "shell",
+	patches = {
+		sugar.patch(bashrc, function(_, data)
+			sugar.alias(data, "config", "ll", "ls -l")
+		end),
+	},
+}
 
 return {
-  shells = { "bash" },
-  documents = { base },
-  configs = { shell },
+	documents = {
+		[bashrc] = sugar.rc(),
+	},
+	configs = { shell },
 }

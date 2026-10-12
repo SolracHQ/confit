@@ -1,9 +1,13 @@
 local mise = require("plugins._.mise")
+local sugar = require("plugins._.sugar")
 
-local installer = mise.init()
+local installer = mise.init("2026.10.8")
 local bat = require("tools.bat")
 
 return {
-	shells = { "bash" },
 	configs = { installer, bat },
+	documents = {
+		[sugar.home(".bashrc")] = sugar.rc(),
+		[sugar.home(".zshrc")] = sugar.rc(),
+	},
 }
