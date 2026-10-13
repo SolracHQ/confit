@@ -9,6 +9,7 @@ use confit_binding_macros::Face;
 use serde::{Deserialize, Serialize};
 
 use confit_model::document::StructuredFormat;
+use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
 /// Face for patch apply callbacks.
@@ -21,6 +22,16 @@ pub struct ApplyArgs {
     /// Current document under patching.
     #[face(live)]
     document: Table,
+}
+
+/// Face for hook patch callbacks.
+#[allow(dead_code)]
+#[derive(Face)]
+#[face(callback_shape)]
+pub struct HookArgs {
+    /// Live hook under patching.
+    #[face(live)]
+    hook: Hook,
 }
 
 /// Face for patch filter callbacks.
@@ -130,6 +141,16 @@ pub struct RcPatch {
     pub priority: Level,
 }
 
+/// One hook patch table.
+#[derive(Debug, Clone, Face)]
+#[face(table)]
+pub struct HookPatch {
+    /// The hook id under patching.
+    pub target: String,
+    /// The hook callback over the live hook.
+    pub apply: Callback<HookArgs>,
+}
+
 /// One patch table in either shape.
 #[derive(Debug, Clone, Face)]
 #[face(table, untagged, probe = probe_patch)]
@@ -138,14 +159,27 @@ pub enum Patch {
     Structured(StructuredPatch),
     /// Rc section payload patch.
     Rc(RcPatch),
+    /// Hook payload patch.
+    Hook(HookPatch),
 }
 
-/// Route one patch table into its face over the format marker.
+/// Route one patch table into its face over the target shape.
+///
+/// String targets route hook patches, route targets route document patches
+/// over the format marker.
 ///
 /// # Errors
 ///
 /// - [`Mismatch`] for unreadable tables.
 fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, Mismatch> {
+    let target = table.get::<Value>("target").map_err(|error| Mismatch {
+        path: "Patch".to_owned(),
+        want: "readable entries".to_owned(),
+        found: error.to_string(),
+    })?;
+    if matches!(target, Value::String(_)) {
+        return HookPatch::decode(&Value::Table(table.clone()), lua).map(Patch::Hook);
+    }
     let raw = table.get::<Value>("format").map_err(|error| Mismatch {
         path: "Patch".to_owned(),
         want: "readable entries".to_owned(),

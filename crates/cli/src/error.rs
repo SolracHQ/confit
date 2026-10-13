@@ -7,13 +7,12 @@ use thiserror::Error;
 
 use confit_driver::process::ProcessFault;
 use confit_engine::error::EngineError;
-use confit_model::condition::Condition;
 use confit_model::error::Error as ModelError;
 use confit_runtime::error::RuntimeError;
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
 
-use crate::presentation::hooks::describe_condition;
+use crate::presentation::hooks::describe_blocked;
 
 /// Cli failure shapes.
 #[derive(Debug, Error)]
@@ -193,9 +192,13 @@ impl From<RuntimeError> for CliError {
             RuntimeError::Output { argv } => Self::Output { argv },
             RuntimeError::HookResolve { argv, head } => Self::Resolve { argv, head },
             RuntimeError::HookFailed { argv, code } => Self::HookFailed { argv, code },
-            RuntimeError::HookChecks { argv, failed } => Self::HookChecks {
+            RuntimeError::HookChecks {
                 argv,
-                failed: join_conditions(&failed),
+                check,
+                failed,
+            } => Self::HookChecks {
+                argv,
+                failed: describe_blocked(&check, &failed),
             },
             other => Self::Runtime(other),
         }
@@ -369,9 +372,13 @@ fn transport_runtime(error: &RuntimeError) -> String {
             code: *code,
         }
         .to_string(),
-        RuntimeError::HookChecks { argv, failed } => CliError::HookChecks {
+        RuntimeError::HookChecks {
+            argv,
+            check,
+            failed,
+        } => CliError::HookChecks {
             argv: argv.clone(),
-            failed: join_conditions(failed),
+            failed: describe_blocked(check, failed),
         }
         .to_string(),
         RuntimeError::Render { route, reason, .. } => {
@@ -426,15 +433,6 @@ fn transport_runtime(error: &RuntimeError) -> String {
             )
         }
     }
-}
-
-/// Join unmet checks into one display list.
-fn join_conditions(failed: &[Condition]) -> String {
-    failed
-        .iter()
-        .map(describe_condition)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Map one blob error into its task line.

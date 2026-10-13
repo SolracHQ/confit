@@ -8,6 +8,9 @@
 		"globals": ["require"]
 	},
 	"workspace": {
-		"library": ["../../stubs"]
+		"library": [
+			"../../plugins",
+			"../../stubs"
+		]
 	}
 }

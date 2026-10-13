@@ -4,6 +4,7 @@
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::{ConditionChange, ConditionSlot, Hook, HookChange, HookLifecycle};
+use confit_runtime::Unmet;
 
 use crate::presentation::summary::Sigil;
 
@@ -30,6 +31,36 @@ pub fn describe_condition(cond: &Condition) -> String {
         }
     }
     render(&cond.simplified())
+}
+
+/// Render one unmet condition with its failing member.
+pub fn describe_unmet(fault: &Unmet) -> String {
+    let head = describe_condition(&fault.member);
+    if fault.cause.is_empty() {
+        return head;
+    }
+    let tail = fault
+        .cause
+        .iter()
+        .map(describe_unmet)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if matches!(fault.member, Condition::Any(_)) {
+        return format!("{head} [{tail}]");
+    }
+    format!("{head} [{}: {tail}]", fault.index)
+}
+
+/// Render one blocked condition with its fault beside the words.
+pub fn describe_blocked(condition: &Condition, fault: &Unmet) -> String {
+    if fault.member == *condition {
+        return describe_unmet(fault);
+    }
+    format!(
+        "{} [{}]",
+        describe_condition(condition),
+        describe_unmet(fault)
+    )
 }
 
 /// Render plan hook lines from lifecycle diff data.
@@ -62,7 +93,6 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
                     Arg::join(&entry.hook.argv)
                 ));
                 render_condition_changes(&edits.conditions, &mut lines);
-                render_check_changes(&edits.removed_checks, &edits.added_checks, &mut lines);
                 if let Some(timeout) = &edits.timeout {
                     lines.push(format!(
                         "  {} timeout ({} -> {})",
@@ -79,26 +109,21 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 }
 
 /// Render full condition lines for one added hook.
+///
+/// - True conditions stay silent.
 fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
-    if let Some(condition) = hook.requires.as_ref() {
+    for (slot, condition) in [
+        ("requires", &hook.requires),
+        ("when", &hook.when),
+        ("check", &hook.check),
+    ] {
+        if condition.is_true() {
+            continue;
+        }
         out.push(format!(
-            "  {} requires ({})",
+            "  {} {slot} ({})",
             Sigil::Add.mark(),
             describe_condition(condition)
-        ));
-    }
-    if let Some(condition) = hook.when.as_ref() {
-        out.push(format!(
-            "  {} when ({})",
-            Sigil::Add.mark(),
-            describe_condition(condition)
-        ));
-    }
-    for check in &hook.checks {
-        out.push(format!(
-            "  {} checks ({})",
-            Sigil::Add.mark(),
-            describe_condition(check)
         ));
     }
 }
@@ -108,6 +133,7 @@ fn condition_slot_text(slot: ConditionSlot) -> &'static str {
     match slot {
         ConditionSlot::Requires => "requires",
         ConditionSlot::When => "when",
+        ConditionSlot::Check => "check",
     }
 }
 
@@ -115,42 +141,11 @@ fn condition_slot_text(slot: ConditionSlot) -> &'static str {
 fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String>) {
     for change in conditions {
         let slot = condition_slot_text(change.slot);
-        let prior = change.before.as_ref().map(describe_condition);
-        let next = change.after.as_ref().map(describe_condition);
-        match (prior, next) {
-            (Some(before), Some(after)) => {
-                out.push(format!(
-                    "  {} {slot} ({before}) -> ({after})",
-                    Sigil::Update.mark()
-                ));
-            }
-            (None, Some(after)) => {
-                out.push(format!("  {} {slot} ({after})", Sigil::Add.mark()));
-            }
-            (Some(before), None) => {
-                out.push(format!("  {} {slot} ({before})", Sigil::Remove.mark()));
-            }
-            (None, None) => {}
-        }
-    }
-}
-
-/// Render removed check lines before added check lines.
-///
-/// - Removals print in previous order, additions print in desired order.
-fn render_check_changes(removed: &[Condition], added: &[Condition], out: &mut Vec<String>) {
-    for check in removed {
         out.push(format!(
-            "  {} checks ({})",
-            Sigil::Remove.mark(),
-            describe_condition(check)
-        ));
-    }
-    for check in added {
-        out.push(format!(
-            "  {} checks ({})",
-            Sigil::Add.mark(),
-            describe_condition(check)
+            "  {} {slot} ({}) -> ({})",
+            Sigil::Update.mark(),
+            describe_condition(&change.before),
+            describe_condition(&change.after)
         ));
     }
 }
@@ -163,13 +158,12 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::hook::merge_hooks;
 
     fn hook(
         argv: &[&str],
         path: &[&str],
-        when: Option<Condition>,
-        checks: Vec<Condition>,
+        when: Condition,
+        check: Condition,
         timeout_secs: u64,
     ) -> Hook {
         Hook {
@@ -181,9 +175,10 @@ mod tests {
                 .iter()
                 .map(|item| Arg::Text(item.to_string()))
                 .collect(),
-            requires: None,
+            id: None,
+            requires: Condition::default(),
             when,
-            checks,
+            check,
             timeout_secs,
         }
     }
@@ -196,22 +191,6 @@ mod tests {
 
     fn render_lifecycle(current: &[Hook], previous: &[Hook]) -> Vec<String> {
         lifecycle_lines(&confit_model::hook::diff_lifecycle(current, previous))
-    }
-
-    #[test]
-    fn requires_merge_collapses_identical_leaves() {
-        let mut first = hook(&["mise"], &[], None, vec![], 60);
-        first.requires = Some(in_path("mise"));
-        let mut second = hook(&["mise"], &[], None, vec![], 60);
-        second.requires = Some(in_path("mise"));
-        let merged = merge_hooks(vec![first, second]);
-        assert_eq!(merged.len(), 1);
-        let condition = match merged[0].requires.clone() {
-            Some(condition) => condition,
-            None => panic!("requires survives the merge"),
-        };
-        assert_eq!(condition.simplified(), in_path("mise"));
-        assert_eq!(describe_condition(&condition).as_str(), "in_path(mise)");
     }
 
     fn changed(path: &str) -> Condition {
@@ -276,32 +255,26 @@ mod tests {
         let mut added = hook(
             &["mise", "install"],
             &[],
-            Some(changed("dest")),
-            vec![in_path("probe")],
+            changed("dest"),
+            in_path("probe"),
             60,
         );
-        added.requires = Some(in_path("mise"));
+        added.requires = in_path("mise");
         assert_eq!(
             render_lifecycle(&[added], &[]),
             vec![
                 "+ mise install".to_string(),
                 "  + requires (in_path(mise))".to_string(),
                 "  + when (changed(dest))".to_string(),
-                "  + checks (in_path(probe))".to_string(),
+                "  + check (in_path(probe))".to_string(),
             ]
         );
     }
 
     #[test]
     fn removed_hook_prints_bare_minus() {
-        let mut recorded = hook(
-            &["tool"],
-            &[],
-            Some(in_path("mise")),
-            vec![in_path("probe")],
-            60,
-        );
-        recorded.requires = Some(in_path("cap"));
+        let mut recorded = hook(&["tool"], &[], in_path("mise"), in_path("probe"), 60);
+        recorded.requires = in_path("cap");
         assert_eq!(
             render_lifecycle(&[], &[recorded]),
             vec!["- tool".to_string()]
@@ -310,10 +283,22 @@ mod tests {
 
     #[test]
     fn modified_condition_prints_tilde_with_slot_diff() {
-        let mut before = hook(&["mise", "install"], &[], None, vec![], 60);
-        before.requires = Some(in_path("a"));
-        let mut after = hook(&["mise", "install"], &[], None, vec![], 60);
-        after.requires = Some(in_path("b"));
+        let mut before = hook(
+            &["mise", "install"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            60,
+        );
+        before.requires = in_path("a");
+        let mut after = hook(
+            &["mise", "install"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            60,
+        );
+        after.requires = in_path("b");
         assert_eq!(
             render_lifecycle(&[after], &[before]),
             vec![
@@ -325,22 +310,28 @@ mod tests {
 
     #[test]
     fn unchanged_hook_prints_nothing() {
-        let mut kept = hook(
-            &["tool"],
-            &[],
-            Some(in_path("mise")),
-            vec![in_path("probe")],
-            60,
-        );
-        kept.requires = Some(in_path("cap"));
+        let mut kept = hook(&["tool"], &[], in_path("mise"), in_path("probe"), 60);
+        kept.requires = in_path("cap");
         assert!(render_lifecycle(&[kept.clone()], &[kept]).is_empty());
     }
 
     #[test]
     fn empty_previous_prints_all_plus() {
         let current = vec![
-            hook(&["tool", "first"], &[], None, vec![], 60),
-            hook(&["tool", "second"], &[], None, vec![], 60),
+            hook(
+                &["tool", "first"],
+                &[],
+                Condition::default(),
+                Condition::default(),
+                60,
+            ),
+            hook(
+                &["tool", "second"],
+                &[],
+                Condition::default(),
+                Condition::default(),
+                60,
+            ),
         ];
         assert_eq!(
             render_lifecycle(&current, &[]),
@@ -349,29 +340,47 @@ mod tests {
     }
 
     #[test]
-    fn condition_absent_to_present_reads_added() {
-        let before = hook(&["mise"], &[], None, vec![], 60);
-        let after = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
+    fn condition_true_to_present_reads_changed() {
+        let before = hook(
+            &["mise"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            60,
+        );
+        let after = hook(&["mise"], &[], in_path("a"), Condition::default(), 60);
         assert_eq!(
             render_lifecycle(&[after], &[before]),
-            vec!["~ mise".to_string(), "  + when (in_path(a))".to_string(),]
+            vec![
+                "~ mise".to_string(),
+                "  ~ when (true) -> (in_path(a))".to_string(),
+            ]
         );
     }
 
     #[test]
-    fn condition_present_to_absent_reads_removed() {
-        let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
-        let after = hook(&["mise"], &[], None, vec![], 60);
+    fn condition_present_to_true_reads_changed() {
+        let before = hook(&["mise"], &[], in_path("a"), Condition::default(), 60);
+        let after = hook(
+            &["mise"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            60,
+        );
         assert_eq!(
             render_lifecycle(&[after], &[before]),
-            vec!["~ mise".to_string(), "  - when (in_path(a))".to_string(),]
+            vec![
+                "~ mise".to_string(),
+                "  ~ when (in_path(a)) -> (true)".to_string(),
+            ]
         );
     }
 
     #[test]
     fn condition_changed_single_reads_old_to_new() {
-        let before = hook(&["mise"], &[], Some(in_path("a")), vec![], 60);
-        let after = hook(&["mise"], &[], Some(in_path("b")), vec![], 60);
+        let before = hook(&["mise"], &[], in_path("a"), Condition::default(), 60);
+        let after = hook(&["mise"], &[], in_path("b"), Condition::default(), 60);
         assert_eq!(
             render_lifecycle(&[after], &[before]),
             vec![
@@ -382,29 +391,86 @@ mod tests {
     }
 
     #[test]
-    fn checks_diff_reports_added_plus_removed() {
-        let before = hook(&["mise"], &[], None, vec![in_path("a")], 60);
-        let after = hook(&["mise"], &[], None, vec![in_path("b")], 60);
+    fn check_diff_reports_slot_change() {
+        let before = hook(&["mise"], &[], Condition::default(), in_path("a"), 60);
+        let after = hook(&["mise"], &[], Condition::default(), in_path("b"), 60);
         assert_eq!(
             render_lifecycle(&[after], &[before]),
             vec![
                 "~ mise".to_string(),
-                "  - checks (in_path(a))".to_string(),
-                "  + checks (in_path(b))".to_string(),
+                "  ~ check (in_path(a)) -> (in_path(b))".to_string(),
             ]
         );
     }
 
     #[test]
     fn timeout_change_reads_old_to_new() {
-        let before = hook(&["mise"], &[], None, vec![], 60);
-        let after = hook(&["mise"], &[], None, vec![], 600);
+        let before = hook(
+            &["mise"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            60,
+        );
+        let after = hook(
+            &["mise"],
+            &[],
+            Condition::default(),
+            Condition::default(),
+            600,
+        );
         assert_eq!(
             render_lifecycle(&[after], &[before]),
             vec![
                 "~ mise".to_string(),
                 "  ~ timeout (60s -> 600s)".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn unmet_leaf_reads_member_words() {
+        let fault = Unmet {
+            index: 0,
+            member: in_path("mise"),
+            cause: Vec::new(),
+        };
+        assert_eq!(describe_unmet(&fault).as_str(), "in_path(mise)");
+        assert_eq!(
+            describe_blocked(&in_path("mise"), &fault).as_str(),
+            "in_path(mise)"
+        );
+    }
+
+    #[test]
+    fn unmet_conjunction_names_failing_member() {
+        let fault = Unmet {
+            index: 1,
+            member: in_path("b"),
+            cause: Vec::new(),
+        };
+        let condition = Condition::All(vec![in_path("a"), in_path("b")]);
+        assert_eq!(describe_unmet(&fault).as_str(), "in_path(b)");
+        assert_eq!(
+            describe_blocked(&condition, &fault).as_str(),
+            "(in_path(a) and in_path(b)) [in_path(b)]"
+        );
+    }
+
+    #[test]
+    fn unmet_nested_fault_reads_index_path() {
+        let fault = Unmet {
+            index: 1,
+            member: Condition::All(vec![in_path("b"), in_path("c")]),
+            cause: vec![Unmet {
+                index: 1,
+                member: in_path("c"),
+                cause: Vec::new(),
+            }],
+        };
+        assert_eq!(
+            describe_unmet(&fault).as_str(),
+            "(in_path(b) and in_path(c)) [1: in_path(c)]"
         );
     }
 }

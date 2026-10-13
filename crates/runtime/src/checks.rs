@@ -10,6 +10,20 @@ use confit_model::routes::Route;
 /// Default hook timeout in seconds for the `10m` opt default.
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
+/// One unmet condition with its failing member.
+///
+/// - Conjunction faults hold the first failing member.
+/// - Disjunction faults hold every member fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unmet {
+    /// The failing member index in its parent conjunction.
+    pub index: usize,
+    /// The failing member condition.
+    pub member: Condition,
+    /// The nested faults under the member.
+    pub cause: Vec<Unmet>,
+}
+
 /// Host facts under condition checks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checks {
@@ -48,6 +62,96 @@ impl Checks {
             Condition::All(items) => items.iter().all(|item| self.check(item, changed)),
             Condition::Any(items) => items.iter().any(|item| self.check(item, changed)),
             Condition::Not(inner) => !self.check(inner, changed),
+        }
+    }
+
+    /// Return the fault under one condition while the condition fails.
+    pub fn unmet(&self, cond: &Condition, changed: &BTreeSet<Route>) -> Option<Unmet> {
+        match cond {
+            Condition::All(items) => self.conjunction_unmet(items, changed),
+            Condition::Any(items) => self.disjunction_unmet(cond, items, changed),
+            Condition::Not(inner) => self.negation_unmet(cond, inner, changed),
+            leaf => self.leaf_unmet(leaf, changed),
+        }
+    }
+
+    /// Return the fault at the first failing member of one conjunction.
+    fn conjunction_unmet(&self, items: &[Condition], changed: &BTreeSet<Route>) -> Option<Unmet> {
+        for (index, member) in items.iter().enumerate() {
+            if self.check(member, changed) {
+                continue;
+            }
+            return Some(Unmet {
+                index,
+                member: member.clone(),
+                cause: self.nested(member, changed),
+            });
+        }
+        None
+    }
+
+    /// Return the nested faults under one failing member.
+    fn nested(&self, member: &Condition, changed: &BTreeSet<Route>) -> Vec<Unmet> {
+        match member {
+            Condition::All(items) => self.conjunction_unmet(items, changed).into_iter().collect(),
+            Condition::Any(items) => self.disjunction_each(items, changed),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Return the fault under one disjunction with every member fault.
+    fn disjunction_unmet(
+        &self,
+        cond: &Condition,
+        items: &[Condition],
+        changed: &BTreeSet<Route>,
+    ) -> Option<Unmet> {
+        if items.iter().any(|item| self.check(item, changed)) {
+            return None;
+        }
+        Some(Unmet {
+            index: 0,
+            member: cond.clone(),
+            cause: self.disjunction_each(items, changed),
+        })
+    }
+
+    /// Collect one fault per member under one failed disjunction.
+    fn disjunction_each(&self, items: &[Condition], changed: &BTreeSet<Route>) -> Vec<Unmet> {
+        items
+            .iter()
+            .filter_map(|item| self.unmet(item, changed))
+            .collect()
+    }
+
+    /// Return the fault under one negation while its inner condition holds.
+    fn negation_unmet(
+        &self,
+        cond: &Condition,
+        inner: &Condition,
+        changed: &BTreeSet<Route>,
+    ) -> Option<Unmet> {
+        if self.check(inner, changed) {
+            Some(Unmet {
+                index: 0,
+                member: cond.clone(),
+                cause: Vec::new(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Return the fault under one leaf while the leaf fails.
+    fn leaf_unmet(&self, leaf: &Condition, changed: &BTreeSet<Route>) -> Option<Unmet> {
+        if self.check(leaf, changed) {
+            None
+        } else {
+            Some(Unmet {
+                index: 0,
+                member: leaf.clone(),
+                cause: Vec::new(),
+            })
         }
     }
 }
@@ -290,6 +394,61 @@ mod tests {
         assert!(
             !checks_with(Vec::new()).check(&Condition::Changed { route: other }, &changed,),
             "absent route fails"
+        );
+    }
+
+    fn leaf(name: &str) -> Condition {
+        Condition::InPath {
+            name: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn unmet_conjunction_names_first_failing_member() {
+        let checks = checks_with(Vec::new());
+        let cond = Condition::All(vec![leaf("a"), leaf("b")]);
+        let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();
+        assert_eq!(fault.index, 0);
+        assert_eq!(fault.member, leaf("a"));
+        assert!(fault.cause.is_empty());
+    }
+
+    #[test]
+    fn unmet_conjunction_carries_nested_cause() {
+        let checks = checks_with(Vec::new());
+        let held = Condition::Not(Box::new(leaf("absent")));
+        let cond = Condition::All(vec![held, Condition::All(vec![leaf("b"), leaf("c")])]);
+        let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();
+        assert_eq!(fault.index, 1);
+        assert_eq!(fault.member, Condition::All(vec![leaf("b"), leaf("c")]));
+        assert_eq!(fault.cause.len(), 1);
+        assert_eq!(fault.cause[0].index, 0);
+        assert_eq!(fault.cause[0].member, leaf("b"));
+    }
+
+    #[test]
+    fn unmet_disjunction_names_every_member() {
+        let checks = checks_with(Vec::new());
+        let cond = Condition::Any(vec![leaf("a"), leaf("b")]);
+        let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();
+        assert_eq!(fault.member, cond);
+        assert_eq!(fault.cause.len(), 2);
+        assert_eq!(fault.cause[0].member, leaf("a"));
+        assert_eq!(fault.cause[1].member, leaf("b"));
+    }
+
+    #[test]
+    fn unmet_holding_conditions_read_none() {
+        let checks = checks_with(Vec::new());
+        assert_eq!(
+            checks.unmet(&Condition::All(Vec::new()), &BTreeSet::new()),
+            None,
+            "empty conjunction holds"
+        );
+        assert_eq!(
+            checks.unmet(&Condition::Not(Box::new(leaf("absent"))), &BTreeSet::new()),
+            None,
+            "negated miss holds"
         );
     }
 }

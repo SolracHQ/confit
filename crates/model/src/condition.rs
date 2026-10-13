@@ -60,7 +60,19 @@ enum NaryKind {
     Any,
 }
 
+impl Default for Condition {
+    /// Return the true condition.
+    fn default() -> Self {
+        Self::All(Vec::new())
+    }
+}
+
 impl Condition {
+    /// Report whether one condition holds true in simplified form.
+    pub fn is_true(&self) -> bool {
+        self.simplified() == Self::default()
+    }
+
     /// Report whether one condition tree holds a changed leaf.
     pub fn holds_changed(&self) -> bool {
         match self {

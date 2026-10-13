@@ -197,6 +197,17 @@ pub(crate) fn expand_struct_callback(
                 #count
             }
 
+            fn call_face() -> ::std::string::String {
+                ::std::format!(
+                    "fun({})",
+                    [#(::std::format!(
+                        "{}: {}",
+                        #labels,
+                        <#faces as ::confit_binding::face::Face>::face_name()
+                    )),*].join(", ")
+                )
+            }
+
             fn decode_function(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,

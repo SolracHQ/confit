@@ -92,7 +92,7 @@ local fonts = confit.document.tree(archive, confit.path.data("fonts"), function(
 end)
 ```
 
-The manifest reads as one line either way. One add with the file count, silence on repeat runs, one update with the changed count. Member modes inherit the archive executable bit. An empty pick fails naming the filter.
+The manifest reads as one line either way. One add with the file count, silence on repeat runs, one update with the changed count. Member modes inherit the archive executable bit. An empty pick fails showing the filter.
 
 For the exact contract see [spec documents](../spec/documents.md).
 

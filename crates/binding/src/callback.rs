@@ -5,7 +5,9 @@ use std::marker::PhantomData;
 
 use mlua::{Function, Lua, Value};
 
-use crate::value::{Decode, Mismatch};
+use crate::face::Face;
+use crate::registry::Registry;
+use crate::value::{Decode, Encode, Mismatch};
 
 /// One Lua callback over its args face.
 ///
@@ -24,6 +26,9 @@ pub trait CallbackArgs {
 
     /// Return the param count.
     fn arity() -> usize;
+
+    /// Return the inline call face.
+    fn call_face() -> String;
 
     /// Decode one Lua value into the callback function.
     ///
@@ -101,6 +106,36 @@ impl<Args: CallbackArgs> Callback<Args> {
     }
 }
 
+impl<Args: CallbackArgs + Face> Face for Callback<Args> {
+    fn face_name() -> String {
+        Args::call_face()
+    }
+
+    fn face_stub() -> String {
+        String::new()
+    }
+
+    fn kind() -> crate::face::FaceKind {
+        crate::face::FaceKind::Function
+    }
+
+    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+        Args::collect(collector)
+    }
+}
+
+impl<Args: CallbackArgs> Decode for Callback<Args> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+        Self::decode(value, lua)
+    }
+}
+
+impl<Args: CallbackArgs> Encode for Callback<Args> {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        self.as_function().encode(lua)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +194,15 @@ mod tests {
     #[test]
     fn stub_names_documented_params() {
         assert_eq!(TestArgs::face_name(), "TestArgs");
+        assert_eq!(
+            TestArgs::call_face(),
+            "fun(route: string, document: TestLive)"
+        );
+        assert_eq!(SingleArgs::call_face(), "fun(route: string)");
+        assert_eq!(
+            Callback::<TestArgs>::face_name(),
+            "fun(route: string, document: TestLive)"
+        );
         let stub = TestArgs::face_stub();
         assert!(stub.contains("@param route string Target route of the patched document."));
         assert!(stub.contains("@param document TestLive Live document under patching."));
@@ -170,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_non_functions_naming_the_shape() {
+    fn decode_rejects_non_functions_showing_the_shape() {
         let lua = Lua::new();
         let failure = Callback::<TestArgs>::decode(&Value::Integer(1), &lua).unwrap_err();
         let text = failure.to_string();
@@ -179,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_checks_fixed_arity_naming_params() {
+    fn decode_checks_fixed_arity_showing_params() {
         let lua = Lua::new();
         assert_eq!(TestArgs::arity(), 2);
         assert_eq!(SingleArgs::arity(), 1);

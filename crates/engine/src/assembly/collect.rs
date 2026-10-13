@@ -26,6 +26,34 @@ pub(super) fn check_names(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
+/// Reject requirement edges showing unknown configs. The error holds the hint.
+///
+/// - Configs match by exact name in profile order with targets in key order.
+///
+/// # Errors
+///
+/// - [`EngineError::Require`] for edges showing unknown configs.
+pub(super) fn check_requirements(profile: &Profile) -> Result<()> {
+    let mut present = BTreeSet::new();
+    for config in &profile.configs {
+        present.insert(config.name.clone());
+    }
+    for config in &profile.configs {
+        let mut targets: Vec<(&String, &String)> = config.requirements.iter().collect();
+        targets.sort();
+        for (target, hint) in targets {
+            if !present.contains(target) {
+                return Err(EngineError::Require {
+                    name: config.name.clone(),
+                    target: target.clone(),
+                    hint: Some(hint.clone()),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Collect one profile's documents keyed by destination route.
 ///
 /// - Profile documents join first, config documents follow in order.

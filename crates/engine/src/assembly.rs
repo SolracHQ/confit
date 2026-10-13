@@ -42,11 +42,13 @@ impl<'a> Assembler<'a> {
     /// - Filters fan out over matched destinations in destination order.
     /// - Callbacks run with the target route beside live data.
     /// - Unknown targets fail the plan.
+    /// - Unknown requirement names fail the plan with the hint.
     ///
     /// # Errors
     ///
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
+    /// - [`crate::error::EngineError::Require`] for requirements showing unknown names.
     /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
     /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
     /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
@@ -54,6 +56,7 @@ impl<'a> Assembler<'a> {
     /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
     pub fn assemble(&self, profile: &Profile) -> Result<BTreeMap<Route, Data>> {
         collect::check_names(profile)?;
+        collect::check_requirements(profile)?;
         let placed = collect::dedupe(profile)?;
         let owned = patches::split_patches(profile);
         let mut finished = BTreeMap::new();
@@ -79,16 +82,23 @@ impl<'a> Assembler<'a> {
 
     /// Collect one profile's hooks in first-seen order.
     ///
+    /// - Hook patches mutate live hooks in return order.
+    /// - Unknown hook targets and repeated ids fail the plan.
+    ///
     /// # Errors
     ///
+    /// - [`crate::error::EngineError::DuplicateHook`] for repeated hook ids.
+    /// - [`crate::error::EngineError::UnknownHookTarget`] for patches with
+    ///   unknown ids.
     /// - [`crate::error::EngineError::ChangedUnknown`] for conditions with
     ///   unbuilt routes.
+    /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
     pub fn collect_hooks(
         &self,
         profile: &Profile,
         documents: &BTreeMap<Route, Data>,
     ) -> Result<Vec<Hook>> {
-        hooks::collect_hooks(profile, documents)
+        hooks::collect_hooks(self.lua, profile, documents)
     }
 }
 
@@ -99,11 +109,13 @@ impl<'a> Assembler<'a> {
 /// - Filters fan out over matched destinations in destination order.
 /// - Callbacks run with the target route beside live data.
 /// - Unknown targets fail the plan.
+/// - Unknown requirement names fail the plan with the hint.
 ///
 /// # Errors
 ///
 /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
 /// - [`crate::error::EngineError::Defined`] for repeated config names.
+/// - [`crate::error::EngineError::Require`] for requirements showing unknown names.
 /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
 /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
 /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with

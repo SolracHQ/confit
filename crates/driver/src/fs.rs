@@ -18,12 +18,17 @@ pub use mem::*;
 pub struct FileMeta {
     len: u64,
     is_dir: bool,
+    modified: u64,
 }
 
 impl FileMeta {
-    /// Build facts from a byte length and the folder flag.
-    pub fn new(len: u64, is_dir: bool) -> Self {
-        Self { len, is_dir }
+    /// Build facts from a byte length, the folder flag, and mtime nanos.
+    pub fn new(len: u64, is_dir: bool, modified: u64) -> Self {
+        Self {
+            len,
+            is_dir,
+            modified,
+        }
     }
 
     /// Return the byte length of one file, zero for folders.
@@ -44,6 +49,11 @@ impl FileMeta {
     /// Report whether the path is a plain file.
     pub fn is_file(&self) -> bool {
         !self.is_dir
+    }
+
+    /// Return mtime nanos since the epoch, zero when unknown.
+    pub fn modified(&self) -> u64 {
+        self.modified
     }
 }
 
@@ -208,6 +218,20 @@ mod tests {
             !dir.path().join("cache").exists(),
             "guarded folders never land on host"
         );
+    }
+
+    #[test]
+    fn writes_bump_modified_ticks() {
+        let _guard = TestGuard::install();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ticks").join("probe.bin");
+        create_dir_all(file.parent().unwrap()).unwrap();
+        write(&file, b"first").unwrap();
+        let first = metadata(&file).unwrap().modified();
+        assert_ne!(first, 0, "writes stamp ticks");
+        write(&file, b"second").unwrap();
+        let second = metadata(&file).unwrap().modified();
+        assert!(second > first, "rewrites bump ticks");
     }
 
     #[test]

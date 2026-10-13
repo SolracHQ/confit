@@ -21,12 +21,14 @@ fn duplicates_fail_across_configs() {
                 [placed_text(".bashrc", "one")].into_iter().collect(),
                 vec![],
                 Vec::new(),
+                HashMap::new(),
             ),
             Config::new(
                 "second".to_owned(),
                 [placed_text(".bashrc", "two")].into_iter().collect(),
                 vec![],
                 Vec::new(),
+                HashMap::new(),
             ),
         ],
         std::collections::HashMap::new(),
@@ -53,12 +55,14 @@ fn repeated_names_fail() {
                 [placed_text("a", "one")].into_iter().collect(),
                 vec![],
                 Vec::new(),
+                HashMap::new(),
             ),
             Config::new(
                 "same".to_owned(),
                 [placed_text("b", "two")].into_iter().collect(),
                 vec![],
                 Vec::new(),
+                HashMap::new(),
             ),
         ],
         std::collections::HashMap::new(),
@@ -102,6 +106,7 @@ fn duplicates_fail_across_profile_and_configs() {
             [placed_text(".bashrc", "two")].into_iter().collect(),
             vec![],
             Vec::new(),
+            HashMap::new(),
         )],
         [placed_text(".bashrc", "one")].into_iter().collect(),
     );
@@ -493,7 +498,7 @@ fn rc_patches_merge_entries() {
 }
 
 #[test]
-fn rc_missing_targets_fail_naming_targets() {
+fn rc_missing_targets_fail_showing_targets() {
     let lua = Lua::new();
     let patch = rc_patch_of(
         &lua,
@@ -558,7 +563,7 @@ fn structured_patches_merge_data() {
 }
 
 #[test]
-fn structured_missing_targets_fail_naming_targets() {
+fn structured_missing_targets_fail_showing_targets() {
     let lua = Lua::new();
     let patch = structured_patch_of(
         &lua,
@@ -581,7 +586,7 @@ fn structured_missing_targets_fail_naming_targets() {
 }
 
 #[test]
-fn structured_mixed_formats_fail_naming_formats() {
+fn structured_mixed_formats_fail_showing_formats() {
     let lua = Lua::new();
     let first = structured_patch_of(
         &lua,
@@ -751,7 +756,7 @@ fn rc_failing_callbacks_fail() {
 }
 
 #[test]
-fn rc_broken_bodies_fail_naming_entries() {
+fn rc_broken_bodies_fail_showing_entries() {
     let lua = Lua::new();
     let patch = rc_patch_of(
         &lua,
@@ -776,7 +781,7 @@ fn rc_broken_bodies_fail_naming_entries() {
 }
 
 #[test]
-fn hooks_merge_in_first_seen_order_across_configs() {
+fn hooks_pass_through_without_merging() {
     let lua = Lua::new();
     let profile = profile_with_hooks(vec![
         Config::new(
@@ -787,23 +792,237 @@ fn hooks_merge_in_first_seen_order_across_configs() {
                 hook_of(&["mise", "install"], 60),
                 hook_of(&["fc-cache"], 60),
             ],
+            HashMap::new(),
         ),
         Config::new(
             "tools/second".to_owned(),
             HashMap::new(),
             Vec::new(),
             vec![hook_of(&["mise", "install"], 600)],
+            HashMap::new(),
         ),
     ]);
     let documents = assemble(&lua, &profile).unwrap();
     match Assembler::new(&lua).collect_hooks(&profile, &documents) {
         Ok(hooks) => {
-            assert_eq!(hooks.len(), 2);
+            assert_eq!(hooks.len(), 3);
             assert_eq!(confit_model::arg::Arg::join(&hooks[0].argv), "mise install");
-            assert_eq!(hooks[0].timeout_secs, 600);
+            assert_eq!(hooks[0].timeout_secs, 60);
             assert_eq!(confit_model::arg::Arg::join(&hooks[1].argv), "fc-cache");
+            assert_eq!(confit_model::arg::Arg::join(&hooks[2].argv), "mise install");
+            assert_eq!(hooks[2].timeout_secs, 600);
         }
-        Err(error) => panic!("hooks merge: {error}"),
+        Err(error) => panic!("hooks collect: {error}"),
+    }
+}
+
+#[test]
+fn repeated_hook_ids_fail_showing_ids() {
+    let lua = Lua::new();
+    let profile = profile_with_hooks(vec![
+        Config::new(
+            "tools/first".to_owned(),
+            HashMap::new(),
+            Vec::new(),
+            vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
+            HashMap::new(),
+        ),
+        Config::new(
+            "tools/second".to_owned(),
+            HashMap::new(),
+            Vec::new(),
+            vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
+            HashMap::new(),
+        ),
+    ]);
+    let documents = assemble(&lua, &profile).unwrap();
+    match Assembler::new(&lua).collect_hooks(&profile, &documents) {
+        Ok(_) => panic!("repeated hook ids pass"),
+        Err(error) => {
+            let text = error.to_string();
+            assert!(
+                text.contains("mise:install"),
+                "the text shows the id: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hook_patches_mutate_live_hooks_in_order() {
+    let lua = Lua::new();
+    let patch = hook_patch_of(
+        &lua,
+        "mise:install",
+        r#"return function(hook) hook.check = { in_path = { name = "extra" } } end"#,
+    );
+    let profile = profile_with_hooks(vec![Config::new(
+        "tools/test".to_owned(),
+        HashMap::new(),
+        vec![Patch::Hook(patch)],
+        vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
+        HashMap::new(),
+    )]);
+    let documents = assemble(&lua, &profile).unwrap();
+    match Assembler::new(&lua).collect_hooks(&profile, &documents) {
+        Ok(hooks) => {
+            assert_eq!(hooks.len(), 1);
+            assert_eq!(hooks[0].id.as_deref(), Some("mise:install"));
+            assert_eq!(
+                hooks[0].check,
+                confit_model::condition::Condition::InPath {
+                    name: "extra".to_owned(),
+                }
+            );
+        }
+        Err(error) => panic!("hook patch applies: {error}"),
+    }
+}
+
+#[test]
+fn hook_patches_append_checks_through_all_unions() {
+    let lua = Lua::new();
+    let first = hook_patch_of(
+        &lua,
+        "mise:install",
+        r#"return function(hook) hook.check = { in_path = { name = "first" } } end"#,
+    );
+    let second = hook_patch_of(
+        &lua,
+        "mise:install",
+        r#"return function(hook)
+            local next = { in_path = { name = "second" } }
+            if hook.check.all ~= nil then
+                local members = {}
+                for _, item in ipairs(hook.check.all) do
+                    members[#members + 1] = item
+                end
+                members[#members + 1] = next
+                hook.check = { all = members }
+            else
+                hook.check = { all = { hook.check, next } }
+            end
+        end"#,
+    );
+    let profile = profile_with_hooks(vec![Config::new(
+        "tools/test".to_owned(),
+        HashMap::new(),
+        vec![Patch::Hook(first), Patch::Hook(second)],
+        vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
+        HashMap::new(),
+    )]);
+    let documents = assemble(&lua, &profile).unwrap();
+    match Assembler::new(&lua).collect_hooks(&profile, &documents) {
+        Ok(hooks) => {
+            assert_eq!(hooks.len(), 1);
+            assert_eq!(
+                hooks[0].check,
+                confit_model::condition::Condition::All(vec![
+                    confit_model::condition::Condition::InPath {
+                        name: "first".to_owned(),
+                    },
+                    confit_model::condition::Condition::InPath {
+                        name: "second".to_owned(),
+                    },
+                ])
+            );
+        }
+        Err(error) => panic!("hook patches append: {error}"),
+    }
+}
+
+#[test]
+fn hook_patches_over_missing_ids_fail() {
+    let lua = Lua::new();
+    let patch = hook_patch_of(
+        &lua,
+        "mise:absent",
+        r#"return function(hook) return hook end"#,
+    );
+    let profile = profile_with_hooks(vec![Config::new(
+        "tools/test".to_owned(),
+        HashMap::new(),
+        vec![Patch::Hook(patch)],
+        vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
+        HashMap::new(),
+    )]);
+    let documents = assemble(&lua, &profile).unwrap();
+    match Assembler::new(&lua).collect_hooks(&profile, &documents) {
+        Ok(_) => panic!("missing hook target passes"),
+        Err(error) => {
+            let text = error.to_string();
+            assert!(
+                text.contains("mise:absent"),
+                "the text shows the id: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn missing_requirements_fail_with_hints() {
+    let lua = Lua::new();
+    let profile = Profile::new(
+        vec![Config::new(
+            "tools/bat".to_owned(),
+            HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+            HashMap::from([(
+                "plugin:_/mise:install".to_owned(),
+                "add mise.init() to the profile configs".to_owned(),
+            )]),
+        )],
+        HashMap::new(),
+    );
+    match assemble(&lua, &profile) {
+        Ok(_) => panic!("missing requirement passes"),
+        Err(error) => {
+            let text = error.to_string();
+            assert!(
+                text.contains("tools/bat"),
+                "the text shows the requirer: {text}"
+            );
+            assert!(
+                text.contains("plugin:_/mise:install"),
+                "the text shows the target: {text}"
+            );
+            assert!(
+                text.contains("add mise.init() to the profile configs"),
+                "the text shows the hint: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn present_requirements_pass() {
+    let lua = Lua::new();
+    let profile = Profile::new(
+        vec![
+            Config::new(
+                "plugin:_/mise:install".to_owned(),
+                HashMap::new(),
+                Vec::new(),
+                Vec::new(),
+                HashMap::new(),
+            ),
+            Config::new(
+                "tools/bat".to_owned(),
+                HashMap::new(),
+                Vec::new(),
+                Vec::new(),
+                HashMap::from([(
+                    "plugin:_/mise:install".to_owned(),
+                    "add mise.init() to the profile configs".to_owned(),
+                )]),
+            ),
+        ],
+        HashMap::new(),
+    );
+    match assemble(&lua, &profile) {
+        Ok(documents) => assert!(documents.is_empty()),
+        Err(error) => panic!("present requirement fails: {error}"),
     }
 }
 
@@ -813,15 +1032,16 @@ fn changed_conditions_over_unbuilt_routes_fail() {
     let present = Route::new(RouteBase::Home, "present").unwrap();
     let missing = Route::new(RouteBase::Home, "missing").unwrap();
     let mut built_hook = hook_of(&["mise"], 60);
-    built_hook.when = Some(confit_model::condition::Condition::Changed {
+    built_hook.when = confit_model::condition::Condition::Changed {
         route: present.clone(),
-    });
+    };
     let documents = [placed_text("present", "hi")];
     let profile = profile_with_hooks(vec![Config::new(
         "tools/test".to_owned(),
         documents.into_iter().collect(),
         Vec::new(),
         vec![built_hook],
+        HashMap::new(),
     )]);
     let finished = assemble(&lua, &profile).unwrap();
     match Assembler::new(&lua).collect_hooks(&profile, &finished) {
@@ -829,12 +1049,13 @@ fn changed_conditions_over_unbuilt_routes_fail() {
         Err(error) => panic!("built changed condition passes: {error}"),
     }
     let mut foreign_hook = hook_of(&["mise"], 60);
-    foreign_hook.when = Some(confit_model::condition::Condition::Changed { route: missing });
+    foreign_hook.when = confit_model::condition::Condition::Changed { route: missing };
     let profile = profile_with_hooks(vec![Config::new(
         "tools/test".to_owned(),
         HashMap::new(),
         Vec::new(),
         vec![foreign_hook],
+        HashMap::new(),
     )]);
     let finished = assemble(&lua, &profile).unwrap();
     match Assembler::new(&lua).collect_hooks(&profile, &finished) {

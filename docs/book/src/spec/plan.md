@@ -94,7 +94,7 @@ the first run.
 
 A present file parses in two steps:
 
-- Version probe runs first. Version 7 passes. Other versions fail as unsupported. A missing version fails as a plan error naming the file.
+- Version probe runs first. Version 7 passes. Other versions fail as unsupported. A missing version fails as a plan error showing the file.
 - Manifest cast runs second. Unknown fields fail the load.
 
 Hashes persist

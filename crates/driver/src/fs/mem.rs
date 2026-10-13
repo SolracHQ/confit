@@ -11,6 +11,8 @@ use vfs::{MemoryFS, VfsError, VfsFileType, VfsPath};
 thread_local! {
     static PARKED: RefCell<Option<VfsPath>> = const { RefCell::new(None) };
     static MODES: RefCell<BTreeMap<String, u32>> = const { RefCell::new(BTreeMap::new()) };
+    static TICKS: RefCell<BTreeMap<String, u64>> = const { RefCell::new(BTreeMap::new()) };
+    static CLOCK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static READ_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
     static WRITE_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
 }
@@ -28,6 +30,7 @@ impl TestGuard {
         let root = VfsPath::new(MemoryFS::new());
         let prior = PARKED.with(|cell| cell.borrow_mut().replace(root));
         MODES.with(|cell| cell.borrow_mut().clear());
+        TICKS.with(|cell| cell.borrow_mut().clear());
         READ_FAULT.with(|cell| *cell.borrow_mut() = None);
         WRITE_FAULT.with(|cell| *cell.borrow_mut() = None);
         Self { prior }
@@ -165,7 +168,32 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
 ///   entry and when no guard holds.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     let root = rooted()?;
-    mem_rename(&root, from, to)
+    mem_rename(&root, from, to)?;
+    carry_ticks(from, to);
+    Ok(())
+}
+
+/// Carry write ticks across one rename.
+fn carry_ticks(from: &Path, to: &Path) {
+    let from_key = mode_key(from);
+    let prefix = format!("{from_key}/");
+    let base = mode_key(to);
+    TICKS.with(|cell| {
+        let mut ticks = cell.borrow_mut();
+        let moved: Vec<(String, u64)> = ticks
+            .iter()
+            .filter(|(key, _)| *key == &from_key || key.starts_with(&prefix))
+            .map(|(key, tick)| (key.clone(), *tick))
+            .collect();
+        for (key, tick) in moved {
+            ticks.remove(&key);
+            if key == from_key {
+                ticks.insert(base.clone(), tick);
+            } else {
+                ticks.insert(format!("{base}{}", &key[prefix.len() - 1..]), tick);
+            }
+        }
+    });
 }
 
 /// Copy one file onto a new path and overwrite any entry.
@@ -507,7 +535,17 @@ fn mem_write(root: &VfsPath, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut created = to_vfs(root, path)?.create_file().map_err(io_error)?;
     created.write_all(bytes)?;
     created.flush()?;
+    touch(path);
     Ok(())
+}
+
+/// Bump the write tick for one path.
+fn touch(path: &Path) {
+    CLOCK.with(|clock| {
+        let tick = clock.get().wrapping_add(1).max(1);
+        clock.set(tick);
+        TICKS.with(|cell| cell.borrow_mut().insert(mode_key(path), tick));
+    });
 }
 
 /// Move one backend file onto a new path and overwrite any entry.
@@ -546,9 +584,12 @@ fn mem_rename_dir(source: &VfsPath, dest: &VfsPath) -> io::Result<()> {
 /// Read backend length and file-type facts for one path.
 fn mem_metadata(root: &VfsPath, path: &Path) -> io::Result<super::FileMeta> {
     let facts = to_vfs(root, path)?.metadata().map_err(io_error)?;
+    // Side maps share one key form.
+    let modified = TICKS.with(|cell| cell.borrow().get(&mode_key(path)).copied().unwrap_or(0));
     Ok(super::FileMeta::new(
         facts.len,
         facts.file_type == VfsFileType::Directory,
+        modified,
     ))
 }
 

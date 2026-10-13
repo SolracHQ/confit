@@ -6,80 +6,108 @@ use mlua::{Lua, Value};
 use crate::api::config::Config;
 use crate::api::patch::Patch;
 use confit_binding::value::Decode;
+use confit_model::condition::Condition;
 use confit_model::document::Data;
+use confit_model::document::RcEntry;
+use confit_model::hook::Hook;
+use confit_model::routes::Route;
 
-confit_binding::verb! {
+/// Declare one shape-check verb over a face decode.
+macro_rules! check {
+    (
+        $(#[doc = $verb_documentation:literal])+
+        fn $verb:ident (
+            $(#[doc = $parameter_documentation:literal])+
+            $parameter:ident : Value
+            $(,)?
+        ) -> $checked:ty
+    ) => {
+        confit_binding::verb! {
+            $(#[doc = $verb_documentation])+
+            fn $verb (
+                lua: &Lua,
+                $(#[doc = $parameter_documentation])+
+                $parameter: Value
+            ) -> (
+                /// The decoded value, else nil.
+                ::std::option::Option<$checked>,
+                /// The failure reason, else nil.
+                ::std::option::Option<::std::string::String>,
+            ) [call = check_impl]
+        }
+    };
+}
+
+/// Check one value table against its face decode.
+fn check_impl<T>(lua: &Lua, value: Value) -> mlua::Result<(Option<T>, Option<String>)>
+where
+    T: Decode,
+{
+    match T::decode(&value, lua) {
+        Ok(found) => Ok((Some(found), None)),
+        Err(error) => Ok((None, Some(error.to_string()))),
+    }
+}
+
+check! {
     /// Checks one body table.
     fn document(
-        lua: &Lua,
         /// The body table under checking.
         body: Value,
-    ) -> (
-        /// The decoded body, else nil.
-        Option<Data>,
-        /// The failure reason, else nil.
-        Option<String>,
-    ) [call = document_impl]
+    ) -> Data
 }
 
-confit_binding::verb! {
+check! {
     /// Checks one config table.
     fn config(
-        lua: &Lua,
         /// The config table under checking.
         config: Value,
-    ) -> (
-        /// The decoded config, else nil.
-        Option<Config>,
-        /// The failure reason, else nil.
-        Option<String>,
-    ) [call = config_impl]
+    ) -> Config
 }
 
-confit_binding::verb! {
+check! {
     /// Checks one patch table.
     fn patch(
-        lua: &Lua,
         /// The patch table under checking.
         patch: Value,
-    ) -> (
-        /// The decoded patch, else nil.
-        Option<Patch>,
-        /// The failure reason, else nil.
-        Option<String>,
-    ) [call = patch_impl]
+    ) -> Patch
+}
+
+check! {
+    /// Checks one hook table.
+    fn hook(
+        /// The hook table under checking.
+        value: Value,
+    ) -> Hook
+}
+
+check! {
+    /// Checks one condition table.
+    fn condition(
+        /// The condition table under checking.
+        value: Value,
+    ) -> Condition
+}
+
+check! {
+    /// Checks one rc entry table.
+    fn entry(
+        /// The entry table under checking.
+        value: Value,
+    ) -> RcEntry
+}
+
+check! {
+    /// Checks one route table.
+    fn route(
+        /// The route table under checking.
+        value: Value,
+    ) -> Route
 }
 
 confit_binding::module! {
     namespace = "confit.validate",
-    verbs = [document, config, patch],
-}
-
-/// Check one body table with the decoded body and nil for good shapes and nil
-/// with the reason for bad shapes.
-fn document_impl(lua: &Lua, body: Value) -> mlua::Result<(Option<Data>, Option<String>)> {
-    match Data::decode(&body, lua) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error) => Ok((None, Some(error.to_string()))),
-    }
-}
-
-/// Check one config table with the decoded config and nil for good shapes and
-/// nil with the reason for bad shapes.
-fn config_impl(lua: &Lua, config: Value) -> mlua::Result<(Option<Config>, Option<String>)> {
-    match Config::decode(&config, lua) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error) => Ok((None, Some(error.to_string()))),
-    }
-}
-
-/// Check one patch table with the decoded patch and nil for good shapes and nil
-/// with the reason for bad shapes.
-fn patch_impl(lua: &Lua, patch: Value) -> mlua::Result<(Option<Patch>, Option<String>)> {
-    match Patch::decode(&patch, lua) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error) => Ok((None, Some(error.to_string()))),
-    }
+    verbs = [document, config, patch, hook, condition, entry, route],
 }
 
 #[cfg(test)]
@@ -301,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_rejects_foreign_shapes_naming_keys() {
+    fn patch_rejects_foreign_shapes_showing_keys() {
         let _guard = TestGuard::install();
         let lua = test_lua();
         let cases = [
@@ -400,6 +428,55 @@ mod tests {
             let text = reason_of(run(&lua, &source));
             assert!(text.contains(first), "reason shows the fault: {text}");
             assert!(text.contains(second), "reason shows the fault: {text}");
+        }
+    }
+
+    #[test]
+    fn every_check_verb_rejects_numbers_with_reasons() {
+        let _guard = TestGuard::install();
+        let lua = test_lua();
+        for verb in [
+            "document",
+            "config",
+            "patch",
+            "hook",
+            "condition",
+            "entry",
+            "route",
+        ] {
+            let source = [
+                "local found, reason = validate.",
+                verb,
+                "(42) assert(found == nil and reason ~= nil) return reason",
+            ]
+            .concat();
+            let text = reason_of(run(&lua, &source));
+            assert!(!text.is_empty(), "{verb} shows the fault");
+        }
+    }
+
+    #[test]
+    fn new_check_verbs_pass_good_shapes() {
+        let _guard = TestGuard::install();
+        let lua = test_lua();
+        for (verb, body) in [
+            ("hook", r#"{ argv = { "true" } }"#),
+            ("condition", r#"{ all = {} }"#),
+            ("entry", r#"{ alias = { name = "x", expansion = "y" } }"#),
+            ("route", r#"{ base = "home", relative = ".bashrc" }"#),
+        ] {
+            let source = [
+                "local found, reason = validate.",
+                verb,
+                "(",
+                body,
+                ") assert(found ~= nil and reason == nil) return 'ok'",
+            ]
+            .concat();
+            match run(&lua, &source) {
+                Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
+                _ => panic!("{verb} passes good shapes"),
+            }
         }
     }
 }

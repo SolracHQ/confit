@@ -27,7 +27,7 @@ pub enum Command {
     Plan(PlanArgs),
     /// confirm the manifest and create every document in place
     Apply(ApplyArgs),
-    /// scaffold a profile with stubs in the target folder
+    /// scaffold a profile or rewrite stubs and plugins in the target folder
     Init(InitArgs),
     /// pack one state into a portable bundle file or print its manifest
     Export(ExportArgs),
@@ -67,12 +67,21 @@ pub struct ApplyArgs {
     pub force: bool,
 }
 
-/// Scaffold a profile with stubs in a folder.
+/// Scaffold a profile or rewrite stubs and plugins in a folder.
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// folder to scaffold (default: current folder)
-    #[arg(default_value = ".")]
-    pub dir: PathBuf,
+    /// folder to scaffold or refresh (default: current folder)
+    #[arg()]
+    pub dir: Option<PathBuf>,
+    /// rewrite the stubs folder under the target
+    #[arg(long)]
+    pub stubs: bool,
+    /// rewrite the core plugins folder under the target
+    #[arg(long)]
+    pub plugins: bool,
+    /// write the editor config beside the profile
+    #[arg(long)]
+    pub lsp: bool,
 }
 
 /// Pack one state into a bundle or print its manifest.
@@ -142,7 +151,7 @@ pub fn expand_command(command: &mut Command) {
             }
         }
         Command::Init(args) => {
-            args.dir = expand_tilde(&args.dir);
+            opt(&mut args.dir);
         }
         Command::Export(args) => {
             opt(&mut args.output);

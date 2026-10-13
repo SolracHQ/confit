@@ -96,6 +96,7 @@ fn rank_of(patch: &OwnedPatch) -> u8 {
     match &patch.patch {
         Patch::Structured(found) => found.priority.rank(),
         Patch::Rc(found) => found.priority.rank(),
+        Patch::Hook(_) => 0,
     }
 }
 
@@ -255,6 +256,7 @@ mod tests {
                 documents.into_iter().collect(),
                 patches,
                 Vec::new(),
+                std::collections::HashMap::new(),
             )],
             std::collections::HashMap::new(),
         )
@@ -393,6 +395,7 @@ mod tests {
                 let target = match &item.patch {
                     Patch::Structured(found) => &found.target,
                     Patch::Rc(found) => &found.target,
+                    Patch::Hook(_) => panic!("document patches hold routes"),
                 };
                 match target {
                     Some(route) => route.display(),

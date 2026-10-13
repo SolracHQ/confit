@@ -266,8 +266,8 @@ callback takes the live structured wrapper. The wrapper
 exposes `set` and `append` only. `set` writes one dotted
 path. `append` extends one list. Paths hold dotted keys
 and single indices. List positions count from 1, so
-`servers[1].host` names the first server. `[0]` fails the
-plan naming the path. One path rides each call.
+`servers[1].host` shows the first server. `[0]` fails the
+plan showing the path. One path rides each call.
 
 Preconditions hold a known format, a string path,
 and a function callback. Plan errors name unknown
@@ -357,7 +357,7 @@ The call takes one document path. The condition reads
 true while the path sits in the changed set. Hooks
 only. Rc guards holding it fail.
 
-Preconditions hold a string path naming a built
+Preconditions hold a string path showing a built
 document. Plan errors name unknown documents.
 
 #### `confit.runtime.all`
@@ -548,7 +548,7 @@ confit.path.confroot("resources/logo.bin")
 
 Preconditions hold string segments. Plan errors name
 non-string segments. A missing home folder fails with a
-plan error naming the `HOME` variable.
+plan error showing the `HOME` variable.
 
 ### Utils
 
@@ -708,7 +708,7 @@ c:require("plugin:solrachq/mise:install", "Add mise.init() to configs.")
 The call takes a sibling name and an optional hint. The
 hint renders on its own line while present. Requires
 check existence alone and compose nothing. A missing
-target fails the plan naming both configs.
+target fails the plan showing both configs.
 
 Preconditions hold a non-empty string name and a string
 hint while present. Plan errors name empty names, 
@@ -788,7 +788,7 @@ The base holds an empty `tools` table at
 release tarball and unpacks `mise/bin/mise`. It places
 an opaque document under `~/.local/bin/mise` with mode
 `755`. The tarball must hold the member exactly once.
-Any other count fails naming the member. The installer
+Any other count fails showing the member. The installer
 carries one rc patch with a PATH prepend and an eval
 entry holding the `{{shell}}` slot.
 
@@ -867,10 +867,10 @@ runs hold every built path in the set, so every
 condition reads true. Later runs hold rewritten
 documents and differenced documents. Tree member
 difference maps to the parent destination. Unknown
-paths fail the plan naming the path.
+paths fail the plan showing the path.
 
 `changed` rides hooks alone. Rc guards holding it fail
-with a hooks-only plan error. The refusal names the
+with a hooks-only plan error. The refusal shows the
 field.
 
 ```lua
@@ -915,7 +915,7 @@ return {
 Document data holds JSON shaped values alone. Strings
 , numbers, booleans, null, arrays and
 objects pass. Functions fail. Userdata fails. Threads
-fail. Recursive tables fail. Errors name the config
+fail. Recursive tables fail. Errors show the config
 and the field.
 
 ```lua

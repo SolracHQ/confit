@@ -20,6 +20,8 @@ pub struct SuspendControl {
     multi: indicatif::MultiProgress,
     /// Spinner bar driver.
     spinner: indicatif::ProgressBar,
+    /// Print drain handshake for prompts.
+    flush_tx: crossbeam_channel::Sender<crossbeam_channel::Sender<()>>,
 }
 
 impl SuspendControl {
@@ -31,11 +33,13 @@ impl SuspendControl {
     /// Ask one question with widgets parked.
     ///
     /// The answer is true only for the literal `yes`.
+    /// Queued prints land before the question.
     ///
     /// # Errors
     ///
     /// Stderr and stdin failures surface as io errors.
     pub fn ask(&self, question: &str) -> std::io::Result<bool> {
+        self.flush();
         self.suspend(|| {
             use std::io::{BufRead as _, Write as _};
             let mut stderr = std::io::stderr().lock();
@@ -46,9 +50,20 @@ impl SuspendControl {
             let mut line = String::new();
             let reads = std::io::stdin().lock().read_line(&mut line)?;
             log::debug!("prompt read {reads} bytes");
-            // Truth table lives in seams tests.
+            // Truth table lives in caller tests.
             Ok(line.trim() == "yes")
         })
+    }
+
+    /// Drain queued prints.
+    ///
+    /// - Missing renderers skip.
+    fn flush(&self) {
+        let (ack_tx, ack_rx) = crossbeam_channel::bounded::<()>(1);
+        if self.flush_tx.send(ack_tx).is_err() {
+            return;
+        }
+        let _ = ack_rx.recv();
     }
 
     /// Clear the widget.
@@ -92,16 +107,18 @@ impl Terminal {
         spinner.set_style(Self::spinner_style());
         spinner.set_message("collecting artifacts");
         spinner.enable_steady_tick(Duration::from_millis(80));
+        let (tx, rx) = crossbeam_channel::unbounded::<Event>();
+        let (print_tx, print_rx) = crossbeam_channel::unbounded::<String>();
+        let (flush_tx, flush_rx) = crossbeam_channel::unbounded::<crossbeam_channel::Sender<()>>();
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
         let control = SuspendControl {
             multi,
             spinner: spinner.clone(),
+            flush_tx,
         };
-        let (tx, rx) = crossbeam_channel::unbounded::<Event>();
-        let (print_tx, print_rx) = crossbeam_channel::unbounded::<String>();
-        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name("confit-progress".to_string())
-            .spawn(move || run(rx, print_rx, shutdown_rx, spinner))
+            .spawn(move || run(rx, print_rx, flush_rx, shutdown_rx, spinner))
             .ok();
         Self {
             tx,
@@ -173,6 +190,7 @@ impl Default for Terminal {
 fn run(
     rx: crossbeam_channel::Receiver<Event>,
     prints: crossbeam_channel::Receiver<String>,
+    flush: crossbeam_channel::Receiver<crossbeam_channel::Sender<()>>,
     shutdown: crossbeam_channel::Receiver<()>,
     spinner: indicatif::ProgressBar,
 ) {
@@ -190,6 +208,17 @@ fn run(
                     Err(_) => break,
                 }
             }
+            recv(flush) -> request => {
+                match request {
+                    Ok(ack) => {
+                        while let Ok(line) = prints.try_recv() {
+                            spinner.println(line);
+                        }
+                        let _ = ack.send(());
+                    }
+                    Err(_) => break,
+                }
+            }
             recv(shutdown) -> _ => break,
         }
     }
@@ -198,6 +227,7 @@ fn run(
 
 /// Map one run fact onto the spinner message.
 fn render(spinner: &indicatif::ProgressBar, event: Event) {
+    log::debug!("event: {event:?}");
     match event {
         Event::FetchStarted { url } => {
             spinner.set_message(format!("collecting artifacts: {url}"));
@@ -245,8 +275,8 @@ fn render(spinner: &indicatif::ProgressBar, event: Event) {
         } => {
             spinner.set_message(format!("hook {position} of {total}: {argv}"));
         }
-        Event::BlobCompressed { done, total } => {
-            spinner.set_message(format!("compressing blobs ({done}/{total})"));
+        Event::BlobCompressed { done } => {
+            spinner.set_message(format!("compressing blobs ({done})"));
         }
         Event::Promoting { blobs } => {
             spinner.set_message(format!("promoting {blobs} blobs"));
@@ -274,4 +304,58 @@ fn human_bytes(bytes: u64) -> String {
 /// Convert one byte count into u64.
 fn bytes_as_u64(bytes: usize) -> u64 {
     u64::try_from(bytes).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_control() -> (
+        SuspendControl,
+        crossbeam_channel::Sender<String>,
+        crossbeam_channel::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let multi =
+            indicatif::MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
+        let spinner = multi.add(indicatif::ProgressBar::new_spinner());
+        let (flush_tx, flush_rx) = crossbeam_channel::unbounded::<crossbeam_channel::Sender<()>>();
+        let control = SuspendControl {
+            multi,
+            spinner: spinner.clone(),
+            flush_tx,
+        };
+        let (_event_tx, event_rx) = crossbeam_channel::unbounded::<Event>();
+        let (print_tx, print_rx) = crossbeam_channel::unbounded::<String>();
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
+        let handle = std::thread::spawn(move || {
+            run(event_rx, print_rx, flush_rx, shutdown_rx, spinner);
+        });
+        (control, print_tx, shutdown_tx, handle)
+    }
+
+    #[test]
+    fn flush_acks_after_queued_prints() {
+        let (control, print_tx, shutdown_tx, handle) = test_control();
+        for line in ["first", "second", "third"] {
+            print_tx.send(line.to_owned()).unwrap();
+        }
+        control.flush();
+        let _ = shutdown_tx.send(());
+        match handle.join() {
+            Ok(()) => {}
+            Err(_) => panic!("renderer joins after flush"),
+        }
+    }
+
+    #[test]
+    fn flush_passes_without_queued_prints() {
+        let (control, _, shutdown_tx, handle) = test_control();
+        control.flush();
+        let _ = shutdown_tx.send(());
+        match handle.join() {
+            Ok(()) => {}
+            Err(_) => panic!("renderer joins after empty flush"),
+        }
+    }
 }

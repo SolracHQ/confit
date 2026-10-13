@@ -149,13 +149,32 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<(
     Ok(())
 }
 
-/// Run init with project scaffolding on host seams.
+/// Run init with project scaffolding.
 fn run_init(args: &confit_cli::cli::InitArgs) -> confit_cli::error::Result<()> {
-    let report = confit_cli::actions::init::InitRunner { args }.execute()?;
-    anstream::println!(
-        "init: {} ({} files)",
-        report.profile.display(),
-        report.written
-    );
+    let runner = confit_cli::actions::init::InitRunner { args };
+    for outcome in runner.execute()? {
+        match outcome {
+            confit_cli::actions::init::InitOutcome::Scaffold(report) => {
+                anstream::println!("init: {} ({} files)", report.path.display(), report.written);
+            }
+            confit_cli::actions::init::InitOutcome::Stubs(report) => {
+                anstream::println!(
+                    "stubs: {} ({} files)",
+                    report.path.display(),
+                    report.written
+                );
+            }
+            confit_cli::actions::init::InitOutcome::Plugins(report) => {
+                anstream::println!(
+                    "plugins: {} ({} files)",
+                    report.path.display(),
+                    report.written
+                );
+            }
+            confit_cli::actions::init::InitOutcome::Lsp(report) => {
+                anstream::println!("lsp: {} ({} files)", report.path.display(), report.written);
+            }
+        }
+    }
     Ok(())
 }

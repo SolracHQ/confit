@@ -28,21 +28,26 @@ pub struct Config {
     /// Hooks in profile return order.
     #[face(default)]
     pub hooks: Vec<Hook>,
+    /// Requirements keyed by config name with hints.
+    #[face(default)]
+    pub requirements: HashMap<String, String>,
 }
 
 impl Config {
-    /// Build one config from its name with documents, patches and hooks.
+    /// Build one config from its name with documents, patches, hooks, and requirements.
     pub fn new(
         name: String,
         documents: HashMap<Route, Data>,
         patches: Vec<Patch>,
         hooks: Vec<Hook>,
+        requirements: HashMap<String, String>,
     ) -> Self {
         Self {
             name,
             documents,
             patches,
             hooks,
+            requirements,
         }
     }
 }

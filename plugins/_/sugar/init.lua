@@ -3,6 +3,8 @@
 --- Plain constructors over routes, documents, and patches.
 local sugar = {}
 
+local is = require("plugins._.is")
+
 
 local function route(base, relative)
 	return { base = base, relative = relative }
@@ -50,12 +52,49 @@ function sugar.patch(target, apply)
 	return { target = target, apply = apply }
 end
 
----@param data table Live shell sections under patching.
----@param section string Section receiving the entry.
 ---@param name string Alias name.
----@param expansion string Alias expansion.
-function sugar.alias(data, section, name, expansion)
-	table.insert(data[section], { alias = { name = name, expansion = expansion } })
+---@param value string Alias expansion.
+---@return RcEntry Alias entry table.
+function sugar.alias(name, value)
+	return { alias = { name = name, expansion = value } }
+end
+
+---@param name string Variable name.
+---@param value string Value under export.
+---@return RcEntry Env entry table.
+function sugar.env(name, value)
+	return { env = { name = name, value = value } }
+end
+
+---@param dir Route Directory route under prepending to PATH.
+---@return RcEntry PATH entry table.
+function sugar.prepend(dir)
+	return { path = { name = "PATH", dir = dir } }
+end
+
+---@param var string Variable name under prepending.
+---@param dir Route Directory route under prepending.
+---@return RcEntry Variable entry table.
+function sugar.prepend_to(var, dir)
+	return { path = { name = var, dir = dir } }
+end
+
+---@param argv Arg[] Eval command.
+---@return RcEntry Eval entry table.
+function sugar.eval(argv)
+	return { eval = { argv = argv } }
+end
+
+---@param argv Arg[] Plain command.
+---@return RcEntry Cmd entry table.
+function sugar.cmd(argv)
+	return { cmd = { argv = argv } }
+end
+
+---@param path Route File route for sourcing.
+---@return RcEntry Source entry table.
+function sugar.source(path)
+	return { source = { path = path } }
 end
 
 return sugar

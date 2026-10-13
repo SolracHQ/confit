@@ -191,7 +191,7 @@ fn two_patches_merge_both_keys() {
 }
 
 #[test]
-fn missing_targets_fail_naming_targets() {
+fn missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
@@ -286,7 +286,7 @@ fn rc_two_patches_merge_entries() {
 }
 
 #[test]
-fn rc_missing_targets_fail_naming_targets() {
+fn rc_missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
@@ -457,7 +457,7 @@ fn mixed_kind_same_target_gaps() {
 }
 
 #[test]
-fn foreign_patch_keys_fail_naming_keys() {
+fn foreign_patch_keys_fail_showing_keys() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
@@ -479,7 +479,7 @@ fn evaluation_carries_hooks_through() {
     let (_, profile) = profile_with(dir.path(), HOOKS_THROUGH);
     match engine.evaluate(&profile) {
         Ok(found) => {
-            assert_eq!(found.hooks.len(), 2);
+            assert_eq!(found.hooks.len(), 3);
             assert_eq!(
                 confit_model::arg::Arg::join(&found.hooks[0].argv),
                 "mise install"
@@ -487,9 +487,14 @@ fn evaluation_carries_hooks_through() {
             assert_eq!(found.hooks[0].timeout_secs, 600);
             assert_eq!(
                 confit_model::arg::Arg::join(&found.hooks[1].argv),
+                "mise install"
+            );
+            assert_eq!(found.hooks[1].timeout_secs, 90);
+            assert_eq!(
+                confit_model::arg::Arg::join(&found.hooks[2].argv),
                 "fc-cache"
             );
-            assert_eq!(found.hooks[1].timeout_secs, 600);
+            assert_eq!(found.hooks[2].timeout_secs, 600);
         }
         Err(error) => panic!("hooks evaluate: {error}"),
     }

@@ -1,0 +1,8 @@
+version = "0.9.0"
+
+[plugins]
+folder = "../../plugins"
+allow_external_folders = true
+
+[stubs]
+folder = "../../stubs"

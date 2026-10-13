@@ -55,7 +55,11 @@ impl Engine {
     /// - [`crate::error::EngineError::Mismatch`] for misshaped profiles.
     /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
     /// - [`crate::error::EngineError::Defined`] for repeated config names.
+    /// - [`crate::error::EngineError::Require`] for requirements showing unknown names.
     /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
+    /// - [`crate::error::EngineError::DuplicateHook`] for repeated hook ids.
+    /// - [`crate::error::EngineError::UnknownHookTarget`] for hook patches with
+    ///   unknown ids.
     /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
     /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
     ///   hooks-only changed leaves.
@@ -64,6 +68,9 @@ impl Engine {
     /// - [`crate::error::EngineError::Lua`] for Lua failures.
     pub fn evaluate(&self, profile: &Path) -> Result<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
+        let root = self.stores.resources().roots.project_root.clone();
+        let project = crate::project::Project::read(&root)?;
+        self.lua.set_app_data(project.plugin_root(&root)?);
         crate::loader::install(&self.lua)?;
         let value = crate::loader::load_chunk(&self.lua, profile)?;
         let decoded = Profile::decode(&value, &self.lua)?;

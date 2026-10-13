@@ -14,7 +14,7 @@ mod prepare;
 mod render;
 mod write;
 
-pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, find_executable};
+pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, Unmet, find_executable};
 pub use differ::{Differ, Difference, DifferenceOrder};
 pub use disk::{Disk, DiskMember};
 pub use hooks::{DecidedHooks, HookDecision, HookRunner, Spawned};

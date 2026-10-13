@@ -11,7 +11,7 @@ run. The flow reads:
 
 `confit apply PROFILE` evaluates a profile path. Tilde expansion
 runs first across the source and the shared flags. A missing
-profile file fails naming the path:
+profile file fails showing the path:
 
 ```
 apply reads no profile '{path}'
@@ -46,14 +46,14 @@ failure carries the `apply:` prefix.
 ### History source
 
 `confit apply %N` loads one history entry. Picks start at one
-with newest-first order, so `%1` names the just-previous entry.
-A malformed pick fails naming the shape:
+with newest-first order, so `%1` shows the just-previous entry.
+A malformed pick fails showing the shape:
 
 ```
 apply: '{raw}' reads unsupported, want '%N' holding a number from 1
 ```
 
-An out-of-range pick fails naming the stored count:
+An out-of-range pick fails showing the stored count:
 
 ```
 apply: '{raw}' reads out of range, holding {total} stored manifests
@@ -77,7 +77,7 @@ print one resolved line each:
 
 Failed conditions print skip lines instead. Requires
 speaks first, when speaks second, and passing checks
-speak third. Unresolvable binaries fail the run naming
+speak third. Unresolvable binaries fail the run showing
 the hook:
 
 ```
@@ -227,7 +227,7 @@ status code to 1 before comparing.
 
 #### Nonzero
 
-The runner treats a nonzero code as failure, naming the argv and
+The runner treats a nonzero code as failure, showing the argv and
 the code:
 
 ```
@@ -239,7 +239,7 @@ The failure aborts the rest of the hooks.
 #### Still-failing abort
 
 Post checks re-evaluate after each run. Passing checks
-prove the work. Failing checks abort the rest naming
+prove the work. Failing checks abort the rest showing
 the hook and the unmet conditions:
 
 ```

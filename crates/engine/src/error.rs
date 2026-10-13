@@ -3,6 +3,18 @@
 
 use thiserror::Error;
 
+/// Optional hint suffix rendering on its own line.
+struct Hint<'a>(Option<&'a str>);
+
+impl std::fmt::Display for Hint<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(hint) = self.0 {
+            write!(formatter, "\nhint: {hint}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Engine failure shapes.
 #[derive(Debug, Clone, Error)]
 pub enum EngineError {
@@ -47,6 +59,9 @@ pub enum EngineError {
     /// Fetch failure.
     #[error(transparent)]
     Fetch(#[from] confit_store::fetch::error::FetchError),
+    /// Binding failure.
+    #[error(transparent)]
+    Binding(#[from] confit_binding::error::BindingError),
     /// Model failure.
     #[error(transparent)]
     Model(#[from] confit_model::error::Error),
@@ -61,6 +76,28 @@ pub enum EngineError {
     Defined {
         /// The repeated config name.
         name: String,
+    },
+    /// Defined-twice hook.
+    #[error("hook '{id}' is already defined")]
+    DuplicateHook {
+        /// The repeated hook identifier.
+        id: String,
+    },
+    /// Missing hook patch target.
+    #[error("hook patch target '{id}' matches no hook")]
+    UnknownHookTarget {
+        /// The missing hook identifier.
+        id: String,
+    },
+    /// Dangling requirement holding its hint.
+    #[error("config \"{name}\" requires \"{target}\" config{hint}", hint = Hint(hint.as_deref()))]
+    Require {
+        /// The requiring config name.
+        name: String,
+        /// The missing required config name.
+        target: String,
+        /// The remediation hint.
+        hint: Option<String>,
     },
     /// Changed condition.
     #[error("hook changed condition shows unknown document '{route}'")]
@@ -105,6 +142,14 @@ pub enum EngineError {
     Utf8 {
         /// The offending file path.
         path: String,
+    },
+    /// Project config failure.
+    #[error("project '{path}': {reason}")]
+    Project {
+        /// The offending project path.
+        path: String,
+        /// The failure reason.
+        reason: String,
     },
     /// Lua failure.
     #[error(transparent)]

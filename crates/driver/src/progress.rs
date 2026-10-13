@@ -73,8 +73,6 @@ pub enum Event {
     BlobCompressed {
         /// Finished blob count including this blob.
         done: usize,
-        /// Total blobs under compressing.
-        total: usize,
     },
     /// Promotion started with a known blob count.
     Promoting {

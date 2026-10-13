@@ -44,6 +44,7 @@ docker run -d --name "$CONTAINER" \
   -v "$VOLUME:/home/tester" \
   -v "$ROOT/target:/opt/confit:ro,Z" \
   -v "$ROOT/examples:/home/tester/examples:Z" \
+  -v "$ROOT/plugins:/home/tester/plugins:ro,Z" \
   "$IMAGE" sleep infinity >/dev/null
 
 echo "up: $CONTAINER (fake HOME in volume $VOLUME)"

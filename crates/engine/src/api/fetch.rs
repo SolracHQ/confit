@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_inputs_raise_naming_want() {
+    fn foreign_inputs_raise_showing_want() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());

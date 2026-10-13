@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn rc_unknown_ops_fail_naming_section() {
+    fn rc_unknown_ops_fail_showing_section() {
         let lua = test_lua();
         for (body, section, fault) in [
             (

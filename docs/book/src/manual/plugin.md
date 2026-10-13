@@ -67,7 +67,7 @@ local merged = confit.plugin.solrachq.merge(base, overlay)
 local flat = confit.plugin.solrachq.merge(base, overlay, { shallow = true })
 ```
 
-`solrachq.template` renders a minijinja file into a text document. `src` names the template, `vars` feeds the slots:
+`solrachq.template` renders a minijinja file into a text document. `src` holds the template, `vars` feeds the slots:
 
 ```lua
 local page = confit.plugin.solrachq.template(path, {

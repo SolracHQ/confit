@@ -4,18 +4,16 @@
 local nerd_fonts = {}
 
 local fetch = require("confit.fetch")
+local is = require("plugins._.is")
 local validate = require("confit.validate")
 
---- Releases feed backing latest-version resolution; the first tag wins.
+--- Releases feed backing latest-version resolution.
 local FONTS_RELEASES_URL = "https://api.github.com/repos/ryanoasis/nerd-fonts/releases"
 
 --- Checks one built config table, failing on unknown keys.
 ---@param config Config Config table under checking.
 local function check_config(config)
-	local _, reason = validate.config(config)
-	if reason then
-		error("nerd_fonts: invalid config: " .. tostring(reason))
-	end
+	is.must("nerd_fonts: invalid config: ", validate.config(config))
 end
 
 --- Builds the destination route holding one font.
@@ -32,14 +30,14 @@ local function resolve_version(version)
 	if version then
 		return version
 	end
-	local handle, fetch_reason = fetch(FONTS_RELEASES_URL)
-	if not handle then
-		error("nerd_fonts: cannot resolve the latest release from the releases feed: " .. tostring(fetch_reason))
-	end
-	local body, text_reason = handle:text()
-	if not body then
-		error("nerd_fonts: cannot resolve the latest release from the releases feed: " .. tostring(text_reason))
-	end
+	local handle = is.must(
+		"nerd_fonts: cannot resolve the latest release from the releases feed: ",
+		fetch(FONTS_RELEASES_URL)
+	)
+	local body = is.must(
+		"nerd_fonts: cannot resolve the latest release from the releases feed: ",
+		handle:text()
+	)
 	local tag = body:match('"tag_name"%s*:%s*"([^"]+)"')
 	if not tag then
 		error("nerd_fonts: cannot resolve the latest release from the releases feed")
@@ -55,18 +53,13 @@ end
 ---@param archive ArchiveHandle Opened font zip.
 ---@return {[string]: ResourceHandle} Member handles keyed by archive path.
 local function ttf_members(archive)
-	local names, names_reason = archive:members()
-	if not names then
-		error("nerd_fonts: cannot list the font archive: " .. tostring(names_reason))
-	end
+	local names =
+		is.must("nerd_fonts: cannot list the font archive: ", archive:members())
 	local members = {}
 	for _, name in ipairs(names) do
 		if name:match("%.ttf$") then
-			local member, member_reason = archive:member(name)
-			if not member then
-				error("nerd_fonts: the font archive holds no '" .. name .. "': " .. tostring(member_reason))
-			end
-			members[name] = member
+			members[name] =
+				is.must("nerd_fonts: the font archive holds no '" .. name .. "': ", archive:member(name))
 		end
 	end
 	if not next(members) then
@@ -91,11 +84,9 @@ end
 ---@param version string? Pinned release defaulting to latest.
 ---@return Config Config table for the profile configs array.
 function nerd_fonts.font(name, version)
-	if type(name) ~= "string" or name == "" then
-		error("nerd_fonts: field 'name' must be a non-empty string")
-	end
-	if version and (type(version) ~= "string" or version == "") then
-		error("nerd_fonts: field 'version' must be a non-empty string or nil")
+	is.assert(is.nonempty, name, "nerd_fonts: field 'name' must be a non-empty string")
+	if version then
+		is.assert(is.nonempty, version, "nerd_fonts: field 'version' must be a non-empty string or nil")
 	end
 	local resolved = resolve_version(version)
 	local url = "https://github.com/ryanoasis/nerd-fonts/releases/download/v"
@@ -103,14 +94,8 @@ function nerd_fonts.font(name, version)
 		.. "/"
 		.. name
 		.. ".zip"
-	local handle, fetch_reason = fetch(url)
-	if not handle then
-		error("nerd_fonts: cannot fetch the font zip: " .. tostring(fetch_reason))
-	end
-	local archive, archive_reason = handle:archive()
-	if not archive then
-		error("nerd_fonts: cannot open the font zip: " .. tostring(archive_reason))
-	end
+	local handle = is.must("nerd_fonts: cannot fetch the font zip: ", fetch(url))
+	local archive = is.must("nerd_fonts: cannot open the font zip: ", handle:archive())
 	local dest = font_route(name)
 	local config = {
 		name = name,

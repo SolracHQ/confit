@@ -10,19 +10,19 @@ confit apply profile.lua
 ```
 
 A first run compares planned files against disk bytes and
-prints one line naming adds and files already in place:
+prints one line showing adds and files already in place:
 
 ```text
 Bundle: 2 to add, 1 already in place.
 ```
 
-A repeat run prints one `Bundle:` line naming adds, changes,
+A repeat run prints one `Bundle:` line showing adds, changes,
 and removals.
 The run writes every document to its path. Files land with
 their rendered content, symlinks point at their targets,
 missing parent folders appear. Shell lines land in the
 startup files from the shell documents. Post-config steps run
-after the files land. Each hook prints one line naming its
+after the files land. Each hook prints one line showing its
 place in the order, and its output lands in the run log.
 The log path prints after the run. Passing checks skip the
 hook, failed conditions skip it, and failures stop the rest.

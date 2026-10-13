@@ -20,7 +20,7 @@ Confirm the binary runs:
 confit --version
 ```
 
-The output names the release:
+The output shows the release:
 
 ```text
 confit 0.7.0

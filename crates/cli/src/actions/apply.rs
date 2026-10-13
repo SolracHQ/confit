@@ -17,7 +17,7 @@ use crate::error::{CliError, Result};
 
 use crate::cli::{ApplyArgs, plan_profile};
 use crate::presentation::difference::difference_lines;
-use crate::presentation::hooks::describe_condition;
+use crate::presentation::hooks::describe_blocked;
 use crate::presentation::summary::render_prepared;
 
 use crate::sinks::Sinks;
@@ -195,13 +195,13 @@ impl<'a> ApplyRunner<'a> {
         for (index, hook) in prepared.desired.hooks.iter().enumerate() {
             let position = index + 1;
             match &decided.decisions[index] {
-                HookDecision::RequiresClosed(condition) => {
+                HookDecision::RequiresClosed(condition, fault) => {
                     return Err(CliError::HookRequires {
                         argv: Arg::join(&hook.argv),
-                        condition: describe_condition(condition),
+                        condition: describe_blocked(condition, fault),
                     });
                 }
-                HookDecision::WhenClosed(_) | HookDecision::ChecksPass => {}
+                HookDecision::WhenClosed(_, _) | HookDecision::ChecksPass => {}
                 HookDecision::Run(binary) => {
                     let line = format!("hook {position} of {total}: {}", Arg::join(&hook.argv));
                     self.sinks.print_line(line.clone());

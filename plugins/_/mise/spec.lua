@@ -1,35 +1,29 @@
 ---@module "plugins._.mise.spec"
 
----@class MiseSpec The package spec holding the tool name and its alias map.
+local is = require("plugins._.is")
+
+---@class MiseRcSections Rc entries keyed by document section.
+---@field profile RcEntry[]? Entries before the guard.
+---@field config RcEntry[]? Entries after the guard.
+---@field final RcEntry[]? Entries last.
+
+---@class MiseSpec The package spec holding the tool name and its rc entries.
 ---@field name string The package and config name.
 ---@field version string? The pinned version defaulting to latest.
 ---@field bin string? The binary defaulting to name.
----@field aliases {[string]: string}? The alias map or nil.
 ---@field options {[string]: any}? The backend tool options or nil.
----@field rc_builder (fun(rc: MiseRc))? The builder receiving the collector or nil.
-
---- Reports whether one value holds a non-empty string.
----@param value any Value under checking.
----@return boolean True for non-empty strings alone.
-local function is_nonempty_string(value)
-	return type(value) == "string" and value ~= ""
-end
+---@field rc (RcEntry[]|MiseRcSections)? Positional entries read config with named sections overriding or nil.
 
 --- Checks one options table holding backend tool options.
 ---@param options {[string]: any} Raw options under checking.
 local function check_options(options)
-	if type(options) ~= "table" then
-		error("mise: field 'options' must be a table")
-	end
+	is.assert(is.tab, options, "mise: field 'options' must be a table")
 	for key, value in pairs(options) do
-		if not is_nonempty_string(key) then
-			error("mise: field 'options' keys must be non-empty strings")
-		end
+		is.assert(is.nonempty, key, "mise: field 'options' keys must be non-empty strings")
 		local field = "mise: field 'options." .. key .. "' must be a string, number, boolean, or array of those"
-		local value_type = type(value)
-		if value_type == "string" or value_type == "number" or value_type == "boolean" then
+		if is.string(value) or is.num(value) or is.bool(value) then
 			-- Scalar option, nothing more to check.
-		elseif value_type == "table" then
+		elseif is.tab(value) then
 			local count = 0
 			local max = 0
 			for item_key, item in pairs(value) do
@@ -54,55 +48,65 @@ local function check_options(options)
 	end
 end
 
+--- Normalizes one rc table into section entries.
+---@param rc (RcEntry[]|MiseRcSections) Raw rc table under normalizing.
+---@return MiseRcSections Section entries in profile, config, final order.
+local function normalize_rc(rc)
+	local normalized = {}
+	local count = 0
+	for _, item in ipairs(rc) do
+		count = count + 1
+		normalized.config = normalized.config or {}
+		table.insert(normalized.config, item)
+	end
+	for _, section in ipairs({ "profile", "config", "final" }) do
+		if rc[section] then
+			is.assert(is.tab, rc[section], "mise: field 'rc." .. section .. "' must be an array")
+			normalized[section] = normalized[section] or {}
+			for _, item in ipairs(rc[section]) do
+				table.insert(normalized[section], item)
+			end
+		end
+	end
+	for key, _ in pairs(rc) do
+		local known = key == "profile" or key == "config" or key == "final"
+		local seen = type(key) == "number" and key >= 1 and key % 1 == 0 and key <= count
+		if not known and not seen then
+			error("mise: field 'rc' unknown field '" .. tostring(key) .. "'")
+		end
+	end
+	return normalized
+end
+
 --- Checks one package spec into its validated fields.
 ---@param spec MiseSpec Raw package table under checking.
 ---@return string Package and config name.
 ---@return string Pinned version defaulting to latest.
 ---@return string Binary defaulting to name.
----@return {[string]: string}? Alias map or nil.
 ---@return {[string]: any}? Backend options or nil.
----@return (fun(rc: MiseRc))? Rc builder or nil.
+---@return MiseRcSections? Section rc entries or nil.
 local function check_spec(spec)
-	if type(spec) ~= "table" then
-		error("mise: package opts must be a table")
-	end
-	local name = spec.name
-	if not is_nonempty_string(name) then
-		error("mise: field 'name' must be a non-empty string")
-	end
-	local version = spec.version or "latest"
-	if not is_nonempty_string(version) then
-		error("mise: field 'version' must be a non-empty string")
-	end
-	local bin = spec.bin or name
-	if not is_nonempty_string(bin) then
-		error("mise: field 'bin' must be a non-empty string")
-	end
-	local rc_builder = spec.rc_builder
-	if rc_builder and type(rc_builder) ~= "function" then
-		error("mise: field 'rc_builder' must be a function or nil")
-	end
-	local aliases = spec.aliases
-	if aliases and type(aliases) ~= "table" then
-		error("mise: field 'aliases' must be a table")
+	is.assert(is.tab, spec, "mise: package opts must be a table")
+	local name = is.assert(is.nonempty, spec.name, "mise: field 'name' must be a non-empty string")
+	local version = is.assert(is.nonempty, spec.version or "latest", "mise: field 'version' must be a non-empty string")
+	local bin = is.assert(is.nonempty, spec.bin or name, "mise: field 'bin' must be a non-empty string")
+	local rc = spec.rc
+	if rc then
+		is.assert(is.tab, rc, "mise: field 'rc' must be a table or nil")
+		rc = normalize_rc(rc)
 	end
 	local options = spec.options
 	if options then
 		check_options(options)
 	end
-	for key, _ in pairs(spec) do
-		if
-			key ~= "name"
-			and key ~= "version"
-			and key ~= "bin"
-			and key ~= "aliases"
-			and key ~= "options"
-			and key ~= "rc_builder"
-		then
-			error("mise: field 'opts' unknown field '" .. tostring(key) .. "'")
-		end
-	end
-	return name, version, bin, aliases, options, rc_builder
+	is.keys("mise", spec, {
+		name = true,
+		version = true,
+		bin = true,
+		options = true,
+		rc = true,
+	}, "opts")
+	return name, version, bin, options, rc
 end
 
-return { check = check_spec, nonempty = is_nonempty_string }
+return { check = check_spec }

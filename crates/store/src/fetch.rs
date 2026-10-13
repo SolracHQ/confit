@@ -798,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn scripted_failure_reads_as_download_error_naming_url() {
+    fn scripted_failure_reads_as_download_error_showing_url() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         driver::http::clear();
@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn unscripted_url_fails_naming_url_with_one_call() {
+    fn unscripted_url_fails_showing_url_with_one_call() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         driver::http::clear();

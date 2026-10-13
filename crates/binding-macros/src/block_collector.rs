@@ -48,7 +48,7 @@ fn is_lua_ref(ty: &Type) -> bool {
     false
 }
 
-/// Report whether one type names the Lua context in any shape.
+/// Report whether one type contains the Lua context in any shape.
 fn names_lua(ty: &Type) -> bool {
     match ty {
         Type::Reference(reference) => names_lua(&reference.elem),

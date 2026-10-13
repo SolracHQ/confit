@@ -10,17 +10,17 @@ use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-use crate::checks::{Checks, find_executable};
+use crate::checks::{Checks, Unmet, find_executable};
 use crate::error::{Result, RuntimeError};
 
 /// One hook run decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// Unmet capability condition.
-    RequiresClosed(Condition),
-    /// Unmet need condition.
-    WhenClosed(Condition),
-    /// Passing checks with done work.
+    /// Unmet capability condition with its fault.
+    RequiresClosed(Condition, Unmet),
+    /// Unmet need condition with its fault.
+    WhenClosed(Condition, Unmet),
+    /// Passing check with done work.
     ChecksPass,
     /// Runnable hook with its resolved binary.
     Run(PathBuf),
@@ -68,7 +68,8 @@ impl HookRunner {
 
     /// Decide one hook outcome.
     ///
-    /// - Requires, when, and checks evaluate before resolving.
+    /// - Requires, when, and check evaluate before resolving.
+    /// - True checks run through binary resolving.
     ///
     /// # Errors
     ///
@@ -79,17 +80,13 @@ impl HookRunner {
         checks: &Checks,
         changed: &BTreeSet<Route>,
     ) -> Result<HookDecision> {
-        if let Some(condition) = hook.requires.as_ref()
-            && !checks.check(condition, changed)
-        {
-            return Ok(HookDecision::RequiresClosed(condition.clone()));
+        if let Some(fault) = checks.unmet(&hook.requires, changed) {
+            return Ok(HookDecision::RequiresClosed(hook.requires.clone(), fault));
         }
-        if let Some(condition) = hook.when.as_ref()
-            && !checks.check(condition, changed)
-        {
-            return Ok(HookDecision::WhenClosed(condition.clone()));
+        if let Some(fault) = checks.unmet(&hook.when, changed) {
+            return Ok(HookDecision::WhenClosed(hook.when.clone(), fault));
         }
-        if !hook.checks.is_empty() && hook.checks.iter().all(|check| checks.check(check, changed)) {
+        if !hook.check.is_true() && checks.unmet(&hook.check, changed).is_none() {
             return Ok(HookDecision::ChecksPass);
         }
         let Some(binary) = resolve_binary(hook, checks) else {
@@ -168,22 +165,14 @@ impl HookRunner {
         changed: &BTreeSet<Route>,
         argv: &str,
     ) -> Result<()> {
-        if hook.checks.is_empty() {
-            return Ok(());
+        if let Some(fault) = checks.unmet(&hook.check, changed) {
+            return Err(RuntimeError::HookChecks {
+                argv: argv.to_owned(),
+                check: hook.check.clone(),
+                failed: Box::new(fault),
+            });
         }
-        let failed: Vec<Condition> = hook
-            .checks
-            .iter()
-            .filter(|check| !checks.check(check, changed))
-            .cloned()
-            .collect();
-        if failed.is_empty() {
-            return Ok(());
-        }
-        Err(RuntimeError::HookChecks {
-            argv: argv.to_owned(),
-            failed,
-        })
+        Ok(())
     }
 }
 
@@ -284,9 +273,10 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("mise".into()), Arg::Text("install".into())],
             path: vec![Arg::Text(bindir.display().to_string())],
-            requires: None,
-            when: None,
-            checks: Vec::new(),
+            id: None,
+            requires: Condition::default(),
+            when: Condition::default(),
+            check: Condition::default(),
             timeout_secs: 60,
         }
     }
@@ -295,9 +285,10 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("tool".into()), Arg::Text("run".into())],
             path: vec![Arg::Text(bindir.display().to_string())],
-            requires: None,
-            when: None,
-            checks: Vec::new(),
+            id: None,
+            requires: Condition::default(),
+            when: Condition::default(),
+            check: Condition::default(),
             timeout_secs: 60,
         }
     }
@@ -333,15 +324,15 @@ mod tests {
         driver::fs::set_mode(&binary, 0o755).unwrap();
         let sentinel = dir.path().join("sentinel.txt");
         let mut hook = tool_hook(&bindir);
-        hook.requires = Some(Condition::Exists {
+        hook.requires = Condition::Exists {
             route: literal(&sentinel),
-        });
+        };
         let closed = match runner().decide_all(std::slice::from_ref(&hook), &BTreeSet::new()) {
             Ok(decided) => decided,
             Err(error) => panic!("hooks decide: {error}"),
         };
         assert!(
-            matches!(closed.decisions[0], HookDecision::RequiresClosed(_)),
+            matches!(closed.decisions[0], HookDecision::RequiresClosed(_, _)),
             "missing sentinel fails the condition"
         );
         let writer = writer_in(dir.path());

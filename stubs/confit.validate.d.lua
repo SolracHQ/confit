@@ -1,7 +1,7 @@
 --- @meta confit.validate
 --- Checks one body table.
 --- @param body any The body table under checking.
---- @return Document? The decoded body, else nil.
+--- @return Document? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function document(body) end
 
@@ -153,7 +153,7 @@ function ArchiveHandle:member(name) end
 
 --- Checks one config table.
 --- @param config any The config table under checking.
---- @return Config? The decoded config, else nil.
+--- @return Config? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function config(config) end
 
@@ -163,9 +163,10 @@ function config(config) end
 --- @field documents {[Route]: Document}? Documents keyed by destination route.
 --- @field patches Patch[]? Patches in profile return order.
 --- @field hooks Hook[]? Hooks in profile return order.
+--- @field requirements {[string]: string}? Requirements keyed by config name with hints.
 
 --- One patch table in either shape.
---- @alias Patch StructuredPatch | RcPatch
+--- @alias Patch StructuredPatch | RcPatch | HookPatch
 
 --- One structured patch table.
 --- @class StructuredPatch
@@ -185,19 +186,53 @@ function config(config) end
 --- @field apply fun() The patch callback over current sections.
 --- @field priority Level? The patch merge level. Higher levels apply first.
 
+--- One hook patch table.
+--- @class HookPatch
+--- @field target string The hook id under patching.
+--- @field apply fun(hook: Hook) The hook callback over the live hook.
+
+--- Face for hook patch callbacks.
+--- @param hook Hook Live hook under patching.
+function HookArgs(hook) end
+
 --- One post-config step with conditions and checks.
 --- @class Hook
 --- @field argv Arg[] Command for the subprocess.
 --- @field path Arg[]? PATH entries for the subprocess alone.
+--- @field id string? The hook identifier.
 --- @field requires Condition? The capability condition.
 --- @field when Condition? The need condition.
---- @field checks Condition[]? AND conditions for the run.
+--- @field check Condition? The run condition.
 --- @field timeout string? The run cap in seconds.
 
 --- Checks one patch table.
 --- @param patch any The patch table under checking.
---- @return Patch? The decoded patch, else nil.
+--- @return Patch? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function patch(patch) end
 
-return {document = document, config = config, patch = patch}
+--- Checks one hook table.
+--- @param value any The hook table under checking.
+--- @return Hook? The decoded value, else nil.
+--- @return string? The failure reason, else nil.
+function hook(value) end
+
+--- Checks one condition table.
+--- @param value any The condition table under checking.
+--- @return Condition? The decoded value, else nil.
+--- @return string? The failure reason, else nil.
+function condition(value) end
+
+--- Checks one rc entry table.
+--- @param value any The entry table under checking.
+--- @return RcEntry? The decoded value, else nil.
+--- @return string? The failure reason, else nil.
+function entry(value) end
+
+--- Checks one route table.
+--- @param value any The route table under checking.
+--- @return Route? The decoded value, else nil.
+--- @return string? The failure reason, else nil.
+function route(value) end
+
+return {document = document, config = config, patch = patch, hook = hook, condition = condition, entry = entry, route = route}

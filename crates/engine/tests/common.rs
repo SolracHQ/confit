@@ -6,16 +6,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use confit_binding::value::Decode;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
-use confit_engine::api::patch::{Level, Patch, RcPatch, StructuredPatch};
+use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
 use confit_engine::api::profile::Profile;
 use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::blob::BlobSource;
 use confit_store::{StoreRoots, Stores};
-use mlua::{Function, Lua};
+use mlua::{Function, Lua, Value};
 
 /// Lua profile with two text configs in zebra then apple order.
 pub const PAIR: &str = r#"
@@ -549,6 +550,7 @@ pub fn profile_of(documents: Vec<(Route, Data)>, patches: Vec<Patch>) -> Profile
             documents.into_iter().collect(),
             patches,
             Vec::new(),
+            HashMap::new(),
         )],
         HashMap::new(),
     )
@@ -656,10 +658,30 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
             .map(|item| confit_model::arg::Arg::Text((*item).to_owned()))
             .collect(),
         path: Vec::new(),
-        requires: None,
-        when: None,
-        checks: Vec::new(),
+        id: None,
+        requires: confit_model::condition::Condition::default(),
+        when: confit_model::condition::Condition::default(),
+        check: confit_model::condition::Condition::default(),
         timeout_secs,
+    }
+}
+
+/// Build one identified hook with argv words and a timeout.
+pub fn identified_hook_of(id: &str, argv: &[&str], timeout_secs: u64) -> Hook {
+    let mut hook = hook_of(argv, timeout_secs);
+    hook.id = Some(id.to_owned());
+    hook
+}
+
+/// Build one hook patch over its Lua callback source.
+pub fn hook_patch_of(lua: &Lua, target: &str, source: &str) -> HookPatch {
+    let apply: Function = lua.load(source).call(()).unwrap();
+    let table = lua.create_table().unwrap();
+    table.set("target", target).unwrap();
+    table.set("apply", apply).unwrap();
+    match HookPatch::decode(&Value::Table(table), lua) {
+        Ok(patch) => patch,
+        Err(error) => panic!("hook patch decodes: {error}"),
     }
 }
 

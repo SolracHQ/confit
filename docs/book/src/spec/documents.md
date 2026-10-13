@@ -31,7 +31,7 @@ Patches run in pipeline order. Priority sorts descending.
 Declaration order breaks ties. The base seeds leaf owners
 under the declaring owner. Each `set` writes one dotted
 path. Each `append` extends one list. A later write to a
-slot another owner holds drops. One collision line names
+slot another owner holds drops. One collision line shows
 the format, the path, and the winner.
 
 ```lua
@@ -42,11 +42,11 @@ end):priority(confit.priority.HIGH)
 ```
 
 Paths hold dotted keys and single indices. List positions
-count from 1, so `servers[1]` names the first entry. One
-path rides each call. `[0]` fails the plan naming the
+count from 1, so `servers[1]` shows the first entry. One
+path rides each call. `[0]` fails the plan showing the
 path. A `set` past the list tail fails. An `append`
 onto a non-list leaf fails. A write through a scalar leaf
-fails as blocked. A patch naming another format than the
+fails as blocked. A patch showing another format than the
 base fails as a format mismatch. Patches with no base
 create the document. Patches that agree on nothing fail
 as a format mismatch.
@@ -94,7 +94,7 @@ existence-only documents, sharing the opaque rule.
 #### Merge rule
 
 Text reads declaration only. No patch targets text. One
-path holds one document. A repeat fails naming both
+path holds one document. A repeat fails showing both
 owners.
 
 #### Render rule
@@ -136,7 +136,7 @@ confit.document.rc.new({
 The base holds section buckets only. Keys name `profile`,
 `config`, or `final`. Each key stays optional. Values hold
 lists of rc entry tables. Bare entries outside `rc.new`
-fail. One manifest holds one rc base. A repeat fails naming
+fail. One manifest holds one rc base. A repeat fails showing
 both owners.
 
 #### Merge rule
@@ -191,7 +191,7 @@ The call takes a link path and a target string.
 #### Merge rule
 
 Links read declaration only. One path holds one document.
-A repeat fails naming both owners.
+A repeat fails showing both owners.
 
 #### Render rule
 
@@ -233,7 +233,7 @@ into the plan and records its hash and size.
 #### Merge rule
 
 Opaque reads declaration only. One path holds one
-document. A repeat fails naming both owners.
+document. A repeat fails showing both owners.
 
 #### Render rule
 
@@ -280,12 +280,12 @@ picker returns a destination-relative path per kept
 member. It returns nil per skip. A non-string return
 fails. An empty return fails. An absolute return fails.
 A dot-dot return fails. A repeated return fails. A pick
-that keeps nothing fails naming the filter.
+that keeps nothing fails showing the filter.
 
 #### Merge rule
 
 Trees read declaration only. One path holds one document.
-A repeat fails naming both owners. Members sort by
+A repeat fails showing both owners. Members sort by
 relative path. Member modes follow the archive executable
 bit. Set bits read `755`. Clear bits read `644`. Member
 modes come from the archive alone.
@@ -414,7 +414,7 @@ eval "$(starship init bash)"
 callback takes member path, info, and member file
 path. Info holds `size` and `executable`. The callback
 returns one document per kept member. It returns nil per
-skip. Other returns fail naming the constructor. Kept
+skip. Other returns fail showing the constructor. Kept
 documents ride the profile `documents` array or
 `config:add_document`. Results follow callback order.
 Transforms read the member file through `load_bytes` or
@@ -470,4 +470,4 @@ Hashes persist in the file and load trusted. Loads skip
 rendering. Hydration stays lazy. Disk bytes matching a
 blob hash win before any pool read. Pool hits verify the
 hash and cache per run. Missing pool blobs fail the load
-naming the hash.
+showing the hash.

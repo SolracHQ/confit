@@ -10,6 +10,7 @@ use confit_driver as driver;
 use confit_store::Stores;
 
 use crate::api::builtin;
+use crate::project::PluginRoot;
 
 use crate::error::{EngineError, Result};
 
@@ -215,8 +216,21 @@ fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
 fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
     let root = stored_root(lua)?;
     let root_real = canonical_root(&root)?;
-    let path = resolve(&root, &root_real, name)?;
-    audit(&root_real, caller, &path, name)?;
+    let held = stored_plugins(lua);
+    let fallback = root_real.join(PLUGIN_ROOT);
+    let plugins = held.as_ref().map(|scope| &scope.dir).unwrap_or(&fallback);
+    let parts = map_name(name)?;
+    if parts.is_empty() {
+        return Err(EngineError::UnknownModule {
+            name: name.to_owned(),
+        });
+    }
+    let (base, scope, rest) = match parts.first() {
+        Some(first) if first == PLUGIN_ROOT => (plugins.as_path(), plugins.as_path(), &parts[1..]),
+        _ => (root.as_path(), root_real.as_path(), &parts[..]),
+    };
+    let path = resolve(base, scope, rest, name)?;
+    audit(plugins, caller, &path, name)?;
     let key = CacheKey::File(path.clone());
     if let Some(hit) = with_session(lua, |session| session.cached(&key))? {
         return Ok(hit);
@@ -247,29 +261,23 @@ fn canonical_root(root: &Path) -> Result<PathBuf> {
     })
 }
 
-/// Resolve one file module name to its contained canonical path.
+/// Resolve path parts to their contained canonical path.
 ///
-/// - Dots map to slashes with empty components collapsing.
+/// - Parts resolve under the base with entry fallback.
 ///
 /// # Errors
 ///
 /// - [`EngineError::Escape`] for escaping names.
 /// - [`EngineError::UnknownModule`] for missing files.
 /// - [`EngineError::Read`] for unreadable files.
-fn resolve(root: &Path, root_real: &Path, name: &str) -> Result<PathBuf> {
-    let parts = map_name(name)?;
-    if parts.is_empty() {
-        return Err(EngineError::UnknownModule {
-            name: name.to_owned(),
-        });
-    }
-    let mut direct = root.to_path_buf();
-    for part in &parts {
+fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<PathBuf> {
+    let mut direct = base.to_path_buf();
+    for part in parts {
         direct.push(part);
     }
     direct.set_extension("lua");
-    let mut entry = root.to_path_buf();
-    for part in &parts {
+    let mut entry = base.to_path_buf();
+    for part in parts {
         entry.push(part);
     }
     entry.push(INIT_ENTRY);
@@ -293,7 +301,7 @@ fn resolve(root: &Path, root_real: &Path, name: &str) -> Result<PathBuf> {
             });
         }
     };
-    scoped(root_real, found, name)
+    scoped(scope, found, name)
 }
 
 /// Map one require name to its path parts.
@@ -328,16 +336,15 @@ fn map_name(name: &str) -> Result<Vec<String>> {
 /// # Errors
 ///
 /// - [`EngineError::Escape`] for plugin callers outside the tree.
-fn audit(root_real: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Result<()> {
+fn audit(plugins: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Result<()> {
     const CALLER: &str = "require";
-    let plugins = root_real.join(PLUGIN_ROOT);
     let Some(caller) = caller else {
         return Ok(());
     };
     let Ok(caller_real) = driver::fs::canonicalize(caller) else {
         return Ok(());
     };
-    if caller_real.starts_with(&plugins) && !target.starts_with(&plugins) {
+    if caller_real.starts_with(plugins) && !target.starts_with(plugins) {
         return Err(EngineError::Escape {
             caller: CALLER.to_owned(),
             input: name.to_owned(),
@@ -411,6 +418,11 @@ fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> Result<T> {
             "confit loader is not installed".to_owned(),
         ))),
     }
+}
+
+/// Resolve the plugin root from the shared app data.
+fn stored_plugins(lua: &Lua) -> Option<PluginRoot> {
+    lua.app_data_ref::<PluginRoot>().map(|scope| scope.clone())
 }
 
 /// Resolve the project root from the shared stores.
@@ -713,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn proxies_reject_writes_naming_readonly() {
+    fn proxies_reject_writes_showing_readonly() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let stores = test_stores(dir.path());

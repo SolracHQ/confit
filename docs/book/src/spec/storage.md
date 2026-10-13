@@ -1,7 +1,7 @@
 # Storage
 
 Confit keeps slots, history, and the blob pool under one
-base folder. Bundles travel as files. Every path below names the
+base folder. Bundles travel as files. Every path below shows the
 exact file the framework reads and writes.
 
 ### On-disk layout
@@ -30,7 +30,7 @@ slot name '{name}' reads unsupported
 
 The OS config folder holds slots, history, and the pool.
 Fetch bodies live under the OS cache folder joined with
-`confit`. Each body names the URL hash. A `.sha` sidecar beside
+`confit`. Each body shows the URL hash. A `.sha` sidecar beside
 it holds the hex digest. Lookups verify the digest before
 serving bytes, so tampered bodies read as misses. Profile path
 joins read the OS data folder through `confit.path.data`. Tmp
@@ -42,7 +42,7 @@ folder.
 History holds the newest five entries. Stamps hold wall-clock
 nanos. A colliding stamp bumps up by one until the name reads
 fresh. Past five, the oldest drops first. Picks start at one
-with newest-first order, so `%1` names the just-previous entry.
+with newest-first order, so `%1` shows the just-previous entry.
 Every apply records a fresh entry, so history keeps moving
 forward.
 
@@ -54,7 +54,7 @@ stored bytes. Blob bytes land gzipped with level 6 under content
 hashes. Compression runs in parallel with per-blob progress.
 Loads hydrate lazily. Disk bytes matching a hash win before any
 pool read, so repeat plans skip pool bytes. Pool hits verify
-and cache per run. Missing pool entries fail naming the hash:
+and cache per run. Missing pool entries fail showing the hash:
 
 ```
 read state '{file}': missing blob '{sha}' for '{path}'
@@ -91,7 +91,7 @@ through the raw value. Mismatches fail before parsing:
 state version {v} reads unsupported, want 7
 ```
 
-Missing versions fail naming the file:
+Missing versions fail showing the file:
 
 ```
 read state '{file}': missing manifest version

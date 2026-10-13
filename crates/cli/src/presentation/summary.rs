@@ -866,11 +866,12 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("absent-probe".into()), Arg::Text("run".into())],
             path: Vec::new(),
-            requires: Some(Condition::InPath {
+            id: None,
+            requires: Condition::InPath {
                 name: "absent-probe".into(),
-            }),
-            when: None,
-            checks: Vec::new(),
+            },
+            when: Condition::default(),
+            check: Condition::default(),
             timeout_secs: 60,
         }
     }

@@ -2,6 +2,7 @@
 
 pub mod error;
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -24,13 +25,16 @@ const BLOBS_DIR: &str = "blobs";
 /// Pool gzip level.
 const BLOB_GZIP_LEVEL: u32 = 6;
 
+/// Content to stored hash index file under the temp base.
+const INDEX_FILE: &str = "blob-index.json";
+
 /// Content-addressed blob pool.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
     pool: PathBuf,
     cache: PathBuf,
+    index: PathBuf,
     progress: ProgressSender,
-    started: Arc<AtomicUsize>,
     finished: Arc<AtomicUsize>,
 }
 
@@ -56,8 +60,8 @@ impl BlobStore {
         Self {
             pool: roots.config_base.join(BLOBS_DIR),
             cache: roots.temp_base.join(BLOBS_DIR),
+            index: roots.temp_base.join(INDEX_FILE),
             progress,
-            started: Arc::new(AtomicUsize::new(0)),
             finished: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -97,6 +101,8 @@ impl BlobStore {
 
     /// Write bytes into the cache with both identities.
     ///
+    /// - Present blobs skip compression.
+    ///
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed source reads.
@@ -104,18 +110,23 @@ impl BlobStore {
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
     pub fn put(&self, source: BlobSource<'_>) -> Result<BlobHandle> {
-        self.started.fetch_add(1, Ordering::Relaxed);
+        let digest = match &source {
+            BlobSource::Bytes(bytes) => Sha::hash(bytes),
+            BlobSource::Handle(handle) => handle.sha256().clone(),
+        };
+        if let Some(handle) = self.reuse(&digest) {
+            return Ok(handle);
+        }
         let (mut reader, sha): (Box<dyn Read>, Sha) = match source {
             BlobSource::Bytes(bytes) => (
                 Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>,
-                Sha::hash(bytes),
+                digest,
             ),
             BlobSource::Handle(handle) => {
                 let path = handle.canonical();
-                let sha = handle.sha256().clone();
-                let file =
-                    driver::fs::open(path).map_err(|error| BlobError::from_read_io(&sha, error))?;
-                (file as Box<dyn Read>, sha)
+                let file = driver::fs::open(path)
+                    .map_err(|error| BlobError::from_read_io(&digest, error))?;
+                (file as Box<dyn Read>, digest)
             }
         };
         driver::fs::create_dir_all(&self.cache)
@@ -132,13 +143,13 @@ impl BlobStore {
         })?;
         let writer = encoder.finish().map_err(|_| BlobError::Compress)?;
         let stored = writer.digest();
+        self.record(&sha, &stored);
         let handle = BlobHandle::new(sha.clone(), stored);
         let dest = self.cache.join(handle.stored().hex());
         driver::fs::rename(&pending, &dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
-        let total = self.started.load(Ordering::Relaxed);
-        let _ = self.progress.send(Event::BlobCompressed { done, total });
+        let _ = self.progress.send(Event::BlobCompressed { done });
         Ok(handle)
     }
 
@@ -146,6 +157,35 @@ impl BlobStore {
     fn present(&self, stored: &Sha) -> bool {
         driver::fs::exists(&self.cache.join(stored.hex()))
             || driver::fs::exists(&self.pool.join(stored.hex()))
+    }
+
+    /// Reuse one present blob without compression.
+    fn reuse(&self, sha: &Sha) -> Option<BlobHandle> {
+        let stored = self.lookup(sha)?;
+        if !self.present(&stored) {
+            return None;
+        }
+        Some(BlobHandle::new(sha.clone(), stored))
+    }
+
+    /// Look up one stored hash by content hash.
+    fn lookup(&self, sha: &Sha) -> Option<Sha> {
+        let bytes = driver::fs::read(&self.index).ok()?;
+        let table: BTreeMap<String, String> = serde_json::from_slice(&bytes).ok()?;
+        let stored = table.get(&sha.hex())?;
+        Sha::new(stored).ok()
+    }
+
+    /// Record one content to stored hash mapping.
+    fn record(&self, sha: &Sha, stored: &Sha) {
+        let mut table: BTreeMap<String, String> = driver::fs::read(&self.index)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        table.insert(sha.hex(), stored.hex());
+        if let Ok(bytes) = serde_json::to_vec(&table) {
+            let _ = driver::fs::write(&self.index, &bytes);
+        }
     }
 
     /// Receive already-compressed bytes from a trusted member into the cache.
@@ -525,14 +565,9 @@ mod tests {
             Err(error) => panic!("cache stores again: {error}"),
         };
         assert_eq!(again, handle, "repeat put keeps identity");
-        let cached = roots.temp_base.join("blobs").join(handle.stored().hex());
         let pooled = roots.config_base.join("blobs").join(handle.stored().hex());
-        assert!(
-            driver::fs::exists(&cached) && driver::fs::exists(&pooled),
-            "both homes hold the blob"
-        );
-        assert_eq!(read_open(&store, &handle), raw, "both homes read bytes");
-        driver::fs::remove_file(&cached).unwrap();
+        assert!(driver::fs::exists(&pooled), "pool holds the blob");
+        assert_eq!(read_open(&store, &handle), raw, "pool reads bytes");
         assert_eq!(
             read_open(&store, &handle),
             raw,
@@ -544,11 +579,77 @@ mod tests {
         };
         assert_eq!(remade, handle, "remade put keeps identity");
         driver::fs::remove_file(&pooled).unwrap();
+        let healed = match store.put(BlobSource::Bytes(raw)) {
+            Ok(handle) => handle,
+            Err(error) => panic!("cache stores after pool loss: {error}"),
+        };
+        assert_eq!(healed, handle, "stale index recompresses");
+        let cached = roots.temp_base.join("blobs").join(handle.stored().hex());
+        assert!(driver::fs::exists(&cached), "recompress lands cache");
         assert!(
             store.resolve(&handle.to_ref()).is_ok(),
             "resolve proves from cache alone"
         );
         assert_eq!(read_open(&store, &handle), raw, "cache wins while present");
+    }
+
+    #[test]
+    fn put_skips_present_blobs_without_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let roots = test_roots(dir.path());
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
+        let raw = b"skipped bytes";
+        let handle = match store.put(BlobSource::Bytes(raw)) {
+            Ok(handle) => handle,
+            Err(error) => panic!("cache stores: {error}"),
+        };
+        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
+        match store.put(BlobSource::Bytes(raw)) {
+            Ok(again) => assert_eq!(again, handle, "repeat put keeps identity"),
+            Err(error) => panic!("present put skips writes: {error}"),
+        }
+    }
+
+    #[test]
+    fn put_shares_index_across_store_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = TestGuard::install();
+        let roots = test_roots(dir.path());
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
+        let raw = b"shared index bytes";
+        let handle = match store.put(BlobSource::Bytes(raw)) {
+            Ok(handle) => handle,
+            Err(error) => panic!("cache stores: {error}"),
+        };
+        let (fresh_sender, _) = crossbeam_channel::unbounded();
+        let fresh = BlobStore::new(&roots, fresh_sender);
+        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
+        match fresh.put(BlobSource::Bytes(raw)) {
+            Ok(again) => assert_eq!(again, handle, "fresh stores reuse the index"),
+            Err(error) => panic!("indexed put skips writes: {error}"),
+        }
+    }
+
+    #[test]
+    fn torn_index_falls_back_to_compress() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let roots = test_roots(dir.path());
+        let (sender, _) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&roots, sender);
+        let raw = b"recorded bytes";
+        let handle = match store.put(BlobSource::Bytes(raw)) {
+            Ok(handle) => handle,
+            Err(error) => panic!("cache stores: {error}"),
+        };
+        driver::fs::write(&roots.temp_base.join("blob-index.json"), b"{torn").unwrap();
+        match store.put(BlobSource::Bytes(raw)) {
+            Ok(again) => assert_eq!(again, handle, "torn index still resolves"),
+            Err(error) => panic!("torn index falls back: {error}"),
+        }
     }
 
     #[test]
@@ -693,7 +794,7 @@ mod tests {
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![Event::BlobCompressed { done: 1, total: 1 }],
+            vec![Event::BlobCompressed { done: 1 }],
             "put fires one finished fact"
         );
     }
@@ -718,9 +819,34 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                Event::BlobCompressed { done: 1, total: 1 },
-                Event::BlobCompressed { done: 2, total: 2 },
+                Event::BlobCompressed { done: 1 },
+                Event::BlobCompressed { done: 2 },
             ]
+        );
+    }
+
+    #[test]
+    fn reuse_stays_silent() {
+        use confit_driver::progress::Event;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = BlobStore::new(&test_roots(dir.path()), sender);
+        let raw = b"silent reuse bytes";
+        match store.put(BlobSource::Bytes(raw)) {
+            Ok(_) => {}
+            Err(error) => panic!("first put stores: {error}"),
+        }
+        match store.put(BlobSource::Bytes(raw)) {
+            Ok(_) => {}
+            Err(error) => panic!("second put reuses: {error}"),
+        }
+        let events: Vec<Event> = receiver.try_iter().collect();
+        assert_eq!(
+            events,
+            vec![Event::BlobCompressed { done: 1 }],
+            "reuse fires no fact"
         );
     }
 

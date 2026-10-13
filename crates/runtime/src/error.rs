@@ -11,6 +11,8 @@ use confit_model::error::Error as ModelError;
 use confit_model::routes::Route;
 use thiserror::Error;
 
+use crate::checks::Unmet;
+
 use confit_store::archive::error::ArchiveError;
 use confit_store::faults::AccessFault;
 use confit_store::resources::error::ResourceError;
@@ -255,8 +257,10 @@ pub enum RuntimeError {
     HookChecks {
         /// The joined argv under running.
         argv: String,
-        /// The unmet checks under running.
-        failed: Vec<Condition>,
+        /// The check condition under running.
+        check: Condition,
+        /// The unmet fault under running.
+        failed: Box<Unmet>,
     },
 }
 

@@ -34,7 +34,7 @@ The order is stable. Same priority follows config declaration order. Only priori
 
 ## Conflict
 
-Same slot twice means first writer wins, with a warning naming both owners. The demo meets this when two tool configs claim the same alias. The log shows the decision:
+Same slot twice means first writer wins, with a warning showing both owners. The demo meets this when two tool configs claim the same alias. The log shows the decision:
 
 ```text
 collision on alias "ll": "eza" overwritten, "shell" wins
@@ -66,6 +66,6 @@ data:set("servers[1].host", "example.com")
 data:append("plugins", "tail")
 ```
 
-`set` writes the leaf, creating parent tables along the way. `append` extends the list at the key, creating it on nil. A non-list leaf under `append` fails the plan naming the key.
+`set` writes the leaf, creating parent tables along the way. `append` extends the list at the key, creating it on nil. A non-list leaf under `append` fails the plan showing the key.
 
 The demo configs now share files cleanly through patches. Next, [Plugin](plugin.md) installs demo tools with reusable code.

@@ -112,7 +112,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// Read length and file-type facts for one path.
+/// Read length, file-type, and mtime facts for one path.
 ///
 /// # Errors
 ///
@@ -123,27 +123,23 @@ pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
     Ok(super::FileMeta::new(
         facts.len(),
         facts.file_type().is_dir(),
+        host_modified(&facts),
     ))
+}
+
+/// Read mtime nanos since the epoch, zero when missing or pre-epoch.
+fn host_modified(facts: &std::fs::Metadata) -> u64 {
+    facts
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|span| u64::try_from(span.as_nanos()).ok())
+        .unwrap_or(0)
 }
 
 /// Report whether one path holds any entry.
 pub fn exists(path: &Path) -> bool {
     path.exists()
-}
-
-/// Report whether one path holds a folder.
-pub fn is_dir(path: &Path) -> bool {
-    metadata(path).is_ok_and(|facts| facts.is_dir())
-}
-
-/// Report whether one path holds a plain file.
-pub fn is_file(path: &Path) -> bool {
-    metadata(path).is_ok_and(|facts| facts.is_file())
-}
-
-/// Report whether one path holds a symlink.
-pub fn is_link(path: &Path) -> bool {
-    read_link(path).is_ok()
 }
 
 /// List immediate child paths under one folder sorted by name.

@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_markers_fail_naming_keys() {
+    fn mixed_markers_fail_showing_keys() {
         let lua = test_lua();
         let text = body_error(
             &lua,

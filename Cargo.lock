@@ -245,6 +245,7 @@ dependencies = [
  "flate2",
  "indicatif",
  "log",
+ "minijinja",
  "rayon",
  "serde",
  "serde_json",
@@ -285,6 +286,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

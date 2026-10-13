@@ -2,7 +2,7 @@
 //! Patch tables under owner config names.
 
 use crate::api::config::Config;
-use crate::api::patch::{Patch, RcPatch, StructuredPatch};
+use crate::api::patch::{HookPatch, Patch, RcPatch, StructuredPatch};
 
 /// One patch under its owner config name.
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ impl OwnedPatch {
     pub fn structured(&self) -> Option<&StructuredPatch> {
         match &self.patch {
             Patch::Structured(found) => Some(found),
-            Patch::Rc(_) => None,
+            Patch::Rc(_) | Patch::Hook(_) => None,
         }
     }
 
@@ -34,7 +34,15 @@ impl OwnedPatch {
     pub fn rc(&self) -> Option<&RcPatch> {
         match &self.patch {
             Patch::Rc(found) => Some(found),
-            Patch::Structured(_) => None,
+            Patch::Structured(_) | Patch::Hook(_) => None,
+        }
+    }
+
+    /// Return the hook patch for hook payloads.
+    pub fn hook(&self) -> Option<&HookPatch> {
+        match &self.patch {
+            Patch::Hook(found) => Some(found),
+            Patch::Structured(_) | Patch::Rc(_) => None,
         }
     }
 }

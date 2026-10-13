@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_names_raise_naming_want() {
+    fn unknown_names_raise_showing_want() {
         let lua = test_lua();
         match run(&lua, r#"return fact("shell")"#) {
             Ok(_) => panic!("foreign fact passes"),

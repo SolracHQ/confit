@@ -40,7 +40,7 @@ The count covers the profile and every stub.
 ## Clash matrix
 
 Each present path aborts the run before any write lands. The
-message names the first clash:
+message shows the first clash:
 
 ```sh
 init: '{path}' already exists, remove it or pick another target
