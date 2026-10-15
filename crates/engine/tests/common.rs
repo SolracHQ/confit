@@ -11,7 +11,7 @@ use confit_engine::Engine;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
 use confit_engine::api::profile::Profile;
-use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+use confit_model::document::{Data, Payload, RcData, RcEntry, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::blob::BlobSource;
@@ -293,8 +293,8 @@ pub const FORMAT_GAP: &str = r#"
 
 /// Lua profile reading project text through the resource bridge.
 pub const PROJECT_TEXT: &str = r#"
-        local resource = require("confit.resource")
-        local handle = assert(resource("note.txt"))
+        local open = require("confit.open")
+        local handle = assert(open("note.txt"))
         return {
             configs = {
                 {
@@ -526,16 +526,13 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
 pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Data) {
     let root = stores.resources().roots.project_root.clone();
     confit_driver::fs::create_dir_all(&root).unwrap();
-    let full = root.join("blob.bin");
-    confit_driver::fs::write(&full, b"hi").unwrap();
-    let resource = stores.resources().resource(&full).unwrap();
+    confit_driver::fs::write(&root.join("blob.bin"), b"hi").unwrap();
+    let resource = stores.resources().resource("blob.bin").unwrap();
     let opened = stores.blobs().put(BlobSource::Handle(&resource)).unwrap();
-    let size = stores.blobs().len(&opened).unwrap();
     (
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Opaque {
-            blob: opened.to_ref(),
-            size,
+            handle: Payload::Resolved(opened.to_ref()),
             mode: 0o644,
             unmanaged: true,
         },

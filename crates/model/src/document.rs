@@ -1,34 +1,30 @@
 //! Document
 //! Desired state payloads reaching disk.
 
+pub mod payload;
 pub mod rc;
 
 use std::collections::BTreeMap;
 
 use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
-use mlua::{Lua, Table, Value};
-use schemars::JsonSchema;
+use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
-use confit_store::Stores;
-use confit_store::blob::BlobSource;
 use confit_store::handles::{BlobRef, ResourceHandle};
 
+pub use payload::Payload;
 pub use rc::{RcData, RcEntry, RcSection};
 
 /// Default unix permission bits for files without explicit modes.
 pub const DEFAULT_FILE_MODE: u32 = 0o644;
 
-/// Member handles keyed by relative path.
-type MemberHandleMap = BTreeMap<String, ResourceHandle>;
-
 /// Structured data values keyed by field name.
 type DataFieldMap = BTreeMap<String, serde_json::Value>;
 
 /// Serialization format for structured documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Face, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Face)]
 #[serde(rename_all = "lowercase")]
 #[face(table, string)]
 pub enum StructuredFormat {
@@ -106,19 +102,45 @@ impl std::fmt::Display for DocumentKind {
     }
 }
 
-/// One persisted tree member.
+/// One tree member.
+///
+/// A bare handle takes the default mode. A table names
+/// the handle with a required mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[serde(deny_unknown_fields)]
-#[face(table)]
-pub struct TreeMember {
-    /// The content-addressed member bytes identity.
-    #[face(proxy = ResourceHandle, convert = decode_opaque_blob, encode = render_blob)]
-    pub blob: BlobRef,
-    /// Unix permission bits for the member file.
-    pub mode: u32,
+#[serde(untagged)]
+#[face(table, untagged, rename = "TreeMember")]
+pub enum TreeMember {
+    /// Bare handle with default mode.
+    Handle(Payload),
+    /// Handle with explicit mode.
+    Full {
+        /// The file payload.
+        #[face(proxy = ResourceHandle, decode_hook = decode_payload)]
+        handle: Payload,
+        /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
+        #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode)]
+        mode: u32,
+    },
 }
 
-/// Persisted document payload.
+impl TreeMember {
+    /// Return the member payload.
+    pub fn blob(&self) -> &Payload {
+        match self {
+            Self::Handle(blob) | Self::Full { handle: blob, .. } => blob,
+        }
+    }
+
+    /// Return the unix permission bits for the member file.
+    pub fn mode(&self) -> u32 {
+        match self {
+            Self::Handle(_) => DEFAULT_FILE_MODE,
+            Self::Full { mode, .. } => *mode,
+        }
+    }
+}
+
+/// One document payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(rename_all = "snake_case")]
 #[face(table, untagged, rename = "Document")]
@@ -128,7 +150,7 @@ pub enum Data {
         /// The serialization format.
         format: StructuredFormat,
         /// Structured content for the file.
-        #[face(proxy = DataFieldMap, convert = decode_payload_map)]
+        #[face(proxy = DataFieldMap, decode_hook = decode_payload_map)]
         data: serde_json::Value,
     },
     /// Plain Text Document.
@@ -136,9 +158,9 @@ pub enum Data {
         /// The exact file text.
         #[face(rename = "text")]
         content: String,
-        /// Unix permission bits.
+        /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
         #[serde(default = "default_file_mode")]
-        #[face(proxy = String, convert = decode_mode, encode = render_mode, default = default_file_mode)]
+        #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
         mode: u32,
         /// Existence-only document flag.
         #[serde(default)]
@@ -154,20 +176,12 @@ pub enum Data {
     Rc(RcData),
     /// Binary Document.
     Opaque {
-        /// The resource handle holding the file bytes.
-        #[face(
-            rename = "handle",
-            proxy = ResourceHandle,
-            convert = decode_opaque_blob,
-            encode = render_blob
-        )]
-        blob: BlobRef,
-        /// Raw byte count of the file content.
-        #[face(convert = decode_opaque_size)]
-        size: u64,
-        /// Unix permission bits.
+        /// The opaque file handle.
+        #[face(proxy = ResourceHandle, decode_hook = decode_payload)]
+        handle: Payload,
+        /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
         #[serde(default = "default_file_mode")]
-        #[face(proxy = String, convert = decode_mode, encode = render_mode, default = default_file_mode)]
+        #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
         mode: u32,
         /// Existence-only document flag.
         #[serde(default)]
@@ -177,10 +191,6 @@ pub enum Data {
     /// File Tree Document.
     Tree {
         /// Tree members keyed by relative path.
-        #[face(
-            proxy = MemberHandleMap,
-            convert = decode_tree_members
-        )]
         members: BTreeMap<String, TreeMember>,
     },
 }
@@ -222,15 +232,23 @@ impl Data {
         }
     }
 
-    /// Collect every blob ref in document order.
-    pub fn blob_refs(&self) -> Vec<&BlobRef> {
+    /// Collect every payload in document order.
+    pub fn payloads(&self) -> Vec<&Payload> {
         match self {
-            Self::Opaque { blob, .. } => vec![blob],
-            Self::Tree { members } => members.values().map(|member| &member.blob).collect(),
+            Self::Opaque { handle: blob, .. } => vec![blob],
+            Self::Tree { members } => members.values().map(TreeMember::blob).collect(),
             Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
                 Vec::new()
             }
         }
+    }
+
+    /// Collect every sealed blob ref in document order.
+    pub fn blob_refs(&self) -> Vec<&BlobRef> {
+        self.payloads()
+            .into_iter()
+            .filter_map(Payload::resolved)
+            .collect()
     }
 }
 
@@ -257,13 +275,8 @@ pub fn tree_changed(
 }
 
 /// Render mode bits as octal digits.
-pub fn render_mode(mode: u32) -> String {
-    format!("{mode:o}")
-}
-
-/// Render one blob ref as its content hash.
-fn render_blob(blob: BlobRef) -> String {
-    blob.sha256.hex()
+pub fn render_mode(_lua: &Lua, mode: &u32) -> mlua::Result<String> {
+    Ok(format!("{:o}", mode))
 }
 
 /// Return the default unix permission bits for decode.
@@ -282,7 +295,7 @@ fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, Mismatch> {
         want: "expected a string".to_owned(),
         found: error.found,
     })?;
-    parse_mode_bits(text.as_str()).map_or_else(
+    parse_mode_bits(&text).map_or_else(
         || {
             Err(Mismatch {
                 path: "mode".to_owned(),
@@ -356,102 +369,13 @@ fn decode_payload_map(
     }
 }
 
-/// Register one handle value into its blob ref.
+/// Decode one handle value into its payload.
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside resource handles and pool failures.
-fn decode_opaque_blob(lua: &Lua, value: &Value) -> std::result::Result<BlobRef, Mismatch> {
-    let handle = decode_handle(lua, value, "handle")?;
-    let stores = stores_of(lua)?;
-    stores
-        .blobs()
-        .put(BlobSource::Handle(&handle))
-        .map(|opened| opened.to_ref())
-        .map_err(|error| Mismatch {
-            path: "handle".to_owned(),
-            want: "a decoded body".to_owned(),
-            found: error.to_string(),
-        })
-}
-
-/// Read one handle value into its raw byte count.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for values outside resource handles and pool failures.
-fn decode_opaque_size(lua: &Lua, table: &Table) -> std::result::Result<u64, Mismatch> {
-    let value = confit_binding::value::read_field(table, "Document_Opaque", "handle")?;
-    let handle = decode_handle(lua, &value, "handle")?;
-    let stores = stores_of(lua)?;
-    let opened = stores.resources().open(&handle).map_err(|error| Mismatch {
-        path: "handle".to_owned(),
-        want: "a decoded body".to_owned(),
-        found: error.to_string(),
-    })?;
-    opened.len().map_err(|error| Mismatch {
-        path: "handle".to_owned(),
-        want: "a decoded body".to_owned(),
-        found: error.to_string(),
-    })
-}
-
-/// Decode one members table into member entries with pool registration.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for misshaped tables, handles, paths and pool failures.
-fn decode_tree_members(
-    lua: &Lua,
-    value: &Value,
-) -> std::result::Result<BTreeMap<String, TreeMember>, Mismatch> {
-    let source = confit_binding::value::table_value(value, "members")?;
-    let mut pairs: Vec<(String, Value)> = Vec::new();
-    for pair in source.pairs::<Value, Value>() {
-        let (key, item) = pair.map_err(|error| Mismatch {
-            path: "members".to_owned(),
-            want: "readable entries".to_owned(),
-            found: error.to_string(),
-        })?;
-        match key {
-            Value::String(text) => pairs.push((text.to_string_lossy(), item)),
-            _ => {
-                return Err(Mismatch {
-                    path: "members".to_owned(),
-                    want: "a string key".to_owned(),
-                    found: key.type_name().to_owned(),
-                });
-            }
-        }
-    }
-    pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    let stores = stores_of(lua)?;
-    let mut members = BTreeMap::new();
-    for (relative, item) in &pairs {
-        check_member_key(relative)?;
-        let handle = decode_handle(lua, item, &["members.", relative.as_str()].concat())?;
-        let opened = stores
-            .blobs()
-            .put(BlobSource::Handle(&handle))
-            .map_err(|error| Mismatch {
-                path: ["members.", relative.as_str()].concat(),
-                want: "a decoded body".to_owned(),
-                found: error.to_string(),
-            })?;
-        let mode = stores.resources().mode(&handle).map_err(|error| Mismatch {
-            path: ["members.", relative.as_str()].concat(),
-            want: "a decoded body".to_owned(),
-            found: error.to_string(),
-        })?;
-        members.insert(
-            relative.clone(),
-            TreeMember {
-                blob: opened.to_ref(),
-                mode,
-            },
-        );
-    }
-    Ok(members)
+/// - [`Mismatch`] for values outside resource handles.
+fn decode_payload(lua: &Lua, value: &Value) -> std::result::Result<Payload, Mismatch> {
+    decode_handle(lua, value, "handle").map(Payload::Handle)
 }
 
 /// Decode one handle value into its resource handle.
@@ -471,51 +395,11 @@ fn decode_handle(
     })
 }
 
-/// Reject tree keys outside relative member paths.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for empty, absolute, and dot-dot keys.
-fn check_member_key(relative: &str) -> std::result::Result<(), Mismatch> {
-    if relative.is_empty() || relative.starts_with('/') {
-        return Err(Mismatch {
-            path: "tree files key".to_owned(),
-            want: "a relative member path".to_owned(),
-            found: ["'", relative, "'"].concat(),
-        });
-    }
-    for segment in relative.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
-            return Err(Mismatch {
-                path: "tree files key".to_owned(),
-                want: "a relative member path".to_owned(),
-                found: ["'", relative, "'"].concat(),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Read the shared stores from one Lua instance.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for an uninstalled api.
-fn stores_of(lua: &Lua) -> std::result::Result<Stores, Mismatch> {
-    match lua.app_data_ref::<Stores>() {
-        Some(stores) => Ok(stores.clone()),
-        None => Err(Mismatch {
-            path: "Document".to_owned(),
-            want: "a decoded body".to_owned(),
-            found: "confit api is not installed".to_owned(),
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use confit_binding::value::{Decode, Encode};
+    use confit_store::Stores;
 
     use crate::routes::RouteBase;
 
@@ -639,11 +523,11 @@ mod tests {
 
     #[test]
     fn opaque_mode_encodes_strings() {
-        let lua = test_lua();
-        let digest = confit_driver::sha::Sha::hash(b"confit opaque fixture");
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (_directory, lua, stores) = opened_lua();
+        let handle = stores.resources().resource("note.txt").unwrap();
         let source = Data::Opaque {
-            blob: BlobRef::new(digest.clone(), digest),
-            size: 5,
+            handle: Payload::Handle(handle),
             mode: 0o644,
             unmanaged: false,
         };
@@ -653,6 +537,7 @@ mod tests {
         };
         let rendered: String = table.get("mode").unwrap();
         assert_eq!(rendered, "644");
+        let _: mlua::AnyUserData = table.get("handle").unwrap();
     }
 
     #[test]
@@ -710,10 +595,9 @@ mod tests {
         (directory, lua, stores)
     }
 
-    fn handle_of(lua: &Lua, stores: &Stores, directory: &tempfile::TempDir, name: &str) -> String {
+    fn handle_of(lua: &Lua, stores: &Stores, _directory: &tempfile::TempDir, name: &str) -> String {
         let global = format!("handle_{}", name.replace('.', "_"));
-        let path = directory.path().join("project").join(name);
-        let handle = match stores.resources().resource(&path) {
+        let handle = match stores.resources().resource(name) {
             Ok(handle) => handle,
             Err(error) => panic!("project opens: {error}"),
         };
@@ -793,32 +677,306 @@ mod tests {
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         for (body, want) in [
             (
-                format!(r#"{{ members = {{ [""] = {note} }} }}"#),
-                "a relative member path",
-            ),
-            (
-                format!(r#"{{ members = {{ ["/top.txt"] = {note} }} }}"#),
-                "a relative member path",
-            ),
-            (
-                format!(r#"{{ members = {{ ["sub//nested.txt"] = {note} }} }}"#),
-                "a relative member path",
-            ),
-            (
-                format!(r#"{{ members = {{ ["sub/../nested.txt"] = {note} }} }}"#),
-                "a relative member path",
-            ),
-            (
                 r#"{ members = { ["top.txt"] = "hi" } }"#.to_owned(),
-                "a resource handle",
+                "TreeMember",
             ),
             (
                 format!(r#"{{ members = {{ ["sub"] = {{ ["nested.txt"] = {note} }} }} }}"#),
-                "a resource handle",
+                "TreeMember",
             ),
         ] {
             let text = body_error(&lua, &body);
             assert!(text.contains(want), "the text shows the fault: {text}");
         }
+    }
+
+    #[test]
+    fn decode_bare_handle_with_default_mode() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let body = format!(r#"{{ members = {{ ["top.txt"] = {note} }} }}"#);
+        let documents = documents_of(&lua, &body);
+        match documents.1 {
+            Data::Tree { members } => {
+                assert_eq!(members.len(), 1, "bare body keeps one member");
+                let member = match members.get("top.txt") {
+                    Some(found) => found,
+                    None => panic!("bare member keeps its key"),
+                };
+                assert!(
+                    matches!(member, TreeMember::Handle(_)),
+                    "bare handle decodes to Handle"
+                );
+                assert_eq!(member.mode(), 0o644, "bare handle takes the default mode");
+            }
+            _ => panic!("tree body decodes"),
+        }
+    }
+
+    #[test]
+    fn decode_full_table_with_explicit_mode() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let body =
+            format!(r#"{{ members = {{ ["top.txt"] = {{ handle = {note}, mode = "755" }} }} }}"#);
+        let documents = documents_of(&lua, &body);
+        match documents.1 {
+            Data::Tree { members } => {
+                let member = match members.get("top.txt") {
+                    Some(found) => found,
+                    None => panic!("full member keeps its key"),
+                };
+                match member {
+                    TreeMember::Full { mode, .. } => {
+                        assert_eq!(*mode, 0o755, "table mode parses octal digits")
+                    }
+                    _ => panic!("table decodes to Full"),
+                }
+                assert_eq!(member.mode(), 0o755, "full member keeps its mode");
+            }
+            _ => panic!("tree body decodes"),
+        }
+    }
+
+    #[test]
+    fn decode_mixed_members_in_one_table() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let other = handle_of(&lua, &stores, &directory, "other.txt");
+        let body = format!(
+            r#"{{
+            members = {{
+                ["top.txt"] = {note},
+                ["sub/nested.txt"] = {{ handle = {other}, mode = "755" }},
+            }},
+        }}"#
+        );
+        let documents = documents_of(&lua, &body);
+        match documents.1 {
+            Data::Tree { members } => {
+                assert_eq!(members.len(), 2, "mixed body keeps both members");
+                let bare = match members.get("top.txt") {
+                    Some(found) => found,
+                    None => panic!("bare member keeps its key"),
+                };
+                assert!(
+                    matches!(bare, TreeMember::Handle(_)),
+                    "bare entry decodes to Handle"
+                );
+                assert_eq!(bare.mode(), 0o644, "bare entry takes the default mode");
+                let full = match members.get("sub/nested.txt") {
+                    Some(found) => found,
+                    None => panic!("full member keeps its key"),
+                };
+                assert!(
+                    matches!(full, TreeMember::Full { .. }),
+                    "table entry decodes to Full"
+                );
+                assert_eq!(full.mode(), 0o755, "table entry keeps its mode");
+            }
+            _ => panic!("tree body decodes"),
+        }
+    }
+
+    #[test]
+    fn reject_table_without_mode() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let text = body_error(
+            &lua,
+            &format!(r#"{{ members = {{ ["top.txt"] = {{ handle = {note} }} }} }}"#),
+        );
+        assert!(
+            text.contains("TreeMember"),
+            "the text shows the fault: {text}"
+        );
+    }
+
+    #[test]
+    fn round_trip_sealed_members_through_serde() {
+        let full_blob = confit_store::handles::BlobRef::new(
+            confit_driver::sha::Sha::hash(b"full bytes"),
+            confit_driver::sha::Sha::hash(b"full stored"),
+        );
+        let bare_blob = confit_store::handles::BlobRef::new(
+            confit_driver::sha::Sha::hash(b"bare bytes"),
+            confit_driver::sha::Sha::hash(b"bare stored"),
+        );
+        let bare = TreeMember::Handle(Payload::Resolved(bare_blob));
+        let full = TreeMember::Full {
+            handle: Payload::Resolved(full_blob),
+            mode: 0o755,
+        };
+        let bare_text = match serde_json::to_string(&bare) {
+            Ok(found) => found,
+            Err(error) => panic!("sealed bare serializes: {error}"),
+        };
+        assert!(
+            !bare_text.contains("mode"),
+            "sealed bare carries zero mode keys: {bare_text}"
+        );
+        match serde_json::from_str::<TreeMember>(&bare_text) {
+            Ok(TreeMember::Handle(_)) => {}
+            Ok(_) => panic!("sealed bare decodes back to Handle"),
+            Err(error) => panic!("sealed bare decodes: {error}"),
+        }
+        let full_text = match serde_json::to_string(&full) {
+            Ok(found) => found,
+            Err(error) => panic!("sealed full serializes: {error}"),
+        };
+        match serde_json::from_str::<TreeMember>(&full_text) {
+            Ok(back) => assert_eq!(back, full, "sealed full survives serde"),
+            Err(error) => panic!("sealed full decodes: {error}"),
+        }
+        let source = Data::Tree {
+            members: BTreeMap::from([
+                ("top.txt".to_owned(), bare),
+                ("sub/nested.txt".to_owned(), full),
+            ]),
+        };
+        let text = match serde_json::to_string(&source) {
+            Ok(found) => found,
+            Err(error) => panic!("sealed tree serializes: {error}"),
+        };
+        match serde_json::from_str::<Data>(&text) {
+            Ok(back) => assert_eq!(back, source, "sealed tree survives serde"),
+            Err(error) => panic!("sealed tree decodes: {error}"),
+        }
+    }
+
+    fn no_blob_files(directory: &tempfile::TempDir) -> bool {
+        let cache = directory.path().join("temp").join("blobs");
+        !confit_driver::fs::exists(&cache)
+            || confit_driver::fs::read_dir(&cache)
+                .unwrap_or_default()
+                .is_empty()
+    }
+
+    #[test]
+    fn opaque_decodes_handles_without_writes() {
+        let guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        let documents = documents_of(
+            &lua,
+            &format!(r#"{{ handle = {note}, mode = "644", unmanaged = true }}"#),
+        );
+        match documents.1 {
+            Data::Opaque {
+                handle: Payload::Handle(_),
+                ..
+            } => {}
+            _ => panic!("opaque body decodes to a handle"),
+        }
+        assert!(no_blob_files(&directory), "decode writes zero blob files");
+    }
+
+    #[test]
+    fn tree_decodes_handles_without_writes() {
+        let guard = confit_driver::fs::TestGuard::install();
+        let (directory, lua, stores) = opened_lua();
+        let note = handle_of(&lua, &stores, &directory, "note.txt");
+        let other = handle_of(&lua, &stores, &directory, "other.txt");
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        let body = format!(
+            r#"{{
+            members = {{
+                ["top.txt"] = {note},
+                ["sub/nested.txt"] = {other},
+            }},
+        }}"#
+        );
+        let documents = documents_of(&lua, &body);
+        match documents.1 {
+            Data::Tree { members } => {
+                assert_eq!(members.len(), 2);
+                assert!(
+                    members
+                        .values()
+                        .all(|member| matches!(member.blob(), Payload::Handle(_))),
+                    "every member holds a handle"
+                );
+            }
+            _ => panic!("tree body decodes to handles"),
+        }
+        assert!(no_blob_files(&directory), "decode writes zero blob files");
+    }
+
+    #[test]
+    fn ref_tables_fail_where_handles_belong() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (_directory, lua, _stores) = opened_lua();
+        let text = body_error(
+            &lua,
+            r#"{ handle = { sha256 = "aa", stored = "bb" }, mode = "644" }"#,
+        );
+        assert!(
+            text.contains("a resource handle"),
+            "the text shows the want: {text}"
+        );
+        let members = body_error(
+            &lua,
+            r#"{ members = { ["top.txt"] = { sha256 = "aa", stored = "bb" } } }"#,
+        );
+        assert!(
+            members.contains("TreeMember"),
+            "the text shows the want: {members}"
+        );
+    }
+
+    #[test]
+    fn sealed_documents_refuse_lua_encode() {
+        let lua = test_lua();
+        let digest = confit_driver::sha::Sha::hash(b"confit sealed fixture");
+        let source = Data::Opaque {
+            handle: Payload::Resolved(BlobRef::new(digest.clone(), digest)),
+            mode: 0o644,
+            unmanaged: false,
+        };
+        match source.encode(&lua) {
+            Ok(_) => panic!("sealed documents encode"),
+            Err(error) => assert!(
+                error.to_string().contains("resolved"),
+                "the error shows the arm: {error}"
+            ),
+        }
+    }
+
+    #[test]
+    fn unsealed_documents_refuse_serialize() {
+        let _guard = confit_driver::fs::TestGuard::install();
+        let (_directory, _lua, stores) = opened_lua();
+        let handle = match stores.resources().resource("note.txt") {
+            Ok(found) => found,
+            Err(error) => panic!("project opens: {error}"),
+        };
+        let unsealed = Data::Opaque {
+            handle: Payload::Handle(handle),
+            mode: 0o644,
+            unmanaged: false,
+        };
+        match serde_json::to_string(&unsealed) {
+            Ok(_) => panic!("unsealed documents serialize"),
+            Err(error) => assert!(
+                error.to_string().contains("unsealed"),
+                "the error shows the state: {error}"
+            ),
+        }
+        let digest = confit_driver::sha::Sha::hash(b"confit sealed fixture");
+        let sealed = Data::Opaque {
+            handle: Payload::Resolved(BlobRef::new(digest.clone(), digest.clone())),
+            mode: 0o644,
+            unmanaged: false,
+        };
+        let text = serde_json::to_string(&sealed).unwrap();
+        assert!(
+            text.contains(&digest.hex()),
+            "sealed json carries the hexes: {text}"
+        );
     }
 }

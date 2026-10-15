@@ -4,9 +4,9 @@
 pub mod config;
 pub mod fact;
 pub mod fetch;
+pub mod open;
 pub mod patch;
 pub mod profile;
-pub mod resource;
 pub mod template;
 pub mod validate;
 
@@ -24,11 +24,11 @@ use crate::error::EngineError;
 /// - [`mlua::Error`] for module build failures.
 pub fn builtin(lua: &Lua, name: &str) -> mlua::Result<Value> {
     match name {
-        crate::api::fetch::Module::NAMESPACE => crate::api::fetch::Module::register(lua),
-        crate::api::resource::Module::NAMESPACE => crate::api::resource::Module::register(lua),
-        crate::api::validate::Module::NAMESPACE => crate::api::validate::Module::register(lua),
-        crate::api::fact::Module::NAMESPACE => crate::api::fact::Module::register(lua),
-        crate::api::template::Module::NAMESPACE => crate::api::template::Module::register(lua),
+        crate::api::fetch::Fetch::NAMESPACE => crate::api::fetch::Fetch::register(lua),
+        crate::api::open::Open::NAMESPACE => crate::api::open::Open::register(lua),
+        crate::api::validate::Validate::NAMESPACE => crate::api::validate::Validate::register(lua),
+        crate::api::fact::Fact::NAMESPACE => crate::api::fact::Fact::register(lua),
+        crate::api::template::Template::NAMESPACE => crate::api::template::Template::register(lua),
         _ => Err(EngineError::UnknownModule {
             name: name.to_owned(),
         }

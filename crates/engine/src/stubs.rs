@@ -18,29 +18,29 @@ use crate::error::Result;
 pub fn generate_stubs() -> Result<Vec<StubDocument>> {
     let documents = vec![
         module_document(
-            crate::api::fetch::Module::NAMESPACE,
-            crate::api::fetch::Module::VERBS,
-            crate::api::fetch::Module::stubs,
+            crate::api::fetch::Fetch::NAMESPACE,
+            crate::api::fetch::Fetch::VERBS,
+            crate::api::fetch::Fetch::stubs,
         )?,
         module_document(
-            crate::api::resource::Module::NAMESPACE,
-            crate::api::resource::Module::VERBS,
-            crate::api::resource::Module::stubs,
+            crate::api::open::Open::NAMESPACE,
+            crate::api::open::Open::VERBS,
+            crate::api::open::Open::stubs,
         )?,
         module_document(
-            crate::api::validate::Module::NAMESPACE,
-            crate::api::validate::Module::VERBS,
-            crate::api::validate::Module::stubs,
+            crate::api::validate::Validate::NAMESPACE,
+            crate::api::validate::Validate::VERBS,
+            crate::api::validate::Validate::stubs,
         )?,
         module_document(
-            crate::api::fact::Module::NAMESPACE,
-            crate::api::fact::Module::VERBS,
-            crate::api::fact::Module::stubs,
+            crate::api::fact::Fact::NAMESPACE,
+            crate::api::fact::Fact::VERBS,
+            crate::api::fact::Fact::stubs,
         )?,
         module_document(
-            crate::api::template::Module::NAMESPACE,
-            crate::api::template::Module::VERBS,
-            crate::api::template::Module::stubs,
+            crate::api::template::Template::NAMESPACE,
+            crate::api::template::Template::VERBS,
+            crate::api::template::Template::stubs,
         )?,
     ];
     for document in &documents {

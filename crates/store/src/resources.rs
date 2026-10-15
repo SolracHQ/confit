@@ -3,7 +3,7 @@
 
 pub mod error;
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use confit_driver::sha::Sha;
 use file_format::FileFormat;
@@ -12,7 +12,7 @@ use mlua::{Lua, Table};
 use crate::StoreRoots;
 use crate::handles::ResourceHandle;
 use confit_driver as driver;
-use error::{ResourceError, Result};
+use error::{ResourceError, Result, SegmentFault};
 
 /// Fallback mode for extract entries.
 const DEFAULT_EXTRACT_MODE: u32 = 0o644;
@@ -32,27 +32,51 @@ impl Resources {
         }
     }
 
-    /// Create a resource handle for one project file.
+    /// Create a resource handle for one project-relative file.
     ///
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for escaping files.
     /// - [`ResourceError::Read`] for failed file reads.
-    pub fn resource(&self, path: &Path) -> Result<ResourceHandle> {
+    pub fn resource(&self, relative: &str) -> Result<ResourceHandle> {
+        let parts = split_checked(relative, false).map_err(|fault| ResourceError::Escape {
+            path: PathBuf::from(relative),
+            reason: fault.reason().to_owned(),
+        })?;
         let exec_root = &self.roots.project_root;
-        if !path.starts_with(exec_root) {
+        let mut full = exec_root.clone();
+        for part in &parts {
+            full.push(part);
+        }
+        if !normalize(&full).starts_with(normalize(exec_root)) {
             return Err(ResourceError::Escape {
-                path: path.to_path_buf(),
+                path: full,
+                reason: format!("'{relative}' is outside the project root"),
             });
         }
-        let mut file = match driver::fs::open(path) {
+        let canonical_full = match driver::fs::canonicalize(&full) {
+            Ok(resolved) => resolved,
+            Err(error) => return Err(ResourceError::from_io(&full, error)),
+        };
+        let canonical_root = match driver::fs::canonicalize(exec_root) {
+            Ok(resolved) => resolved,
+            Err(error) => return Err(ResourceError::from_io(&full, error)),
+        };
+        if !canonical_full.starts_with(&canonical_root) {
+            return Err(ResourceError::Escape {
+                path: canonical_full,
+                reason: format!("'{relative}' is outside the project root"),
+            });
+        }
+        let mut file = match driver::fs::open(&canonical_full) {
             Ok(file) => file,
             Err(error) => {
-                return Err(ResourceError::from_io(path, error));
+                return Err(ResourceError::from_io(&canonical_full, error));
             }
         };
-        let sha = Sha::read(&mut file).map_err(|failure| ResourceError::from_io(path, failure))?;
-        ResourceHandle::new(exec_root, path.to_path_buf(), sha)
+        let sha = Sha::read(&mut file)
+            .map_err(|failure| ResourceError::from_io(&canonical_full, failure))?;
+        ResourceHandle::new(&canonical_root, canonical_full, sha)
     }
 
     /// Read one trusted file as text.
@@ -69,17 +93,31 @@ impl Resources {
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for escaping files.
-    pub fn cache(&self, dir: &Path, name: &str, sha: Sha) -> Result<ResourceHandle> {
+    pub(crate) fn cache(&self, dir: &Path, name: &str, sha: Sha) -> Result<ResourceHandle> {
         if name.is_empty() {
             return Err(ResourceError::Escape {
                 path: dir.join(name),
+                reason: SegmentFault::Empty.reason().to_owned(),
             });
         }
         for part in Path::new(name).components() {
             match part {
-                Component::RootDir | Component::Prefix(_) | Component::ParentDir => {
+                Component::RootDir => {
                     return Err(ResourceError::Escape {
                         path: dir.join(name),
+                        reason: SegmentFault::Absolute.reason().to_owned(),
+                    });
+                }
+                Component::Prefix(_) => {
+                    return Err(ResourceError::Escape {
+                        path: dir.join(name),
+                        reason: SegmentFault::Drive.reason().to_owned(),
+                    });
+                }
+                Component::ParentDir => {
+                    return Err(ResourceError::Escape {
+                        path: dir.join(name),
+                        reason: SegmentFault::Parent.reason().to_owned(),
                     });
                 }
                 Component::CurDir | Component::Normal(_) => {}
@@ -87,7 +125,10 @@ impl Resources {
         }
         let joined = dir.join(name);
         if !joined.starts_with(&self.roots.temp_base) {
-            return Err(ResourceError::Escape { path: joined });
+            return Err(ResourceError::Escape {
+                path: joined.clone(),
+                reason: format!("'{}' is outside the extract root", joined.display()),
+            });
         }
         ResourceHandle::new(dir, joined.clone(), sha)
     }
@@ -127,6 +168,56 @@ impl Resources {
             return Ok(DEFAULT_EXTRACT_MODE);
         }
         driver::fs::mode(path).map_err(|error| ResourceError::from_io(path, error))
+    }
+}
+
+/// Split one segment string into checked components.
+///
+/// # Errors
+///
+/// - [`SegmentFault`] for every escaping or empty shape.
+fn split_checked(raw: &str, absolute_ok: bool) -> std::result::Result<Vec<String>, SegmentFault> {
+    if raw.contains('\\') {
+        return Err(SegmentFault::Backslash);
+    }
+    if raw.len() >= 2 && raw.as_bytes()[0].is_ascii_alphabetic() && raw.as_bytes()[1] == b':' {
+        return Err(SegmentFault::Drive);
+    }
+    let absolute = raw.starts_with('/');
+    if absolute && !absolute_ok {
+        return Err(SegmentFault::Absolute);
+    }
+    let mut parts = Vec::new();
+    for component in raw.trim_start_matches('/').split('/') {
+        if component.is_empty() {
+            return Err(SegmentFault::EmptyComponent);
+        }
+        if component == ".." {
+            return Err(SegmentFault::Parent);
+        }
+        parts.push(component.to_owned());
+    }
+    if parts.is_empty() {
+        return Err(SegmentFault::Empty);
+    }
+    Ok(parts)
+}
+
+/// Normalize one path lexically.
+///
+/// - Current-dir steps drop.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            _ => out.push(component),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
     }
 }
 
@@ -265,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_creates_handle_and_reads_text() {
+    fn resource_opens_relative_file() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let root = dir.path().join("project");
@@ -273,7 +364,7 @@ mod tests {
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, b"return {}").unwrap();
         let store = test_store(&root);
-        match store.resource(&path) {
+        match store.resource("profile.lua") {
             Ok(handle) => {
                 assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha256(), &Sha::hash(b"return {}"));
@@ -287,29 +378,76 @@ mod tests {
     }
 
     #[test]
-    fn resource_refuses_escape_plus_exec_root_mismatch() {
+    fn resource_rejects_parent_escape() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        let outside = dir.path().join("outside.lua");
         driver::fs::create_dir_all(&root).unwrap();
-        driver::fs::write(&outside, b"return {}").unwrap();
         let store = test_store(&root);
-        match store.resource(&outside) {
+        match store.resource("../outside.lua") {
             Ok(_) => panic!("escaping resource passes"),
-            Err(ResourceError::Escape { path }) => {
-                assert_eq!(path, outside, "escape shows the path")
+            Err(ResourceError::Escape { path, reason }) => {
+                assert_eq!(path, PathBuf::from("../outside.lua"));
+                assert!(
+                    reason.contains("parent steps are not supported"),
+                    "escape keeps the fault: {reason}"
+                );
             }
             Err(error) => panic!("wrong escape variant: {error}"),
         }
-        let nested = root.join("sub").join("note.lua");
-        driver::fs::create_dir_all(nested.parent().unwrap()).unwrap();
-        driver::fs::write(&nested, b"hi").unwrap();
-        let foreign = test_store(&dir.path().join("other"));
-        match foreign.resource(&nested) {
-            Ok(_) => panic!("foreign root passes"),
-            Err(ResourceError::Escape { .. }) => {}
-            Err(error) => panic!("wrong foreign variant: {error}"),
+    }
+
+    #[test]
+    fn resource_rejects_absolute_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let root = dir.path().join("project");
+        driver::fs::create_dir_all(&root).unwrap();
+        let store = test_store(&root);
+        match store.resource("/etc/passwd") {
+            Ok(_) => panic!("absolute resource passes"),
+            Err(ResourceError::Escape { reason, .. }) => {
+                assert!(
+                    reason.contains("expected a relative path"),
+                    "escape keeps the fault: {reason}"
+                );
+            }
+            Err(error) => panic!("wrong escape variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn resource_rejects_empty_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let root = dir.path().join("project");
+        driver::fs::create_dir_all(&root).unwrap();
+        let store = test_store(&root);
+        match store.resource("") {
+            Ok(_) => panic!("empty resource passes"),
+            Err(ResourceError::Escape { reason, .. }) => {
+                assert!(!reason.is_empty(), "escape keeps the fault");
+            }
+            Err(error) => panic!("wrong escape variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn resource_rejects_backslash_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let root = dir.path().join("project");
+        driver::fs::create_dir_all(&root).unwrap();
+        let store = test_store(&root);
+        match store.resource("sub\\note.lua") {
+            Ok(_) => panic!("backslash resource passes"),
+            Err(ResourceError::Escape { reason, .. }) => {
+                assert!(
+                    reason.contains("backslashes are not supported"),
+                    "escape keeps the fault: {reason}"
+                );
+            }
+            Err(error) => panic!("wrong escape variant: {error}"),
         }
     }
 
@@ -321,7 +459,7 @@ mod tests {
         let store = test_store(&root);
         let missing = root.join("absent.lua");
         driver::fs::create_dir_all(&root).unwrap();
-        match store.resource(&missing) {
+        match store.resource("absent.lua") {
             Ok(_) => panic!("absent resource passes"),
             Err(error) => {
                 let text = error.to_string();
@@ -335,6 +473,51 @@ mod tests {
     }
 
     #[test]
+    fn resource_refuses_outside_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let root = dir.path().join("project");
+        driver::fs::create_dir_all(&root).unwrap();
+        let outside = dir.path().join("escaped.txt");
+        driver::fs::write(&outside, b"secret").unwrap();
+        driver::fs::write_link(&root.join("outside"), &outside).unwrap();
+        let store = test_store(&root);
+        match store.resource("outside") {
+            Ok(_) => panic!("escaping link passes"),
+            Err(ResourceError::Escape { reason, .. }) => {
+                assert!(
+                    reason.contains("outside the project root"),
+                    "link escape keeps the boundary: {reason}"
+                );
+            }
+            Err(error) => panic!("wrong link variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn resource_follows_inside_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let root = dir.path().join("project");
+        driver::fs::create_dir_all(&root).unwrap();
+        let target = root.join("target.txt");
+        driver::fs::write(&target, b"inside bytes").unwrap();
+        driver::fs::write_link(&root.join("inside"), Path::new("target.txt")).unwrap();
+        let store = test_store(&root);
+        match store.resource("inside") {
+            Ok(handle) => {
+                assert_eq!(handle.canonical(), target.as_path());
+                assert_eq!(handle.sha256(), &Sha::hash(b"inside bytes"));
+                match store.read_text(&handle) {
+                    Ok(found) => assert_eq!(found, "inside bytes"),
+                    Err(error) => panic!("link text reads: {error}"),
+                }
+            }
+            Err(error) => panic!("inside link creates: {error}"),
+        }
+    }
+
+    #[test]
     fn read_text_refuses_invalid_text() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -343,7 +526,7 @@ mod tests {
         let path = root.join("binary.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, &[0xFF, 0xFE, b'x']).unwrap();
-        match store.resource(&path) {
+        match store.resource("binary.lua") {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
                 Err(ResourceError::Read { path: found, fault }) => {
@@ -444,7 +627,7 @@ mod tests {
         let path = root.join("profile.lua");
         driver::fs::create_dir_all(&root).unwrap();
         driver::fs::write(&path, b"return {}").unwrap();
-        let handle = match store.resource(&path) {
+        let handle = match store.resource("profile.lua") {
             Ok(handle) => handle,
             Err(error) => panic!("resource creates: {error}"),
         };

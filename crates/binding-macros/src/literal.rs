@@ -1,5 +1,5 @@
 //! Literal faces
-//! Expands string enums into literal unions.
+//! Expand string enums into literal unions.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -29,7 +29,7 @@ pub(crate) fn expand_string_enum(
         if !matches!(variant.fields, Fields::Unit) {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
-                format!("{outer}.{variant_name}: string faces read unit variants alone"),
+                format!("{outer}.{variant_name}: unit variants are expected for string faces"),
             ));
         }
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;

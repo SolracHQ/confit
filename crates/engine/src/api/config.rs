@@ -52,11 +52,15 @@ impl Config {
     }
 }
 
-/// Decode one documents key into its destination route.
+/// Decode one documents key.
+///
+/// # Returns
+///
+/// - Return the destination route.
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside route tables and jailed paths.
+/// - [`Mismatch`] for values outside route tables and relative paths.
 pub(crate) fn decode_document_key(
     lua: &Lua,
     value: &Value,

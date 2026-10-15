@@ -53,7 +53,7 @@ impl PlanRunner<'_> {
             });
         }
         let evaluated = confit_engine::Engine::new(self.stores.clone()).evaluate(&path)?;
-        let desired = Manifest::build(evaluated.documents, evaluated.hooks)?;
+        let desired = Manifest::build(&self.stores, evaluated.documents, evaluated.hooks)?;
         let prepared = confit_runtime::prepare(&self.stores, desired)?;
         let text = render_prepared(&prepared);
         if let Some(output) = self.args.output.as_deref() {

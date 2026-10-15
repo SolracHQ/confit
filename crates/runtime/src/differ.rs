@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use confit_driver::sha::Sha;
-use confit_model::document::{Data, StructuredFormat, TreeMember, render_mode};
+use confit_model::document::{Data, StructuredFormat, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
@@ -12,6 +12,11 @@ use confit_store::faults::AccessFault;
 use crate::disk::{Disk, DiskMember, disk_doc, disk_tree, open_member};
 use crate::manifest::{Document, Manifest};
 use crate::render::render_document;
+
+/// Render mode bits as octal digits for diff lines.
+fn mode_text(mode: u32) -> String {
+    format!("{mode:o}")
+}
 
 /// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,13 +121,16 @@ impl Differ {
                         ));
                         continue;
                     }
-                    if let Data::Opaque { blob, .. } = &document.data {
+                    if let Data::Opaque { handle: blob, .. } = &document.data {
                         let store = self.stores.blobs();
-                        let Ok(handle) = store.resolve(blob) else {
+                        let Ok(resolved) = blob.resolve(&self.stores) else {
+                            continue;
+                        };
+                        let Ok(handle) = store.resolve(&resolved) else {
                             continue;
                         };
                         let recorded_label = match store.len(&handle) {
-                            Ok(len) => blob.sha256.label(len),
+                            Ok(len) => resolved.sha256.label(len),
                             Err(_) => continue,
                         };
                         let disk_label = match Self::disk_label(document) {
@@ -136,12 +144,12 @@ impl Differ {
                             {
                                 let (old, new) = match order {
                                     DifferenceOrder::RecordedFirst => (
-                                        serde_json::Value::String(render_mode(wanted)),
-                                        serde_json::Value::String(render_mode(seen)),
+                                        serde_json::Value::String(mode_text(wanted)),
+                                        serde_json::Value::String(mode_text(seen)),
                                     ),
                                     DifferenceOrder::DiskFirst => (
-                                        serde_json::Value::String(render_mode(seen)),
-                                        serde_json::Value::String(render_mode(wanted)),
+                                        serde_json::Value::String(mode_text(seen)),
+                                        serde_json::Value::String(mode_text(wanted)),
                                     ),
                                 };
                                 out.push(Difference::Key {
@@ -190,11 +198,14 @@ impl Differ {
                 Some(DiskMember::Present { mode, .. }) => {
                     let seen_mode = *mode;
                     let store = self.stores.blobs();
-                    let Ok(handle) = store.resolve(&member.blob) else {
+                    let Ok(resolved) = member.blob().resolve(&self.stores) else {
+                        continue;
+                    };
+                    let Ok(handle) = store.resolve(&resolved) else {
                         continue;
                     };
                     let recorded_label = match store.len(&handle) {
-                        Ok(len) => member.blob.sha256.label(len),
+                        Ok(len) => resolved.sha256.label(len),
                         Err(_) => continue,
                     };
                     let Some(disk_label) = Self::tree_member_label(destination, relative) else {
@@ -210,16 +221,16 @@ impl Differ {
                         ));
                     }
                     if let Some(seen) = seen_mode
-                        && seen != member.mode
+                        && seen != member.mode()
                     {
                         let (old, new) = match order {
                             DifferenceOrder::RecordedFirst => (
-                                serde_json::Value::String(render_mode(member.mode)),
-                                serde_json::Value::String(render_mode(seen)),
+                                serde_json::Value::String(mode_text(member.mode())),
+                                serde_json::Value::String(mode_text(seen)),
                             ),
                             DifferenceOrder::DiskFirst => (
-                                serde_json::Value::String(render_mode(seen)),
-                                serde_json::Value::String(render_mode(member.mode)),
+                                serde_json::Value::String(mode_text(seen)),
+                                serde_json::Value::String(mode_text(member.mode())),
                             ),
                         };
                         out.push(Difference::Key {
@@ -350,12 +361,12 @@ fn disk_difference(
     {
         let (old, new) = match order {
             DifferenceOrder::RecordedFirst => (
-                serde_json::Value::String(render_mode(wanted)),
-                serde_json::Value::String(render_mode(seen)),
+                serde_json::Value::String(mode_text(wanted)),
+                serde_json::Value::String(mode_text(seen)),
             ),
             DifferenceOrder::DiskFirst => (
-                serde_json::Value::String(render_mode(seen)),
-                serde_json::Value::String(render_mode(wanted)),
+                serde_json::Value::String(mode_text(seen)),
+                serde_json::Value::String(mode_text(wanted)),
             ),
         };
         out.push(Difference::Key {

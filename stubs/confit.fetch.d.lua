@@ -1,5 +1,5 @@
 --- @meta confit.fetch
---- Opens one url into its handle.
+--- Open one url.
 --- @param url string The url to fetch.
 --- @param opts? FetchOpts The digest pin table.
 --- @return ResourceHandle? The resource handle, else nil.
@@ -14,38 +14,38 @@ function fetch(url, opts) end
 --- @class ResourceHandle
 ResourceHandle = {}
 
---- Read file text, else nil with reason.
---- @return string?
---- @return string?
+--- Read file text.
+--- @return string? File text, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:text() end
 
 --- Render the opened content hash.
---- @return string
+--- @return string Hex digest of the file content.
 function ResourceHandle:sha() end
 
---- Read file content into its table, else nil with reason.  - Inputs without a table shape produce nil with reason.
---- @return table?
---- @return string?
+--- Read file content.
+--- @return table? Decoded table, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:load() end
 
---- Open the input as its archive, else nil with reason.  - Non-archives produce nil with reason.
---- @return ArchiveHandle?
---- @return string?
+--- Open the input archive.
+--- @return ArchiveHandle? Archive handle, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:archive() end
 
 --- Handle to a verified compressed archive.
 --- @class ArchiveHandle
 ArchiveHandle = {}
 
---- List the archive member names, else nil with reason.  - Members are archive-relative with forward slashes.
---- @return string[]?
---- @return string?
+--- List the archive member names, archive-relative with forward slashes.
+--- @return string[]? Member names, else nil.
+--- @return string? Failure reason, else nil.
 function ArchiveHandle:members() end
 
---- Open one archive member as its handle, else nil with reason.  - Names are archive-relative with forward slashes.
---- @param name string
---- @return ResourceHandle?
---- @return string?
+--- Open one archive member.
+--- @param name string Archive-relative member name.
+--- @return ResourceHandle? Member handle, else nil.
+--- @return string? Failure reason, else nil.
 function ArchiveHandle:member(name) end
 
 return fetch

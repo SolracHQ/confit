@@ -1,7 +1,7 @@
 //! Facts
 //! Immediate host facts over closed names.
 
-use confit_binding_macros::Face;
+use confit_binding_macros::{Face, face_impl};
 
 /// Api level of the Lua surface.
 pub const API_VERSION: i64 = 1;
@@ -18,28 +18,26 @@ pub enum FactName {
     Arch,
 }
 
-confit_binding::verb! {
-    /// Reads one host fact into its string.
-    fn fact(
-        /// The fact name under reading.
-        name: FactName,
-    ) -> (
-        /// The host fact string.
-        String,
-    ) [call = fact_impl]
-}
+/// Fact namespace.
+pub struct Fact;
 
-confit_binding::module! {
-    namespace = "confit.fact",
-    verb = fact,
-}
-
-/// Read one host fact into its string.
-fn fact_impl(name: FactName) -> mlua::Result<(String,)> {
-    match name {
-        FactName::Version => Ok((API_VERSION.to_string(),)),
-        FactName::Os => Ok((std::env::consts::OS.to_owned(),)),
-        FactName::Arch => Ok((std::env::consts::ARCH.to_owned(),)),
+#[face_impl(namespace = "confit.fact")]
+impl Fact {
+    /// Read one host fact.
+    ///
+    /// # Arguments
+    ///
+    /// - [name] The fact name under reading.
+    ///
+    /// # Returns
+    ///
+    /// - The host fact string.
+    pub fn fact(name: FactName) -> mlua::Result<(String,)> {
+        match name {
+            FactName::Version => Ok((API_VERSION.to_string(),)),
+            FactName::Os => Ok((std::env::consts::OS.to_owned(),)),
+            FactName::Arch => Ok((std::env::consts::ARCH.to_owned(),)),
+        }
     }
 }
 
@@ -50,7 +48,7 @@ mod tests {
 
     fn test_lua() -> Lua {
         let lua = Lua::new();
-        let fact = Module::register(&lua).unwrap();
+        let fact = Fact::register(&lua).unwrap();
         lua.globals().set("fact", fact).unwrap();
         lua
     }

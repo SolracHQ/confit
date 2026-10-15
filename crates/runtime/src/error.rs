@@ -100,6 +100,14 @@ pub enum RuntimeError {
         /// The refused payload shape.
         shape: RefusalShape,
     },
+    /// Unresolvable destination base.
+    #[error("cannot resolve '{route}': {source}", route = route.display())]
+    Expand {
+        /// The destination route under resolving.
+        route: Route,
+        /// The model resolve cause.
+        source: ModelError,
+    },
     /// Missing blob.
     #[error(
         "cannot write '{dest}': member '{member}' needs blob '{short}'",

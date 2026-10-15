@@ -2,10 +2,10 @@
 
 use mlua::Lua;
 
-use confit_binding_macros::Face;
+use confit_binding_macros::{Face, face_impl};
 
 use confit_driver::sha::Sha;
-use confit_store::fetch::error::FetchError;
+
 use confit_store::handles::ResourceHandle;
 
 use crate::api::stores_of;
@@ -19,73 +19,71 @@ pub struct FetchOpts {
     pub sha256: Option<String>,
 }
 
-confit_binding::verb! {
-    /// Opens one url into its handle.
-    fn fetch(
+/// Fetch namespace.
+pub struct Fetch;
+
+#[face_impl(namespace = "confit.fetch")]
+impl Fetch {
+    /// Open one url.
+    ///
+    /// # Arguments
+    ///
+    /// - [url] The url to fetch.
+    /// - [opts] The digest pin table.
+    ///
+    /// # Returns
+    ///
+    /// - The resource handle, else nil.
+    /// - The failure reason, else nil.
+    pub fn fetch(
         lua: &Lua,
-        /// The url to fetch.
         url: String,
-        /// The digest pin table.
-        #[face(optional)] opts: Option<FetchOpts>,
-    ) -> (
-        /// The resource handle, else nil.
-        Option<ResourceHandle>,
-        /// The failure reason, else nil.
-        Option<String>,
-    ) [call = fetch_impl]
-}
-
-confit_binding::module! {
-    namespace = "confit.fetch",
-    verb = fetch,
-}
-
-/// Open one url into its resource handle.
-///
-/// Dead urls take nil with reason and pin mismatches raise.
-///
-/// # Errors
-///
-/// - [`EngineError::Mismatch`] for non-string urls and misshaped pins.
-/// - [`EngineError::Fetch`] for pin mismatches.
-fn fetch_impl(
-    lua: &Lua,
-    raw: String,
-    opts: Option<FetchOpts>,
-) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
-    let stores = stores_of(lua)?;
-    if raw.is_empty() {
-        return Err(EngineError::mismatch("url", "a non-empty url", "empty string").into());
-    }
-    let wanted = pin_of(opts)?;
-    match stores.fetch().fetch(&raw, wanted, false) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error @ FetchError::DigestMismatch { .. }) => Err(EngineError::Fetch(error).into()),
-        Err(error) => Ok((None, Some(error.to_string()))),
+        #[face(optional)] opts: FetchOpts,
+    ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
+        let stores = stores_of(lua)?;
+        if url.is_empty() {
+            let reason =
+                EngineError::mismatch("url", "a non-empty url", "empty string").to_string();
+            return Ok((None, Some(reason)));
+        }
+        let (wanted, pin_reason) = pin_of(opts)?;
+        if let Some(reason) = pin_reason {
+            return Ok((None, Some(reason)));
+        }
+        match stores.fetch().fetch(&url, wanted, false) {
+            Ok(found) => Ok((Some(found), None)),
+            Err(error) => Ok((None, Some(error.to_string()))),
+        }
     }
 }
 
 /// Resolve the digest pin from the options value.
 ///
-/// # Errors
+/// # Returns
 ///
-/// - [`EngineError::Mismatch`] for bad digests.
-fn pin_of(opts: Option<FetchOpts>) -> mlua::Result<Option<Sha>> {
-    match opts.and_then(|found| found.sha256) {
-        None => Ok(None),
+/// - Return the pin on success.
+/// - Return the reason on bad digests.
+fn pin_of(opts: FetchOpts) -> mlua::Result<(Option<Sha>, Option<String>)> {
+    match opts.sha256 {
+        None => Ok((None, None)),
         Some(digest) => open_pin(&digest),
     }
 }
 
 /// Open one digest pin.
 ///
-/// # Errors
+/// # Returns
 ///
-/// - [`EngineError::Mismatch`] for non-hex digests.
-fn open_pin(digest: &str) -> mlua::Result<Option<Sha>> {
+/// - Return the pin on success.
+/// - Return the reason on bad digests.
+fn open_pin(digest: &str) -> mlua::Result<(Option<Sha>, Option<String>)> {
     match Sha::new(digest) {
-        Ok(found) => Ok(Some(found)),
-        Err(_) => Err(EngineError::mismatch("sha256", "a 64-char hex digest", digest).into()),
+        Ok(found) => Ok((Some(found), None)),
+        Err(_) => {
+            let reason =
+                EngineError::mismatch("sha256", "a 64-char hex digest", digest).to_string();
+            Ok((None, Some(reason)))
+        }
     }
 }
 
@@ -192,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn sha_pin_mismatches_raise() {
+    fn sha_pin_mismatches_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         confit_driver::http::clear();
@@ -200,19 +198,22 @@ mod tests {
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);
         let source = format!(
-            r#"return fetch("{URL}", {{ sha256 = "{}" }})"#,
+            r#"local handle, reason = fetch("{URL}", {{ sha256 = "{}" }})
+            assert(handle == nil)
+            return reason"#,
             "0".repeat(64)
         );
         match run(&lua, &source) {
-            Ok(_) => panic!("mismatched pin passes"),
-            Err(error) => {
-                let text = error.to_string();
+            Ok(Value::String(reason)) => {
+                let text = reason.to_string_lossy();
                 assert!(
                     text.contains("sha256 mismatch"),
                     "the text shows the pin: {text}"
                 );
                 assert!(text.contains(URL), "the text shows the url: {text}");
             }
+            Ok(_) => panic!("mismatched pin returns nil with reason"),
+            Err(error) => panic!("mismatched pins stay soft: {error}"),
         }
     }
 
@@ -230,16 +231,6 @@ mod tests {
                 assert!(text.contains("a string"), "the text shows the want: {text}");
             }
         }
-        match run(&lua, "return fetch(\"\")") {
-            Ok(_) => panic!("empty url passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("a non-empty url"),
-                    "the text shows the want: {text}"
-                );
-            }
-        }
         let source = format!(r#"return fetch("{URL}", {{ nope = 1 }})"#);
         match run(&lua, &source) {
             Ok(_) => panic!("unknown pin passes"),
@@ -248,17 +239,47 @@ mod tests {
                 assert!(text.contains("nope"), "the text shows the field: {text}");
             }
         }
-        let source = format!(r#"return fetch("{URL}", {{ sha256 = "zzz" }})"#);
+    }
+
+    #[test]
+    fn operational_failures_return_nil_with_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        confit_driver::http::clear();
+        let stores = test_stores(dir.path());
+        let lua = test_lua(&stores);
+        let source = r#"
+            local handle, reason = fetch("")
+            assert(handle == nil)
+            return reason
+        "#;
+        match run(&lua, source) {
+            Ok(Value::String(reason)) => {
+                let text = reason.to_string_lossy();
+                assert!(
+                    text.contains("a non-empty url"),
+                    "the text shows the want: {text}"
+                );
+            }
+            Ok(_) => panic!("empty url returns nil with reason"),
+            Err(error) => panic!("empty urls stay soft: {error}"),
+        }
+        let source = format!(
+            r#"local handle, reason = fetch("{URL}", {{ sha256 = "zzz" }})
+            assert(handle == nil)
+            return reason"#
+        );
         match run(&lua, &source) {
-            Ok(_) => panic!("bad digest passes"),
-            Err(error) => {
-                let text = error.to_string();
+            Ok(Value::String(reason)) => {
+                let text = reason.to_string_lossy();
                 assert!(
                     text.contains("64-char hex digest"),
                     "the text shows the want: {text}"
                 );
                 assert!(text.contains("zzz"), "the text shows the received: {text}");
             }
+            Ok(_) => panic!("bad digest returns nil with reason"),
+            Err(error) => panic!("bad digests stay soft: {error}"),
         }
     }
 }

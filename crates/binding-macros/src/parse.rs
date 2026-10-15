@@ -1,5 +1,5 @@
 //! Face parsing
-//! Reads face attributes into marker selections.
+//! Read face attributes into marker selections.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -60,10 +60,10 @@ pub(crate) struct FieldFlags {
     pub(crate) rename: Option<String>,
     /// The Lua face override.
     pub(crate) proxy: Option<syn::Path>,
-    /// The decode function path.
-    pub(crate) convert: Option<syn::Path>,
-    /// The encode function path.
-    pub(crate) encode: Option<syn::Path>,
+    /// The decode hook path.
+    pub(crate) decode_hook: Option<syn::Path>,
+    /// The encode hook path.
+    pub(crate) encode_hook: Option<syn::Path>,
     /// The map key decode function path.
     pub(crate) key_convert: Option<syn::Path>,
     /// The map value decode function path.
@@ -264,13 +264,13 @@ pub(crate) fn parse_header(
     if !is_enum && header.union.is_some() {
         return Err(syn::Error::new_spanned(
             identifier,
-            format!("{type_name}: struct faces take no union annotation"),
+            format!("{type_name}: struct faces do not support union annotations"),
         ));
     }
     if !is_enum && header.probe.is_some() {
         return Err(syn::Error::new_spanned(
             identifier,
-            format!("{type_name}: probe hooks read untagged enums alone"),
+            format!("{type_name}: untagged enums are expected for probe hooks"),
         ));
     }
     Ok(header)
@@ -399,8 +399,8 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown face option '{ident}'; \
                                      want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
-                                     'convert', 'encode', 'key_convert', 'value_convert', \
-                                     'rename', or 'default'"
+                                     'decode_hook', 'encode_hook', 'key_convert', \
+                                     'value_convert', 'rename', or 'default'"
                                 ),
                             ));
                         }
@@ -432,12 +432,12 @@ pub(crate) fn parse_field_flags(
                             }
                             flags.proxy = Some(found.path.clone());
                         }
-                        "convert" => {
+                        "decode_hook" => {
                             let syn::Expr::Path(found) = &pair.value else {
                                 return Err(syn::Error::new_spanned(
                                     &pair.value,
                                     format!(
-                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                        "{outer}.{field}: face option 'decode_hook' wants a function path"
                                     ),
                                 ));
                             };
@@ -445,18 +445,18 @@ pub(crate) fn parse_field_flags(
                                 return Err(syn::Error::new_spanned(
                                     &pair.value,
                                     format!(
-                                        "{outer}.{field}: face option 'convert' wants a function path"
+                                        "{outer}.{field}: face option 'decode_hook' wants a function path"
                                     ),
                                 ));
                             }
-                            flags.convert = Some(found.path.clone());
+                            flags.decode_hook = Some(found.path.clone());
                         }
-                        "encode" => {
+                        "encode_hook" => {
                             let syn::Expr::Path(found) = &pair.value else {
                                 return Err(syn::Error::new_spanned(
                                     &pair.value,
                                     format!(
-                                        "{outer}.{field}: face option 'encode' wants a function path"
+                                        "{outer}.{field}: face option 'encode_hook' wants a function path"
                                     ),
                                 ));
                             };
@@ -464,11 +464,11 @@ pub(crate) fn parse_field_flags(
                                 return Err(syn::Error::new_spanned(
                                     &pair.value,
                                     format!(
-                                        "{outer}.{field}: face option 'encode' wants a function path"
+                                        "{outer}.{field}: face option 'encode_hook' wants a function path"
                                     ),
                                 ));
                             }
-                            flags.encode = Some(found.path.clone());
+                            flags.encode_hook = Some(found.path.clone());
                         }
                         "key_convert" => {
                             let syn::Expr::Path(found) = &pair.value else {
@@ -556,8 +556,8 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown face option '{key}'; \
                                      want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
-                                     'convert', 'encode', 'key_convert', 'value_convert', \
-                                     'rename', or 'default'"
+                                     'decode_hook', 'encode_hook', 'key_convert', \
+                                     'value_convert', 'rename', or 'default'"
                                 ),
                             ));
                         }
@@ -568,8 +568,8 @@ pub(crate) fn parse_field_flags(
                         &item,
                         format!(
                             "{outer}.{field}: unknown face shape; want 'optional', \
-                             'opaque', 'live', 'ignore', 'proxy', 'convert', 'encode', \
-                             'key_convert', \
+                             'opaque', 'live', 'ignore', 'proxy', 'decode_hook', \
+                             'encode_hook', 'key_convert', \
                              'value_convert', 'rename', or 'default'"
                         ),
                     ));
@@ -577,22 +577,16 @@ pub(crate) fn parse_field_flags(
             }
         }
     }
-    if flags.proxy.is_some() && flags.convert.is_none() {
+    if flags.proxy.is_some() && flags.decode_hook.is_none() {
         return Err(syn::Error::new_spanned(
             attrs.first(),
-            format!("{outer}.{field}: face option 'proxy' arrives with 'convert'"),
-        ));
-    }
-    if flags.encode.is_some() && flags.proxy.is_none() {
-        return Err(syn::Error::new_spanned(
-            attrs.first(),
-            format!("{outer}.{field}: face option 'encode' arrives with 'proxy'"),
+            format!("{outer}.{field}: proxy without decode_hook is not supported"),
         ));
     }
     if flags.optional && flags.default.is_some() {
         return Err(syn::Error::new_spanned(
             attrs.first(),
-            format!("{outer}.{field}: face options 'optional' and 'default' stay apart"),
+            format!("{outer}.{field}: optional with default is not supported"),
         ));
     }
     if flags.ignore
@@ -600,8 +594,8 @@ pub(crate) fn parse_field_flags(
             || flags.opaque
             || flags.live
             || flags.proxy.is_some()
-            || flags.convert.is_some()
-            || flags.encode.is_some()
+            || flags.decode_hook.is_some()
+            || flags.encode_hook.is_some()
             || flags.key_convert.is_some()
             || flags.value_convert.is_some()
             || flags.rename.is_some()

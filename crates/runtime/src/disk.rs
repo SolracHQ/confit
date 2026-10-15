@@ -4,12 +4,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_driver as driver;
-use confit_model::document::{Data, TreeMember};
+use confit_model::document::{Data, Payload, TreeMember};
 use confit_model::routes::Route;
-use confit_store::blob::BlobStore;
+use confit_store::Stores;
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
-use confit_store::handles::BlobRef;
 
 use crate::error::{Result, RuntimeError};
 use crate::manifest::Document;
@@ -50,7 +49,16 @@ pub enum DiskMember {
 
 /// Open one document destination through its kind-aware reader.
 pub fn disk_doc(document: &Document) -> Disk {
-    let expanded = document.destination.expand();
+    let expanded = match document.destination.expand() {
+        Ok(path) => path,
+        Err(error) => {
+            return Disk::Unreadable {
+                fault: AccessFault::Unknown {
+                    message: error.to_string(),
+                },
+            };
+        }
+    };
     let is_link = matches!(document.data, Data::Link { .. });
     let target = match driver::fs::read_link(&expanded) {
         Ok(link) => join_link_target(&expanded, &link),
@@ -88,7 +96,9 @@ pub fn disk_doc(document: &Document) -> Disk {
 
 /// Open one tree destination into relative member readers.
 pub fn disk_tree(document: &Document) -> BTreeMap<String, DiskMember> {
-    let dir = document.destination.expand();
+    let Ok(dir) = document.destination.expand() else {
+        return BTreeMap::new();
+    };
     let mut out = BTreeMap::new();
     walk_tree(&dir, &dir, &mut out);
     out
@@ -96,7 +106,7 @@ pub fn disk_tree(document: &Document) -> BTreeMap<String, DiskMember> {
 
 /// Open a fresh reader for one tree member path.
 pub fn open_member(destination: &Route, relative: &str) -> Option<Box<dyn std::io::Read>> {
-    let dest = destination.expand();
+    let dest = destination.expand().ok()?;
     let path = dest.join(relative);
     if let Ok(bytes) = driver::fs::read_link_bytes(&path) {
         return Some(Box::new(std::io::Cursor::new(bytes)) as Box<dyn std::io::Read>);
@@ -119,12 +129,12 @@ pub fn open_member(destination: &Route, relative: &str) -> Option<Box<dyn std::i
 pub fn write_tree(
     dest: &Path,
     members: &BTreeMap<String, TreeMember>,
-    blobs: &BlobStore,
+    stores: &Stores,
 ) -> Result<usize> {
     for (relative, member) in members {
         let path = dest.join(relative);
-        copy_blob(dest, &path, &member.blob, blobs)?;
-        driver::fs::set_mode(&path, member.mode)
+        copy_blob(dest, &path, member.blob(), stores)?;
+        driver::fs::set_mode(&path, member.mode())
             .map_err(|error| RuntimeError::from_write_io(&path, error))?;
     }
     Ok(1)
@@ -239,15 +249,20 @@ fn file_mode(path: &Path) -> Option<u32> {
 pub(crate) fn copy_blob(
     dest: &Path,
     target: &Path,
-    blob: &BlobRef,
-    blobs: &BlobStore,
+    payload: &Payload,
+    stores: &Stores,
 ) -> Result<()> {
     use std::io::Write as _;
 
-    let handle = blobs
-        .resolve(blob)
+    let resolved = payload
+        .resolve(stores)
         .map_err(|error| map_pool(error, dest, target))?;
-    let mut reader = blobs
+    let handle = stores
+        .blobs()
+        .resolve(&resolved)
+        .map_err(|error| map_pool(error, dest, target))?;
+    let mut reader = stores
+        .blobs()
         .open(&handle)
         .map_err(|error| map_pool(error, dest, target))?;
     driver::fs::create_parent(target)

@@ -14,7 +14,6 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 noyalib.workspace = true
-sha2.workspace = true
 crossbeam-channel.workspace = true
 thiserror.workspace = true
 log.workspace = true

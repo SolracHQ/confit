@@ -11,6 +11,16 @@ pub struct MethodParameter {
     pub name: &'static str,
     /// The parameter face expression.
     pub face: Cow<'static, str>,
+    /// The parameter documentation.
+    pub documentation: &'static str,
+}
+
+/// One userdata method return with its Lua face.
+pub struct MethodReturn {
+    /// The return face expression.
+    pub face: Cow<'static, str>,
+    /// The return documentation.
+    pub documentation: &'static str,
 }
 
 /// One userdata method with its Lua faces.
@@ -22,7 +32,7 @@ pub struct MethodDescriptor {
     /// The method parameters in declaration order.
     pub parameters: Vec<MethodParameter>,
     /// The method return faces in order.
-    pub returns: Vec<Cow<'static, str>>,
+    pub returns: Vec<MethodReturn>,
 }
 
 /// Bound userdata class.
@@ -62,12 +72,24 @@ mod tests {
     #[face_impl]
     impl Roster {
         /// List members with the prefix.
+        ///
+        /// # Arguments
+        ///
+        /// - [prefix] Filter members by prefix.
+        ///
+        /// # Returns
+        ///
+        /// - Member names with the seed first.
         pub fn members(&self, lua: &Lua, prefix: String) -> mlua::Result<Vec<String>> {
             let _ = lua;
             Ok(vec![self.seed.clone(), prefix])
         }
 
         /// Answer the seed.
+        ///
+        /// # Returns
+        ///
+        /// - The stored seed.
         pub fn seed_name(&self) -> String {
             self.seed.clone()
         }
@@ -87,9 +109,20 @@ mod tests {
             vec!["prefix"]
         );
         assert_eq!(methods[0].parameters[0].face, "string");
-        assert_eq!(methods[0].returns, vec!["string[]"]);
+        assert_eq!(
+            methods[0].parameters[0].documentation,
+            "Filter members by prefix."
+        );
+        assert_eq!(methods[0].returns.len(), 1);
+        assert_eq!(methods[0].returns[0].face, "string[]");
+        assert_eq!(
+            methods[0].returns[0].documentation,
+            "Member names with the seed first."
+        );
         assert!(methods[1].parameters.is_empty());
-        assert_eq!(methods[1].returns, vec!["string"]);
+        assert_eq!(methods[1].returns.len(), 1);
+        assert_eq!(methods[1].returns[0].face, "string");
+        assert_eq!(methods[1].returns[0].documentation, "The stored seed.");
         let lua = Lua::new();
         lua.globals()
             .set(

@@ -272,7 +272,7 @@ impl StateStore {
         Ok(())
     }
 
-    /// Report whether no applied state is present.
+    /// Report whether this is the first run.
     pub fn is_first_run(&self) -> bool {
         driver::fs::is_missing(&self.state)
     }
@@ -328,7 +328,7 @@ fn system_nanos() -> std::result::Result<u128, std::time::SystemTimeError> {
         .map(|span| span.as_nanos())
 }
 
-/// Check one state name for one file stem with no separators.
+/// Check one state name for a file stem.
 ///
 /// # Errors
 ///

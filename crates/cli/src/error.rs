@@ -163,9 +163,7 @@ pub enum CliError {
         path: PathBuf,
     },
     /// Bad delete name.
-    #[error(
-        "delete: '{input}' is unsupported, want '@name'; history and the current state never delete"
-    )]
+    #[error("delete: '{input}' is unsupported, want '@name'")]
     BadName {
         /// The delete input under parsing.
         input: String,
@@ -330,9 +328,6 @@ fn transport_model(error: &ModelError) -> String {
         ModelError::Parse { input, want } => {
             format!("invalid '{input}': want {want}")
         }
-        ModelError::Segment { input, fault } => {
-            format!("invalid '{input}': want valid relative segments ({fault})")
-        }
         ModelError::Render { format, reason } => {
             log::error!("model render as {format} failed: {reason}");
             format!("cannot render {format}, see log")
@@ -340,6 +335,14 @@ fn transport_model(error: &ModelError) -> String {
         ModelError::Unhashable { document, reason } => {
             log::error!("cannot hash '{document}': {reason}");
             format!("cannot hash '{document}', see log")
+        }
+        ModelError::Seal { document, reason } => {
+            log::error!("cannot seal '{document}': {reason}");
+            format!("cannot seal '{document}', see log")
+        }
+        ModelError::Base { base } => {
+            log::error!("cannot resolve '{}' folder", base.name());
+            format!("cannot resolve '{}' folder, see log", base.name())
         }
     }
 }
@@ -383,6 +386,10 @@ fn transport_runtime(error: &RuntimeError) -> String {
         .to_string(),
         RuntimeError::Render { route, reason, .. } => {
             log::error!("render '{}' failed: {reason}", route.display());
+            error.to_string()
+        }
+        RuntimeError::Expand { route, source } => {
+            log::error!("resolve '{}' failed: {source}", route.display());
             error.to_string()
         }
         RuntimeError::WriteUnknown { path, message } => {

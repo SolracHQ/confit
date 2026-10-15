@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 
 use confit_binding_macros::Face;
-use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +14,7 @@ const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
 /// Text or route for command arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Face, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Face)]
 #[serde(untagged)]
 #[face(table, untagged)]
 pub enum Arg {
@@ -74,14 +73,6 @@ impl Arg {
         }
     }
 
-    /// Materialize one argument into a host path.
-    pub fn materialize(&self) -> std::path::PathBuf {
-        match self {
-            Self::Text(text) => std::path::PathBuf::from(text),
-            Self::Route(route) => route.expand(),
-        }
-    }
-
     /// Render argv slots as one shell-safe display line.
     ///
     /// - Slots with shell-special text quote single.
@@ -114,7 +105,7 @@ impl From<Route> for Arg {
 
 /// Quote one word for shell use.
 ///
-/// - Safe text holds alphanumerics and `@%_+=:,./-` only.
+/// - Safe text with alphanumerics and `@%_+=:,./-` only.
 pub fn quote(text: &str) -> Cow<'_, str> {
     if !text.is_empty() && text.bytes().all(|byte| SAFE_CHARS.contains(&byte)) {
         Cow::Borrowed(text)

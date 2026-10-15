@@ -57,7 +57,9 @@ impl Checks {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => find_executable(name, &self.path_dirs).is_some(),
-            Condition::Exists { route } => driver::fs::exists(&route.expand()),
+            Condition::Exists { route } => {
+                route.expand().is_ok_and(|path| driver::fs::exists(&path))
+            }
             Condition::Changed { route } => changed.contains(route),
             Condition::All(items) => items.iter().all(|item| self.check(item, changed)),
             Condition::Any(items) => items.iter().any(|item| self.check(item, changed)),
@@ -359,7 +361,11 @@ mod tests {
         driver::fs::create_dir_all(dir.path()).unwrap();
         driver::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
-        assert_eq!(route.expand(), path, "literal routes resolve unchanged");
+        assert_eq!(
+            route.expand().unwrap(),
+            path,
+            "literal routes resolve unchanged"
+        );
         assert!(
             checks_with(Vec::new()).check(
                 &Condition::Exists {

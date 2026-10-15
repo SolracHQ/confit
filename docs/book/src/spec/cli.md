@@ -65,7 +65,7 @@ literal path, adding `.cb` to names missing it, in any letter
 case. Without `-o`, the name follows the slot: `applied.cb`,
 `{name}.cb`, or `prev-{N}.cb`. `-m` renders the manifest as
 pretty JSON on stdout instead and writes no bundle file. The
-JSON carries blob hashes and sizes only; document bytes stay in the
+JSON carries blob hashes only; document bytes stay in the
 pool.
 
 A file export answers with `export: {path}` on stdout.

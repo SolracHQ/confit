@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use confit_driver::sha::Sha;
     use confit_driver::{self as driver, fs::TestGuard};
-    use confit_model::document::Data;
+    use confit_model::document::{Data, Payload};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -177,14 +177,13 @@ mod tests {
             documents.insert(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 Data::Opaque {
-                    blob: handle.to_ref(),
-                    size: body.len() as u64,
+                    handle: Payload::Resolved(handle.to_ref()),
                     mode: 0o644,
                     unmanaged: false,
                 },
             );
         }
-        match Manifest::build(documents, Vec::new()) {
+        match Manifest::build(&stores, documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }

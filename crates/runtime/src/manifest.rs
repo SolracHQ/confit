@@ -7,10 +7,11 @@ use std::path::Path;
 use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
 use confit_driver::sha::Sha;
-use confit_model::document::{Data, DocumentKind, StructuredFormat, TreeMember};
+use confit_model::document::{Data, DocumentKind, Payload, StructuredFormat, TreeMember};
 use confit_model::error::{Error, Result};
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
+use confit_store::Stores;
 use confit_store::faults::AccessFault;
 use confit_store::handles::BlobRef;
 use confit_store::handles::StateHandle;
@@ -69,13 +70,13 @@ pub enum DocumentStatus {
 #[face(table)]
 pub struct Summary {
     /// Documents absent from previous documents.
-    #[face(proxy = u64, convert = decode_count)]
+    #[face(proxy = u64, decode_hook = decode_count)]
     pub create: usize,
     /// Documents with a differing data hash.
-    #[face(proxy = u64, convert = decode_count)]
+    #[face(proxy = u64, decode_hook = decode_count)]
     pub update: usize,
     /// Previous documents missing from the built documents.
-    #[face(proxy = u64, convert = decode_count)]
+    #[face(proxy = u64, decode_hook = decode_count)]
     pub delete: usize,
 }
 
@@ -91,17 +92,24 @@ impl Manifest {
 
     /// Build the desired manifest from route documents with filled hashes.
     ///
+    /// - Handles seal through the blob pool before hashing.
     /// - Documents sort by destination display.
     ///
     /// # Errors
     ///
+    /// - [`Error::Seal`] for documents failing blob compression.
     /// - [`Error::Unhashable`] for documents failing hashes.
-    pub fn build(documents: BTreeMap<Route, Data>, hooks: Vec<Hook>) -> Result<Self> {
+    pub fn build(
+        stores: &Stores,
+        documents: BTreeMap<Route, Data>,
+        hooks: Vec<Hook>,
+    ) -> Result<Self> {
         let mut placed: Vec<Document> = documents
             .into_iter()
             .map(|(destination, data)| Document::new(destination, data))
             .collect();
         for document in &mut placed {
+            seal_document(stores, document)?;
             document.fill_hash().map_err(|error| Error::Unhashable {
                 document: document.destination.display(),
                 reason: error.to_string(),
@@ -242,8 +250,7 @@ impl Manifest {
 
     /// Gather stored refs for a sweep.
     ///
-    /// Every stored manifest feeds the keep set. Missing, unreadable,
-    /// unparsable, and stale files add no refs.
+    /// Every readable stored manifest feeds the keep set.
     ///
     /// # Errors
     ///
@@ -332,8 +339,8 @@ impl Document {
     /// - [`Error::Render`] for serializer failures.
     pub fn fill_hash(&mut self) -> Result<()> {
         match &self.data {
-            Data::Opaque { blob, .. } => {
-                self.data_hash = blob.sha256.hex();
+            Data::Opaque { handle: blob, .. } => {
+                self.data_hash = blob.sha256().hex();
                 Ok(())
             }
             Data::Tree { members } => {
@@ -392,10 +399,81 @@ fn tree_manifest_bytes(members: &BTreeMap<String, TreeMember>) -> Vec<u8> {
     let mut out = Vec::new();
     for (relative, member) in members {
         out.extend_from_slice(
-            format!("{:o} {} {}\n", member.mode, relative, member.blob.sha256).as_bytes(),
+            format!(
+                "{:o} {} {}\n",
+                member.mode(),
+                relative,
+                member.blob().sha256()
+            )
+            .as_bytes(),
         );
     }
     out
+}
+
+/// Seal every payload in one document through the blob pool.
+///
+/// # Errors
+///
+/// - [`Error::Seal`] for payloads failing blob compression.
+fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
+    let display = document.destination.display();
+    match &mut document.data {
+        Data::Opaque { handle: blob, .. } => {
+            let resolved = blob.resolve(stores).map_err(|error| Error::Seal {
+                document: display.clone(),
+                reason: error.to_string(),
+            })?;
+            *blob = Payload::Resolved(resolved);
+        }
+        Data::Tree { members } => {
+            for relative in members.keys() {
+                if let Err(error) = check_member_key(relative) {
+                    return Err(Error::Seal {
+                        document: display.clone(),
+                        reason: error.to_string(),
+                    });
+                }
+            }
+            for member in members.values_mut() {
+                let payload = match member {
+                    TreeMember::Handle(blob) | TreeMember::Full { handle: blob, .. } => blob,
+                };
+                let resolved = payload.resolve(stores).map_err(|error| Error::Seal {
+                    document: display.clone(),
+                    reason: error.to_string(),
+                })?;
+                *payload = Payload::Resolved(resolved);
+            }
+        }
+        Data::Structured { .. } | Data::Text { .. } | Data::Link { .. } | Data::Rc(_) => {}
+    }
+    Ok(())
+}
+
+/// Reject tree keys outside relative member paths.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for empty, absolute, and dot-dot keys.
+fn check_member_key(relative: &str) -> std::result::Result<(), Mismatch> {
+    if relative.is_empty() || relative.starts_with('/') {
+        return Err(Mismatch {
+            path: "tree files key".to_owned(),
+            want: "a relative member path".to_owned(),
+            found: ["'", relative, "'"].concat(),
+        });
+    }
+    for segment in relative.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+            return Err(Mismatch {
+                path: "tree files key".to_owned(),
+                want: "a relative member path".to_owned(),
+                found: ["'", relative, "'"].concat(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Decode one count field into its size value.
@@ -446,9 +524,7 @@ fn from_codec(path: &Path, error: CodecError) -> RuntimeError {
     }
 }
 
-/// Collect blob refs from one stored manifest.
-///
-/// Unreadable, unparsable, and stale files add no refs.
+/// Collect blob refs from one readable stored manifest.
 fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTreeSet<Sha>) {
     let bytes = match states.read(handle) {
         Ok(bytes) => bytes,
@@ -469,7 +545,9 @@ mod tests {
     use super::*;
     use confit_driver::sha::Sha;
     use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+    use confit_model::error::Error;
     use confit_model::routes::{Route, RouteBase};
+    use confit_store::{StoreRoots, Stores};
 
     fn test_ref(content: &str, stored: &str) -> BlobRef {
         let sha = Sha::new(content).unwrap();
@@ -477,12 +555,11 @@ mod tests {
         BlobRef::new(sha, pool)
     }
 
-    fn opaque_doc(name: &str, blob: BlobRef) -> Document {
+    fn opaque_doc(name: &str, blob: Payload) -> Document {
         Document::new(
             Route::new(RouteBase::Home, name).unwrap(),
             Data::Opaque {
-                blob,
-                size: 1,
+                handle: blob,
                 mode: 0o644,
                 unmanaged: false,
             },
@@ -496,8 +573,8 @@ mod tests {
         let manifest = Manifest {
             version: MANIFEST_VERSION,
             documents: vec![
-                opaque_doc("a", first.clone()),
-                opaque_doc("b", second.clone()),
+                opaque_doc("a", Payload::Resolved(first.clone())),
+                opaque_doc("b", Payload::Resolved(second.clone())),
             ],
             hooks: Vec::new(),
         };
@@ -605,8 +682,7 @@ mod tests {
         );
         let expected = blob.sha256.hex();
         let hash = fill(Data::Opaque {
-            blob,
-            size: 2,
+            handle: Payload::Resolved(blob),
             mode: 0o644,
             unmanaged: false,
         });
@@ -629,15 +705,15 @@ mod tests {
         let mut members = BTreeMap::new();
         members.insert(
             "b".to_owned(),
-            TreeMember {
-                blob: second,
+            TreeMember::Full {
+                handle: Payload::Resolved(second),
                 mode: 0o755,
             },
         );
         members.insert(
             "a".to_owned(),
-            TreeMember {
-                blob: first,
+            TreeMember::Full {
+                handle: Payload::Resolved(first),
                 mode: 0o644,
             },
         );
@@ -647,5 +723,300 @@ mod tests {
             expected,
             "tree hash covers manifest bytes"
         );
+    }
+
+    fn test_stores(dir: &std::path::Path) -> Stores {
+        let (sender, _) = crossbeam_channel::unbounded();
+        Stores::new(
+            StoreRoots {
+                config_base: dir.join("config"),
+                temp_base: dir.join("temp"),
+                project_root: dir.join("project"),
+            },
+            sender,
+        )
+    }
+
+    fn project_handle(stores: &Stores, dir: &std::path::Path, name: &str, body: &[u8]) -> Payload {
+        let project = dir.join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
+        confit_driver::fs::write(&project.join(name), body).unwrap();
+        match stores.resources().resource(name) {
+            Ok(found) => Payload::Handle(found),
+            Err(error) => panic!("project opens: {error}"),
+        }
+    }
+
+    #[test]
+    fn build_seals_handles_with_verified_hashes() {
+        use std::io::Read as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
+        let other = project_handle(&stores, dir.path(), "other.txt", b"other bytes");
+        let mut members = BTreeMap::new();
+        members.insert(
+            "top.txt".to_owned(),
+            TreeMember::Full {
+                handle: note,
+                mode: 0o644,
+            },
+        );
+        let documents = [
+            (
+                Route::new(RouteBase::Home, "fonts").unwrap(),
+                Data::Tree { members },
+            ),
+            (
+                Route::new(RouteBase::Home, "blob.bin").unwrap(),
+                Data::Opaque {
+                    handle: other,
+                    mode: 0o644,
+                    unmanaged: false,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let manifest = match Manifest::build(&stores, documents, Vec::new()) {
+            Ok(found) => found,
+            Err(error) => panic!("manifest seals: {error}"),
+        };
+        assert_eq!(manifest.documents.len(), 2, "build keeps documents");
+        for document in &manifest.documents {
+            for payload in document.data.payloads() {
+                let resolved = match payload.resolved() {
+                    Some(found) => found,
+                    None => panic!("build seals every payload"),
+                };
+                let cache = dir
+                    .path()
+                    .join("temp")
+                    .join("blobs")
+                    .join(resolved.stored.hex());
+                assert!(
+                    confit_driver::fs::exists(&cache),
+                    "the blob file lands in cache"
+                );
+                let handle = match stores.blobs().resolve(resolved) {
+                    Ok(found) => found,
+                    Err(error) => panic!("sealed refs resolve: {error}"),
+                };
+                let mut seen = Vec::new();
+                match stores.blobs().open(&handle) {
+                    Ok(mut reader) => {
+                        reader.read_to_end(&mut seen).unwrap();
+                    }
+                    Err(error) => panic!("sealed bytes open: {error}"),
+                }
+                assert_eq!(
+                    resolved.sha256,
+                    Sha::hash(&seen),
+                    "content sha covers member bytes"
+                );
+            }
+        }
+        match manifest
+            .documents
+            .iter()
+            .find(|document| document.destination.display() == "home('blob.bin')")
+        {
+            Some(document) => assert_eq!(
+                document.data_hash,
+                Sha::hash(b"other bytes").hex(),
+                "opaque hash copies the content sha"
+            ),
+            None => panic!("sealed opaque builds"),
+        }
+    }
+
+    #[test]
+    fn build_passes_sealed_refs_without_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let blob = BlobRef::new(Sha::hash(b"sealed"), Sha::hash(b"stored"));
+        let documents = [(
+            Route::new(RouteBase::Home, "bin").unwrap(),
+            Data::Opaque {
+                handle: Payload::Resolved(blob),
+                mode: 0o644,
+                unmanaged: false,
+            },
+        )]
+        .into_iter()
+        .collect();
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        match Manifest::build(&stores, documents, Vec::new()) {
+            Ok(found) => assert_eq!(found.documents.len(), 1, "sealed builds pass through"),
+            Err(error) => panic!("sealed builds skip io: {error}"),
+        }
+    }
+
+    #[test]
+    fn seal_bare_and_full_members_with_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
+        let full = project_handle(&stores, dir.path(), "other.txt", b"full bytes");
+        let mut members = BTreeMap::new();
+        members.insert("top.txt".to_owned(), TreeMember::Handle(bare));
+        members.insert(
+            "sub/nested.txt".to_owned(),
+            TreeMember::Full {
+                handle: full,
+                mode: 0o755,
+            },
+        );
+        let documents = [(
+            Route::new(RouteBase::Home, "tree").unwrap(),
+            Data::Tree { members },
+        )]
+        .into_iter()
+        .collect();
+        let manifest = match Manifest::build(&stores, documents, Vec::new()) {
+            Ok(found) => found,
+            Err(error) => panic!("manifest seals: {error}"),
+        };
+        let document = match manifest
+            .documents
+            .iter()
+            .find(|document| document.destination.display() == "home('tree')")
+        {
+            Some(found) => found,
+            None => panic!("sealed tree builds"),
+        };
+        match &document.data {
+            Data::Tree { members } => {
+                assert_eq!(members.len(), 2, "build keeps both members");
+                let bare = match members.get("top.txt") {
+                    Some(found) => found,
+                    None => panic!("bare member keeps its key"),
+                };
+                assert!(
+                    matches!(bare.blob(), Payload::Resolved(_)),
+                    "bare member seals its bytes"
+                );
+                assert_eq!(bare.mode(), 0o644, "bare member keeps the default mode");
+                let full = match members.get("sub/nested.txt") {
+                    Some(found) => found,
+                    None => panic!("full member keeps its key"),
+                };
+                assert!(
+                    matches!(full.blob(), Payload::Resolved(_)),
+                    "full member seals its bytes"
+                );
+                assert_eq!(full.mode(), 0o755, "full member keeps its mode");
+            }
+            _ => panic!("sealed tree keeps its shape"),
+        }
+    }
+
+    #[test]
+    fn reject_bad_member_keys_at_seal() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
+        for key in ["", "/top.txt", "sub//nested.txt", "sub/../nested.txt"] {
+            let mut members = BTreeMap::new();
+            members.insert(key.to_owned(), TreeMember::Handle(note.clone()));
+            let documents = [(
+                Route::new(RouteBase::Home, "tree").unwrap(),
+                Data::Tree { members },
+            )]
+            .into_iter()
+            .collect();
+            match Manifest::build(&stores, documents, Vec::new()) {
+                Ok(_) => panic!("bad key seals: {key}"),
+                Err(Error::Seal { document, reason }) => {
+                    assert!(
+                        document.contains("tree"),
+                        "seal shows the document: {document}"
+                    );
+                    assert!(
+                        reason.contains("a relative member path"),
+                        "the reason shows the fault: {reason}"
+                    );
+                }
+                Err(error) => panic!("wrong seal variant: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_sealed_manifest_with_both_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
+        let full = project_handle(&stores, dir.path(), "other.txt", b"full bytes");
+        let mut members = BTreeMap::new();
+        members.insert("top.txt".to_owned(), TreeMember::Handle(bare));
+        members.insert(
+            "sub/nested.txt".to_owned(),
+            TreeMember::Full {
+                handle: full,
+                mode: 0o755,
+            },
+        );
+        let documents = [(
+            Route::new(RouteBase::Home, "tree").unwrap(),
+            Data::Tree { members },
+        )]
+        .into_iter()
+        .collect();
+        let manifest = match Manifest::build(&stores, documents, Vec::new()) {
+            Ok(found) => found,
+            Err(error) => panic!("manifest seals: {error}"),
+        };
+        let text = match serde_json::to_string(&manifest) {
+            Ok(found) => found,
+            Err(error) => panic!("sealed manifest serializes: {error}"),
+        };
+        match serde_json::from_str::<Manifest>(&text) {
+            Ok(back) => assert_eq!(back, manifest, "sealed manifest survives serde"),
+            Err(error) => panic!("sealed manifest decodes: {error}"),
+        }
+    }
+
+    #[test]
+    fn build_reports_vanished_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = confit_driver::fs::TestGuard::install();
+        let stores = test_stores(dir.path());
+        let project = dir.path().join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
+        let path = project.join("gone.txt");
+        confit_driver::fs::write(&path, b"gone bytes").unwrap();
+        let handle = match stores.resources().resource("gone.txt") {
+            Ok(found) => found,
+            Err(error) => panic!("project opens: {error}"),
+        };
+        confit_driver::fs::remove_file(&path).unwrap();
+        let documents = [(
+            Route::new(RouteBase::Home, "gone").unwrap(),
+            Data::Opaque {
+                handle: Payload::Handle(handle),
+                mode: 0o644,
+                unmanaged: false,
+            },
+        )]
+        .into_iter()
+        .collect();
+        match Manifest::build(&stores, documents, Vec::new()) {
+            Ok(_) => panic!("vanished handles seal"),
+            Err(Error::Seal { document, reason }) => {
+                assert!(
+                    document.contains("gone"),
+                    "seal shows the document: {document}"
+                );
+                assert!(!reason.is_empty(), "seal shows the reason");
+            }
+            Err(error) => panic!("wrong seal variant: {error}"),
+        }
     }
 }

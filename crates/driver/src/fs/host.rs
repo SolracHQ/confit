@@ -44,7 +44,7 @@ impl super::FsFile for HostFile {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     std::fs::read(path)
@@ -54,7 +54,7 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 /// - [InvalidData] when bytes refuse UTF-8.
 pub fn read_to_string(path: &Path) -> io::Result<String> {
@@ -65,7 +65,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the parent holds no entry.
+/// - [NotFound] for missing parents.
 /// - [PermissionDenied] when the path refuses writes.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::write(path, bytes)
@@ -85,7 +85,7 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the source holds no entry.
+/// - [NotFound] for missing sources.
 /// - [PermissionDenied] when the destination refuses writes.
 /// - [InvalidInput] when a folder meets a file.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
@@ -96,7 +96,7 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the source holds no entry.
+/// - [NotFound] for missing sources.
 /// - [PermissionDenied] when the destination refuses writes.
 pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     std::fs::copy(from, to)
@@ -106,7 +106,7 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses removal.
 pub fn remove_file(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
@@ -116,7 +116,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
     let facts = std::fs::metadata(path)?;
@@ -146,7 +146,7 @@ pub fn exists(path: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the folder holds no entry.
+/// - [NotFound] for missing folders.
 /// - [PermissionDenied] when the folder refuses reads.
 /// - [NotADirectory] when the path holds a file.
 pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
@@ -162,7 +162,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::File::open(path).map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
@@ -172,7 +172,7 @@ pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 /// - [UnexpectedEof] when the file runs short of the tail.
 pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
@@ -196,7 +196,7 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the parent holds no entry.
+/// - [NotFound] for missing parents.
 /// - [PermissionDenied] when the path refuses writes.
 pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::File::create(path).map(|file| Box::new(HostFile { file }) as Box<dyn super::FsFile>)
@@ -206,7 +206,7 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the parent holds no entry.
+/// - [NotFound] for missing parents.
 /// - [PermissionDenied] when the path refuses writes.
 pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     std::fs::OpenOptions::new()
@@ -220,7 +220,7 @@ pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the folder holds no entry.
+/// - [NotFound] for missing folders.
 /// - [PermissionDenied] when the folder refuses removal.
 /// - [NotADirectory] when the path holds a file.
 pub fn remove_dir_all(path: &Path) -> io::Result<()> {
@@ -231,7 +231,7 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     std::fs::canonicalize(path)
@@ -241,9 +241,9 @@ pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
-/// - [InvalidInput] when the path holds no link.
+/// - [InvalidInput] for non-link paths.
 pub fn read_link(path: &Path) -> io::Result<PathBuf> {
     std::fs::read_link(path)
 }
@@ -252,7 +252,7 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the parent holds no entry.
+/// - [NotFound] for missing parents.
 /// - [PermissionDenied] when folders refuse writes.
 /// - [InvalidInput] when the link path holds bad bytes.
 pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
@@ -271,7 +271,7 @@ pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses writes.
 pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -283,7 +283,7 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
 pub fn mode(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::PermissionsExt;

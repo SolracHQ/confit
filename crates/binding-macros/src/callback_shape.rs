@@ -1,5 +1,5 @@
 //! Callback faces
-//! Expands callback shape declarations into function faces.
+//! Expand callback shape declarations into function faces.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -42,7 +42,7 @@ fn collect_fields(
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         }
     };
@@ -51,7 +51,7 @@ fn collect_fields(
         let Some(ident) = field.ident.clone() else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         };
         let field_name = ident.unraw().to_string();
@@ -60,20 +60,22 @@ fn collect_fields(
             || flags.opaque
             || flags.ignore
             || flags.proxy.is_some()
-            || flags.convert.is_some()
-            || flags.encode.is_some()
+            || flags.decode_hook.is_some()
+            || flags.encode_hook.is_some()
             || flags.rename.is_some()
             || flags.default.is_some()
         {
             return Err(syn::Error::new_spanned(
                 &field.ident,
-                format!("{outer}.{field_name}: callback shapes read plain or live fields alone"),
+                format!(
+                    "{outer}.{field_name}: plain or live fields are expected for callback shapes"
+                ),
             ));
         }
         if is_function_ty(&field.ty) {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                format!("{outer}.{field_name}: callback shapes hold params alone, never functions"),
+                format!("{outer}.{field_name}: callback shapes hold params alone"),
             ));
         }
         let documentation = doc_lines(&field.attrs).join(" ");
@@ -106,13 +108,13 @@ pub(crate) fn expand_struct_callback(
     if validate.is_some() {
         return Err(syn::Error::new_spanned(
             name,
-            format!("{outer}: callback shapes take no validate hook"),
+            format!("{outer}: callback shapes do not support validate hooks"),
         ));
     }
     if rename.is_some() {
         return Err(syn::Error::new_spanned(
             name,
-            format!("{outer}: callback shapes take no rename"),
+            format!("{outer}: callback shapes do not support rename"),
         ));
     }
     let struct_docs = doc_lines(attrs).join(" ");
@@ -158,12 +160,12 @@ pub(crate) fn expand_struct_callback(
 
             fn face_stub() -> ::std::string::String {
                 ::confit_binding::stub::emit_function(
-                    &::confit_binding::verb::VerbDescriptor {
+                    &::confit_binding::face::FunctionDescriptor {
                         name: stringify!(#name),
                         documentation: #struct_docs,
                     },
                     &[
-                        #(::confit_binding::verb::ParameterDescriptor {
+                        #(::confit_binding::face::FunctionParameter {
                             name: #labels,
                             documentation: #documentations,
                             face: ::std::borrow::Cow::Owned(
@@ -352,7 +354,7 @@ mod tests {
             }
             "#,
         );
-        assert!(failure.contains("never functions"));
+        assert!(failure.contains("hold params alone"));
     }
 
     #[test]
@@ -367,7 +369,7 @@ mod tests {
             }
             "#,
         );
-        assert!(failure.contains("plain or live fields alone"));
+        assert!(failure.contains("plain or live fields are expected for callback shapes"));
     }
 
     #[test]
@@ -389,6 +391,6 @@ mod tests {
         let failure = expand_struct_callback(&input.ident, data, &input.attrs, &Some(hook), &None)
             .unwrap_err()
             .to_string();
-        assert!(failure.contains("no validate hook"));
+        assert!(failure.contains("do not support validate hooks"));
     }
 }

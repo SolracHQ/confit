@@ -90,7 +90,7 @@ impl<'a> ApplyRunner<'a> {
                 });
             }
             let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(&path)?;
-            Manifest::build(evaluated.documents, evaluated.hooks)?
+            Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
         } else {
             if args.profile.is_some() {
                 return Err(CliError::ProfileWithoutProject {
@@ -103,7 +103,7 @@ impl<'a> ApplyRunner<'a> {
                 });
             }
             let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(positional)?;
-            Manifest::build(evaluated.documents, evaluated.hooks)?
+            Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
         };
         let prepared = confit_runtime::prepare(&stores, desired)?;
         Ok(Self {
@@ -173,8 +173,9 @@ impl<'a> ApplyRunner<'a> {
         Manifest::store(&self.stores.states(), built)?;
         let mut handles = Vec::new();
         for document in &built.documents {
-            for blob in document.data.blob_refs() {
-                handles.push(self.stores.blobs().resolve(blob)?);
+            for payload in document.data.payloads() {
+                let resolved = payload.resolve(&self.stores)?;
+                handles.push(self.stores.blobs().resolve(&resolved)?);
             }
         }
         self.stores.blobs().persist(&handles)?;

@@ -34,7 +34,7 @@ pub struct Hook {
     #[face(default)]
     pub check: Condition,
     /// The run cap in seconds.
-    #[face(rename = "timeout", proxy = String, convert = decode_timeout, encode = render_timeout, default = default_timeout_secs)]
+    #[face(rename = "timeout", proxy = String, decode_hook = decode_timeout, encode_hook = render_timeout, default = default_timeout_secs)]
     pub timeout_secs: u64,
 }
 
@@ -91,7 +91,7 @@ pub enum HookChange {
     Removed,
     /// Changed header with detail lines.
     Modified(HookModification),
-    /// Silent change with no lines.
+    /// No diff.
     Unchanged,
 }
 
@@ -105,22 +105,13 @@ pub struct HookLifecycle<'a> {
 }
 
 impl HookModification {
-    /// Report whether one modification holds no edits.
+    /// Report whether one modification is empty.
     pub fn is_empty(&self) -> bool {
         self.conditions.is_empty() && self.timeout.is_none()
     }
 }
 
 impl HookChange {
-    /// Report whether one change renders no lines.
-    pub fn is_silent(&self) -> bool {
-        match self {
-            Self::Unchanged => true,
-            Self::Modified(edits) => edits.is_empty(),
-            Self::Added | Self::Removed => false,
-        }
-    }
-
     /// Report whether one change renders an added header.
     pub fn is_added(&self) -> bool {
         matches!(self, Self::Added)
@@ -154,11 +145,6 @@ impl HookLifecycle<'_> {
     /// Report whether one lifecycle renders a changed header.
     pub fn is_modified(&self) -> bool {
         self.change.is_modified()
-    }
-
-    /// Report whether one lifecycle renders no lines.
-    pub fn is_silent(&self) -> bool {
-        self.change.is_silent()
     }
 }
 
@@ -295,8 +281,8 @@ fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, Mismatch
 }
 
 /// Render timeout seconds as bare digits.
-fn render_timeout(timeout: u64) -> String {
-    timeout.to_string()
+fn render_timeout(_lua: &Lua, timeout: &u64) -> mlua::Result<String> {
+    Ok(timeout.to_string())
 }
 
 /// Parse one duration string into seconds.
@@ -415,13 +401,13 @@ mod tests {
         ];
         let lifecycle = diff_lifecycle(&current, &previous);
         assert_eq!(lifecycle.len(), 3);
-        assert!(lifecycle[0].is_silent());
+        assert!(matches!(lifecycle[0].change, HookChange::Unchanged));
         assert!(lifecycle[1].is_added());
         assert!(lifecycle[2].is_removed());
     }
 
     #[test]
-    fn lifecycle_reads_simplified_conditions_silent() {
+    fn lifecycle_reads_simplified_conditions_unchanged() {
         let mut before = hook(
             &["mise"],
             &[],
@@ -442,7 +428,7 @@ mod tests {
         let previous = [before];
         let lifecycle = diff_lifecycle(&current, &previous);
         assert_eq!(lifecycle.len(), 1);
-        assert!(lifecycle[0].is_silent());
+        assert!(matches!(lifecycle[0].change, HookChange::Unchanged));
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! Binding macros
-//! Face derive with impl-block method collection.
+//! Lua faces from Rust declarations.
+//!
+//! The derive emits Decode plus Encode plus stubs from one marker.
 
 use proc_macro::TokenStream;
 
@@ -13,43 +14,133 @@ mod structs;
 mod tagged;
 mod untagged;
 
-/// Derive the Face trait for one table or userdata declaration.
+/// Rust struct as Lua table.
 ///
-/// - Every derived type carries one kind marker, table or userdata or
-///   callback shape.
-/// - Enums carry one union annotation, string or untagged or tagged
-///   or probe.
-/// - Field docs plus variant docs read `///` lines.
-/// - Optional fields hold Option values with inner content.
-/// - Defaulted fields fill absent keys with defaults and face `?`.
-/// - Renamed fields read their Lua key.
-/// - Opaque fields pass Lua functions plus handles through.
-/// - Userdata faces pair with face_impl for method stubs.
-/// - Callback shapes read documented params with live tables borrowed.
-/// - Proxy fields face as the proxy type and decode through the convert
-///   function with Lua access. Lone convert functions read the table
-///   with sibling access and hold no Lua key.
-/// - Proxy fields with convert and encode functions round-trip through
-///   strings in both directions.
-/// - Map fields read key_convert with value_convert entry functions
-///   over HashMap and BTreeMap shapes and face `{[K]: V}`.
-/// - Untagged enums route tables through the synthesized family router.
-/// - The probe hook overrides the family router on untagged enums.
-/// - Decoded values pass the validate hook.
-/// - Userdata faces carry Clone handles.
+/// Absent defaulted keys fill in. Option fields stay absent without
+/// the marker. Docs feed stubs.
+///
+/// ```rust,no_run
+/// use confit_binding_macros::Face;
+///
+/// #[derive(Face)]
+/// #[face(table)]
+/// struct Hook {
+///     argv: Vec<String>,
+///     #[face(default)]
+///     timeout_secs: u64,
+/// }
+/// ```
+///
+/// String enums face as bare strings.
+///
+/// ```rust,no_run
+/// use confit_binding_macros::Face;
+///
+/// #[derive(Face)]
+/// #[face(table, string)]
+/// enum Slot {
+///     Requires,
+///     When,
+///     Check,
+/// }
+/// ```
+///
+/// Untagged enums route tables by shape.
+///
+/// ```rust,no_run
+/// use confit_binding_macros::Face;
+///
+/// #[derive(Face)]
+/// #[face(table, untagged)]
+/// enum Arg {
+///     Text(String),
+///     Count(u64),
+/// }
+/// ```
+///
+/// Proxy fields route through hook functions. The decode hook reads
+/// the Lua value. The encode hook returns the proxy value and the
+/// derive encodes it.
+///
+/// ```rust,no_run
+/// use confit_binding::value::Mismatch;
+/// use confit_binding_macros::Face;
+/// use mlua::{Lua, Value};
+///
+/// fn decode_timeout(lua: &Lua, value: &Value) -> Result<u64, Mismatch> {
+///     Ok(60)
+/// }
+///
+/// fn render_timeout(_lua: &Lua, timeout: &u64) -> mlua::Result<String> {
+///     Ok(timeout.to_string())
+/// }
+///
+/// #[derive(Face)]
+/// #[face(table)]
+/// struct Job {
+///     #[face(proxy = String, decode_hook = decode_timeout, encode_hook = render_timeout)]
+///     timeout_secs: u64,
+/// }
+/// ```
 #[proc_macro_derive(Face, attributes(face))]
 pub fn derive_face(input: TokenStream) -> TokenStream {
     face_derive::expand(input)
 }
 
-/// Collect userdata methods from one impl block.
+/// Userdata methods plus static namespaces from one impl block.
 ///
-/// - Every method in the block registers or the build fails.
-/// - Method names read idents and docs read `///` lines.
-/// - Method faces read declared bounds.
-/// - The type answers the Face trait beside the block.
-/// - The macro owns the UserData glue and keeps the block.
-/// - Runtime methods decode arguments through Decode and encode returns through Encode.
+/// Blocks without a namespace hold &self methods alone. Blocks with
+/// a namespace hold statics alone and answer NAMESPACE plus VERBS
+/// plus register plus stubs on the type itself. Statics accept
+/// #[face(optional)] with missing filling Default.
+///
+/// ```rust,no_run
+/// use confit_binding_macros::{Face, face_impl};
+///
+/// #[derive(Clone, Face)]
+/// #[face(userdata)]
+/// struct Roster {
+///     name: String,
+/// }
+///
+/// #[face_impl]
+/// impl Roster {
+///     /// Greet with the prefix.
+///     ///
+///     /// # Arguments
+///     ///
+///     /// - [prefix] Greeting prefix.
+///     ///
+///     /// # Returns
+///     ///
+///     /// - Greeting text.
+///     fn greeting(&self, prefix: String) -> String {
+///         format!("{prefix} {}", self.name)
+///     }
+/// }
+/// ```
+///
+/// ```rust,no_run
+/// use confit_binding_macros::face_impl;
+///
+/// pub struct Fact;
+///
+/// #[face_impl(namespace = "confit.fact")]
+/// impl Fact {
+///     /// Read one host fact.
+///     ///
+///     /// # Arguments
+///     ///
+///     /// - [name] The fact name under reading.
+///     ///
+///     /// # Returns
+///     ///
+///     /// - The host fact string.
+///     pub fn fact(name: String) -> String {
+///         name
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn face_impl(attribute: TokenStream, item: TokenStream) -> TokenStream {
     block_collector::expand(attribute, item)

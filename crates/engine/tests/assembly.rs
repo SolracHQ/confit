@@ -5,7 +5,7 @@ use confit_engine::api::config::Config;
 use confit_engine::api::patch::{Level, Patch};
 use confit_engine::api::profile::Profile;
 use confit_engine::{assemble, assembly::Assembler};
-use confit_model::document::{Data, StructuredFormat, TreeMember};
+use confit_model::document::{Data, Payload, StructuredFormat, TreeMember};
 use confit_model::routes::{Route, RouteBase};
 use confit_store::blob::BlobSource;
 use mlua::Lua;
@@ -149,25 +149,23 @@ fn placed_documents_convert_every_kind() {
     let (_held, stores) = test_stores();
     let root = stores.resources().roots.project_root.clone();
     confit_driver::fs::create_dir_all(&root).unwrap();
-    let full = root.join("glyph.ttf");
-    confit_driver::fs::write(&full, b"ttf").unwrap();
-    let resource = stores.resources().resource(&full).unwrap();
+    confit_driver::fs::write(&root.join("glyph.ttf"), b"ttf").unwrap();
+    let resource = stores.resources().resource("glyph.ttf").unwrap();
     let opened = stores.blobs().put(BlobSource::Handle(&resource)).unwrap();
-    let mode = stores.resources().mode(&resource).unwrap();
     let blob = opened.to_ref();
     let mut members = BTreeMap::new();
     members.insert(
         "sub/nested.txt".to_owned(),
-        TreeMember {
-            blob: blob.clone(),
-            mode,
+        TreeMember::Full {
+            handle: Payload::Resolved(blob.clone()),
+            mode: 0o644,
         },
     );
     members.insert(
         "top.txt".to_owned(),
-        TreeMember {
-            blob: blob.clone(),
-            mode,
+        TreeMember::Full {
+            handle: Payload::Resolved(blob.clone()),
+            mode: 0o644,
         },
     );
     let documents = vec![
@@ -226,12 +224,8 @@ fn placed_documents_convert_every_kind() {
             );
             match by_display("home('blob.bin')") {
                 Data::Opaque {
-                    size,
-                    mode,
-                    unmanaged,
-                    ..
+                    mode, unmanaged, ..
                 } => {
-                    assert_eq!(*size, 2);
                     assert_eq!(*mode, 0o644);
                     assert!(unmanaged);
                 }

@@ -228,8 +228,6 @@ impl Summary<'_> {
     }
 
     /// Count first-run creates and overwrites.
-    ///
-    /// - Documents with no difference entries leave the counts.
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
@@ -639,8 +637,8 @@ fn entry_bodies(document: &Document) -> Vec<String> {
             }
         }
         Data::Link { target } => vec![target.display()],
-        Data::Opaque { size, .. } => {
-            vec![format!("opaque ({size} bytes)")]
+        Data::Opaque { handle: blob, .. } => {
+            vec![format!("opaque {}", opaque_ref_label(blob.sha256()))]
         }
         Data::Tree { members } => vec![format!("tree ({} files)", members.len())],
         Data::Rc(rc) => {
@@ -672,9 +670,9 @@ fn touches_opaque(first: &Document, second: &Document) -> bool {
         || matches!(second.data.kind(), DocumentKind::Opaque)
 }
 
-/// Render the hash and size label for one opaque ref.
-fn opaque_ref_label(sha: &Sha, size: u64) -> String {
-    format!("sha256:{sha} ({size} bytes)")
+/// Render the hash label for one opaque ref.
+fn opaque_ref_label(sha: &Sha) -> String {
+    format!("sha256:{sha}")
 }
 
 /// Collect update lines with old to new values.
@@ -700,14 +698,10 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
         }
         (
             Data::Opaque {
-                blob: new_blob,
-                size: new_size,
-                ..
+                handle: new_blob, ..
             },
             Data::Opaque {
-                blob: old_blob,
-                size: old_size,
-                ..
+                handle: old_blob, ..
             },
         ) => {
             if old_blob == new_blob {
@@ -718,8 +712,8 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     &format!(
                         "  {} content = {} -> {}",
                         Sigil::Update.mark(),
-                        opaque_ref_label(&old_blob.sha256, *old_size),
-                        opaque_ref_label(&new_blob.sha256, *new_size)
+                        opaque_ref_label(old_blob.sha256()),
+                        opaque_ref_label(new_blob.sha256())
                     ),
                 )]
             }
@@ -878,6 +872,7 @@ mod tests {
 
     #[test]
     fn tree_first_run_groups_members_under_destination() {
+        use confit_model::document::Payload;
         use confit_model::routes::RouteBase;
         use confit_store::handles::BlobRef;
         let dest = Route::new(RouteBase::Data, "fonts/JetBrainsMono").unwrap();
@@ -885,7 +880,10 @@ mod tests {
         let mut members = BTreeMap::new();
         members.insert(
             "a.ttf".to_owned(),
-            confit_model::document::TreeMember { blob, mode: 0o644 },
+            confit_model::document::TreeMember::Full {
+                handle: Payload::Resolved(blob),
+                mode: 0o644,
+            },
         );
         let document = Document {
             destination: dest.clone(),
@@ -905,7 +903,9 @@ mod tests {
 
     #[test]
     fn preview_renders_missing_binaries_without_resolving() {
-        let desired = Manifest::build(BTreeMap::new(), vec![probe_hook()]).unwrap();
+        let (sender, _) = crossbeam_channel::unbounded();
+        let stores = confit_store::Stores::new(confit_store::StoreRoots::default(), sender);
+        let desired = Manifest::build(&stores, BTreeMap::new(), vec![probe_hook()]).unwrap();
         let prepared = confit_runtime::Prepared {
             desired,
             previous: Manifest::empty(),

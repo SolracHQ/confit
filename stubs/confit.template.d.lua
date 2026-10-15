@@ -1,5 +1,5 @@
 --- @meta confit.template
---- Renders one template string with plain vars.
+--- Render one template string with plain vars.
 --- @param template string The template text under rendering.
 --- @param vars any Plain vars for the template.
 --- @return string? The rendered text, else nil.

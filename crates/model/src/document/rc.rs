@@ -8,11 +8,10 @@ use crate::condition::Condition;
 use crate::error::{Error, Result};
 use crate::routes::Route;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// One rc entry in any section.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(rename_all = "snake_case")]
 #[face(table, tagged)]
 pub enum RcEntry {
@@ -121,7 +120,7 @@ impl RcSection {
     ///
     /// # Errors
     ///
-    /// - [`Error::Parse`] when the name matches no known section.
+    /// - [`Error::Parse`] for unknown section names.
     pub fn parse(name: &str) -> Result<Self> {
         match name {
             "profile" => Ok(Self::Profile),

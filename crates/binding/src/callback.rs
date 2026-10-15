@@ -11,7 +11,7 @@ use crate::value::{Decode, Encode, Mismatch};
 
 /// One Lua callback over its args face.
 ///
-/// The callback holds one Lua function with its args marker.
+/// One Lua function with its args marker.
 pub struct Callback<Args> {
     function: Function,
     marker: PhantomData<Args>,
@@ -19,7 +19,7 @@ pub struct Callback<Args> {
 
 /// Callback args shape.
 ///
-/// The shape carries the function face with the call arity and the call encoding.
+/// The function face with the call arity and the call encoding.
 pub trait CallbackArgs {
     /// Call parameters with borrowed plain values beside owned live tables.
     type Parameters<'args>;

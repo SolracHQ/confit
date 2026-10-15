@@ -1,7 +1,7 @@
 //! Destination writes with deleted removal.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use confit_driver as driver;
 use confit_driver::progress::{Event, ProgressSender};
@@ -30,6 +30,7 @@ impl Writer {
     ///
     /// # Errors
     ///
+    /// - [`RuntimeError::Expand`] for unresolvable base folders.
     /// - [`RuntimeError::Write`] for write faults.
     /// - [`RuntimeError::WriteUnknown`] for unmapped
     ///   write failures.
@@ -42,12 +43,11 @@ impl Writer {
         documents: &[Document],
         changed: &BTreeSet<Route>,
     ) -> Result<usize> {
-        let blobs = self.stores.blobs();
         let total = documents.len();
         let mut done = 0;
         let mut written = 0;
         for document in documents {
-            let expanded = document.destination.expand();
+            let expanded = expand_destination(document)?;
             if document.data.unmanaged()
                 && driver::fs::exists(&expanded)
                 && !changed.contains(&document.destination)
@@ -55,7 +55,7 @@ impl Writer {
                 continue;
             }
             if let Data::Tree { members } = &document.data {
-                let count = write_tree(&expanded, members, blobs.as_ref())?;
+                let count = write_tree(&expanded, members, &self.stores)?;
                 driver::fs::set_mode_if_present(&expanded, document.mode())
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
@@ -63,11 +63,11 @@ impl Writer {
                 written += count;
                 continue;
             }
-            if let Data::Opaque { blob, .. } = &document.data {
+            if let Data::Opaque { handle: blob, .. } = &document.data {
                 if let Err(error) = driver::fs::remove_link(&expanded) {
                     return Err(RuntimeError::from_write_io(&expanded, error));
                 }
-                copy_blob(&expanded, &expanded, blob, blobs.as_ref())?;
+                copy_blob(&expanded, &expanded, blob, &self.stores)?;
                 driver::fs::set_mode_if_present(&expanded, document.mode())
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
@@ -115,11 +115,27 @@ impl Writer {
     }
 }
 
+/// Resolve one document destination or fail the write.
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn expand_destination(document: &Document) -> Result<PathBuf> {
+    document
+        .destination
+        .expand()
+        .map_err(|source| RuntimeError::Expand {
+            route: document.destination.clone(),
+            source,
+        })
+}
+
 impl Writer {
     /// Remove recorded destinations absent from desired documents.
     ///
     /// # Errors
     ///
+    /// - [`RuntimeError::Expand`] for unresolvable base folders.
     /// - [`RuntimeError::Remove`] for removal faults.
     /// - [`RuntimeError::RemoveUnknown`] for unmapped
     ///   removal failures.
@@ -137,7 +153,7 @@ impl Writer {
             if kept {
                 continue;
             }
-            let expanded = old.destination.expand();
+            let expanded = expand_destination(old)?;
             if remove(&expanded).map_err(|error| RuntimeError::from_remove_io(&expanded, error))? {
                 done += 1;
                 self.emit_removed(&old.destination, done, total);
@@ -151,6 +167,7 @@ impl Writer {
     ///
     /// # Errors
     ///
+    /// - [`RuntimeError::Expand`] for unresolvable base folders.
     /// - [`RuntimeError::Remove`] for removal faults.
     /// - [`RuntimeError::RemoveUnknown`] for unmapped
     ///   removal failures.
@@ -176,7 +193,7 @@ impl Writer {
                 .filter_map(|document| document.data.tree_members())
                 .flat_map(|members| members.keys().map(String::as_str))
                 .collect();
-            let dest = old.destination.expand();
+            let dest = expand_destination(old)?;
             for relative in old_members.keys() {
                 if new_rels.contains(relative.as_str()) {
                     continue;

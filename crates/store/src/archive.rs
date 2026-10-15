@@ -510,7 +510,7 @@ fn extract_read_error(error: std::io::Error, source: &Path, name: &str) -> Archi
 /// Map one resource creation failure into archive language.
 fn from_resource(error: ResourceError) -> ArchiveError {
     match error {
-        ResourceError::Escape { path } => ArchiveError::Escape { path },
+        ResourceError::Escape { path, .. } => ArchiveError::Escape { path },
         ResourceError::Read { path, fault } => ArchiveError::Read { path, fault },
     }
 }

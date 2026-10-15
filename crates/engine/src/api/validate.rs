@@ -1,123 +1,128 @@
 //! Validate
 //! Shape checks over the decode cores returning bool with reason.
 
-use mlua::{Lua, Value};
+use confit_binding_macros::face_impl;
 
 use crate::api::config::Config;
 use crate::api::patch::Patch;
-use confit_binding::value::Decode;
 use confit_model::condition::Condition;
 use confit_model::document::Data;
 use confit_model::document::RcEntry;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Declare one shape-check verb over a face decode.
+/// Declare shape-check statics over face decodes.
 macro_rules! check {
     (
-        $(#[doc = $verb_documentation:literal])+
-        fn $verb:ident (
-            $(#[doc = $parameter_documentation:literal])+
-            $parameter:ident : Value
-            $(,)?
-        ) -> $checked:ty
+        $( {
+            $(#[doc = $verb_documentation:literal])+
+            fn $verb:ident (
+                $(#[doc = $parameter_documentation:literal])+
+                $parameter:ident : Value
+                $(,)?
+            ) -> $checked:ty
+        } ),* $(,)?
     ) => {
-        confit_binding::verb! {
-            $(#[doc = $verb_documentation])+
-            fn $verb (
-                lua: &Lua,
+        #[face_impl(namespace = "confit.validate")]
+        impl Validate {
+            $(
+                $(#[doc = $verb_documentation])+
+                ///
+                /// # Arguments
+                ///
                 $(#[doc = $parameter_documentation])+
-                $parameter: Value
-            ) -> (
-                /// The decoded value, else nil.
-                ::std::option::Option<$checked>,
-                /// The failure reason, else nil.
-                ::std::option::Option<::std::string::String>,
-            ) [call = check_impl]
+                ///
+                /// # Returns
+                ///
+                /// - The decoded value, else nil.
+                /// - The failure reason, else nil.
+                pub fn $verb(
+                    lua: &::mlua::Lua,
+                    $parameter: ::mlua::Value,
+                ) -> ::mlua::Result<(
+                    ::std::option::Option<$checked>,
+                    ::std::option::Option<::std::string::String>,
+                )> {
+                    match <$checked as ::confit_binding::value::Decode>::decode(&$parameter, lua) {
+                        ::std::result::Result::Ok(found) => ::std::result::Result::Ok((
+                            ::std::option::Option::Some(found),
+                            ::std::option::Option::None,
+                        )),
+                        ::std::result::Result::Err(error) => ::std::result::Result::Ok((
+                            ::std::option::Option::None,
+                            ::std::option::Option::Some(error.to_string()),
+                        )),
+                    }
+                }
+            )*
         }
     };
 }
 
-/// Check one value table against its face decode.
-fn check_impl<T>(lua: &Lua, value: Value) -> mlua::Result<(Option<T>, Option<String>)>
-where
-    T: Decode,
-{
-    match T::decode(&value, lua) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error) => Ok((None, Some(error.to_string()))),
-    }
-}
+/// Validate namespace.
+pub struct Validate;
 
 check! {
-    /// Checks one body table.
-    fn document(
-        /// The body table under checking.
-        body: Value,
-    ) -> Data
-}
-
-check! {
-    /// Checks one config table.
-    fn config(
-        /// The config table under checking.
-        config: Value,
-    ) -> Config
-}
-
-check! {
-    /// Checks one patch table.
-    fn patch(
-        /// The patch table under checking.
-        patch: Value,
-    ) -> Patch
-}
-
-check! {
-    /// Checks one hook table.
-    fn hook(
-        /// The hook table under checking.
-        value: Value,
-    ) -> Hook
-}
-
-check! {
-    /// Checks one condition table.
-    fn condition(
-        /// The condition table under checking.
-        value: Value,
-    ) -> Condition
-}
-
-check! {
-    /// Checks one rc entry table.
-    fn entry(
-        /// The entry table under checking.
-        value: Value,
-    ) -> RcEntry
-}
-
-check! {
-    /// Checks one route table.
-    fn route(
-        /// The route table under checking.
-        value: Value,
-    ) -> Route
-}
-
-confit_binding::module! {
-    namespace = "confit.validate",
-    verbs = [document, config, patch, hook, condition, entry, route],
+    {
+        /// Check one body table.
+        fn document(
+            /// - [body] The body table under checking.
+            body: Value,
+        ) -> Data
+    },
+    {
+        /// Check one config table.
+        fn config(
+            /// - [config] The config table under checking.
+            config: Value,
+        ) -> Config
+    },
+    {
+        /// Check one patch table.
+        fn patch(
+            /// - [patch] The patch table under checking.
+            patch: Value,
+        ) -> Patch
+    },
+    {
+        /// Check one hook table.
+        fn hook(
+            /// - [value] The hook table under checking.
+            value: Value,
+        ) -> Hook
+    },
+    {
+        /// Check one condition table.
+        fn condition(
+            /// - [value] The condition table under checking.
+            value: Value,
+        ) -> Condition
+    },
+    {
+        /// Check one rc entry table.
+        fn entry(
+            /// - [value] The entry table under checking.
+            value: Value,
+        ) -> RcEntry
+    },
+    {
+        /// Check one route table.
+        fn route(
+            /// - [value] The route table under checking.
+            value: Value,
+        ) -> Route
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use confit_driver::fs::TestGuard;
+    use mlua::{Lua, Value};
 
     fn test_lua() -> Lua {
         let lua = Lua::new();
-        let validate = Module::register(&lua).unwrap();
+        let validate = Validate::register(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
         lua
     }
@@ -138,9 +143,9 @@ mod tests {
         );
         let lua = Lua::new();
         let _ = lua.set_app_data(stores.clone());
-        let resource = crate::api::builtin(&lua, "confit.resource").unwrap();
-        lua.globals().set("resource", resource).unwrap();
-        let validate = Module::register(&lua).unwrap();
+        let open = crate::api::builtin(&lua, "confit.open").unwrap();
+        lua.globals().set("open", open).unwrap();
+        let validate = Validate::register(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
         (directory, lua)
     }
@@ -385,8 +390,8 @@ mod tests {
             r#"{ format = "json", data = { alpha = "one" } }"#,
             r#"{ target = { base = "home", relative = "linked" } }"#,
             r#"{ profile = { { env = { name = "EDITOR", value = "hx" } } } }"#,
-            r#"{ handle = assert(resource("note.txt")), mode = "644" }"#,
-            r#"{ members = { ["top.txt"] = assert(resource("note.txt")) } }"#,
+            r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
+            r#"{ members = { ["top.txt"] = assert(open("note.txt")) } }"#,
         ];
         for body in cases {
             let source = [
@@ -398,6 +403,28 @@ mod tests {
             match run(&lua, &source) {
                 Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
                 _ => panic!("good body passes: {body}"),
+            }
+        }
+    }
+
+    #[test]
+    fn document_checks_blob_bodies_without_writes() {
+        let guard = TestGuard::install();
+        let (_held, lua) = opened_lua();
+        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        for body in [
+            r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
+            r#"{ members = { ["top.txt"] = assert(open("note.txt")) } }"#,
+        ] {
+            let source = [
+                "local found, reason = validate.document(",
+                body,
+                ") assert(found ~= nil, reason) return 'ok'",
+            ]
+            .concat();
+            match run(&lua, &source) {
+                Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
+                _ => panic!("good body passes without writes: {body}"),
             }
         }
     }

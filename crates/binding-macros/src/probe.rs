@@ -1,5 +1,5 @@
 //! Probe faces
-//! Expands probe enums into marker-key unions.
+//! Expand probe enums into marker-key unions.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -45,7 +45,7 @@ pub(crate) fn expand_probe_enum(
         if flags.probe.is_empty() && index + 1 != count {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
-                format!("{outer}: probe fallback reads last position alone"),
+                format!("{outer}: last position is expected for probe fallback"),
             ));
         }
         let payload = payload_of(&outer, variant, "probe")?;

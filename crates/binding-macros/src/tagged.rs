@@ -1,5 +1,5 @@
 //! Tagged faces
-//! Expands tagged enums into single-key unions.
+//! Expand tagged enums into single-key unions.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::{format_ident, quote};
@@ -49,7 +49,7 @@ fn build_inline_payload(
         let Some(field_ident) = field.ident.clone() else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                format!("{outer}.{variant_name}: inline faces read named fields alone"),
+                format!("{outer}.{variant_name}: named fields are expected for inline faces"),
             ));
         };
         let field_name = field_ident.unraw().to_string();
@@ -59,8 +59,8 @@ fn build_inline_payload(
             &field.attrs,
         )?;
         if flags.proxy.is_some()
-            || flags.convert.is_some()
-            || flags.encode.is_some()
+            || flags.decode_hook.is_some()
+            || flags.encode_hook.is_some()
             || flags.opaque
             || flags.ignore
         {
@@ -95,8 +95,7 @@ fn build_inline_payload(
             return Err(syn::Error::new_spanned(
                 field_type,
                 format!(
-                    "{outer}.{variant_name}.{field_name}: face option 'default' \
-                     reads plain types alone"
+                    "{outer}.{variant_name}.{field_name}: plain types are expected for face option 'default'"
                 ),
             ));
         }

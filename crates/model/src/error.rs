@@ -4,7 +4,7 @@
 use thiserror::Error;
 
 use crate::document::StructuredFormat;
-use crate::routes::SegmentFault;
+use crate::routes::RouteBase;
 
 /// Core failure shapes.
 #[derive(Debug, Clone, Error)]
@@ -33,13 +33,19 @@ pub enum Error {
         /// The render reason.
         reason: String,
     },
-    /// Route jail failure.
-    #[error("invalid '{input}': want valid relative segments ({fault})")]
-    Segment {
-        /// The offending relative text.
-        input: String,
-        /// Jail fault for the offense.
-        fault: SegmentFault,
+    /// Blob seal failure.
+    #[error("cannot seal '{document}': {reason}")]
+    Seal {
+        /// The destination display under sealing.
+        document: String,
+        /// The store reason.
+        reason: String,
+    },
+    /// Unresolvable base folder.
+    #[error("cannot resolve '{base}' folder", base = base.name())]
+    Base {
+        /// The base under resolving.
+        base: RouteBase,
     },
 }
 

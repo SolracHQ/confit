@@ -48,8 +48,8 @@ show-spec VERSION="0.1":
 check:
   cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 
-# Bump all three crates to one version. The release flow tags from cli.
+# Bump every crate manifest to one version.
 set-version VERSION:
-  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/model/Cargo.toml crates/driver/Cargo.toml crates/engine/Cargo.toml crates/runtime/Cargo.toml crates/cli/Cargo.toml crates/store/Cargo.toml
+  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/*/Cargo.toml
   cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
-  grep -h '^version' crates/model/Cargo.toml crates/driver/Cargo.toml crates/engine/Cargo.toml crates/runtime/Cargo.toml crates/cli/Cargo.toml crates/store/Cargo.toml
+  grep -h '^version' crates/*/Cargo.toml

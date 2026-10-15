@@ -4,62 +4,130 @@
 
 ### Added
 
-- `confit.fetch` returns one handle for urls and project files
-  alike. Views decode on the handle: `:text()` reads the body,
-  `:toml()`, `:json()`, and `:yaml()` decode it into a table,
-  `:sha()` names the digest. Handles print one-line identities,
-  so errors and verbose logs stay readable.
-- Destinations ride `confit.path` routes now. `home`, `config`,
-  `data`, and `cache` join segments under portable bases,
-  `literal` carries host paths verbatim. Bundles store the
-  portable form (`config:mise/config.toml`), apply resolves per
-     host, previews show the portable text.
-- Archive members travel as handles. `:archive()` seals a fetched
-  or project source once, `:members()` lists names without reading
-  bytes, `:extract_member(name)` picks one member for opaque
-  documents, `:tree(dest, callback)` builds a managed file set
-  where nil skips, true keeps, and a `{ path, mode }` table
-  renames.
-- Zip archives read again beside tar and gzip, so zipped releases
-  and font packs enter trees and member picks.
+- Added bundles to runtime. Export packs slots and
+  history into portable files.
+- Added routes. Documents key by routes with `home`,
+  `config`, `data`, `cache` and `literal` bases. Hook
+  argv with `rc` path entries take strings or routes.
+- Added validate verbs (`validate.document`,
+  `validate.config`, `validate.patch`, `validate.hook`,
+  `validate.condition`, `validate.entry` and
+  `validate.route`). Checks return values with reasons.
+- Added filter patches. Filter callbacks cover matched
+  documents in destination order. Target and filter never
+  mix in one patch.
+- Added hook ids. Hook patches target one id and patch
+  the live hook. Repeated ids fail the plan.
+- Added dotted require paths. Dotted paths address any
+  file inside the project. Folder paths fall back to
+  `init.lua` entries. Plugins require siblings alone.
+  Project code requires anything contained.
+- Added the is plugin with `is.string`, `is.nonempty`,
+  `is.num`, `is.bool`, `is.tab` and `is.fun` checks with
+  `assert`, `keys` and `must` helpers.
+- Added the tab plugin with `tab.clone` for shallow table
+  copies.
+- Added the sugar plugin. Builders cover home, config,
+  data, cache and literal routes, empty rc sections,
+  patch, alias, env, path, eval, cmd and source entries.
+- Added in-flight fetch progress with byte counts.
+- Added document removal counts.
+- Added project folders to `apply` sources with a profile
+  choice.
+- Added init flags. New profiles ship with live stubs,
+  core plugins and a project file. The `--stubs`,
+  `--plugins` and `--lsp` flags refresh the stubs folder,
+  the core plugins folder and `.luarc.json` in old
+  scaffolds. Present targets fail with nothing written.
+- Added the delete line with pruned blob counts.
+- Added `project.toml` with the plugin folder path, the
+  outside-folder flag and the stubs folder path.
+- Added the 3-fonts example. The dotfiles tools moved to
+  4-dotfiles.
+- Added stub generation from live faces. Stub files cover
+  `confit.fetch`, `confit.open`, `confit.template`,
+  `confit.fact` and `confit.validate`. Committed copies
+  refresh through `just stubs`.
+- Added the plugins folder mount to the test container as
+  read only. Examples resolve the same shared tree on host
+  and in the container.
 
 ### Changed
 
-- Every document constructor takes a `confit.path` route for its
-  destination. Plain path strings fail the plan naming the field,
-  profiles move each destination to its base.
-- `confit.document.opaque` takes a fetch, resource, or member
-  handle as its source. Cache-path and project-path strings fail
-  the plan, callers pass the handle itself.
-- `confit.document.tree` takes a destination route and a callback
-  receiving one member handle per entry. The old
-  `(path, info, member)` triple dies, `member:name()` and
-  `member:keep()` read on the handle.
-- `confit.document.compressed` retires. Archive trees and
-  single-member picks ride the handle verbs instead.
-- The `confit.resources` namespace leaves the surface.
-  `fetch_text` and `fetch_file` become `confit.fetch` and a view,
-  `load_text`, `load_toml`, and siblings become `confit.fetch`
-  of a root-relative path and a view.
-- Hook `path` dirs and secret commands and runtime `changed`
-  and `exists` gates take routes. Bare `~` strings fail the plan,
-  profiles wrap them in `confit.path`.
-- `confit.path.*` joins many segments now, so
-  `confit.path.home(".local/bin", "mise")` replaces string
-  concatenation. `confroot` leaves the surface, root-relative
-  loads ride `confit.fetch`.
-- Fetch cache layout moves to content addresses behind a url
-  index. Old caches miss on first run and redownload, nothing
-  migrates.
-- Old bundles and saved slots fail the plan naming the file.
-  Manifests carry routes and handle shapes now, unknown fields
-  still fail.
-- Rc path entries drop the `op` key, prepend reads always.
-  Tables still carrying `op` fail the unknown field check,
-  profiles delete the key with no other change.
-- The bundle envelope reads plain tar, the outer gzip level
-  compressed nothing since pool blobs already gzip alone.
-  Readers keep both framings, writers emit plain tar.
+- Changed engine from globals to `require` with plain
+  tables over handles.
+- Changed configs, documents, hooks and patches to plain
+  tables. Profiles build literals and return them.
+- Changed fetch and open calls to handles. Fetch and open
+  calls return handles with `text`, `load`, `archive` and
+  `sha` verbs. Bytes load on call. Text files open through
+  `text` alone, structured files open through `load`
+  alone. Absent reads return nil with reason.
+- Changed opaque documents to blob refs with hashes.
+  Bytes stream on write. Plan labels show hashes alone.
+- Changed blob payloads to seal at build. Decoded handles
+  seal into refs. Decode and validate compress nothing.
+- Changed tree documents to member tables. Members map
+  relative paths to resource handles or handle tables with
+  a required mode. Bare handles take 644. Empty, absolute
+  and parent keys fail the plan.
+- Changed conditions to plain tables. Profiles write
+  `in_path`, `exists`, `changed`, `env_eq`, `env_set`,
+  `all`, `any` and `nop` literals.
+- Changed patch destinations to routes. Patches to missing
+  documents fail the plan instead of creating them.
+- Changed requirements to a plain table field. Configs
+  list required configs with hints. Missing installers
+  fail with the hint.
+- Changed mise to plain configs with patches. `mise.init`
+  builds one shared installer config with the base toml,
+  the binary, one rc filter patch and one install hook.
+  `mise.package` folds one tool entry into the base toml,
+  and shim checks join the shared hook through a hook
+  patch. Activation shells come from matched routes.
+- Changed nerd fonts to tree member tables. Fonts fetch
+  one release zip each, keep ttf members alone and write
+  them as a tree document with an `fc-cache` hook. Missing
+  versions resolve from the releases feed.
+- Changed blob compression progress to a done count alone.
+- Changed archive extraction to stream each member under
+  a pending folder with a streamed hash.
+- Changed storage to stream bytes with 14 MB peak on
+  example 3.
+- Changed caches to hold across runs. Warm plans take
+  about a second.
+- Changed the default profile to `main.lua`. Project
+  folders feed `plan` with an optional profile choice.
+  Single profiles skip the flag.
+- Changed the prompt to drain queued prints before the
+  question.
+- Changed the log surface to a logs folder. Logs folders
+  come from the `--logs-dir` flag or `CONFIT_LOG_DIR`. Log
+  lines carry millis stamps. Hook outputs land one file
+  per hook under the hooks folder.
+- Changed the apply tail to print restore with
+  `confit apply %1`.
+- Changed examples to `main.lua` profiles. `main.lua`,
+  `project.toml` and the editor config ship in each
+  example. Tool files require the shared plugins.
+- Changed core plugins to normal plugins. Init scaffolds
+  them, profiles never require them. Users drop them freely.
+
+### Removed
+
+- Removed the core crate.
+- Removed the confit global. Profiles call `require`
+  with `confit.fetch`, `confit.open`,
+  `confit.validate`, `confit.template` and `confit.fact`.
+- Removed the shells list. Profiles list rc documents
+  beside configs now.
+- Removed the solrachq globals plugins. Core plugins moved
+  to `plugins/_`. Profiles `require` them as dotted paths.
+- Removed the merge and template globals plugins.
+  `confit.template` renders templates now. `tab.clone`
+  clones tables now.
+- Removed the `--root`, `--plugins` and `--re-fetch`
+  flags. Project folders with `project.toml` replace them.
 
 ## [0.8.1] (never released)
 

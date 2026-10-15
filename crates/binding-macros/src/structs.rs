@@ -1,5 +1,5 @@
 //! Struct faces
-//! Expands struct declarations into faces.
+//! Expand struct declarations into faces.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -68,7 +68,7 @@ fn map_parts(
     }
     Err(syn::Error::new_spanned(
         span,
-        format!("{outer}.{field}: map converts read HashMap or BTreeMap fields alone"),
+        format!("{outer}.{field}: HashMap or BTreeMap fields are expected for map converts"),
     ))
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn expand_struct_table(
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         }
     };
@@ -102,7 +102,7 @@ pub(crate) fn expand_struct_table(
         let Some(ident) = field.ident.clone() else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         };
         let field_name = ident.unraw().to_string();
@@ -118,14 +118,16 @@ pub(crate) fn expand_struct_table(
         if flags.live {
             return Err(syn::Error::new_spanned(
                 &field.ident,
-                format!("{outer}.{field_name}: face option 'live' reads callback shapes alone"),
+                format!(
+                    "{outer}.{field_name}: callback shapes are expected for face option 'live'"
+                ),
             ));
         }
         if flags.optional && is_option(ty) {
             return Err(syn::Error::new_spanned(
                 ty,
                 format!(
-                    "{outer}.{field_name}: Option fields read optional alone; \
+                    "{outer}.{field_name}: optional is inferred for Option fields; \
                      drop #[face(optional)]"
                 ),
             ));
@@ -149,12 +151,12 @@ pub(crate) fn expand_struct_table(
                 ),
             ));
         }
-        if flags.convert.is_some() && flags.proxy.is_none() {
+        if flags.decode_hook.is_some() && flags.proxy.is_none() {
             if flags.optional || flags.default.is_some() || flags.rename.is_some() {
                 return Err(syn::Error::new_spanned(
                     &field.ident,
                     format!(
-                        "{outer}.{field_name}: sibling convert reads the table \
+                        "{outer}.{field_name}: sibling decode_hook reads the table \
                          alone with no key options"
                     ),
                 ));
@@ -165,9 +167,9 @@ pub(crate) fn expand_struct_table(
             } else {
                 path.clone()
             };
-            let convert = flags.convert.as_ref();
+            let decode_hook = flags.decode_hook.as_ref();
             decodes.push(quote! {
-                let #ident: #ty = #convert(lua, &table).map_err(|error| {
+                let #ident: #ty = #decode_hook(lua, &table).map_err(|error| {
                     ::confit_binding::value::Mismatch {
                         path: #flagged.to_owned(),
                         want: error.want,
@@ -183,8 +185,8 @@ pub(crate) fn expand_struct_table(
         }
         if flags.key_convert.is_some() || flags.value_convert.is_some() {
             if flags.proxy.is_some()
-                || flags.convert.is_some()
-                || flags.encode.is_some()
+                || flags.decode_hook.is_some()
+                || flags.encode_hook.is_some()
                 || flags.opaque
             {
                 return Err(syn::Error::new_spanned(
@@ -198,7 +200,7 @@ pub(crate) fn expand_struct_table(
             if is_option(ty) {
                 return Err(syn::Error::new_spanned(
                     ty,
-                    format!("{outer}.{field_name}: map converts read plain maps alone"),
+                    format!("{outer}.{field_name}: plain maps are expected for map converts"),
                 ));
             }
             let lua_key = flags.rename.clone().unwrap_or_else(|| field_name.clone());
@@ -367,7 +369,7 @@ pub(crate) fn expand_struct_table(
                 }
             });
         }
-        if let Some(convert) = flags.convert.as_ref() {
+        if let Some(decode_hook) = flags.decode_hook.as_ref() {
             if flags.optional || inferred {
                 decodes.push(quote! {
                     let raw_value: ::mlua::Value =
@@ -379,7 +381,7 @@ pub(crate) fn expand_struct_table(
                             lua,
                             &raw_value,
                             #flagged,
-                            #convert,
+                            #decode_hook,
                         )?
                     };
                 });
@@ -395,7 +397,7 @@ pub(crate) fn expand_struct_table(
                             lua,
                             &raw_value,
                             #flagged,
-                            #convert,
+                            #decode_hook,
                         )?
                     };
                 });
@@ -416,7 +418,7 @@ pub(crate) fn expand_struct_table(
                         lua,
                         &raw_value,
                         #flagged,
-                        #convert,
+                        #decode_hook,
                     )?;
                 });
             }
@@ -476,19 +478,17 @@ pub(crate) fn expand_struct_table(
         members.push(quote! {
             <#face_tokens as ::confit_binding::face::Face>::collect(collector)?;
         });
-        match flags.encode.as_ref() {
-            Some(encode) => encodes.push(quote! {
-                table.set(
-                    #lua_key,
-                    lua.create_string(#encode(self.#ident.clone()))?,
-                )?;
-            }),
-            None => encodes.push(quote! {
+        if let Some(hook) = flags.encode_hook.as_ref() {
+            encodes.push(quote! {
+                table.set(#lua_key, #hook(lua, &self.#ident)?)?;
+            });
+        } else {
+            encodes.push(quote! {
                 table.set(
                     #lua_key,
                     <#ty as ::confit_binding::value::Encode>::encode(&self.#ident, lua)?,
                 )?;
-            }),
+            });
         }
         idents.push(ident);
         if !keys.iter().any(|key| key == &lua_key) {
@@ -571,7 +571,7 @@ pub(crate) fn expand_struct_userdata(
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         }
     };
@@ -580,14 +580,14 @@ pub(crate) fn expand_struct_userdata(
         let Some(ident) = field.ident.clone() else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                format!("{outer}: Face derive reads structs with named fields alone"),
+                format!("{outer}: structs with named fields are expected for Face derive"),
             ));
         };
         let field_name = ident.unraw().to_string();
         if field.attrs.iter().any(|attr| attr.path().is_ident("face")) {
             return Err(syn::Error::new_spanned(
                 &field.ident,
-                format!("{outer}.{field_name}: face field options read table structs alone"),
+                format!("{outer}.{field_name}: table structs are expected for face field options"),
             ));
         }
     }

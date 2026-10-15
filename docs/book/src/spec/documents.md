@@ -250,7 +250,7 @@ lowercase hex.
 #### Difference shape
 
 Changed bytes report under the `content` key. Values carry
-hash and size labels. Equal bytes stay quiet. A recorded
+hash labels. Equal bytes stay quiet. A recorded
 mode and a differing disk mode adds a `mode` key entry.
 
 #### Apply behavior

@@ -67,7 +67,10 @@ impl ResourceHandle {
     ) -> crate::resources::error::Result<Self> {
         let path = path.into();
         if !path.starts_with(exec_root) {
-            return Err(ResourceError::Escape { path });
+            return Err(ResourceError::Escape {
+                path: path.clone(),
+                reason: format!("'{}' is outside the exec root", path.display()),
+            });
         }
         Ok(Self { path, sha256 })
     }
@@ -153,7 +156,12 @@ impl StateHandle {
 
 #[face_impl]
 impl ResourceHandle {
-    /// Read file text, else nil with reason.
+    /// Read file text.
+    ///
+    /// # Returns
+    ///
+    /// - File text, else nil.
+    /// - Failure reason, else nil.
     fn text(&self, lua: &Lua) -> mlua::Result<(Option<String>, Option<String>)> {
         let stores = stores_of(lua)?;
         match stores.resources().read_text(self) {
@@ -163,13 +171,20 @@ impl ResourceHandle {
     }
 
     /// Render the opened content hash.
+    ///
+    /// # Returns
+    ///
+    /// - Hex digest of the file content.
     fn sha(&self) -> mlua::Result<String> {
         Ok(self.sha256.hex())
     }
 
-    /// Read file content into its table, else nil with reason.
+    /// Read file content.
     ///
-    /// - Inputs without a table shape produce nil with reason.
+    /// # Returns
+    ///
+    /// - Decoded table, else nil.
+    /// - Failure reason, else nil.
     fn load(&self, lua: &Lua) -> mlua::Result<(Option<Table>, Option<String>)> {
         let stores = stores_of(lua)?;
         match stores.resources().load_table(lua, self) {
@@ -178,9 +193,12 @@ impl ResourceHandle {
         }
     }
 
-    /// Open the input as its archive, else nil with reason.
+    /// Open the input archive.
     ///
-    /// - Non-archives produce nil with reason.
+    /// # Returns
+    ///
+    /// - Archive handle, else nil.
+    /// - Failure reason, else nil.
     fn archive(&self, lua: &Lua) -> mlua::Result<(Option<ArchiveHandle>, Option<String>)> {
         let stores = stores_of(lua)?;
         match stores.archives().archive(self) {
@@ -192,9 +210,12 @@ impl ResourceHandle {
 
 #[face_impl]
 impl ArchiveHandle {
-    /// List the archive member names, else nil with reason.
+    /// List the archive member names, archive-relative with forward slashes.
     ///
-    /// - Members are archive-relative with forward slashes.
+    /// # Returns
+    ///
+    /// - Member names, else nil.
+    /// - Failure reason, else nil.
     fn members(&self, lua: &Lua) -> mlua::Result<(Option<Vec<String>>, Option<String>)> {
         let stores = stores_of(lua)?;
         match stores.archives().members(self) {
@@ -203,9 +224,16 @@ impl ArchiveHandle {
         }
     }
 
-    /// Open one archive member as its handle, else nil with reason.
+    /// Open one archive member.
     ///
-    /// - Names are archive-relative with forward slashes.
+    /// # Arguments
+    ///
+    /// - [name] Archive-relative member name.
+    ///
+    /// # Returns
+    ///
+    /// - Member handle, else nil.
+    /// - Failure reason, else nil.
     fn member(
         &self,
         lua: &Lua,
@@ -358,8 +386,7 @@ mod tests {
     }
 
     fn open_input(stores: &Stores, relative: &str) -> ResourceHandle {
-        let path = stores.roots.project_root.join(relative);
-        match stores.resources().resource(&path) {
+        match stores.resources().resource(relative) {
             Ok(handle) => handle,
             Err(error) => panic!("project opens: {error}"),
         }

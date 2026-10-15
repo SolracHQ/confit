@@ -7,7 +7,7 @@ use crate::registry::Registry;
 
 /// One documented table field.
 ///
-/// The descriptor carries the optional marker from
+/// The optional marker from
 /// the shape declaration to stub emission.
 pub struct FieldDescriptor {
     /// The field name.
@@ -22,7 +22,7 @@ pub struct FieldDescriptor {
 
 /// One documented union variant.
 ///
-/// The descriptor carries one member from the union
+/// One member from the union
 /// declaration to stub emission.
 pub struct VariantDescriptor {
     /// The variant name.
@@ -31,6 +31,43 @@ pub struct VariantDescriptor {
     pub documentation: &'static str,
     /// The variant face expression.
     pub face: Cow<'static, str>,
+}
+
+/// One documented function.
+///
+/// The function face from
+/// the static declaration to stub emission.
+pub struct FunctionDescriptor {
+    /// The function name.
+    pub name: &'static str,
+    /// The function documentation.
+    pub documentation: &'static str,
+}
+
+/// One documented function parameter.
+///
+/// The optional marker from
+/// the static declaration to stub emission.
+pub struct FunctionParameter {
+    /// The parameter name.
+    pub name: &'static str,
+    /// The parameter documentation.
+    pub documentation: &'static str,
+    /// The parameter face expression.
+    pub face: Cow<'static, str>,
+    /// The optional marker.
+    pub optional: bool,
+}
+
+/// One documented function return.
+///
+/// One return slot from the
+/// static declaration to stub emission.
+pub struct FunctionReturn {
+    /// The return face expression.
+    pub face: Cow<'static, str>,
+    /// The return documentation.
+    pub documentation: &'static str,
 }
 
 /// Face kind marker.

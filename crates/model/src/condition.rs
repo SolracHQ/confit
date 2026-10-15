@@ -2,15 +2,12 @@
 //! Shell session predicates held as data.
 
 use confit_binding_macros::Face;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
 
 /// Shell session predicate.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Face, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Face)]
 #[serde(rename_all = "snake_case")]
 #[face(table, tagged)]
 pub enum Condition {

@@ -28,8 +28,8 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
         Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
-        Data::Opaque { blob, .. } => Err(Error::Parse {
-            input: blob.sha256.hex(),
+        Data::Opaque { handle: blob, .. } => Err(Error::Parse {
+            input: blob.sha256().hex(),
             want: "blob bytes through the blob store".to_owned(),
         }),
         Data::Tree { .. } => Err(Error::Parse {
@@ -167,9 +167,7 @@ fn render_guard(guard: &Condition) -> String {
             let candidate = escape_argv(std::slice::from_ref(&route.display()));
             format!("[ -e {candidate} ]")
         }
-        // Changed never reaches shell guards: rc guards holding it fail
-        // at assembly. Render false so entries stay
-        // quiet if the invariant ever breaks.
+        // Changed renders false.
         Condition::Changed { .. } => "false".to_string(),
         Condition::All(items) if items.is_empty() => "true".to_string(),
         Condition::Any(items) if items.is_empty() => "false".to_string(),

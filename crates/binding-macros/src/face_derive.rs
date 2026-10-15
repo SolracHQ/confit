@@ -96,7 +96,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         },
         _ => Err(syn::Error::new_spanned(
             &identifier,
-            format!("{identifier}: Face derive reads structs and enums alone"),
+            format!("{identifier}: structs and enums are expected for Face derive"),
         )),
     };
     match expanded {

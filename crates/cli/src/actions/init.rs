@@ -10,11 +10,6 @@ use crate::error::{CliError, Result};
 
 use crate::cli::InitArgs;
 
-/// Starter profile text written by init.
-///
-/// Ships from `resources/main.lua` beside the crate. One shell config holds
-/// one alias patch to config and one eval patch to final. Comments guide first
-/// use.
 const PROFILE_TEXT: &str = include_str!("../../resources/main.lua");
 
 // Core plugins.
@@ -51,8 +46,6 @@ pub struct InitRunner<'a> {
 impl InitRunner<'_> {
     /// Run one scaffold or refresh the flagged artifacts.
     ///
-    /// - Present scaffolds leave nothing written.
-    ///
     /// # Errors
     ///
     /// - [`CliError::Exists`] for present scaffolds.
@@ -85,8 +78,6 @@ impl InitRunner<'_> {
 }
 
 /// Write one profile with live stubs, the core plugins and the project file.
-///
-/// - Present scaffolds leave nothing written.
 ///
 /// # Errors
 ///

@@ -13,3 +13,7 @@ syn = { version = "3.0.7", features = ["full"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+confit-binding = { path = "../binding" }
+mlua = { workspace = true, features = ["lua54", "vendored"] }

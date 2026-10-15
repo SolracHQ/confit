@@ -1,11 +1,11 @@
 --- @meta confit.validate
---- Checks one body table.
+--- Check one body table.
 --- @param body any The body table under checking.
 --- @return Document? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function document(body) end
 
---- Persisted document payload.
+--- One document payload.
 --- @alias Document Document_Structured | Document_Text | Document_Link | RcData | Document_Opaque | Document_Tree
 
 --- Structured Text Document.
@@ -19,7 +19,7 @@ function document(body) end
 --- Plain Text Document.
 --- @class Document_Text
 --- @field text string The exact file text.
---- @field mode string? Unix permission bits.
+--- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 --- @field unmanaged boolean? Existence-only document flag.
 
 --- Symbolic Link Document.
@@ -105,53 +105,61 @@ function document(body) end
 
 --- Binary Document.
 --- @class Document_Opaque
---- @field handle ResourceHandle The resource handle holding the file bytes.
---- @field mode string? Unix permission bits.
+--- @field handle ResourceHandle The opaque file handle.
+--- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 --- @field unmanaged boolean? Existence-only document flag.
 
 --- Handle to a project resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
---- Read file text, else nil with reason.
---- @return string?
---- @return string?
+--- Read file text.
+--- @return string? File text, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:text() end
 
 --- Render the opened content hash.
---- @return string
+--- @return string Hex digest of the file content.
 function ResourceHandle:sha() end
 
---- Read file content into its table, else nil with reason.  - Inputs without a table shape produce nil with reason.
---- @return table?
---- @return string?
+--- Read file content.
+--- @return table? Decoded table, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:load() end
 
---- Open the input as its archive, else nil with reason.  - Non-archives produce nil with reason.
---- @return ArchiveHandle?
---- @return string?
+--- Open the input archive.
+--- @return ArchiveHandle? Archive handle, else nil.
+--- @return string? Failure reason, else nil.
 function ResourceHandle:archive() end
 
 --- Handle to a verified compressed archive.
 --- @class ArchiveHandle
 ArchiveHandle = {}
 
---- List the archive member names, else nil with reason.  - Members are archive-relative with forward slashes.
---- @return string[]?
---- @return string?
+--- List the archive member names, archive-relative with forward slashes.
+--- @return string[]? Member names, else nil.
+--- @return string? Failure reason, else nil.
 function ArchiveHandle:members() end
 
---- Open one archive member as its handle, else nil with reason.  - Names are archive-relative with forward slashes.
---- @param name string
---- @return ResourceHandle?
---- @return string?
+--- Open one archive member.
+--- @param name string Archive-relative member name.
+--- @return ResourceHandle? Member handle, else nil.
+--- @return string? Failure reason, else nil.
 function ArchiveHandle:member(name) end
 
 --- File Tree Document.
 --- @class Document_Tree
---- @field members {[string]: ResourceHandle} Tree members keyed by relative path.
+--- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
---- Checks one config table.
+--- One tree member.  A bare handle takes the default mode. A table names the handle with a required mode.
+--- @alias TreeMember ResourceHandle | TreeMember_Full
+
+--- Handle with explicit mode.
+--- @class TreeMember_Full
+--- @field handle ResourceHandle The file payload.
+--- @field mode string File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
+
+--- Check one config table.
 --- @param config any The config table under checking.
 --- @return Config? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
@@ -205,31 +213,31 @@ function HookArgs(hook) end
 --- @field check Condition? The run condition.
 --- @field timeout string? The run cap in seconds.
 
---- Checks one patch table.
+--- Check one patch table.
 --- @param patch any The patch table under checking.
 --- @return Patch? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function patch(patch) end
 
---- Checks one hook table.
+--- Check one hook table.
 --- @param value any The hook table under checking.
 --- @return Hook? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function hook(value) end
 
---- Checks one condition table.
+--- Check one condition table.
 --- @param value any The condition table under checking.
 --- @return Condition? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function condition(value) end
 
---- Checks one rc entry table.
+--- Check one rc entry table.
 --- @param value any The entry table under checking.
 --- @return RcEntry? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function entry(value) end
 
---- Checks one route table.
+--- Check one route table.
 --- @param value any The route table under checking.
 --- @return Route? The decoded value, else nil.
 --- @return string? The failure reason, else nil.

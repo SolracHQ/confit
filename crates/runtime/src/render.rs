@@ -4,6 +4,7 @@
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
 use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+use confit_model::routes::Route;
 
 use crate::error::{RefusalShape, Result, RuntimeError};
 use crate::manifest::Document;
@@ -26,12 +27,12 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
         },
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
         Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
-        Data::Rc(data) => Ok(render_rc(data).into_bytes()),
-        Data::Opaque { blob, .. } => {
+        Data::Rc(data) => Ok(render_rc(&document.destination, data)?.into_bytes()),
+        Data::Opaque { handle: blob, .. } => {
             log::error!(
                 "opaque '{}' uses blob '{}'",
                 document.destination.display(),
-                blob.sha256.hex()
+                blob.sha256().hex()
             );
             Err(RuntimeError::Refusal {
                 route: document.destination.clone(),
@@ -85,10 +86,14 @@ fn render_yaml(route: &confit_model::routes::Route, value: &serde_json::Value) -
 }
 
 /// Render rc data to shell text with trailing newline.
-fn render_rc(data: &RcData) -> String {
-    let profile = section_lines(&data.profile);
-    let config = section_lines(&data.config);
-    let finals = section_lines(&data.final_entries);
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn render_rc(route: &Route, data: &RcData) -> Result<String> {
+    let profile = section_lines(route, &data.profile)?;
+    let config = section_lines(route, &data.config)?;
+    let finals = section_lines(route, &data.final_entries)?;
     let mut blocks: Vec<String> = Vec::new();
     if !profile.is_empty() {
         blocks.push(profile.join("\n"));
@@ -103,27 +108,39 @@ fn render_rc(data: &RcData) -> String {
         blocks.push(finals.join("\n"));
     }
     if blocks.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
     let mut out = blocks.join("\n\n");
     out.push('\n');
-    out
+    Ok(out)
 }
 
 /// Collect one section lines in declaration order.
-fn section_lines(entries: &[RcEntry]) -> Vec<String> {
-    entries.iter().flat_map(render_entry).collect()
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn section_lines(route: &Route, entries: &[RcEntry]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in entries {
+        out.extend(render_entry(route, entry)?);
+    }
+    Ok(out)
 }
 
 /// Render one rc entry as shell lines.
-fn render_entry(entry: &RcEntry) -> Vec<String> {
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn render_entry(route: &Route, entry: &RcEntry) -> Result<Vec<String>> {
     let line = match entry {
         RcEntry::Env { name, value, .. } => {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
         RcEntry::Path { name, dir, .. } => {
-            let expanded = dir.expand().to_string_lossy().into_owned();
+            let expanded = expand_field(route, dir)?;
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")
         }
@@ -133,72 +150,84 @@ fn render_entry(entry: &RcEntry) -> Vec<String> {
             let expanded = escape_argv(std::slice::from_ref(expansion));
             format!("alias {name}={expanded}")
         }
-        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)),
-        RcEntry::Cmd { argv, .. } => escape_args(argv),
+        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(route, argv)?),
+        RcEntry::Cmd { argv, .. } => escape_args(route, argv)?,
         RcEntry::Source { path, .. } => {
-            let expanded = path.expand().to_string_lossy().into_owned();
+            let expanded = expand_field(route, path)?;
             format!("source {}", quote(&expanded))
         }
     };
-    match entry.when() {
+    Ok(match entry.when() {
         None => vec![line],
         Some(guard) => vec![
-            format!("if {}; then", render_guard(guard)),
+            format!("if {}; then", render_guard(route, guard)?),
             format!("  {line}"),
             "fi".to_string(),
         ],
-    }
+    })
 }
 
 /// Render one condition as a Bourne test string.
-fn render_guard(guard: &Condition) -> String {
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn render_guard(route: &Route, guard: &Condition) -> Result<String> {
     match guard {
         Condition::EnvEq { key, value } => {
             let rhs = escape_argv(std::slice::from_ref(value));
-            format!("[ \"${{{key}}}\" = {rhs} ]")
+            Ok(format!("[ \"${{{key}}}\" = {rhs} ]"))
         }
-        Condition::EnvSet { key } => format!("[ -n \"${{{key}}}\" ]"),
+        Condition::EnvSet { key } => Ok(format!("[ -n \"${{{key}}}\" ]")),
         Condition::InPath { name } => {
             let binary = escape_argv(std::slice::from_ref(name));
-            format!("command -v {binary} >/dev/null 2>&1")
+            Ok(format!("command -v {binary} >/dev/null 2>&1"))
         }
-        Condition::Exists { route } => {
-            let expanded = route.expand().to_string_lossy().into_owned();
+        Condition::Exists { route: found } => {
+            let expanded = expand_field(route, found)?;
             let candidate = escape_argv(std::slice::from_ref(&expanded));
-            format!("[ -e {candidate} ]")
+            Ok(format!("[ -e {candidate} ]"))
         }
-        // Changed holds no shell form and renders false.
-        Condition::Changed { .. } => "false".to_string(),
-        Condition::All(items) if items.is_empty() => "true".to_string(),
-        Condition::Any(items) if items.is_empty() => "false".to_string(),
-        Condition::All(items) => join_guards(items, "&&"),
-        Condition::Any(items) => join_guards(items, "||"),
+        // No shell form expresses Changed; it renders false.
+        Condition::Changed { .. } => Ok("false".to_string()),
+        Condition::All(items) if items.is_empty() => Ok("true".to_string()),
+        Condition::Any(items) if items.is_empty() => Ok("false".to_string()),
+        Condition::All(items) => join_guards(route, items, "&&"),
+        Condition::Any(items) => join_guards(route, items, "||"),
         Condition::Not(inner) => match inner.as_ref() {
             Condition::All(_) | Condition::Any(_) | Condition::Not(_) => {
-                format!("! ( {} )", render_guard(inner))
+                Ok(format!("! ( {} )", render_guard(route, inner)?))
             }
-            _ => format!("! {}", render_guard(inner)),
+            _ => Ok(format!("! {}", render_guard(route, inner)?)),
         },
     }
 }
 
 /// Join nested guards under one operator.
-fn join_guards(items: &[Condition], op: &str) -> String {
-    items
-        .iter()
-        .map(|item| group_guard(item, op))
-        .collect::<Vec<_>>()
-        .join(&format!(" {op} "))
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn join_guards(route: &Route, items: &[Condition], op: &str) -> Result<String> {
+    let mut rendered = Vec::with_capacity(items.len());
+    for item in items {
+        rendered.push(group_guard(route, item, op)?);
+    }
+    Ok(rendered.join(&format!(" {op} ")))
 }
 
 /// Group one nested guard under an operator.
-fn group_guard(item: &Condition, parent: &str) -> String {
-    let rendered = render_guard(item);
-    match item {
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn group_guard(route: &Route, item: &Condition, parent: &str) -> Result<String> {
+    let rendered = render_guard(route, item)?;
+    Ok(match item {
         Condition::All(_) if parent != "&&" => format!("( {rendered} )"),
         Condition::Any(_) if parent != "||" => format!("( {rendered} )"),
         _ => rendered,
-    }
+    })
 }
 
 /// Render argv as one shell line with Bourne quoting.
@@ -210,17 +239,44 @@ fn escape_argv(argv: &[String]) -> String {
 }
 
 /// Render slots as one shell line with Bourne quoting.
-fn escape_args(slots: &[Arg]) -> String {
-    slots.iter().map(escape_slot).collect::<Vec<_>>().join(" ")
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn escape_args(route: &Route, slots: &[Arg]) -> Result<String> {
+    let mut rendered = Vec::with_capacity(slots.len());
+    for slot in slots {
+        rendered.push(escape_slot(route, slot)?);
+    }
+    Ok(rendered.join(" "))
 }
 
 /// Render one slot with Bourne quoting.
-fn escape_slot(slot: &Arg) -> String {
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn escape_slot(route: &Route, slot: &Arg) -> Result<String> {
     match slot {
-        Arg::Text(text) => quote(text).into_owned(),
-        Arg::Route(route) => {
-            let expanded = route.expand().to_string_lossy().into_owned();
-            quote(&expanded).into_owned()
+        Arg::Text(text) => Ok(quote(text).into_owned()),
+        Arg::Route(found) => {
+            let expanded = expand_field(route, found)?;
+            Ok(quote(&expanded).into_owned())
         }
     }
+}
+
+/// Expand one route field against its document route for errors.
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn expand_field(route: &Route, found: &Route) -> Result<String> {
+    found
+        .expand()
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|source| RuntimeError::Expand {
+            route: route.clone(),
+            source,
+        })
 }

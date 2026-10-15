@@ -1,7 +1,7 @@
 --- Builds the starship config over the base TOML resource.
 local mise = require("plugins._.mise")
 local sugar = require("plugins._.sugar")
-local resource = require("confit.resource")
+local open = require("confit.open")
 
 ---@type Route
 local STARSHIP_TOML = { base = "config", relative = "starship.toml" }
@@ -9,7 +9,7 @@ local STARSHIP_TOML = { base = "config", relative = "starship.toml" }
 ---@param user_config table User keys winning over the base data.
 ---@return Config Starship config for the profile configs array.
 return function(user_config)
-	local base = assert(assert(resource("resources/starship.toml")):load())
+	local base = assert(assert(open("resources/starship.toml")):load())
 	local config = mise.package({
 		name = "starship",
 		rc = {

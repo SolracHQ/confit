@@ -163,10 +163,14 @@ pub enum Patch {
     Hook(HookPatch),
 }
 
-/// Route one patch table into its face over the target shape.
+/// Route one patch table.
 ///
 /// String targets route hook patches, route targets route document patches
 /// over the format marker.
+///
+/// # Returns
+///
+/// - Return the patch face over the target shape.
 ///
 /// # Errors
 ///

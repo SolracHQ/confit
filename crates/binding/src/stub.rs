@@ -1,14 +1,15 @@
 //! Stub
-//! Emits LuaLS stub text for bound namespaces.
+//! Emit LuaLS stub text for bound namespaces.
 
-use crate::face::{FieldDescriptor, VariantDescriptor};
+use crate::face::{
+    FieldDescriptor, FunctionDescriptor, FunctionParameter, FunctionReturn, VariantDescriptor,
+};
 use crate::registry::Registry;
 use crate::userdata::MethodDescriptor;
-use crate::verb::{ParameterDescriptor, ReturnDescriptor, VerbDescriptor};
 
 /// One rendered stub file.
 ///
-/// The document pairs one namespace with its complete
+/// One namespace with its complete
 /// stub text for freshness comparison.
 pub struct StubDocument {
     /// The dotted namespace path.
@@ -19,8 +20,8 @@ pub struct StubDocument {
 
 /// Stub emitter with a file header.
 ///
-/// The emitter joins registry blocks under one header
-/// and renders one document per namespace.
+/// Registry blocks under one header
+/// and one document per namespace.
 pub struct StubEmitter {
     /// The file header lines.
     header: String,
@@ -93,7 +94,7 @@ pub fn emit_alias(name: &str, documentation: &str, variants: &[VariantDescriptor
     block
 }
 
-/// Emit one function block for one verb.
+/// Emit one function block for one static.
 ///
 /// Optional params read `name?` with the plain face, so one
 /// trailing `?` falls off optional faces. Return faces carry
@@ -101,9 +102,9 @@ pub fn emit_alias(name: &str, documentation: &str, variants: &[VariantDescriptor
 /// trimmed, so raw `///` lines and trimmed strings share one
 /// output shape.
 pub fn emit_function(
-    descriptor: &VerbDescriptor,
-    parameters: &[ParameterDescriptor],
-    returns: &[ReturnDescriptor],
+    descriptor: &FunctionDescriptor,
+    parameters: &[FunctionParameter],
+    returns: &[FunctionReturn],
 ) -> String {
     let mut block = String::from("--- ");
     block.push_str(descriptor.documentation.trim());
@@ -157,10 +158,14 @@ pub fn emit_method(class: &str, method: &MethodDescriptor) -> String {
         block.push_str(parameter.name);
         block.push(' ');
         block.push_str(parameter.face.trim());
+        block.push(' ');
+        block.push_str(parameter.documentation.trim());
     }
     for returned in &method.returns {
         block.push_str("\n--- @return ");
-        block.push_str(returned.trim());
+        block.push_str(returned.face.trim());
+        block.push(' ');
+        block.push_str(returned.documentation.trim());
     }
     block.push_str("\nfunction ");
     block.push_str(class);
@@ -202,7 +207,7 @@ pub fn emit_optional(face: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::userdata::MethodParameter;
+    use crate::userdata::{MethodParameter, MethodReturn};
 
     #[test]
     fn method_block_reads_colon_call_without_receiver() {
@@ -211,13 +216,19 @@ mod tests {
             documentation: "List the archive member names, else nil with reason.",
             parameters: vec![],
             returns: vec![
-                std::borrow::Cow::Borrowed("string[]?"),
-                std::borrow::Cow::Borrowed("string?"),
+                MethodReturn {
+                    face: std::borrow::Cow::Borrowed("string[]?"),
+                    documentation: "Member names, else nil.",
+                },
+                MethodReturn {
+                    face: std::borrow::Cow::Borrowed("string?"),
+                    documentation: "Failure reason, else nil.",
+                },
             ],
         };
         assert_eq!(
             emit_method("ArchiveHandle", &method),
-            "--- List the archive member names, else nil with reason.\n--- @return string[]?\n--- @return string?\nfunction ArchiveHandle:members() end"
+            "--- List the archive member names, else nil with reason.\n--- @return string[]? Member names, else nil.\n--- @return string? Failure reason, else nil.\nfunction ArchiveHandle:members() end"
         );
         let named = MethodDescriptor {
             name: "member",
@@ -225,11 +236,15 @@ mod tests {
             parameters: vec![MethodParameter {
                 name: "name",
                 face: std::borrow::Cow::Borrowed("string"),
+                documentation: "Archive-relative member name.",
             }],
-            returns: vec![std::borrow::Cow::Borrowed("ResourceHandle?")],
+            returns: vec![MethodReturn {
+                face: std::borrow::Cow::Borrowed("ResourceHandle?"),
+                documentation: "Member handle, else nil.",
+            }],
         };
         let block = emit_method("ArchiveHandle", &named);
-        assert!(block.contains("--- @param name string"));
+        assert!(block.contains("--- @param name string Archive-relative member name."));
         assert!(block.contains("function ArchiveHandle:member(name) end"));
         assert!(!block.contains("self"));
     }

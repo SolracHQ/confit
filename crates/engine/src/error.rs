@@ -50,9 +50,6 @@ pub enum EngineError {
         /// The escape reason.
         reason: String,
     },
-    /// Open failure.
-    #[error(transparent)]
-    Open(#[from] confit_store::resources::error::ResourceError),
     /// Blob failure.
     #[error(transparent)]
     Blob(#[from] confit_store::blob::error::BlobError),

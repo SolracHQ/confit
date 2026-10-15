@@ -59,8 +59,8 @@ impl FileMeta {
 
 /// Seekable file handle shared by host and memory backends.
 ///
-/// Handles serve reads and writes and seeks over one cursor. Length reports
-/// committed bytes, sync lands buffered bytes onto the backend.
+/// Handles serve reads and writes and seeks over one cursor. Length report
+/// committed bytes, sync land buffered bytes onto the backend.
 #[allow(clippy::len_without_is_empty)]
 pub trait FsFile: io::Read + io::Write + io::Seek {
     /// Return the committed byte length of one file.
@@ -105,7 +105,7 @@ pub fn is_link(path: &Path) -> bool {
     read_link(path).is_ok()
 }
 
-/// Report whether one path holds no entry.
+/// Report whether one path is a missing path.
 pub fn is_missing(path: &Path) -> bool {
     !exists(path)
 }
@@ -144,9 +144,9 @@ pub fn remove_link(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses reads.
-/// - [InvalidInput] when the path holds no link.
+/// - [InvalidInput] for non-link paths.
 pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
     Ok(read_link(path)?.as_os_str().as_encoded_bytes().to_vec())
 }
@@ -157,7 +157,7 @@ pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses writes.
 pub fn set_mode_if_present(path: &Path, mode: Option<u32>) -> io::Result<()> {
     if let Some(bits) = mode {
@@ -328,32 +328,87 @@ mod tests {
     }
 
     #[test]
-    fn write_link_stores_target_bytes_while_read_link_fails() {
+    fn write_link_creates_resolvable_link() {
         let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("links").join("target.txt");
+        create_dir_all(target.parent().unwrap()).unwrap();
+        write(&target, b"linked bytes").unwrap();
         let link = dir.path().join("links").join("note");
-        let target = PathBuf::from("elsewhere/target.txt");
-        write_link(&link, &target).unwrap();
+        write_link(&link, std::path::Path::new("target.txt")).unwrap();
+        assert_eq!(
+            read_link(&link).unwrap(),
+            PathBuf::from("target.txt"),
+            "link reads back its target"
+        );
+        assert!(is_link(&link), "link reports as a link");
+        assert!(!is_link(&target), "plain file reports no link");
         assert_eq!(
             read(&link).unwrap(),
-            target.as_os_str().as_encoded_bytes(),
-            "link stores target bytes as a plain file"
+            b"linked bytes".to_vec(),
+            "reads follow the link"
         );
-        assert!(
-            read_link(&link).is_err(),
-            "link reads always fail under the guard"
-        );
+        let facts = metadata(&link).unwrap();
+        assert_eq!(facts.len(), 12, "link facts follow the target");
+        assert!(exists(&link), "live link counts as present");
         let moved = PathBuf::from("moved/target.txt");
         write_link(&link, &moved).unwrap();
         assert_eq!(
-            read(&link).unwrap(),
-            moved.as_os_str().as_encoded_bytes(),
+            read_link(&link).unwrap(),
+            moved,
             "repeat link replaces the entry"
         );
         assert!(
             !link.exists(),
             "guarded link never lands on host: {}",
             link.display()
+        );
+    }
+
+    #[test]
+    fn canonicalize_follows_inside_link_and_marks_outside_by_structure() {
+        let _guard = TestGuard::install();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let target = root.join("target.txt");
+        create_dir_all(&root).unwrap();
+        write(&target, b"inside").unwrap();
+        let inside = root.join("inside");
+        write_link(&inside, std::path::Path::new("target.txt")).unwrap();
+        let resolved = canonicalize(&inside).unwrap();
+        assert_eq!(resolved, target, "inside link resolves at its target");
+        assert!(
+            resolved.starts_with(&root),
+            "inside link stays under the root"
+        );
+        let outside = root.join("outside");
+        let escaped = dir.path().join("escaped.txt");
+        write(&escaped, b"outside").unwrap();
+        write_link(&outside, &escaped).unwrap();
+        let resolved = canonicalize(&outside).unwrap();
+        assert!(
+            !resolved.starts_with(&root),
+            "outside link resolves outside the root by structure"
+        );
+    }
+
+    #[test]
+    fn canonicalize_fails_closed_on_link_loops() {
+        let _guard = TestGuard::install();
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        write_link(&first, &second).unwrap();
+        write_link(&second, &first).unwrap();
+        assert!(
+            canonicalize(&first).is_err(),
+            "loops fail closed under the guard"
+        );
+        assert!(read_link(&first).is_ok(), "loop links still read back");
+        assert!(!exists(&first), "loop links count as absent");
+        assert!(
+            metadata(&first).is_err(),
+            "loop facts fail closed under the guard"
         );
     }
 
@@ -476,9 +531,8 @@ mod tests {
         set_mode(&tool, 0o755).unwrap();
         write(&regular, b"run").unwrap();
         set_mode(&regular, 0o644).unwrap();
-        // Links hold no backend under the guard: a current link
-        // mirrors as a stored exec entry, a dangling link
-        // mirrors as a never-written path, both reading the
+        // Current links mirror as stored exec entries, dangling links
+        // mirror as missing paths, both reading the
         // same verdict the disk link reports.
         write_link(&link_ok, &tool).unwrap();
         set_mode(&link_ok, 0o755).unwrap();

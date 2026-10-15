@@ -1,124 +1,42 @@
 //! Resource files opened from the project root.
 
-use std::path::{Component, Path, PathBuf};
-
 use mlua::Lua;
 
+use confit_binding_macros::face_impl;
+
 use confit_store::handles::ResourceHandle;
-use confit_store::resources::Resources;
-use confit_store::resources::error::ResourceError;
 
 use crate::api::stores_of;
-use crate::error::EngineError;
-use confit_model::routes::split_checked;
 
-confit_binding::verb! {
-    /// Opens one project-relative file into its handle.
-    fn resource(
-        lua: &Lua,
-        /// Project-relative file path.
-        path: String,
-    ) -> (
-        /// The resource handle, else nil.
-        Option<ResourceHandle>,
-        /// The failure reason, else nil.
-        Option<String>,
-    ) [call = resource_impl]
-}
+/// Open namespace.
+pub struct Open;
 
-confit_binding::module! {
-    namespace = "confit.resource",
-    verb = resource,
-}
-
-/// Open one project-relative file into its resource handle.
-///
-/// Missing files take nil with reason.
-///
-/// # Errors
-///
-/// - [`EngineError::Mismatch`] for non-string inputs.
-/// - [`EngineError::Escape`] for escaping paths.
-/// - [`EngineError::Open`] for open failures.
-fn resource_impl(
-    lua: &Lua,
-    relative: String,
-) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
-    const CALLER: &str = "confit.resource";
-    let stores = stores_of(lua)?;
-    let project = stores.resources().roots.project_root.clone();
-    let parts = split_checked(&relative, false).map_err(|fault| EngineError::Escape {
-        caller: CALLER.to_owned(),
-        input: relative.clone(),
-        reason: fault.reason().to_owned(),
-    })?;
-    let full = join_project(&project, &parts);
-    if !under_project(&project, &full) {
-        return Err(EngineError::Escape {
-            caller: CALLER.to_owned(),
-            input: relative.clone(),
-            reason: format!("'{relative}' is outside the project root"),
+#[face_impl(namespace = "confit.open")]
+impl Open {
+    /// Open one project-relative file.
+    ///
+    /// # Arguments
+    ///
+    /// - [path] Project-relative file path.
+    ///
+    /// # Returns
+    ///
+    /// - The resource handle, else nil.
+    /// - The failure reason, else nil.
+    pub fn open(lua: &Lua, path: String) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
+        let stores = stores_of(lua)?;
+        match stores.resources().resource(&path) {
+            Ok(handle) => Ok((Some(handle), None)),
+            Err(error) => Ok((None, Some(error.to_string()))),
         }
-        .into());
-    }
-    match open(&stores.resources(), &full) {
-        Ok(handle) => Ok((Some(handle), None)),
-        Err(OpenOutcome::Soft { reason }) => Ok((None, Some(reason))),
-        Err(OpenOutcome::Raise(error)) => Err(EngineError::Open(error).into()),
-    }
-}
-
-enum OpenOutcome {
-    Soft { reason: String },
-    Raise(ResourceError),
-}
-
-/// Open one joined file.
-///
-/// Escapes raise and missing files take soft failure with reason.
-fn open(resources: &Resources, full: &Path) -> std::result::Result<ResourceHandle, OpenOutcome> {
-    match resources.resource(full) {
-        Ok(handle) => Ok(handle),
-        Err(error @ ResourceError::Escape { .. }) => Err(OpenOutcome::Raise(error)),
-        Err(error) => Err(OpenOutcome::Soft {
-            reason: error.to_string(),
-        }),
-    }
-}
-
-fn join_project(project: &Path, parts: &[String]) -> PathBuf {
-    let mut full = project.to_path_buf();
-    for part in parts {
-        full.push(part);
-    }
-    full
-}
-
-fn under_project(project: &Path, full: &Path) -> bool {
-    normalize(full).starts_with(normalize(project))
-}
-
-/// Normalize one path lexically.
-///
-/// - Current-dir steps drop.
-pub fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            _ => out.push(component),
-        }
-    }
-    if out.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        out
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+
     use confit_driver::fs::TestGuard;
     use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
@@ -139,8 +57,8 @@ mod tests {
     fn test_lua(stores: &Stores) -> Lua {
         let lua = Lua::new();
         let _ = lua.set_app_data(stores.clone());
-        let project = crate::api::builtin(&lua, "confit.resource").unwrap();
-        lua.globals().set("resource", project).unwrap();
+        let project = crate::api::builtin(&lua, "confit.open").unwrap();
+        lua.globals().set("open", project).unwrap();
         lua
     }
 
@@ -163,7 +81,7 @@ mod tests {
         confit_driver::fs::write(&project.join("note.txt"), b"hello").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("note.txt"))
+            local handle = assert(open("note.txt"))
             return assert(handle:text())
         "#;
         match run(&lua, source) {
@@ -172,7 +90,7 @@ mod tests {
             Err(error) => panic!("project opens its file: {error}"),
         }
         let source = r#"
-            local handle = assert(resource("note.txt"))
+            local handle = assert(open("note.txt"))
             return handle:sha()
         "#;
         match run(&lua, source) {
@@ -193,15 +111,24 @@ mod tests {
         let lua = test_lua(&stores);
         for (segment, reason) in [
             ("../outside", "outside"),
-            ("/etc/passwd", "must stay relative"),
+            ("/etc/passwd", "expected a relative path"),
         ] {
-            let source = format!("return resource({segment:?})");
+            let source = format!(
+                "local handle, reason = open({segment:?}) \
+                 assert(handle == nil) \
+                 return reason"
+            );
             match run(&lua, &source) {
-                Ok(_) => panic!("escaping project read passes: {segment}"),
-                Err(error) => {
-                    let text = error.to_string();
-                    assert!(text.contains(reason), "the text shows the boundary: {text}");
+                Ok(Value::String(found)) => {
+                    let text = found.to_string_lossy();
+                    assert!(
+                        text.contains("escapes"),
+                        "the text names the boundary: {text}"
+                    );
+                    assert!(text.contains(reason), "the text shows the fault: {text}");
                 }
+                Ok(_) => panic!("escaping read returns nil with reason: {segment}"),
+                Err(error) => panic!("escaping reads stay soft: {error}"),
             }
         }
     }
@@ -214,7 +141,7 @@ mod tests {
         project_root(dir.path());
         let lua = test_lua(&stores);
         let source = r#"
-            local handle, reason = resource("absent.txt")
+            local handle, reason = open("absent.txt")
             assert(handle == nil)
             return reason
         "#;
@@ -237,7 +164,7 @@ mod tests {
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
-        let source = r#"return resource(1)"#;
+        let source = r#"return open(1)"#;
         match run(&lua, source) {
             Ok(_) => panic!("foreign input passes"),
             Err(error) => {
@@ -260,7 +187,7 @@ mod tests {
         .unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("payload.txt"))
+            local handle = assert(open("payload.txt"))
             local found, reason = handle:load()
             assert(reason == nil, reason)
             assert(found.title == "starship")
@@ -286,7 +213,7 @@ mod tests {
         .unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("payload.toml"))
+            local handle = assert(open("payload.toml"))
             local found, reason = handle:load()
             assert(reason == nil, reason)
             assert(found.name == "starship")
@@ -312,7 +239,7 @@ mod tests {
         .unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("payload.json"))
+            local handle = assert(open("payload.json"))
             local found, reason = handle:load()
             assert(reason == nil, reason)
             assert(found.name == "starship")
@@ -338,7 +265,7 @@ mod tests {
         .unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("payload.yaml"))
+            local handle = assert(open("payload.yaml"))
             local found, reason = handle:load()
             assert(reason == nil, reason)
             assert(found.server.host == "localhost")
@@ -360,7 +287,7 @@ mod tests {
         confit_driver::fs::write(&project.join("mystery.bin"), b"\x89PNG\r\n\x1a\nbinary").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("mystery.bin"))
+            local handle = assert(open("mystery.bin"))
             local found, reason = handle:load()
             assert(found == nil)
             return reason
@@ -391,7 +318,7 @@ mod tests {
         confit_driver::fs::write(&project.join("gone.toml"), b"title = \"gone\"\n").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
-            local handle = assert(resource("gone.toml"))
+            local handle = assert(open("gone.toml"))
             return handle
         "#;
         let handle = match run(&lua, source) {

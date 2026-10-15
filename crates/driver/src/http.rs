@@ -161,7 +161,7 @@ mod registry {
     ///
     /// Scripted failures are io with the scripted message.
     ///
-    /// - Unscripted urls fail with no body.
+    /// - Unscripted urls fail.
     pub(super) fn download(
         url: &str,
         _limit: u64,

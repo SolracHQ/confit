@@ -26,7 +26,7 @@ Difference compares full bytes and reports a text diff around the changed lines.
 
 ## Opaque
 
-The demo kitty install uses this shape for fonts and binaries. Source files on disk, named by path. Text kinds keep clear of them. Plans carry hashes and sizes, apply writes raw bytes:
+The demo kitty install uses this shape for fonts and binaries. Source files on disk, named by path. Text kinds keep clear of them. Plans carry hashes, apply writes raw bytes:
 
 ```lua
 confit.document.opaque(path, source)
@@ -36,7 +36,7 @@ confit.document.opaque(path, source, { unmanaged = true })
 
 Text documents take the same opts. The mode reads octal (`"755"`) or symbolic (`"rwxr-xr-x"`) shape. Omitted means the process umask. Structured documents keep clear of modes. `unmanaged` marks existence-only files like self-updating tools: present bytes read as already in place, missing ones land from the source file, rewritten declarations land once.
 
-Difference compares bytes and reports sha and size. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
+Difference compares bytes and reports sha. Content stays out of the output. A recorded mode compares against the disk mode and reports a `mode` key line on mismatch.
 
 ## Rc
 

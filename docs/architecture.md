@@ -1,114 +1,73 @@
 # ConfIt architecture
 
-Four crates form the app, each holding one main
-responsibility.
-
-The engine converts a Lua profile into manifest documents
-and blob bytes. The store holds write-backed capability
-roots for one run. The core manages state and diffs across bundles, manifests, 
-the pool, and rotation.
-The cli orchestrates both, calling engine and core where
-needed, and provides user experience across prompts, progress,
-previews, listings, scaffolding, and arg shapes.
-
-The call flow is `main` to `actions`, with `main` rendering
-reports through `presentation`. Effects hide behind traits
-(`Filesystem`, `Fetch`, progress sink). `main` and `cli`
-name nothing effectful. Test seams keep every crate hermetic:
-memory filesystem, memory fetcher, silent progress.
-
 ## Dependencies
 
-```text
-confit-cli --> confit-engine --> confit-store --> confit-core
-confit-cli --> confit-store
-confit-cli --> confit-core
+```mermaid
+graph TD
+    cli["confit-cli"] --> engine["confit-engine"]
+    cli --> model["confit-model"]
+    cli --> runtime["confit-runtime"]
+    cli --> store["confit-store"]
+    cli --> driver["confit-driver"]
+    engine --> model
+    engine --> store
+    engine --> driver
+    engine --> binding["confit-binding"]
+    runtime --> model
+    runtime --> store
+    runtime --> driver
+    model --> store
+    model --> driver
+    model --> binding
+    store --> driver
+    store --> binding
+    binding --> driver
 ```
 
-These five edges are the whole graph.
+These edges are the whole graph. Binding macros feed the
+derive layer at build time.
 
-## confit-core
+## confit-model
 
-Pure data and render. Every function here runs as a unit test on data alone.
+Model owns the shared entities for the whole
+program life cycle. It contains the definitions
+with annotations to generate the Lua api and
+to make them serializable and deserializable.
 
-- `document` owns `ManifestDocument` and `ManifestData`:
-  structured, text, link, rc, opaque, tree. One path holds
-  one document. Paths expand tildes. Opaque and tree
-  payloads persist as blob refs in manifests, raw bytes
-  in the bundle blob map.
-- `ids` owns `DocPath` and `ReadOutcome` (present, absent, 
-  unreadable).
-- `plan` owns versioned `Bundle` (`manifest`, `blobs`),
-  and on-demand counts against previous bundles.
-  The state slot holds the applied manifest.
-- `drift` owns `Drift` entries comparing recorded manifests
-  against disk, and their display lines.
-- `render` owns shell-agnostic document bytes and text.
-- `error` owns the plan-or-io failure shape.
+## confit-driver
 
-## confit-engine
-
-Lua profiles evaluate into manifest documents and blobs
-through `evaluate(profile, EvalOpts)`. `EvalOpts` carries root, plugins, re-fetch, cache override,
-fetcher override, plus the progress sink. Overrides keep
-tests off the network and the OS cache.
-
-- `surface` owns one namespace module per kind. Config,
-  document, patch, shell, paths, resources, utils,
-  plugin. Resources jail reads to the project root and the
-  fetch cache. `require` jails module loads the same way.
-- `model` owns Config and Patch handles, internal to the
-  crate. `level` owns priority sorting. `exec` owns the live
-  wrappers across first-writer-wins slots, collision logging,
-  and per-shell materialization.
-- `fetch` owns the `Fetch` trait with HTTP and memory
-  sources. Sidecar shas guard the OS cache. Re-download
-  fires on missing files, mismatched bytes, or re-fetch.
-- `progress` owns slow-run facts across fetch, unpack, patch,
-  hash, read, and write.
-- Embedded plugins ship beside the loader under
-  `solrachq` (mise, merge, template). External plugin
-  folders attach beside them. Plugin Lua composes surface
-  primitives only.
+Side effects with third-party libs cut to the used surface.
 
 ## confit-store
 
-Write-backed capability roots for one run.
+Domain file access for slots, blobs, fetched and project
+resources.
 
-- `StoreRoots` owns the config base, the cache base, and
-  the temp base. Roots arrive explicit at construction.
-- `Stores` owns the roots for every capability. `Stores::host`
-  serves CLI wiring, `Stores::memory` serves tests. Later
-  sections add the capabilities behind these roots.
+## confit-runtime
+
+Destination writes alone.
+
+## confit-engine
+
+Lua profiles evaluate into documents and blob refs over
+handles.
 
 ## confit-cli
 
-Terminal surface over evaluation and bundles.
+Terminal surface over evaluation and plans.
 
-- `main` owns command dispatch and report printing.
-- `cli` owns arg shapes for plan, apply, export, delete,
-  init. Tildes expand across every path arg after parsing.
-- `actions` owns the flows (see the plan, apply, and init
-  spec pages). Plan
-  evaluates, diffs, and stores payloads; apply previews,
-  prompts, writes per kind, removes recorded orphans, writes
-  state, and rotates history; export packs slots; delete
-  drops named slots; init scaffolds profiles and stubs
-  from embedded text.
-- `fs` owns the `OsFs` host effect implementing the core `Filesystem` seam.
-  Memory fakes live in core and keep tests hermetic.
-- `presentation` owns summaries, drift lines, and report
-  text. Summaries cover moving documents and counts.
-- Logging rides `fern` into one file per run. The global
-  `--log-level` gates verbosity, warn by default.
+## confit-binding
+
+Domain-agnostic face toolkit for Lua bindings.
 
 ## Data flow
 
-The profile evaluates to manifest documents and blobs. The build diffs desired
-documents against the previous manifest and disk snapshots, 
-hashing rendered bytes. The payload writes as pretty JSON,
-metadata always. Binary bytes gzip once into the shared
-pool under content hashes. Apply writes documents per kind, removes
-state-recorded paths absent from desired documents, records
-the fixed state slot, and rotates manifest history. Apply
-re-applies past slots through the same write path.
+The profile evaluates to documents with blob refs. The
+build fills hashes and diffs desired documents against the
+previous manifest. Caches hold across runs: fetch skips
+downloads, extracts skip unpacks through recorded hashes,
+puts skip present blobs through the content index. Text
+and structured payloads stay inline in the manifest.
+Apply writes documents per kind, removes state-recorded
+paths absent from desired documents, records the applied
+slot, rotates history and persists blobs into the pool.

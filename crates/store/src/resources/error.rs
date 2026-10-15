@@ -18,11 +18,50 @@ pub enum ResourceError {
         fault: AccessFault,
     },
     /// Escaping path.
-    #[error("resource path '{path}' escapes exec root", path = path.display())]
+    #[error("resource path '{path}' escapes exec root: {reason}", path = path.display())]
     Escape {
         /// The offending resource path.
         path: PathBuf,
+        /// The escape reason.
+        reason: String,
     },
+}
+
+/// One segment offense.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentFault {
+    /// Empty segment string.
+    Empty,
+    /// Absolute path in relative position.
+    Absolute,
+    /// Parent step climbing out.
+    Parent,
+    /// Drive prefix showing a foreign host.
+    Drive,
+    /// Backslash separator from another platform.
+    Backslash,
+    /// Empty component from doubled or trailing slashes.
+    EmptyComponent,
+}
+
+impl SegmentFault {
+    /// Return the escape reason for the fault.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::Empty => "expected a path",
+            Self::Absolute => "expected a relative path",
+            Self::Parent => "parent steps are not supported",
+            Self::Drive => "drive prefixes are not supported",
+            Self::Backslash => "backslashes are not supported",
+            Self::EmptyComponent => "empty components are not supported",
+        }
+    }
+}
+
+impl std::fmt::Display for SegmentFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
 }
 
 impl ResourceError {

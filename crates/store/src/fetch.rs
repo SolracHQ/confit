@@ -22,7 +22,7 @@ const STREAM_BUF_BYTES: usize = 8 * 1024;
 /// Progress step for in-flight download events.
 const PROGRESS_STEP_BYTES: u64 = 64 * 1024;
 
-/// The folder holds the url-hash to content-hash index.
+/// The url-hash to content-hash index folder.
 const INDEX_DIR: &str = "urls";
 
 /// File-backed fetch cache for remote bytes.
@@ -389,7 +389,7 @@ mod tests {
                 let path = handle.canonical().to_path_buf();
                 assert!(
                     path.starts_with(dir.path().join("temp")),
-                    "cache path stays jailed: {}",
+                    "cache path stays under temp: {}",
                     path.display()
                 );
                 match driver::fs::read(&path) {

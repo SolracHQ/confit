@@ -12,6 +12,7 @@ thread_local! {
     static PARKED: RefCell<Option<VfsPath>> = const { RefCell::new(None) };
     static MODES: RefCell<BTreeMap<String, u32>> = const { RefCell::new(BTreeMap::new()) };
     static TICKS: RefCell<BTreeMap<String, u64>> = const { RefCell::new(BTreeMap::new()) };
+    static LINKS: RefCell<BTreeMap<String, PathBuf>> = const { RefCell::new(BTreeMap::new()) };
     static CLOCK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static READ_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
     static WRITE_FAULT: RefCell<Option<io::ErrorKind>> = const { RefCell::new(None) };
@@ -31,6 +32,7 @@ impl TestGuard {
         let prior = PARKED.with(|cell| cell.borrow_mut().replace(root));
         MODES.with(|cell| cell.borrow_mut().clear());
         TICKS.with(|cell| cell.borrow_mut().clear());
+        LINKS.with(|cell| cell.borrow_mut().clear());
         READ_FAULT.with(|cell| *cell.borrow_mut() = None);
         WRITE_FAULT.with(|cell| *cell.borrow_mut() = None);
         Self { prior }
@@ -107,21 +109,22 @@ impl Drop for MemFile {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when the path holds a folder and when no
 ///   guard holds.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     check_read()?;
     let root = rooted()?;
-    mem_read(&root, path)
+    let resolved = resolve_path(path)?;
+    mem_read(&root, &resolved)
 }
 
 /// Read whole file text for one path.
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidData] when bytes refuse UTF-8.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when the path holds a folder and when no
@@ -129,7 +132,8 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 pub fn read_to_string(path: &Path) -> io::Result<String> {
     check_read()?;
     let root = rooted()?;
-    mem_read_to_string(&root, path)
+    let resolved = resolve_path(path)?;
+    mem_read_to_string(&root, &resolved)
 }
 
 /// Write whole file bytes to one path.
@@ -137,12 +141,13 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 /// # Errors
 ///
 /// - [InvalidInput] when the path text refuses.
-/// - [Other] when the parent holds no entry and when
+/// - [Other] for missing parents and when
 ///   no guard holds.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     check_write()?;
     let root = rooted()?;
-    mem_write(&root, path, bytes)
+    let resolved = resolve_path(path)?;
+    mem_write(&root, &resolved, bytes)
 }
 
 /// Build every missing folder along one path.
@@ -154,20 +159,27 @@ pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// - [Other] when no guard holds.
 pub fn create_dir_all(path: &Path) -> io::Result<()> {
     let root = rooted()?;
-    to_vfs(&root, path)?.create_dir_all().map_err(io_error)
+    let resolved = resolve_path(path)?;
+    to_vfs(&root, &resolved)?.create_dir_all().map_err(io_error)
 }
 
 /// Move one file onto a new path and overwrite any entry.
 ///
 /// # Errors
 ///
-/// - [NotFound] when the source holds no entry.
+/// - [NotFound] for missing sources.
 /// - [AlreadyExists] when a folder move meets a file.
 /// - [InvalidInput] when path text refuses.
-/// - [Other] when the destination parent holds no
-///   entry and when no guard holds.
+/// - [Other] for missing destination parents and when
+///   no guard holds.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     let root = rooted()?;
+    if shift_links(from, to) {
+        remove_backend_file(&root, to);
+        carry_ticks(from, to);
+        return Ok(());
+    }
+    remove_link_entry(to);
     mem_rename(&root, from, to)?;
     carry_ticks(from, to);
     Ok(())
@@ -200,15 +212,17 @@ fn carry_ticks(from: &Path, to: &Path) {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the source holds no entry.
+/// - [NotFound] for missing sources.
 /// - [InvalidInput] when path text refuses.
-/// - [Other] when the destination parent holds no
-///   entry and when no guard holds.
+/// - [Other] for missing destination parents and when
+///   no guard holds.
 pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     let root = rooted()?;
-    let bytes = mem_read(&root, from)?;
+    let source = resolve_path(from)?;
+    let dest = resolve_path(to)?;
+    let bytes = mem_read(&root, &source)?;
     let len = bytes.len() as u64;
-    mem_write(&root, to, &bytes)?;
+    mem_write(&root, &dest, &bytes)?;
     Ok(len)
 }
 
@@ -216,11 +230,15 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when no guard holds.
 pub fn remove_file(path: &Path) -> io::Result<()> {
     let root = rooted()?;
+    if remove_link_entry(path) {
+        remove_backend_file(&root, path);
+        return Ok(());
+    }
     to_vfs(&root, path)?.remove_file().map_err(io_error)
 }
 
@@ -228,55 +246,61 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when no guard holds.
 pub fn metadata(path: &Path) -> io::Result<super::FileMeta> {
     let root = rooted()?;
-    mem_metadata(&root, path)
+    let resolved = resolve_path(path)?;
+    mem_metadata(&root, &resolved)
 }
 
 /// Report whether one path holds any entry.
 ///
 /// # Panics
 ///
-/// Panics when no guard holds.
+/// Panic when no guard holds.
 pub fn exists(path: &Path) -> bool {
     let Some(root) = parked() else {
         panic!("confit driver: no test guard installed");
     };
-    mem_exists(&root, path)
+    let Ok(resolved) = resolve_path(path) else {
+        return false;
+    };
+    mem_exists(&root, &resolved)
 }
 
 /// List immediate child paths under one folder sorted by name.
 ///
 /// # Errors
 ///
-/// - [NotFound] when the folder holds no entry.
+/// - [NotFound] for missing folders.
 /// - [NotADirectory] when the path holds a file.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when no guard holds.
 pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     let root = rooted()?;
-    mem_read_dir(&root, path)
+    let resolved = resolve_path(path)?;
+    mem_read_dir(&root, &resolved, path)
 }
 
 /// Open one file.
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when the path holds a folder and when no
 ///   guard holds.
 pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     check_read()?;
     let root = rooted()?;
-    let bytes = mem_read(&root, path)?;
+    let resolved = resolve_path(path)?;
+    let bytes = mem_read(&root, &resolved)?;
     let handle = MemFile {
         cursor: io::Cursor::new(bytes),
         root,
-        path: path.to_path_buf(),
+        path: resolved,
     };
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
@@ -285,13 +309,14 @@ pub fn open(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [UnexpectedEof] when the file runs short of the tail.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when no guard holds.
 pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     let root = rooted()?;
-    let bytes = mem_read(&root, path)?;
+    let resolved = resolve_path(path)?;
+    let bytes = mem_read(&root, &resolved)?;
     let tail = tail as usize;
     if bytes.len() < tail {
         return Err(io::Error::new(
@@ -307,16 +332,17 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
 /// # Errors
 ///
 /// - [InvalidInput] when the path text refuses.
-/// - [Other] when the parent holds no entry and when
+/// - [Other] for missing parents and when
 ///   no guard holds.
 pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     check_write()?;
     let root = rooted()?;
-    to_vfs(&root, path)?.create_file().map_err(io_error)?;
+    let resolved = resolve_path(path)?;
+    to_vfs(&root, &resolved)?.create_file().map_err(io_error)?;
     let handle = MemFile {
         cursor: io::Cursor::new(Vec::new()),
         root,
-        path: path.to_path_buf(),
+        path: resolved,
     };
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
@@ -326,14 +352,15 @@ pub fn create(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 /// # Errors
 ///
 /// - [InvalidInput] when the path text refuses.
-/// - [Other] when the path holds a folder, when the
-///   parent holds no entry, and when no guard holds.
+/// - [Other] when the path holds a folder, for missing parents,
+///   and when no guard holds.
 pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     check_write()?;
     let root = rooted()?;
-    let target = to_vfs(&root, path)?;
+    let resolved = resolve_path(path)?;
+    let target = to_vfs(&root, &resolved)?;
     let bytes = if target.exists().map_err(io_error)? {
-        mem_read(&root, path)?
+        mem_read(&root, &resolved)?
     } else {
         target.create_file().map_err(io_error)?;
         Vec::new()
@@ -343,7 +370,7 @@ pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
     let handle = MemFile {
         cursor,
         root,
-        path: path.to_path_buf(),
+        path: resolved,
     };
     Ok(Box::new(handle) as Box<dyn super::FsFile>)
 }
@@ -356,30 +383,33 @@ pub fn append(path: &Path) -> io::Result<Box<dyn super::FsFile>> {
 /// - [Other] when no guard holds.
 pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     let root = rooted()?;
-    to_vfs(&root, path)?.remove_dir_all().map_err(io_error)
+    if link_lookup(path).is_some() {
+        remove_link_entry(path);
+        remove_backend_file(&root, path);
+        return Ok(());
+    }
+    let resolved = resolve_path(path)?;
+    to_vfs(&root, &resolved)?
+        .remove_dir_all()
+        .map_err(io_error)?;
+    remove_links_under(&resolved);
+    Ok(())
 }
 
-/// Resolve one path lexically with symlink-free memory.
+/// Resolve one path through links to its absolute form.
+///
+/// - Relative inputs root at `/`, relative targets resolve at the link parent.
+/// - Dangling and missing finals fail with [NotFound].
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
-/// - [Other] when no guard holds.
+/// - [NotFound] for missing resolved paths.
+/// - [Other] when links loop and when no guard holds.
 pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-    use std::path::Component;
     let root = rooted()?;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            _ => out.push(component),
-        }
-    }
-    if mem_exists(&root, &out) {
-        Ok(out)
+    let resolved = resolve_path(path)?;
+    if mem_exists(&root, &resolved) {
+        Ok(resolved)
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -388,14 +418,27 @@ pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-/// Read one symlink target.
+/// Read one symlink target without following the final link.
+///
+/// - Parent links resolve before the final lookup.
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds any entry or none.
-/// - [Other] when no guard holds.
+/// - [NotFound] for missing paths.
+/// - [InvalidInput] for non-link paths.
+/// - [Other] when parent links loop and when no guard holds.
 pub fn read_link(path: &Path) -> io::Result<PathBuf> {
-    let _ = rooted()?;
+    let root = rooted()?;
+    let candidate = link_candidate(path)?;
+    if let Some(target) = link_lookup(&candidate) {
+        return Ok(target);
+    }
+    if mem_exists(&root, &candidate) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("no link '{}'", path.display()),
+        ));
+    }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
         format!("no link '{}'", path.display()),
@@ -404,16 +447,35 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
 
 /// Create one symlink and replace any present entry.
 ///
+/// - Relative targets stay relative to the link parent.
+///
 /// # Errors
 ///
-/// - [AlreadyExists] when the parent holds a file.
+/// - [AlreadyExists] when the path holds a folder.
 /// - [InvalidInput] when the path text refuses.
-/// - [Other] when no guard holds.
+/// - [Other] when parent links loop and when no guard holds.
 pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     if let Some(parent) = link.parent() {
         create_dir_all(parent)?;
     }
-    write(link, target.as_os_str().as_encoded_bytes())
+    let root = rooted()?;
+    let stored = link_candidate(link)?;
+    if to_vfs(&root, &stored)
+        .and_then(|entry| entry.is_dir().map_err(io_error))
+        .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("folder holds '{}'", link.display()),
+        ));
+    }
+    remove_link_entry(&stored);
+    remove_backend_file(&root, &stored);
+    LINKS.with(|cell| {
+        cell.borrow_mut()
+            .insert(link_key(&stored), target.to_path_buf());
+    });
+    Ok(())
 }
 
 /// Set unix permission bits on one path.
@@ -437,12 +499,17 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] when the path holds no entry.
+/// - [NotFound] for missing paths.
 /// - [InvalidInput] when the path text refuses.
 /// - [Other] when no guard holds.
 pub fn mode(path: &Path) -> io::Result<u32> {
     let root = rooted()?;
-    let target = to_vfs(&root, path)?;
+    if link_lookup(path).is_some() {
+        let stored = MODES.with(|cell| cell.borrow().get(&mode_key(path)).copied());
+        return Ok(stored.unwrap_or(0o777));
+    }
+    let resolved = resolve_path(path)?;
+    let target = to_vfs(&root, &resolved)?;
     if !target.exists().map_err(io_error)? {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -601,18 +668,214 @@ fn mem_exists(root: &VfsPath, path: &Path) -> bool {
 }
 
 /// List sorted backend child paths under one folder.
-fn mem_read_dir(root: &VfsPath, path: &Path) -> io::Result<Vec<PathBuf>> {
-    let target = to_vfs(root, path)?;
+fn mem_read_dir(root: &VfsPath, resolved: &Path, display: &Path) -> io::Result<Vec<PathBuf>> {
+    let target = to_vfs(root, resolved)?;
     if target.is_file().map_err(io_error)? {
         return Err(io::Error::new(
             io::ErrorKind::NotADirectory,
-            format!("not a directory '{}'", path.display()),
+            format!("not a directory '{}'", display.display()),
         ));
     }
     let mut entries = Vec::new();
     for entry in target.read_dir().map_err(io_error)? {
-        entries.push(path.join(entry.filename()));
+        entries.push(display.join(entry.filename()));
+    }
+    for name in link_children(resolved) {
+        let shown = display.join(name);
+        if !entries.contains(&shown) {
+            entries.push(shown);
+        }
     }
     entries.sort();
     Ok(entries)
+}
+
+/// Reduce one path lexically without touching entries.
+fn lexical_normal(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(part) => out.push(part.as_os_str()),
+            Component::RootDir => out.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from("/")
+    } else {
+        out
+    }
+}
+
+/// Key one path for the link table under the guard.
+fn link_key(path: &Path) -> String {
+    lexical_normal(Path::new(&rooted_path(&path.as_os_str().to_string_lossy())))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Copy one link target while the table holds it.
+fn link_lookup(path: &Path) -> Option<PathBuf> {
+    let key = link_key(path);
+    LINKS.with(|cell| cell.borrow().get(&key).cloned())
+}
+
+/// Drop one link entry and report whether one held.
+fn remove_link_entry(path: &Path) -> bool {
+    let key = link_key(path);
+    LINKS.with(|cell| cell.borrow_mut().remove(&key).is_some())
+}
+
+/// Drop one backend file while present and keep missing quiet.
+fn remove_backend_file(root: &VfsPath, path: &Path) {
+    if let Ok(entry) = to_vfs(root, path) {
+        let _ = entry.remove_file();
+    }
+}
+
+/// Drop every link under one resolved folder.
+fn remove_links_under(resolved: &Path) {
+    let prefix = format!("{}/", link_key(resolved));
+    LINKS.with(|cell| {
+        let dead: Vec<String> = cell
+            .borrow()
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in dead {
+            cell.borrow_mut().remove(&key);
+        }
+    });
+}
+
+/// List immediate link child names under one resolved folder.
+fn link_children(resolved: &Path) -> Vec<PathBuf> {
+    let base = link_key(resolved);
+    let prefix = format!("{base}/");
+    let mut names = Vec::new();
+    LINKS.with(|cell| {
+        for key in cell.borrow().keys() {
+            if let Some(rest) = key.strip_prefix(&prefix)
+                && !rest.contains('/')
+                && !rest.is_empty()
+            {
+                names.push(PathBuf::from(rest));
+            }
+        }
+    });
+    names
+}
+
+/// Fold one path parent through links onto its stored form.
+fn link_candidate(path: &Path) -> io::Result<PathBuf> {
+    let Some(parent) = path.parent() else {
+        return Ok(lexical_normal(path));
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(lexical_normal(&PathBuf::from("/").join(path)));
+    }
+    if path.file_name().is_none() {
+        return resolve_path(path);
+    }
+    let base = resolve_path(parent)?;
+    Ok(base.join(path.file_name().unwrap_or_default()))
+}
+
+/// Move link entries under one rename and report an exact link move.
+fn shift_links(from: &Path, to: &Path) -> bool {
+    let from_key = link_key(from);
+    let to_key = link_key(to);
+    let prefix = format!("{from_key}/");
+    let moved: Vec<(String, PathBuf)> = LINKS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|(key, _)| *key == &from_key || key.starts_with(&prefix))
+            .map(|(key, target)| (key.clone(), target.clone()))
+            .collect()
+    });
+    if moved.is_empty() {
+        return false;
+    }
+    let exact = moved.iter().any(|(key, _)| *key == from_key);
+    LINKS.with(|cell| {
+        let mut links = cell.borrow_mut();
+        for (key, _) in &moved {
+            links.remove(key);
+        }
+        for (key, target) in moved {
+            let next = if key == from_key {
+                to_key.clone()
+            } else {
+                format!("{to_key}{}", &key[from_key.len()..])
+            };
+            links.insert(next, target);
+        }
+    });
+    exact
+}
+
+/// Resolve every link along one path onto its absolute form.
+fn resolve_path(path: &Path) -> io::Result<PathBuf> {
+    let start = if path.is_absolute() {
+        lexical_normal(path)
+    } else {
+        lexical_normal(&PathBuf::from("/").join(path))
+    };
+    let mut current = start;
+    for _ in 0..40 {
+        let Some((link, target, suffix)) = first_link(&current) else {
+            return Ok(current);
+        };
+        current = if target.is_absolute() {
+            lexical_normal(&target.join(&suffix))
+        } else {
+            let parent = link
+                .parent()
+                .map_or(PathBuf::from("/"), |held| held.to_path_buf());
+            lexical_normal(&parent.join(&target).join(&suffix))
+        };
+    }
+    Err(io::Error::other(format!(
+        "symlink loop '{}'",
+        path.display()
+    )))
+}
+
+/// Find the first link prefix along one normalized absolute path.
+fn first_link(current: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    use std::path::Component;
+
+    let mut parts = Vec::new();
+    for component in current.components() {
+        if let Component::Normal(part) = component {
+            parts.push(part.to_os_string());
+        }
+    }
+    if let Some(target) = LINKS.with(|cell| cell.borrow().get("/").cloned()) {
+        let mut suffix = PathBuf::new();
+        for part in &parts {
+            suffix.push(part);
+        }
+        return Some((PathBuf::from("/"), target, suffix));
+    }
+    let mut prefix = PathBuf::from("/");
+    for (index, part) in parts.iter().enumerate() {
+        prefix.push(part);
+        let hit = LINKS.with(|cell| cell.borrow().get(&link_key(&prefix)).cloned());
+        if let Some(target) = hit {
+            let mut suffix = PathBuf::new();
+            for rest in &parts[index + 1..] {
+                suffix.push(rest);
+            }
+            return Some((prefix, target, suffix));
+        }
+    }
+    None
 }

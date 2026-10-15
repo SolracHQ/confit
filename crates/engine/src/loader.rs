@@ -313,13 +313,13 @@ fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<Pa
 /// - [`EngineError::Escape`] for escaping names.
 fn map_name(name: &str) -> Result<Vec<String>> {
     if name.contains('\\') {
-        return Err(refuse(name, "backslashes escape"));
+        return Err(refuse(name, "backslashes are not supported"));
     }
     if name.len() >= 2 && name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[1] == b':' {
-        return Err(refuse(name, "drive prefixes escape"));
+        return Err(refuse(name, "drive prefixes are not supported"));
     }
     if name.starts_with('/') {
-        return Err(refuse(name, "must stay relative"));
+        return Err(refuse(name, "expected a relative path"));
     }
     Ok(name
         .replace('.', "/")

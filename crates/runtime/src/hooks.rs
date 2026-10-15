@@ -89,11 +89,14 @@ impl HookRunner {
         if !hook.check.is_true() && checks.unmet(&hook.check, changed).is_none() {
             return Ok(HookDecision::ChecksPass);
         }
-        let Some(binary) = resolve_binary(hook, checks) else {
-            return Err(RuntimeError::HookResolve {
-                argv: Arg::join(&hook.argv),
-                head: hook.argv.first().map(Arg::display).unwrap_or_default(),
-            });
+        let binary = match resolve_binary(hook, checks)? {
+            Some(found) => found,
+            None => {
+                return Err(RuntimeError::HookResolve {
+                    argv: Arg::join(&hook.argv),
+                    head: hook.argv.first().map(Arg::display).unwrap_or_default(),
+                });
+            }
         };
         Ok(HookDecision::Run(binary))
     }
@@ -117,11 +120,11 @@ impl HookRunner {
         let argv_text = Arg::join(&hook.argv);
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for slot in hook.argv.iter().skip(1) {
-            spawn.push(slot.materialize().to_string_lossy().into_owned());
+            spawn.push(materialize_slot(slot)?.to_string_lossy().into_owned());
         }
         let mut path_dirs: Vec<PathBuf> = Vec::with_capacity(hook.path.len());
         for slot in &hook.path {
-            path_dirs.push(slot.materialize());
+            path_dirs.push(materialize_slot(slot)?);
         }
         let _ = self.progress.send(Event::HookRunning {
             position,
@@ -182,14 +185,32 @@ impl HookRunner {
 ///
 /// - Hook path entries precede runtime dirs.
 /// - The first existing executable wins.
-fn resolve_binary(hook: &Hook, checks: &Checks) -> Option<PathBuf> {
-    let head = hook
-        .argv
-        .first()
-        .map(|slot| slot.materialize().to_string_lossy().into_owned())?;
-    let mut dirs: Vec<PathBuf> = hook.path.iter().map(Arg::materialize).collect();
+fn resolve_binary(hook: &Hook, checks: &Checks) -> Result<Option<PathBuf>> {
+    let Some(first) = hook.argv.first() else {
+        return Ok(None);
+    };
+    let head = materialize_slot(first)?.to_string_lossy().into_owned();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for slot in &hook.path {
+        dirs.push(materialize_slot(slot)?);
+    }
     dirs.extend(checks.path_dirs.iter().cloned());
-    find_executable(&head, &dirs)
+    Ok(find_executable(&head, &dirs))
+}
+
+/// Materialize one hook slot into a host path.
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn materialize_slot(slot: &Arg) -> Result<PathBuf> {
+    match slot {
+        Arg::Text(text) => Ok(PathBuf::from(text)),
+        Arg::Route(route) => route.expand().map_err(|source| RuntimeError::Expand {
+            route: route.clone(),
+            source,
+        }),
+    }
 }
 
 /// Map one driver process failure onto runtime language with argv.

@@ -5,8 +5,8 @@ use std::collections::HashSet;
 
 /// Face collector with one entry per Lua name.
 ///
-/// The collector preserves registration order and
-/// stub emission follows that order.
+/// Registration order and
+/// stub emission in that order.
 #[derive(Debug, Default)]
 pub struct Registry {
     /// The seen Lua names.
@@ -25,8 +25,8 @@ impl Registry {
 
     /// Register one face by name with its stub text.
     ///
-    /// - Repeated names keep the first stub text.
-    /// - Empty stub text still reserves the name.
+    /// - Repeated names with the first stub text.
+    /// - Empty stub text with the reserved name.
     pub fn register(&mut self, name: String, stub: String) -> bool {
         if self.seen.contains(&name) {
             return false;

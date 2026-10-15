@@ -7,7 +7,7 @@ use mlua::{Lua, Table, Value};
 
 /// One value mismatch with its field path.
 ///
-/// The mismatch carries the field path from the failing
+/// The field path from the failing
 /// value to the conversion error.
 #[derive(Debug, Clone)]
 pub struct Mismatch {
@@ -139,8 +139,6 @@ pub fn check_keys(table: &Table, shape: &str, allowed: &[&str]) -> Result<(), Mi
 
 /// Collect the sorted string keys of one table.
 ///
-/// - Non-string keys never enter the routing input.
-///
 /// # Errors
 ///
 /// - [`Mismatch`] for tables with unreadable entries.
@@ -162,7 +160,7 @@ pub fn table_keys(table: &Table, shape: &str) -> Result<Vec<String>, Mismatch> {
 
 /// One untagged routing outcome across variant key families.
 ///
-/// The outcome carries the matched family index with stranger keys.
+/// The matched family index with stranger keys.
 pub enum FamilyRoute {
     /// Exactly one family holds every input key.
     Match(usize),
