@@ -27,7 +27,7 @@ fn manifest_path(dest: &Path) -> PathBuf {
     dest.with_extension("json")
 }
 
-/// Load one manifest, torn payloads read empty.
+/// Load one manifest, bad payloads read empty.
 fn load(dest: &Path) -> Manifest {
     let bytes = match driver::fs::read(&manifest_path(dest)) {
         Ok(bytes) => bytes,

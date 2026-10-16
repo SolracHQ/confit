@@ -429,6 +429,10 @@ fn transport_runtime(error: &RuntimeError) -> String {
             log::error!("missing bundle blob '{}'", sha.hex());
             format!("missing blob '{}', see log", sha.short())
         }
+        RuntimeError::BundleCorrupt { path, holders } => {
+            log::error!("bundle '{}' corrupt: blob for {holders}", path.display());
+            error.to_string()
+        }
         RuntimeError::BundleVersion { got, .. } => {
             format!("bundle version {got} is unsupported")
         }
@@ -463,11 +467,11 @@ fn transport_blob(error: &BlobError) -> String {
                 path.display()
             )
         }
+        BlobError::Compress => "cannot compress blob".to_owned(),
         BlobError::Corrupt { sha } => {
             log::error!("corrupt blob '{}'", sha.hex());
-            format!("blob '{}' fails verification, see log", sha.short())
+            format!("corrupt blob '{}', see log", sha.short())
         }
-        BlobError::Compress => "cannot compress blob".to_owned(),
     }
 }
 

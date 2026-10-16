@@ -1,13 +1,13 @@
 //! Bundle output.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
+use confit_driver::sha::Sha;
 use confit_driver::{self as driver};
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
 use confit_store::handles::ArchiveHandle;
-use confit_store::handles::BlobRef;
 
 use super::Bundler;
 use super::ensure_bundle_extension;
@@ -24,7 +24,7 @@ impl Bundler {
     /// The verified handle shows the written file.
     ///
     /// - Destinations carry the bundle extension.
-    /// - Members sort manifest-first in stored-hash order.
+    /// - Members sort manifest-first in content-hash order.
     ///
     /// # Errors
     ///
@@ -50,7 +50,7 @@ impl Bundler {
             mode: BUNDLE_ENTRY_MODE,
         });
         for blob in sorted_blobs(manifest) {
-            let (name, len, reader) = self.stored_member(&blob, &dest)?;
+            let (name, len, reader) = self.object_member(&blob, &dest)?;
             members.push(driver::tar::BuildMember {
                 name,
                 len,
@@ -67,9 +67,9 @@ impl Bundler {
     ///
     /// - [`RuntimeError::BundleMissing`] for missing blobs.
     /// - [`RuntimeError::BundleRead`] for other failed blob reads.
-    fn stored_member(
+    fn object_member(
         &self,
-        blob: &BlobRef,
+        blob: &Sha,
         dest: &Path,
     ) -> Result<(String, u64, Box<dyn std::io::Read>)> {
         let handle = self.blobs.resolve(blob).map_err(|error| match error {
@@ -86,7 +86,7 @@ impl Bundler {
         })?;
         let (len, reader) = self
             .blobs
-            .open_stored(&handle)
+            .open_object(&handle)
             .map_err(|error| match error {
                 BlobError::Read {
                     sha,
@@ -99,7 +99,7 @@ impl Bundler {
                     },
                 },
             })?;
-        let name = [BUNDLE_BLOBS_PREFIX, &blob.stored.to_string()].concat();
+        let name = [BUNDLE_BLOBS_PREFIX, &blob.to_string()].concat();
         Ok((name, len, reader))
     }
 
@@ -131,19 +131,20 @@ impl Bundler {
     }
 }
 
-/// List one manifest's refs sorted by stored hash.
+/// List one manifest's hashes sorted by content hash.
 ///
-/// - Duplicate stored hashes keep their first ref.
-fn sorted_blobs(manifest: &Manifest) -> Vec<BlobRef> {
-    let mut unique: BTreeMap<String, BlobRef> = BTreeMap::new();
+/// - Duplicate content hashes collapse into one entry.
+fn sorted_blobs(manifest: &Manifest) -> Vec<Sha> {
+    let mut unique: BTreeSet<Sha> = BTreeSet::new();
     for blob in manifest.refs() {
-        unique.entry(blob.stored.hex()).or_insert(blob);
+        unique.insert(blob);
     }
-    unique.into_values().collect()
+    unique.into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::io::Read as _;
 
     use super::*;
@@ -163,21 +164,28 @@ mod tests {
 
     fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
         use confit_store::Stores;
-        use confit_store::blob::BlobSource;
 
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
+        let project = dir.join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
         let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
-            let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
+            let name = format!("bin-{index}.bin");
+            confit_driver::fs::write(&project.join(&name), body).unwrap();
+            let source = match stores.resources().resource(&name) {
+                Ok(handle) => handle,
+                Err(error) => panic!("project opens: {error}"),
+            };
+            let handle = match stores.blobs().put(&source) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
             documents.insert(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 Data::Opaque {
-                    handle: Payload::Resolved(handle.to_ref()),
+                    handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
                 },
@@ -268,7 +276,7 @@ mod tests {
                 Ok(handle) => handle,
                 Err(error) => panic!("blob resolves: {error}"),
             };
-            let (_, mut reader) = match store.blobs.open_stored(&handle) {
+            let (_, mut reader) = match store.blobs.open_object(&handle) {
                 Ok(opened) => opened,
                 Err(error) => panic!("blob opens: {error}"),
             };

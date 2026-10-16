@@ -209,14 +209,14 @@ fn escape_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// Render slots as one shell line with Bourne quoting.
-fn escape_args(slots: &[Arg]) -> String {
-    slots.iter().map(escape_slot).collect::<Vec<_>>().join(" ")
+/// Render args as one shell line with Bourne quoting.
+fn escape_args(args: &[Arg]) -> String {
+    args.iter().map(escape_arg).collect::<Vec<_>>().join(" ")
 }
 
-/// Render one slot with Bourne quoting.
-fn escape_slot(slot: &Arg) -> String {
-    match slot {
+/// Render one arg with Bourne quoting.
+fn escape_arg(arg: &Arg) -> String {
+    match arg {
         Arg::Text(text) => quote(text).into_owned(),
         Arg::Route(route) => {
             let expanded = route.display();

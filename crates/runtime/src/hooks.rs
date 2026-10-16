@@ -80,16 +80,17 @@ impl HookRunner {
         checks: &Checks,
         changed: &BTreeSet<Route>,
     ) -> Result<HookDecision> {
-        if let Some(fault) = checks.unmet(&hook.requires, changed) {
+        let scoped = scoped_checks(hook, checks)?;
+        if let Some(fault) = scoped.unmet(&hook.requires, changed) {
             return Ok(HookDecision::RequiresClosed(hook.requires.clone(), fault));
         }
-        if let Some(fault) = checks.unmet(&hook.when, changed) {
+        if let Some(fault) = scoped.unmet(&hook.when, changed) {
             return Ok(HookDecision::WhenClosed(hook.when.clone(), fault));
         }
-        if !hook.check.is_true() && checks.unmet(&hook.check, changed).is_none() {
+        if !hook.check.is_true() && scoped.unmet(&hook.check, changed).is_none() {
             return Ok(HookDecision::ChecksPass);
         }
-        let binary = match resolve_binary(hook, checks)? {
+        let binary = match resolve_binary(hook, &scoped)? {
             Some(found) => found,
             None => {
                 return Err(RuntimeError::HookResolve {
@@ -119,12 +120,12 @@ impl HookRunner {
     ) -> Result<Spawned> {
         let argv_text = Arg::join(&hook.argv);
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
-        for slot in hook.argv.iter().skip(1) {
-            spawn.push(materialize_slot(slot)?.to_string_lossy().into_owned());
+        for arg in hook.argv.iter().skip(1) {
+            spawn.push(materialize_arg(arg)?.to_string_lossy().into_owned());
         }
         let mut path_dirs: Vec<PathBuf> = Vec::with_capacity(hook.path.len());
-        for slot in &hook.path {
-            path_dirs.push(materialize_slot(slot)?);
+        for entry in &hook.path {
+            path_dirs.push(materialize_arg(entry)?);
         }
         let _ = self.progress.send(Event::HookRunning {
             position,
@@ -168,7 +169,8 @@ impl HookRunner {
         changed: &BTreeSet<Route>,
         argv: &str,
     ) -> Result<()> {
-        if let Some(fault) = checks.unmet(&hook.check, changed) {
+        let scoped = scoped_checks(hook, checks)?;
+        if let Some(fault) = scoped.unmet(&hook.check, changed) {
             return Err(RuntimeError::HookChecks {
                 argv: argv.to_owned(),
                 check: hook.check.clone(),
@@ -179,32 +181,40 @@ impl HookRunner {
     }
 }
 
-/// Resolve one hook binary with routes expanded inline.
-///
-/// Route slots map against host folders, text unchanged.
-///
-/// - Hook path entries precede runtime dirs.
-/// - The first existing executable wins.
-fn resolve_binary(hook: &Hook, checks: &Checks) -> Result<Option<PathBuf>> {
-    let Some(first) = hook.argv.first() else {
-        return Ok(None);
-    };
-    let head = materialize_slot(first)?.to_string_lossy().into_owned();
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    for slot in &hook.path {
-        dirs.push(materialize_slot(slot)?);
-    }
-    dirs.extend(checks.path_dirs.iter().cloned());
-    Ok(find_executable(&head, &dirs))
-}
-
-/// Materialize one hook slot into a host path.
+/// Scope host facts to one hook with its path entries first.
 ///
 /// # Errors
 ///
 /// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn materialize_slot(slot: &Arg) -> Result<PathBuf> {
-    match slot {
+fn scoped_checks(hook: &Hook, checks: &Checks) -> Result<Checks> {
+    let mut dirs = Vec::with_capacity(hook.path.len());
+    for entry in &hook.path {
+        dirs.push(materialize_arg(entry)?);
+    }
+    Ok(checks.extended(dirs))
+}
+
+/// Resolve one hook binary with routes expanded inline.
+///
+/// Route args map against host folders, text unchanged.
+///
+/// - Scoped dirs carry hook path entries first.
+/// - The first existing executable wins.
+fn resolve_binary(hook: &Hook, scoped: &Checks) -> Result<Option<PathBuf>> {
+    let Some(first) = hook.argv.first() else {
+        return Ok(None);
+    };
+    let head = materialize_arg(first)?.to_string_lossy().into_owned();
+    Ok(find_executable(&head, &scoped.path_dirs))
+}
+
+/// Materialize one hook arg into a host path.
+///
+/// # Errors
+///
+/// - [`RuntimeError::Expand`] for unresolvable base folders.
+fn materialize_arg(arg: &Arg) -> Result<PathBuf> {
+    match arg {
         Arg::Text(text) => Ok(PathBuf::from(text)),
         Arg::Route(route) => route.expand().map_err(|source| RuntimeError::Expand {
             route: route.clone(),
@@ -331,6 +341,29 @@ mod tests {
             decided.decisions,
             vec![HookDecision::Run(binary)],
             "document-landed mise runs post-write"
+        );
+    }
+
+    #[test]
+    fn requires_sees_hook_path_dirs() {
+        let _guard = TestGuard::install();
+        let dir = tempfile::tempdir().unwrap();
+        let bindir = dir.path().join("bin");
+        let binary = bindir.join("mise");
+        let writer = writer_in(dir.path());
+        let changed = write_doc(&writer, &text_doc(&binary, 0o755));
+        let mut hook = mise_hook(&bindir);
+        hook.requires = Condition::InPath {
+            name: "mise".into(),
+        };
+        let decided = match runner().decide_all(std::slice::from_ref(&hook), &changed) {
+            Ok(decided) => decided,
+            Err(error) => panic!("hooks decide: {error}"),
+        };
+        assert_eq!(
+            decided.decisions,
+            vec![HookDecision::Run(binary)],
+            "hook path dirs meet requires"
         );
     }
 

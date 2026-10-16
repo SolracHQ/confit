@@ -874,9 +874,8 @@ mod tests {
     fn tree_first_run_groups_members_under_destination() {
         use confit_model::document::Payload;
         use confit_model::routes::RouteBase;
-        use confit_store::handles::BlobRef;
         let dest = Route::new(RouteBase::Data, "fonts/JetBrainsMono").unwrap();
-        let blob = BlobRef::new(Sha::hash(b"x"), Sha::hash(b"y"));
+        let blob = Sha::hash(b"x");
         let mut members = BTreeMap::new();
         members.insert(
             "a.ttf".to_owned(),

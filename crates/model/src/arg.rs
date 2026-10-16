@@ -39,7 +39,7 @@ impl<'de> Visitor<'de> for ArgVisitor {
     type Value = Arg;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a string-or-route slot")
+        formatter.write_str("a string or route")
     }
 
     fn visit_str<E>(self, text: &str) -> std::result::Result<Arg, E>
@@ -73,9 +73,9 @@ impl Arg {
         }
     }
 
-    /// Render argv slots as one shell-safe display line.
+    /// Render argv args as one shell-safe display line.
     ///
-    /// - Slots with shell-special text quote single.
+    /// - Args with shell-special text quote single.
     pub fn join(argv: &[Arg]) -> String {
         argv.iter()
             .map(Arg::display)

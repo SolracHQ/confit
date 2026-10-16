@@ -7,7 +7,6 @@ use confit_engine::api::profile::Profile;
 use confit_engine::{assemble, assembly::Assembler};
 use confit_model::document::{Data, Payload, StructuredFormat, TreeMember};
 use confit_model::routes::{Route, RouteBase};
-use confit_store::blob::BlobSource;
 use mlua::Lua;
 use std::collections::{BTreeMap, HashMap};
 
@@ -151,8 +150,8 @@ fn placed_documents_convert_every_kind() {
     confit_driver::fs::create_dir_all(&root).unwrap();
     confit_driver::fs::write(&root.join("glyph.ttf"), b"ttf").unwrap();
     let resource = stores.resources().resource("glyph.ttf").unwrap();
-    let opened = stores.blobs().put(BlobSource::Handle(&resource)).unwrap();
-    let blob = opened.to_ref();
+    let opened = stores.blobs().put(&resource).unwrap();
+    let blob = opened.sha256().clone();
     let mut members = BTreeMap::new();
     members.insert(
         "sub/nested.txt".to_owned(),
@@ -357,7 +356,7 @@ fn equal_priorities_keep_declaration_order() {
 }
 
 #[test]
-fn rc_first_write_wins_shared_slots() {
+fn rc_first_write_wins_shared_keys() {
     let lua = Lua::new();
     let low = rc_patch_of(
         &lua,
@@ -390,7 +389,7 @@ fn rc_first_write_wins_shared_slots() {
                 "higher levels apply first with first writes winning",
             );
         }
-        Err(error) => panic!("shared slots merge: {error}"),
+        Err(error) => panic!("shared keys merge: {error}"),
     }
 }
 
@@ -446,15 +445,15 @@ fn rc_base_beats_every_patch() {
             assert_eq!(
                 rc_names(data),
                 vec!["SEED".to_owned()],
-                "base slots keep their entries against later writes",
+                "base entries survive later writes",
             );
             assert_eq!(
                 rc_value(data, "SEED").as_deref(),
                 Some("0"),
-                "base slots keep their values against later writes",
+                "base keys keep their values against later writes",
             );
         }
-        Err(error) => panic!("base slots merge: {error}"),
+        Err(error) => panic!("base keys merge: {error}"),
     }
 }
 

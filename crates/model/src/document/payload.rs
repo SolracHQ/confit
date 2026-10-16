@@ -6,25 +6,24 @@ use confit_binding::registry::Registry;
 use confit_binding::value::{Decode, Encode, Mismatch};
 use confit_driver::sha::Sha;
 use confit_store::Stores;
-use confit_store::blob::BlobSource;
 use confit_store::blob::error::BlobError;
-use confit_store::handles::{BlobRef, ResourceHandle};
+use confit_store::handles::ResourceHandle;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
-/// Blob payload as a live handle or a sealed ref.
+/// Blob payload as a live handle or sealed bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Payload {
     /// Live project handle awaiting compression.
     Handle(ResourceHandle),
-    /// Sealed content ref with its pool identity.
-    Resolved(BlobRef),
+    /// Sealed content hash with its pool identity.
+    Resolved(Sha),
 }
 
 impl Payload {
-    /// Resolve one payload into its blob ref.
+    /// Resolve one payload into its content hash.
     ///
-    /// - Handles compress through the blob content index.
+    /// - Handles compress into the blob pool.
     /// - Resolved payloads pass through untouched.
     ///
     /// # Errors
@@ -33,18 +32,18 @@ impl Payload {
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
-    pub fn resolve(&self, stores: &Stores) -> std::result::Result<BlobRef, BlobError> {
+    pub fn resolve(&self, stores: &Stores) -> std::result::Result<Sha, BlobError> {
         match self {
             Self::Resolved(blob) => Ok(blob.clone()),
             Self::Handle(handle) => stores
                 .blobs()
-                .put(BlobSource::Handle(handle))
-                .map(|opened| opened.to_ref()),
+                .put(handle)
+                .map(|opened| opened.sha256().clone()),
         }
     }
 
-    /// Return the sealed blob ref.
-    pub fn resolved(&self) -> Option<&BlobRef> {
+    /// Return the sealed content hash.
+    pub fn resolved(&self) -> Option<&Sha> {
         match self {
             Self::Resolved(blob) => Some(blob),
             Self::Handle(_) => None,
@@ -54,7 +53,7 @@ impl Payload {
     /// Return the content hash.
     pub fn sha256(&self) -> &Sha {
         match self {
-            Self::Resolved(blob) => &blob.sha256,
+            Self::Resolved(blob) => blob,
             Self::Handle(handle) => handle.sha256(),
         }
     }
@@ -112,7 +111,7 @@ impl<'de> Deserialize<'de> for Payload {
     where
         D: serde::Deserializer<'de>,
     {
-        BlobRef::deserialize(deserializer).map(Self::Resolved)
+        Sha::deserialize(deserializer).map(Self::Resolved)
     }
 }
 
@@ -146,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_compresses_handles_through_the_index() {
+    fn resolve_compresses_handles_into_the_pool() {
         let dir = tempfile::tempdir().unwrap();
         let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
@@ -157,14 +156,14 @@ mod tests {
             Err(error) => panic!("handle resolves: {error}"),
         };
         assert_eq!(
-            first.sha256,
+            first,
             Sha::hash(b"payload bytes"),
             "resolve keeps the content hash"
         );
         guard.fail_writes(std::io::ErrorKind::StorageFull);
         match payload.resolve(&stores) {
-            Ok(again) => assert_eq!(again, first, "repeat resolve hits the index"),
-            Err(error) => panic!("indexed resolve skips writes: {error}"),
+            Ok(again) => assert_eq!(again, first, "repeat resolve reuses the file"),
+            Err(error) => panic!("present resolve skips writes: {error}"),
         }
     }
 
@@ -173,7 +172,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
-        let blob = BlobRef::new(Sha::hash(b"sealed"), Sha::hash(b"stored"));
+        let blob = Sha::hash(b"sealed");
         guard.fail_writes(std::io::ErrorKind::StorageFull);
         match Payload::Resolved(blob.clone()).resolve(&stores) {
             Ok(found) => assert_eq!(found, blob, "sealed refs pass through"),
@@ -200,7 +199,7 @@ mod tests {
             Ok(_) => panic!("handles encode a table"),
             Err(error) => panic!("handles encode: {error}"),
         }
-        let blob = BlobRef::new(Sha::hash(b"sealed"), Sha::hash(b"stored"));
+        let blob = Sha::hash(b"sealed");
         let sealed = Data::Opaque {
             handle: Payload::Resolved(blob),
             mode: 0o644,
@@ -228,14 +227,14 @@ mod tests {
                 "the error shows the state: {error}"
             ),
         }
-        let blob = BlobRef::new(Sha::hash(b"sealed"), Sha::hash(b"stored"));
+        let blob = Sha::hash(b"sealed");
         let text = match serde_json::to_string(&Payload::Resolved(blob.clone())) {
             Ok(found) => found,
             Err(error) => panic!("sealed payloads serialize: {error}"),
         };
         assert!(
-            text.contains(&blob.sha256.hex()) && text.contains(&blob.stored.hex()),
-            "sealed json carries both hexes: {text}"
+            text.contains(&blob.hex()),
+            "sealed json carries the hex: {text}"
         );
         match serde_json::from_str::<Payload>(&text) {
             Ok(Payload::Resolved(found)) => assert_eq!(found, blob, "sealed json decodes"),

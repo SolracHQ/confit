@@ -20,6 +20,7 @@ serde_json.workspace = true
 toml.workspace = true
 noyalib.workspace = true
 serini = "0.3.0"
+bytemuck = { version = "1.25.2", features = ["derive"] }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

@@ -136,11 +136,11 @@ mod tests {
         }
         let error = from_stream(
             source,
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "torn bytes"),
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt bytes"),
         );
         assert!(
             matches!(error, ArchiveError::CorruptedArchive { .. }),
-            "torn bytes stay corrupt: {error}"
+            "corrupt bytes stay corrupt: {error}"
         );
     }
 }

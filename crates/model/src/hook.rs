@@ -38,10 +38,10 @@ pub struct Hook {
     pub timeout_secs: u64,
 }
 
-/// One condition slot.
+/// One condition key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
 #[face(table, string)]
-pub enum ConditionSlot {
+pub enum ConditionKey {
     /// The capability condition.
     Requires,
     /// The need condition.
@@ -54,8 +54,8 @@ pub enum ConditionSlot {
 #[derive(Debug, Clone, PartialEq, Eq, Face)]
 #[face(table)]
 pub struct ConditionChange {
-    /// The slot under diffing.
-    pub slot: ConditionSlot,
+    /// The key under diffing.
+    pub key: ConditionKey,
     /// The recorded condition.
     pub before: Condition,
     /// The desired condition.
@@ -76,7 +76,7 @@ pub struct TimeoutChange {
 #[derive(Debug, Clone, PartialEq, Eq, Face)]
 #[face(table)]
 pub struct HookModification {
-    /// Condition edits in slot order.
+    /// Condition edits in key order.
     pub conditions: Vec<ConditionChange>,
     /// The timeout edit.
     pub timeout: Option<TimeoutChange>,
@@ -203,7 +203,7 @@ fn find_current<'a>(recorded: &Hook, current: &'a [Hook]) -> Option<&'a Hook> {
 
 /// Build one condition change while simplified conditions differ.
 fn condition_change(
-    slot: ConditionSlot,
+    key: ConditionKey,
     before: &Condition,
     after: &Condition,
 ) -> Option<ConditionChange> {
@@ -211,7 +211,7 @@ fn condition_change(
         return None;
     }
     Some(ConditionChange {
-        slot,
+        key,
         before: before.clone(),
         after: after.clone(),
     })
@@ -227,18 +227,18 @@ fn timeout_change(before: u64, after: u64) -> Option<TimeoutChange> {
 
 /// Build one hook modification across conditions and timeout.
 ///
-/// - Conditions collect in slot order.
+/// - Conditions collect in key order.
 fn modify_hook(recorded: &Hook, hook: &Hook) -> HookModification {
     let mut conditions = Vec::new();
     if let Some(change) =
-        condition_change(ConditionSlot::Requires, &recorded.requires, &hook.requires)
+        condition_change(ConditionKey::Requires, &recorded.requires, &hook.requires)
     {
         conditions.push(change);
     }
-    if let Some(change) = condition_change(ConditionSlot::When, &recorded.when, &hook.when) {
+    if let Some(change) = condition_change(ConditionKey::When, &recorded.when, &hook.when) {
         conditions.push(change);
     }
-    if let Some(change) = condition_change(ConditionSlot::Check, &recorded.check, &hook.check) {
+    if let Some(change) = condition_change(ConditionKey::Check, &recorded.check, &hook.check) {
         conditions.push(change);
     }
     HookModification {
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_reports_check_slot_change() {
+    fn lifecycle_reports_check_key_change() {
         let before = hook(&["mise"], &[], Condition::default(), in_path("a"), 60);
         let after = hook(&["mise"], &[], Condition::default(), in_path("b"), 60);
         let current = [after];
@@ -444,7 +444,7 @@ mod tests {
             _ => panic!("check diff is modified"),
         };
         assert_eq!(edits.conditions.len(), 1);
-        assert_eq!(edits.conditions[0].slot, ConditionSlot::Check);
+        assert_eq!(edits.conditions[0].key, ConditionKey::Check);
         assert_eq!(edits.conditions[0].before, in_path("a"));
         assert_eq!(edits.conditions[0].after, in_path("b"));
     }

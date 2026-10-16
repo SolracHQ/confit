@@ -38,7 +38,7 @@ mod untagged;
 ///
 /// #[derive(Face)]
 /// #[face(table, string)]
-/// enum Slot {
+/// enum Kind {
 ///     Requires,
 ///     When,
 ///     Check,

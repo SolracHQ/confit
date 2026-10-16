@@ -123,7 +123,7 @@ mod tests {
                     let text = found.to_string_lossy();
                     assert!(
                         text.contains("escapes"),
-                        "the text names the boundary: {text}"
+                        "the text shows the boundary: {text}"
                     );
                     assert!(text.contains(reason), "the text shows the fault: {text}");
                 }

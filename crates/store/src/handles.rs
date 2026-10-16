@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use confit_binding_macros::{Face, face_impl};
 use confit_driver::sha::Sha;
 use mlua::{Lua, Table};
-use serde::{Deserialize, Serialize};
 
 use crate::Stores;
 use crate::archive::error::ArchiveError;
@@ -24,16 +23,6 @@ pub struct ResourceHandle {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlobHandle {
     sha256: Sha,
-    stored: Sha,
-}
-
-/// Content-addressed bytes ref for manifests.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BlobRef {
-    /// Content hash for payload bytes.
-    pub sha256: Sha,
-    /// Pool-bytes hash for gzip bytes.
-    pub stored: Sha,
 }
 
 /// Handle to a verified compressed archive.
@@ -77,31 +66,14 @@ impl ResourceHandle {
 }
 
 impl BlobHandle {
-    /// Build a blob handle from verified content and stored hashes.
-    pub(crate) fn new(sha256: Sha, stored: Sha) -> Self {
-        Self { sha256, stored }
+    /// Build a blob handle from its verified content hash.
+    pub(crate) fn new(sha256: Sha) -> Self {
+        Self { sha256 }
     }
 
     /// Return the content hash.
     pub fn sha256(&self) -> &Sha {
         &self.sha256
-    }
-
-    /// Return the pool-bytes hash.
-    pub fn stored(&self) -> &Sha {
-        &self.stored
-    }
-
-    /// Build the manifest ref with both hashes.
-    pub fn to_ref(&self) -> BlobRef {
-        BlobRef::new(self.sha256.clone(), self.stored.clone())
-    }
-}
-
-impl BlobRef {
-    /// Build one blob ref from verified content and stored hashes.
-    pub fn new(sha256: Sha, stored: Sha) -> Self {
-        Self { sha256, stored }
     }
 }
 
@@ -302,7 +274,7 @@ mod tests {
 
     #[test]
     fn blob_handle_builds_from_valid_sha() {
-        let handle = BlobHandle::new(fixture_sha(), fixture_sha());
+        let handle = BlobHandle::new(fixture_sha());
         assert_eq!(handle.sha256(), &fixture_sha());
     }
 
@@ -315,14 +287,6 @@ mod tests {
             };
             assert!(matches!(error, ShaError::Parse { .. }));
         }
-    }
-
-    #[test]
-    fn blob_handle_converts_to_manifest_ref() {
-        let handle = BlobHandle::new(fixture_sha(), fixture_sha());
-        let blob = handle.to_ref();
-        assert_eq!(blob.sha256, fixture_sha());
-        assert_eq!(blob.stored, fixture_sha());
     }
 
     #[test]

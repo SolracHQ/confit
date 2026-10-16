@@ -3,7 +3,7 @@
 
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
-use confit_model::hook::{ConditionChange, ConditionSlot, Hook, HookChange, HookLifecycle};
+use confit_model::hook::{ConditionChange, ConditionKey, Hook, HookChange, HookLifecycle};
 use confit_runtime::Unmet;
 
 use crate::presentation::summary::Sigil;
@@ -112,7 +112,7 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
 ///
 /// - True conditions stay silent.
 fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
-    for (slot, condition) in [
+    for (key, condition) in [
         ("requires", &hook.requires),
         ("when", &hook.when),
         ("check", &hook.check),
@@ -121,28 +121,28 @@ fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
             continue;
         }
         out.push(format!(
-            "  {} {slot} ({})",
+            "  {} {key} ({})",
             Sigil::Add.mark(),
             describe_condition(condition)
         ));
     }
 }
 
-/// Return one condition slot name for detail lines.
-fn condition_slot_text(slot: ConditionSlot) -> &'static str {
-    match slot {
-        ConditionSlot::Requires => "requires",
-        ConditionSlot::When => "when",
-        ConditionSlot::Check => "check",
+/// Return one condition key name for detail lines.
+fn condition_key_text(key: ConditionKey) -> &'static str {
+    match key {
+        ConditionKey::Requires => "requires",
+        ConditionKey::When => "when",
+        ConditionKey::Check => "check",
     }
 }
 
-/// Render one condition change line per slot while text differs.
+/// Render one condition change line per key while text differs.
 fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String>) {
     for change in conditions {
-        let slot = condition_slot_text(change.slot);
+        let key = condition_key_text(change.key);
         out.push(format!(
-            "  {} {slot} ({}) -> ({})",
+            "  {} {key} ({}) -> ({})",
             Sigil::Update.mark(),
             describe_condition(&change.before),
             describe_condition(&change.after)
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_condition_prints_tilde_with_slot_diff() {
+    fn modified_condition_prints_tilde_with_key_diff() {
         let mut before = hook(
             &["mise", "install"],
             &[],
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn check_diff_reports_slot_change() {
+    fn check_diff_reports_key_change() {
         let before = hook(&["mise"], &[], Condition::default(), in_path("a"), 60);
         let after = hook(&["mise"], &[], Condition::default(), in_path("b"), 60);
         assert_eq!(

@@ -237,7 +237,7 @@ pub fn decode_proxy<T>(
 ///
 /// - [`Mismatch`] for tables outside the sequence shape.
 pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
-    let mut slots: Vec<(i64, Value)> = Vec::new();
+    let mut items: Vec<(i64, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         let (key, item) = pair.map_err(|error| Mismatch {
             path: name.to_owned(),
@@ -245,7 +245,7 @@ pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
             found: error.to_string(),
         })?;
         match key {
-            Value::Integer(index) => slots.push((index, item)),
+            Value::Integer(index) => items.push((index, item)),
             _ => {
                 return Err(Mismatch {
                     path: name.to_owned(),
@@ -255,8 +255,8 @@ pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
             }
         }
     }
-    slots.sort_by_key(|(index, _)| *index);
-    for (position, (index, _)) in slots.iter().enumerate() {
+    items.sort_by_key(|(index, _)| *index);
+    for (position, (index, _)) in items.iter().enumerate() {
         if *index != position as i64 + 1 {
             return Err(Mismatch {
                 path: name.to_owned(),
@@ -265,7 +265,7 @@ pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
             });
         }
     }
-    Ok(slots.into_iter().map(|(_, item)| item).collect())
+    Ok(items.into_iter().map(|(_, item)| item).collect())
 }
 
 /// Take one positional call argument with index advance.

@@ -14,7 +14,6 @@ use confit_engine::api::profile::Profile;
 use confit_model::document::{Data, Payload, RcData, RcEntry, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
-use confit_store::blob::BlobSource;
 use confit_store::{StoreRoots, Stores};
 use mlua::{Function, Lua, Value};
 
@@ -528,11 +527,11 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Data) {
     confit_driver::fs::create_dir_all(&root).unwrap();
     confit_driver::fs::write(&root.join("blob.bin"), b"hi").unwrap();
     let resource = stores.resources().resource("blob.bin").unwrap();
-    let opened = stores.blobs().put(BlobSource::Handle(&resource)).unwrap();
+    let opened = stores.blobs().put(&resource).unwrap();
     (
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Opaque {
-            handle: Payload::Resolved(opened.to_ref()),
+            handle: Payload::Resolved(opened.sha256().clone()),
             mode: 0o644,
             unmanaged: true,
         },
@@ -622,13 +621,13 @@ pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &st
     }
 }
 
-/// Collect profile slot names from one finished rc payload.
+/// Collect profile collision keys from one finished rc payload.
 pub fn rc_names(data: &Data) -> Vec<String> {
     match data {
         Data::Rc(found) => found
             .profile
             .iter()
-            .filter_map(|entry| entry.slot_name().map(str::to_owned))
+            .filter_map(|entry| entry.collision_key().map(str::to_owned))
             .collect(),
         _ => panic!("rc patch stays rc"),
     }

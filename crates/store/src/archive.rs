@@ -978,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn torn_manifests_fall_back_to_rehash() {
+    fn bad_manifests_fall_back_to_rehash() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
         let store = test_store(dir.path());
@@ -992,10 +992,10 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("archive extracts: {error}"),
         }
-        driver::fs::write(&extract_manifest(dir.path(), &archive), b"{torn").unwrap();
+        driver::fs::write(&extract_manifest(dir.path(), &archive), b"{bad").unwrap();
         match store.extract_member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
-            Err(error) => panic!("torn manifest still resolves: {error}"),
+            Err(error) => panic!("bad manifest still resolves: {error}"),
         }
     }
 

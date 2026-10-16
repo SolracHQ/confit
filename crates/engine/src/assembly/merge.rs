@@ -167,7 +167,7 @@ impl Assembler<'_> {
         patches: &[&OwnedPatch],
     ) -> Result<RcData> {
         let mut document = document;
-        let mut owned = seed_slot_owners(&document);
+        let mut owned = seed_collision_owners(&document);
         for patch in patches {
             let Some(found) = patch.rc() else {
                 continue;
@@ -266,18 +266,18 @@ fn fold_entry(
     next_value: serde_json::Value,
     loser: &str,
 ) {
-    let Some(slot) = merged.get_mut(&key) else {
+    let Some(live) = merged.get_mut(&key) else {
         seed_leaves(&next_value, &key, loser, owners);
         merged.insert(key, next_value);
         return;
     };
-    if *slot == next_value {
+    if *live == next_value {
         return;
     }
-    fold_value(display, &key, slot, next_value, owners, loser);
+    fold_value(display, &key, live, next_value, owners, loser);
 }
 
-/// Fold one patch value over one live slot keeping first writes.
+/// Fold one patch value over one live value keeping first writes.
 fn fold_value(
     display: &str,
     path: &str,
@@ -294,10 +294,10 @@ fn fold_value(
         (serde_json::Value::Object(live_map), serde_json::Value::Object(next_map)) => {
             fold_maps(display, path, live_map, next_map, owners, loser);
         }
-        (slot, found) => {
+        (live, found) => {
             if live_empty {
                 seed_leaves(&found, path, loser, owners);
-                *slot = found;
+                *live = found;
                 return;
             }
             if let Some(winner) = winner_for(path, owners) {
@@ -325,11 +325,11 @@ fn fold_maps(
         .collect();
     for (key, next_value) in next_map {
         let child = format!("{path}.{key}");
-        if let Some(slot) = live_map.get_mut(&key) {
-            if *slot == next_value {
+        if let Some(live) = live_map.get_mut(&key) {
+            if *live == next_value {
                 continue;
             }
-            fold_value(display, &child, slot, next_value, owners, loser);
+            fold_value(display, &child, live, next_value, owners, loser);
         } else {
             seed_leaves(&next_value, &child, loser, owners);
             live_map.insert(key, next_value);
@@ -382,30 +382,30 @@ fn winner_for(path: &str, owners: &BTreeMap<String, String>) -> Option<String> {
     None
 }
 
-/// Winner owner per rc slot feeding first-writer wins.
+/// Winner owner per rc collision feeding first-writer wins.
 #[derive(Default)]
-struct SlotOwners {
-    /// Slot owners in the profile section.
+struct CollisionOwners {
+    /// Collision owners in the profile section.
     profile: BTreeMap<String, String>,
-    /// Slot owners in the config section.
+    /// Collision owners in the config section.
     config: BTreeMap<String, String>,
-    /// Slot owners in the final section.
+    /// Collision owners in the final section.
     final_entries: BTreeMap<String, String>,
 }
 
-/// Seed slot owners from base entries with slots under the base name.
-fn seed_slot_owners(document: &RcData) -> SlotOwners {
-    let mut owned = SlotOwners::default();
+/// Seed collision owners from base entries under the base name.
+fn seed_collision_owners(document: &RcData) -> CollisionOwners {
+    let mut owned = CollisionOwners::default();
     seed_section(&document.profile, &mut owned.profile);
     seed_section(&document.config, &mut owned.config);
     seed_section(&document.final_entries, &mut owned.final_entries);
     owned
 }
 
-/// Seed one section map from its entries with slots under the base name.
+/// Seed one section map from its entries under the base name.
 fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     for entry in entries {
-        if let Some(name) = entry.slot_name() {
+        if let Some(name) = entry.collision_key() {
             owned.insert(name.to_owned(), "base".to_owned());
         }
     }
@@ -416,7 +416,7 @@ fn merge_rc(
     display: &str,
     live: &RcData,
     next: RcData,
-    owned: &mut SlotOwners,
+    owned: &mut CollisionOwners,
     owner: &str,
 ) -> RcData {
     let loser = owner;
@@ -465,8 +465,8 @@ fn merge_section(
             kept.push(entry);
             continue;
         }
-        let slot = entry.slot_name().map(str::to_owned);
-        match slot {
+        let key = entry.collision_key().map(str::to_owned);
+        match key {
             Some(name) => match owned.get(&name) {
                 Some(winner) => {
                     log::warn!(

@@ -14,7 +14,7 @@ use crate::error::{Result, RuntimeError};
 use crate::manifest::Manifest;
 
 impl Bundler {
-    /// Read one portable bundle into a stored manifest.
+    /// Read one portable bundle into a sealed manifest.
     ///
     /// # Errors
     ///
@@ -37,14 +37,12 @@ impl Bundler {
         let manifest = self.read_manifest(&handle, path)?;
         let refs = manifest.refs();
         for blob in &refs {
-            if !wanted.iter().any(|name| name == blob.stored.hex().as_str()) {
-                return Err(RuntimeError::BundleMissing {
-                    sha: blob.sha256.clone(),
-                });
+            if !wanted.iter().any(|name| name == blob.hex().as_str()) {
+                return Err(RuntimeError::BundleMissing { sha: blob.clone() });
             }
         }
-        for stored in &wanted {
-            self.receive_blob(&handle, stored, path)?;
+        for content in &wanted {
+            self.receive_blob(&handle, content, path, &manifest)?;
         }
         Ok(manifest)
     }
@@ -75,20 +73,27 @@ impl Bundler {
     ///
     /// # Errors
     ///
+    /// - [`RuntimeError::BundleCorrupt`] for corrupt members.
     /// - [`RuntimeError::BundleRead`] for failed member reads.
     /// - [`RuntimeError::BundleWrite`] for receive write faults.
     /// - [`RuntimeError::BundleWriteUnknown`] for other receive write
     ///   failures.
-    fn receive_blob(&self, handle: &ArchiveHandle, stored: &str, bundle: &Path) -> Result<()> {
-        let name = [BUNDLE_BLOBS_PREFIX, stored].concat();
+    fn receive_blob(
+        &self,
+        handle: &ArchiveHandle,
+        content: &str,
+        bundle: &Path,
+        manifest: &Manifest,
+    ) -> Result<()> {
+        let name = [BUNDLE_BLOBS_PREFIX, content].concat();
         let member = self
             .archives
             .extract_member(handle, &name)
             .map_err(|error| RuntimeError::from_archive(bundle, error))?;
-        let stored_sha = Sha::new(stored).map_err(|error| unknown(bundle, error.to_string()))?;
+        let content_sha = Sha::new(content).map_err(|error| unknown(bundle, error.to_string()))?;
         self.blobs
-            .receive(&stored_sha, &member)
-            .map_err(|error| from_blob(bundle, error))?;
+            .receive(&content_sha, &member)
+            .map_err(|error| from_blob(bundle, manifest, &content_sha, error))?;
         Ok(())
     }
 }
@@ -109,17 +114,32 @@ fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
                 return Err(unknown(bundle, "duplicate manifest".to_owned()));
             }
             has_manifest = true;
-        } else if let Some(stored) = name.strip_prefix(BUNDLE_BLOBS_PREFIX) {
-            check_blob_id(stored).map_err(|error| from_codec(bundle, error))?;
-            if !seen.insert(stored.to_string()) {
+        } else if let Some(content) = name.strip_prefix(BUNDLE_BLOBS_PREFIX) {
+            check_blob_id(content).map_err(|error| from_codec(bundle, error))?;
+            if !seen.insert(content.to_string()) {
                 return Err(unknown(bundle, "duplicate blob".to_owned()));
             }
-            wanted.push(stored.to_string());
+            wanted.push(content.to_string());
         } else {
             return Err(unknown(bundle, "unexpected entry".to_owned()));
         }
     }
     Ok((has_manifest, wanted))
+}
+
+/// List manifest documents holding one content hash.
+fn holders(manifest: &Manifest, sha: &Sha) -> String {
+    let found: Vec<String> = manifest
+        .documents
+        .iter()
+        .filter(|document| document.data.blob_refs().contains(&sha))
+        .map(|document| format!("'{}'", document.destination.display()))
+        .collect();
+    if found.is_empty() {
+        "an unlisted bundle member".to_owned()
+    } else {
+        found.join(", ")
+    }
 }
 
 /// Build one bundle read failure for the bundle.
@@ -142,10 +162,14 @@ fn from_codec(bundle: &Path, error: CodecError) -> RuntimeError {
 }
 
 /// Map one blob failure into its bundle error.
-fn from_blob(bundle: &Path, error: BlobError) -> RuntimeError {
+fn from_blob(bundle: &Path, manifest: &Manifest, content: &Sha, error: BlobError) -> RuntimeError {
     use confit_store::faults::AccessFault;
 
     match error {
+        BlobError::Corrupt { .. } => RuntimeError::BundleCorrupt {
+            path: bundle.to_path_buf(),
+            holders: holders(manifest, content),
+        },
         BlobError::Read {
             sha,
             fault: AccessFault::Missing,
@@ -187,21 +211,28 @@ mod tests {
 
     fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
         use confit_store::Stores;
-        use confit_store::blob::BlobSource;
 
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
+        let project = dir.join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
         let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
-            let handle = match stores.blobs().put(BlobSource::Bytes(body)) {
+            let name = format!("bin-{index}.bin");
+            confit_driver::fs::write(&project.join(&name), body).unwrap();
+            let source = match stores.resources().resource(&name) {
+                Ok(handle) => handle,
+                Err(error) => panic!("project opens: {error}"),
+            };
+            let handle = match stores.blobs().put(&source) {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
             documents.insert(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
                 Data::Opaque {
-                    handle: Payload::Resolved(handle.to_ref()),
+                    handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
                 },
@@ -265,6 +296,14 @@ mod tests {
         let mut sorted = blobs.clone();
         sorted.sort();
         assert_eq!(blobs, sorted, "the blob entries stay sorted");
+        let mut expected: Vec<String> = manifest
+            .refs()
+            .iter()
+            .map(|blob| [BUNDLE_BLOBS_PREFIX, &blob.hex()].concat())
+            .collect();
+        expected.sort();
+        expected.dedup();
+        assert_eq!(blobs, expected, "blob entries carry content names");
         for name in &blobs {
             assert!(
                 name.starts_with(BUNDLE_BLOBS_PREFIX),
@@ -301,7 +340,6 @@ mod tests {
     #[test]
     fn read_refuses_missing_blob() {
         use confit_store::Stores;
-        use confit_store::blob::BlobSource;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -309,7 +347,14 @@ mod tests {
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
         let store = Bundler::new(&stores);
-        let handle = match stores.blobs().put(BlobSource::Bytes(b"wanted bytes")) {
+        let project = dir.path().join("project");
+        confit_driver::fs::create_dir_all(&project).unwrap();
+        confit_driver::fs::write(&project.join("wanted.bin"), b"wanted bytes").unwrap();
+        let source = match stores.resources().resource("wanted.bin") {
+            Ok(handle) => handle,
+            Err(error) => panic!("project opens: {error}"),
+        };
+        let handle = match stores.blobs().put(&source) {
             Ok(handle) => handle,
             Err(error) => panic!("cache stores: {error}"),
         };
@@ -318,7 +363,7 @@ mod tests {
             [(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 Data::Opaque {
-                    handle: Payload::Resolved(handle.to_ref()),
+                    handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
                 },
@@ -339,6 +384,39 @@ mod tests {
                 error.to_string().contains(&handle.sha256().hex()),
                 "missing blob shows the hash: {error}"
             ),
+        }
+    }
+
+    #[test]
+    fn read_names_holding_document_for_corrupt_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TestGuard::install();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha"]);
+        let refs = manifest.refs();
+        let raw = serde_json::to_vec(&manifest).unwrap();
+        let member = [BUNDLE_BLOBS_PREFIX, &refs[0].hex()].concat();
+        let path = dir.path().join("corrupt.cb");
+        build_bundle(
+            &path,
+            &[
+                (BUNDLE_MANIFEST, raw),
+                (member.as_str(), b"garbage".to_vec()),
+            ],
+        );
+        match store.read(&path) {
+            Ok(_) => panic!("corrupt blob passes"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("bin-0"), "refusal shows the document: {text}");
+                assert!(
+                    text.contains("is corrupt"),
+                    "refusal shows the failure: {text}"
+                );
+                assert!(
+                    !text.contains(&refs[0].hex()),
+                    "refusal leaks the hash: {text}"
+                );
+            }
         }
     }
 

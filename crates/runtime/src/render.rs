@@ -238,26 +238,26 @@ fn escape_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// Render slots as one shell line with Bourne quoting.
+/// Render args as one shell line with Bourne quoting.
 ///
 /// # Errors
 ///
 /// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn escape_args(route: &Route, slots: &[Arg]) -> Result<String> {
-    let mut rendered = Vec::with_capacity(slots.len());
-    for slot in slots {
-        rendered.push(escape_slot(route, slot)?);
+fn escape_args(route: &Route, args: &[Arg]) -> Result<String> {
+    let mut rendered = Vec::with_capacity(args.len());
+    for arg in args {
+        rendered.push(escape_arg(route, arg)?);
     }
     Ok(rendered.join(" "))
 }
 
-/// Render one slot with Bourne quoting.
+/// Render one arg with Bourne quoting.
 ///
 /// # Errors
 ///
 /// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn escape_slot(route: &Route, slot: &Arg) -> Result<String> {
-    match slot {
+fn escape_arg(route: &Route, arg: &Arg) -> Result<String> {
+    match arg {
         Arg::Text(text) => Ok(quote(text).into_owned()),
         Arg::Route(found) => {
             let expanded = expand_field(route, found)?;

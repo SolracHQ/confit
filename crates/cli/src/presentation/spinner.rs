@@ -158,11 +158,11 @@ impl Terminal {
             return;
         }
         let _ = self.shutdown.send(());
-        let mut slot = match self.thread.lock() {
-            Ok(slot) => slot,
+        let mut guard = match self.thread.lock() {
+            Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some(handle) = slot.take()
+        if let Some(handle) = guard.take()
             && handle.join().is_err()
             && let Some(control) = self.control.as_ref()
         {

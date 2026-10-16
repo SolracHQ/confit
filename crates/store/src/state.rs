@@ -225,7 +225,7 @@ impl StateStore {
         Ok(files.into_iter().map(StateHandle::new).collect())
     }
 
-    /// List named handles in name order.
+    /// List state handles.
     ///
     /// - Missing folders are empty.
     ///

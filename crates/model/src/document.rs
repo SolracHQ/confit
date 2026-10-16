@@ -12,7 +12,8 @@ use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
-use confit_store::handles::{BlobRef, ResourceHandle};
+use confit_driver::sha::Sha;
+use confit_store::handles::ResourceHandle;
 
 pub use payload::Payload;
 pub use rc::{RcData, RcEntry, RcSection};
@@ -243,8 +244,8 @@ impl Data {
         }
     }
 
-    /// Collect every sealed blob ref in document order.
-    pub fn blob_refs(&self) -> Vec<&BlobRef> {
+    /// Collect every sealed content hash in document order.
+    pub fn blob_refs(&self) -> Vec<&Sha> {
         self.payloads()
             .into_iter()
             .filter_map(Payload::resolved)
@@ -798,14 +799,8 @@ mod tests {
 
     #[test]
     fn round_trip_sealed_members_through_serde() {
-        let full_blob = confit_store::handles::BlobRef::new(
-            confit_driver::sha::Sha::hash(b"full bytes"),
-            confit_driver::sha::Sha::hash(b"full stored"),
-        );
-        let bare_blob = confit_store::handles::BlobRef::new(
-            confit_driver::sha::Sha::hash(b"bare bytes"),
-            confit_driver::sha::Sha::hash(b"bare stored"),
-        );
+        let full_blob = confit_driver::sha::Sha::hash(b"full bytes");
+        let bare_blob = confit_driver::sha::Sha::hash(b"bare bytes");
         let bare = TreeMember::Handle(Payload::Resolved(bare_blob));
         let full = TreeMember::Full {
             handle: Payload::Resolved(full_blob),
@@ -911,18 +906,12 @@ mod tests {
     fn ref_tables_fail_where_handles_belong() {
         let _guard = confit_driver::fs::TestGuard::install();
         let (_directory, lua, _stores) = opened_lua();
-        let text = body_error(
-            &lua,
-            r#"{ handle = { sha256 = "aa", stored = "bb" }, mode = "644" }"#,
-        );
+        let text = body_error(&lua, r#"{ handle = { sha256 = "aa" }, mode = "644" }"#);
         assert!(
             text.contains("a resource handle"),
             "the text shows the want: {text}"
         );
-        let members = body_error(
-            &lua,
-            r#"{ members = { ["top.txt"] = { sha256 = "aa", stored = "bb" } } }"#,
-        );
+        let members = body_error(&lua, r#"{ members = { ["top.txt"] = { sha256 = "aa" } } }"#);
         assert!(
             members.contains("TreeMember"),
             "the text shows the want: {members}"
@@ -934,7 +923,7 @@ mod tests {
         let lua = test_lua();
         let digest = confit_driver::sha::Sha::hash(b"confit sealed fixture");
         let source = Data::Opaque {
-            handle: Payload::Resolved(BlobRef::new(digest.clone(), digest)),
+            handle: Payload::Resolved(digest.clone()),
             mode: 0o644,
             unmanaged: false,
         };
@@ -969,14 +958,14 @@ mod tests {
         }
         let digest = confit_driver::sha::Sha::hash(b"confit sealed fixture");
         let sealed = Data::Opaque {
-            handle: Payload::Resolved(BlobRef::new(digest.clone(), digest.clone())),
+            handle: Payload::Resolved(digest.clone()),
             mode: 0o644,
             unmanaged: false,
         };
         let text = serde_json::to_string(&sealed).unwrap();
         assert!(
             text.contains(&digest.hex()),
-            "sealed json carries the hexes: {text}"
+            "sealed json carries the hex: {text}"
         );
     }
 }

@@ -315,18 +315,18 @@ fn map_pool(error: BlobError, dest: &Path, target: &Path) -> RuntimeError {
                 message,
             }
         }
-        BlobError::Corrupt { sha } => {
-            log::error!("corrupt blob '{}'", sha.hex());
-            RuntimeError::WriteUnknown {
-                path: target.to_path_buf(),
-                message: format!("blob '{}' fails verification", sha.hex()),
-            }
-        }
         BlobError::Compress => {
             log::error!("cannot compress blob for '{}'", target.display());
             RuntimeError::WriteUnknown {
                 path: target.to_path_buf(),
                 message: "cannot compress blob".to_owned(),
+            }
+        }
+        BlobError::Corrupt { sha } => {
+            log::error!("corrupt blob '{}' for '{}'", sha.hex(), target.display());
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message: format!("corrupt blob '{}'", sha.hex()),
             }
         }
     }

@@ -61,8 +61,7 @@ pub struct FunctionParameter {
 
 /// One documented function return.
 ///
-/// One return slot from the
-/// static declaration to stub emission.
+/// Runs from static declaration to stub emission.
 pub struct FunctionReturn {
     /// The return face expression.
     pub face: Cow<'static, str>,

@@ -13,7 +13,6 @@ use confit_model::hook::Hook;
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::faults::AccessFault;
-use confit_store::handles::BlobRef;
 use confit_store::handles::StateHandle;
 use confit_store::state::Picker;
 use confit_store::state::StateStore;
@@ -123,8 +122,8 @@ impl Manifest {
         })
     }
 
-    /// List cloned blob refs in document order.
-    pub fn refs(&self) -> Vec<BlobRef> {
+    /// List cloned content hashes in document order.
+    pub fn refs(&self) -> Vec<Sha> {
         let mut refs = Vec::new();
         for document in &self.documents {
             refs.extend(document.data.blob_refs().into_iter().cloned());
@@ -206,7 +205,7 @@ impl Manifest {
         Ok(())
     }
 
-    /// Resolve one picker to its stored manifest.
+    /// Resolve one picker to its sealed manifest.
     ///
     /// # Errors
     ///
@@ -248,9 +247,9 @@ impl Manifest {
         Ok(())
     }
 
-    /// Gather stored refs for a sweep.
+    /// Gather content refs for a sweep.
     ///
-    /// Every readable stored manifest feeds the keep set.
+    /// Every readable state manifest feeds the keep set.
     ///
     /// # Errors
     ///
@@ -524,20 +523,20 @@ fn from_codec(path: &Path, error: CodecError) -> RuntimeError {
     }
 }
 
-/// Collect blob refs from one readable stored manifest.
+/// Collect blob refs from one readable state manifest.
 fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTreeSet<Sha>) {
     let bytes = match states.read(handle) {
         Ok(bytes) => bytes,
         Err(_) => return,
     };
-    let stored: Manifest = match serde_json::from_slice(&bytes) {
-        Ok(stored) => stored,
+    let found: Manifest = match serde_json::from_slice(&bytes) {
+        Ok(found) => found,
         Err(_) => return,
     };
-    if stored.version != MANIFEST_VERSION {
+    if found.version != MANIFEST_VERSION {
         return;
     }
-    keep.extend(stored.refs().iter().map(|blob| blob.stored.clone()));
+    keep.extend(found.refs());
 }
 
 #[cfg(test)]
@@ -549,10 +548,8 @@ mod tests {
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
-    fn test_ref(content: &str, stored: &str) -> BlobRef {
-        let sha = Sha::new(content).unwrap();
-        let pool = Sha::new(stored).unwrap();
-        BlobRef::new(sha, pool)
+    fn test_ref(content: &str) -> Sha {
+        Sha::new(content).unwrap()
     }
 
     fn opaque_doc(name: &str, blob: Payload) -> Document {
@@ -568,8 +565,8 @@ mod tests {
 
     #[test]
     fn refs_preserves_document_order() {
-        let first = test_ref(&"11".repeat(32), &"33".repeat(32));
-        let second = test_ref(&"22".repeat(32), &"44".repeat(32));
+        let first = test_ref(&"11".repeat(32));
+        let second = test_ref(&"22".repeat(32));
         let manifest = Manifest {
             version: MANIFEST_VERSION,
             documents: vec![
@@ -676,11 +673,8 @@ mod tests {
 
     #[test]
     fn fill_hash_copies_opaque_blob_sha() {
-        let blob = BlobRef::new(
-            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
-        );
-        let expected = blob.sha256.hex();
+        let blob = confit_driver::sha::Sha::new("aa".repeat(32)).unwrap();
+        let expected = blob.hex();
         let hash = fill(Data::Opaque {
             handle: Payload::Resolved(blob),
             mode: 0o644,
@@ -694,14 +688,8 @@ mod tests {
 
     #[test]
     fn fill_hash_covers_tree_manifest_bytes() {
-        let first = BlobRef::new(
-            confit_driver::sha::Sha::new("aa".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("bb".repeat(32)).unwrap(),
-        );
-        let second = BlobRef::new(
-            confit_driver::sha::Sha::new("cc".repeat(32)).unwrap(),
-            confit_driver::sha::Sha::new("dd".repeat(32)).unwrap(),
-        );
+        let first = confit_driver::sha::Sha::new("aa".repeat(32)).unwrap();
+        let second = confit_driver::sha::Sha::new("cc".repeat(32)).unwrap();
         let mut members = BTreeMap::new();
         members.insert(
             "b".to_owned(),
@@ -791,11 +779,7 @@ mod tests {
                     Some(found) => found,
                     None => panic!("build seals every payload"),
                 };
-                let cache = dir
-                    .path()
-                    .join("temp")
-                    .join("blobs")
-                    .join(resolved.stored.hex());
+                let cache = dir.path().join("temp").join("blobs").join(resolved.hex());
                 assert!(
                     confit_driver::fs::exists(&cache),
                     "the blob file lands in cache"
@@ -812,7 +796,7 @@ mod tests {
                     Err(error) => panic!("sealed bytes open: {error}"),
                 }
                 assert_eq!(
-                    resolved.sha256,
+                    *resolved,
                     Sha::hash(&seen),
                     "content sha covers member bytes"
                 );
@@ -837,7 +821,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
-        let blob = BlobRef::new(Sha::hash(b"sealed"), Sha::hash(b"stored"));
+        let blob = Sha::hash(b"sealed");
         let documents = [(
             Route::new(RouteBase::Home, "bin").unwrap(),
             Data::Opaque {

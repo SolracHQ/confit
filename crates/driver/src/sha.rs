@@ -30,7 +30,7 @@ impl std::error::Error for ShaError {}
 pub type Result<T> = std::result::Result<T, ShaError>;
 
 /// Byte count for a SHA-256 digest.
-const SHA_BYTE_LEN: usize = 32;
+pub const SHA_BYTE_LEN: usize = 32;
 
 /// Hex character count for a SHA-256 digest.
 const SHA_HEX_LEN: usize = 64;
@@ -55,10 +55,10 @@ impl Sha {
         check_sha_hex(&sha)?;
         let bytes = sha.as_bytes();
         let mut inner = [0u8; SHA_BYTE_LEN];
-        for (index, slot) in inner.iter_mut().enumerate() {
+        for (index, byte) in inner.iter_mut().enumerate() {
             let high = hex_value(bytes[index * 2], &sha)?;
             let low = hex_value(bytes[index * 2 + 1], &sha)?;
-            *slot = (high << 4) | low;
+            *byte = (high << 4) | low;
         }
         Ok(Self { inner })
     }
@@ -105,6 +105,16 @@ impl Sha {
     /// Stream read failures surface as io errors.
     pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
         Ok(Self::read_with_size(stream)?.0)
+    }
+
+    /// Return the raw digest bytes.
+    pub fn as_bytes(&self) -> [u8; SHA_BYTE_LEN] {
+        self.inner
+    }
+
+    /// Build one digest from raw bytes.
+    pub fn from_bytes(bytes: [u8; SHA_BYTE_LEN]) -> Self {
+        Self { inner: bytes }
     }
 
     /// Render the hex digest.
@@ -177,6 +187,12 @@ impl<W: std::io::Write> ShaWriter<W> {
     /// Finish the running hash over every byte written.
     pub fn digest(self) -> Sha {
         Sha::finish(self.hasher)
+    }
+
+    /// Finish the running hash and return the writer with its digest.
+    pub fn finish(self) -> (W, Sha) {
+        let digest = Sha::finish(self.hasher);
+        (self.inner, digest)
     }
 }
 

@@ -80,7 +80,7 @@ pub(crate) fn method_of(method: &MethodFace) -> Tokens {
                 proc_macro2::Span::call_site(),
             ),
         };
-        let slot: Tokens = match &param.binding {
+        let target: Tokens = match &param.binding {
             Pat::Ident(_) => {
                 let binding = &param.binding;
                 quote! { #binding }
@@ -88,7 +88,7 @@ pub(crate) fn method_of(method: &MethodFace) -> Tokens {
             _ => quote! { #caller },
         };
         takes.push(quote! {
-            let #slot: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
+            let #target: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
                 ::std::option::Option::Some(raw) => <#shape as ::confit_binding::value::Decode>::decode(&raw, lua).map_err(|error| ::mlua::Error::runtime(::std::format!(#failure)))?,
                 ::std::option::Option::None => return ::std::result::Result::Err(::mlua::Error::runtime(#missing)),
             };
@@ -163,7 +163,7 @@ pub(crate) fn static_function_of(method: &StaticFace) -> Tokens {
                 proc_macro2::Span::call_site(),
             ),
         };
-        let slot: Tokens = match &param.binding {
+        let target: Tokens = match &param.binding {
             Pat::Ident(_) => {
                 let binding = &param.binding;
                 quote! { #binding }
@@ -172,14 +172,14 @@ pub(crate) fn static_function_of(method: &StaticFace) -> Tokens {
         };
         if param.optional {
             takes.push(quote! {
-                let #slot: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
+                let #target: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
                     ::std::option::Option::Some(raw) => <#shape as ::confit_binding::value::Decode>::decode(&raw, lua).map_err(|error| ::mlua::Error::runtime(::std::format!(#failure)))?,
                     ::std::option::Option::None => < #shape as ::std::default::Default >::default(),
                 };
             });
         } else {
             takes.push(quote! {
-                let #slot: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
+                let #target: #shape = match ::confit_binding::value::take_arg(&args, &mut next) {
                     ::std::option::Option::Some(raw) => <#shape as ::confit_binding::value::Decode>::decode(&raw, lua).map_err(|error| ::mlua::Error::runtime(::std::format!(#failure)))?,
                     ::std::option::Option::None => return ::std::result::Result::Err(::mlua::Error::runtime(#missing)),
                 };

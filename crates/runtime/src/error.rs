@@ -187,6 +187,14 @@ pub enum RuntimeError {
         /// The content hash under reading.
         sha: Sha,
     },
+    /// Corrupt bundle blob.
+    #[error("bundle '{path}': blob for {holders} is corrupt", path = path.display())]
+    BundleCorrupt {
+        /// The bundle path under reading.
+        path: PathBuf,
+        /// The holding documents under reading.
+        holders: String,
+    },
     /// Failed bundle write.
     #[error("bundle '{path}': {fault}", path = path.display())]
     BundleWrite {

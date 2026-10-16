@@ -34,15 +34,15 @@ pub enum BlobError {
         /// The failure message under writing.
         message: String,
     },
-    /// Corrupt pool entry.
-    #[error("blob '{sha}' fails verification")]
-    Corrupt {
-        /// The content hash under verifying.
-        sha: Sha,
-    },
     /// Failed compression.
     #[error("cannot compress blob")]
     Compress,
+    /// Corrupt object bytes.
+    #[error("corrupt blob '{sha}'")]
+    Corrupt {
+        /// The content hash under reading.
+        sha: Sha,
+    },
 }
 
 impl BlobError {

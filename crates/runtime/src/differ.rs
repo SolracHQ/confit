@@ -130,7 +130,7 @@ impl Differ {
                             continue;
                         };
                         let recorded_label = match store.len(&handle) {
-                            Ok(len) => resolved.sha256.label(len),
+                            Ok(len) => resolved.label(len),
                             Err(_) => continue,
                         };
                         let disk_label = match Self::disk_label(document) {
@@ -205,7 +205,7 @@ impl Differ {
                         continue;
                     };
                     let recorded_label = match store.len(&handle) {
-                        Ok(len) => resolved.sha256.label(len),
+                        Ok(len) => resolved.label(len),
                         Err(_) => continue,
                     };
                     let Some(disk_label) = Self::tree_member_label(destination, relative) else {

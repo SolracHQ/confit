@@ -68,8 +68,8 @@ pub enum RcEntry {
 }
 
 impl RcEntry {
-    /// Return the collision slot name.
-    pub fn slot_name(&self) -> Option<&str> {
+    /// Return the collision key.
+    pub fn collision_key(&self) -> Option<&str> {
         match self {
             Self::Env { name, .. } | Self::Path { name, .. } | Self::Alias { name, .. } => {
                 Some(name.as_str())

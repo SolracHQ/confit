@@ -51,6 +51,16 @@ impl Checks {
         Self { vars, path_dirs }
     }
 
+    /// Return facts with extra dirs first.
+    pub fn extended(&self, dirs: Vec<PathBuf>) -> Self {
+        let mut path_dirs = dirs;
+        path_dirs.extend(self.path_dirs.iter().cloned());
+        Self {
+            vars: self.vars.clone(),
+            path_dirs,
+        }
+    }
+
     /// Report whether one condition holds against facts and the driver.
     pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {

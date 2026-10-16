@@ -962,8 +962,8 @@ mod tests {
     }
 
     #[test]
-    fn pooled_paths_agree_for_identical_content() {
-        use crate::blob::{BlobSource, BlobStore};
+    fn pooled_paths_agree_for_identical_files() {
+        use crate::blob::BlobStore;
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = TestGuard::install();
@@ -977,22 +977,30 @@ mod tests {
             BlobStore::new(&roots, sender)
         };
         let small = b"shared pool bytes".to_vec();
-        let via_put = store.put(BlobSource::Bytes(&small)).unwrap();
+        driver::fs::create_dir_all(dir.path()).unwrap();
         let source_path = dir.path().join("source.bin");
         driver::fs::write(&source_path, &small).unwrap();
         let source = ResourceHandle::new(dir.path(), source_path, Sha::hash(&small)).unwrap();
-        let via_source = store.put(BlobSource::Handle(&source)).unwrap();
+        let via_source = store.put(&source).unwrap();
+        let repeat_path = dir.path().join("repeat.bin");
+        driver::fs::write(&repeat_path, &small).unwrap();
+        let repeat = ResourceHandle::new(dir.path(), repeat_path, Sha::hash(&small)).unwrap();
+        let via_repeat = store.put(&repeat).unwrap();
         assert_eq!(
-            via_source, via_put,
+            via_repeat, via_source,
             "trusted source keeps verified identity"
         );
         let large: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
         assert!(large.len() > STREAM_BUF_BYTES);
-        let large_put = store.put(BlobSource::Bytes(&large)).unwrap();
         let large_path = dir.path().join("large.bin");
         driver::fs::write(&large_path, &large).unwrap();
         let large_source = ResourceHandle::new(dir.path(), large_path, Sha::hash(&large)).unwrap();
-        let large_sourced = store.put(BlobSource::Handle(&large_source)).unwrap();
+        let large_put = store.put(&large_source).unwrap();
+        let large_again_path = dir.path().join("large-again.bin");
+        driver::fs::write(&large_again_path, &large).unwrap();
+        let large_again =
+            ResourceHandle::new(dir.path(), large_again_path, Sha::hash(&large)).unwrap();
+        let large_sourced = store.put(&large_again).unwrap();
         assert_eq!(
             large_sourced.sha256(),
             large_put.sha256(),
@@ -1000,7 +1008,7 @@ mod tests {
         );
         assert_eq!(
             large_put, large_sourced,
-            "both shapes keep one verified identity"
+            "both files keep one verified identity"
         );
         for handle in [&large_put, &large_sourced] {
             let mut found = Vec::new();
