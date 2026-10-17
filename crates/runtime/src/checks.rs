@@ -61,15 +61,13 @@ impl Checks {
         }
     }
 
-    /// Report whether one condition holds against facts and the driver.
+    /// Report whether conditions hold against facts and the driver.
     pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => find_executable(name, &self.path_dirs).is_some(),
-            Condition::Exists { route } => {
-                route.expand().is_ok_and(|path| driver::fs::exists(&path))
-            }
+            Condition::Exists { route } => route.expand().is_ok_and(|path| path.exists()),
             Condition::Changed { route } => changed.contains(route),
             Condition::All(items) => items.iter().all(|item| self.check(item, changed)),
             Condition::Any(items) => items.iter().any(|item| self.check(item, changed)),
@@ -136,7 +134,7 @@ impl Checks {
             .collect()
     }
 
-    /// Return the fault under one negation while its inner condition holds.
+    /// Return the fault under one negation while inner conditions hold.
     fn negation_unmet(
         &self,
         cond: &Condition,
@@ -178,7 +176,7 @@ pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 
     for dir in dirs {
         let candidate = dir.join(name);
-        if driver::fs::is_missing(&candidate) {
+        if !candidate.exists() {
             continue;
         }
         match driver::fs::mode(&candidate) {
@@ -194,7 +192,6 @@ pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use confit_driver as driver;
-    use confit_driver::fs::TestGuard;
     use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &std::path::Path) -> Route {
@@ -209,17 +206,18 @@ mod tests {
     }
 
     fn place(path: &std::path::Path, mode: u32) {
-        driver::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        driver::fs::write(path, b"run").unwrap();
-        driver::fs::set_mode(path, mode).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"run").unwrap();
+        driver::fs::set_mode(path, Some(mode)).unwrap();
     }
 
     /// Driver oracle for the discovery decision.
+    #[cfg(unix)]
     fn oracle(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
             let candidate = dir.join(name);
-            if !driver::fs::exists(&candidate) {
+            if !candidate.exists() {
                 continue;
             }
             match driver::fs::mode(&candidate) {
@@ -231,9 +229,9 @@ mod tests {
         None
     }
 
+    #[cfg(unix)]
     #[test]
     fn executable_bit_controls_discovery() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let tool = dir.path().join("tool");
         let regular = dir.path().join("regular");
@@ -273,7 +271,6 @@ mod tests {
 
     #[test]
     fn ordered_dirs_first_win() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
         let second = dir.path().join("second");
@@ -291,13 +288,13 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinks_follow_with_dangling_missing() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         place(&dir.path().join("tool"), 0o755);
         driver::fs::write_link(&dir.path().join("link_ok"), std::path::Path::new("tool")).unwrap();
-        driver::fs::set_mode(&dir.path().join("link_ok"), 0o755).unwrap();
+        driver::fs::set_mode(&dir.path().join("link_ok"), Some(0o755)).unwrap();
         driver::fs::write_link(
             &dir.path().join("link_dead"),
             &dir.path().join("dangling-target"),
@@ -316,22 +313,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn helper_matches_oracle_row_by_row() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
         let second = dir.path().join("second");
         for folder in [&first, &second] {
-            driver::fs::create_dir_all(folder).unwrap();
+            std::fs::create_dir_all(folder).unwrap();
         }
         place(&first.join("tool"), 0o755);
         place(&first.join("regular"), 0o644);
         place(&second.join("tool"), 0o755);
         driver::fs::write_link(&first.join("link_ok"), std::path::Path::new("tool")).unwrap();
-        driver::fs::set_mode(&first.join("link_ok"), 0o755).unwrap();
         driver::fs::write_link(&first.join("link_plain"), std::path::Path::new("regular")).unwrap();
-        driver::fs::set_mode(&first.join("link_plain"), 0o755).unwrap();
         driver::fs::write_link(&first.join("link_dead"), &first.join("dangling-target")).unwrap();
         let rows: Vec<(&str, Vec<PathBuf>, Option<PathBuf>)> = vec![
             ("tool", vec![first.clone()], Some(first.join("tool"))),
@@ -364,12 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn exists_reads_seeded_plus_absent() {
-        let _guard = TestGuard::install();
+    fn exists_true_for_seeded_false_for_absent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("needle");
-        driver::fs::create_dir_all(dir.path()).unwrap();
-        driver::fs::write(&path, b"needle").unwrap();
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
         assert_eq!(
             route.expand().unwrap(),

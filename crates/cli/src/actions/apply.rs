@@ -5,7 +5,6 @@ use std::io::BufRead;
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::Manifest;
@@ -57,7 +56,7 @@ impl<'a> ApplyRunner<'a> {
     /// # Errors
     ///
     /// - [`CliError::BadPicker`] for malformed pickers.
-    /// - [`CliError::Runtime`] for state and bundle reads.
+    /// - [`CliError::Runtime`] for unreadable states and bundles.
     /// - [`CliError::Engine`] for evaluation failures.
     /// - [`CliError::NoProfile`] for absent profiles.
     /// - [`CliError::NoDefaultProfile`] for absent defaults.
@@ -82,9 +81,9 @@ impl<'a> ApplyRunner<'a> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
         {
             bundles.read(positional)?
-        } else if driver::fs::is_dir(positional) {
+        } else if positional.is_dir() {
             let path = plan_profile(positional, args.profile.as_deref());
-            if args.profile.is_none() && driver::fs::is_missing(&path) {
+            if args.profile.is_none() && !path.exists() {
                 return Err(CliError::NoDefaultProfile {
                     project: positional.to_path_buf(),
                 });
@@ -97,7 +96,7 @@ impl<'a> ApplyRunner<'a> {
                     path: positional.to_path_buf(),
                 });
             }
-            if driver::fs::is_missing(positional) {
+            if !positional.exists() {
                 return Err(CliError::NoProfile {
                     path: positional.to_path_buf(),
                 });
@@ -254,9 +253,9 @@ fn write_hook_log(
     output: &[u8],
 ) -> Result<()> {
     let log = hooks_dir.join(file_name);
-    driver::fs::create_dir_all(hooks_dir).map_err(|error| CliError::from_write_io(&log, error))?;
+    std::fs::create_dir_all(hooks_dir).map_err(|error| CliError::from_write_io(&log, error))?;
     let mut sink =
-        driver::fs::create(&log).map_err(|error| CliError::from_write_io(&log, error))?;
+        std::fs::File::create(&log).map_err(|error| CliError::from_write_io(&log, error))?;
     sink.write_all(header.as_bytes())
         .map_err(|error| CliError::from_write_io(&log, error))?;
     sink.write_all(b"\n")
@@ -267,7 +266,7 @@ fn write_hook_log(
         sink.write_all(b"\n")
             .map_err(|error| CliError::from_write_io(&log, error))?;
     }
-    sink.sync()
+    sink.sync_all()
         .map_err(|error| CliError::from_write_io(&log, error))?;
     Ok(())
 }

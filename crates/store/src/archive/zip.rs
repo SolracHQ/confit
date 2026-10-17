@@ -26,9 +26,9 @@ impl ArchiveBackend for ZipBackend {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed source reads.
-fn open_source(source: &Path) -> Result<Box<dyn driver::fs::FsFile>> {
-    let reader = driver::fs::open(source);
+/// - [`ArchiveError::Read`] for unreadable sources.
+fn open_source(source: &Path) -> Result<std::fs::File> {
+    let reader = std::fs::File::open(source);
     reader.map_err(|error| ArchiveError::from_io(source, error))
 }
 
@@ -80,10 +80,10 @@ fn read_unknown(source: &Path, message: String) -> ArchiveError {
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::Read`] for failed archive reads.
+/// - [`ArchiveError::Read`] for unreadable archives.
 /// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn unpack_stream(
-    reader: Box<dyn driver::fs::FsFile>,
+    reader: std::fs::File,
     source: &Path,
     pending: &Path,
 ) -> Result<Vec<ExtractedMember>> {

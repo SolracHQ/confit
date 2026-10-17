@@ -7,7 +7,7 @@ use syn::{Attribute, Type, ext::IdentExt};
 
 use super::parse::{doc_lines, parse_field_flags};
 
-/// Report whether one type reads as Option with inner content.
+/// Report whether one type is Option with inner content.
 fn is_option(ty: &Type) -> bool {
     if let Type::Path(path) = ty
         && let Some(last) = path.path.segments.last()

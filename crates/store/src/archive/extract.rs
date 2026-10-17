@@ -6,7 +6,7 @@ use confit_driver::sha::{Sha, ShaWriter};
 
 use super::ArchiveBackend;
 use super::error::{ArchiveError, Result};
-use confit_driver::{self as driver};
+use confit_driver as driver;
 
 /// Archive member with a streamed content hash.
 pub(crate) struct ExtractedMember {
@@ -36,7 +36,7 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping member names.
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 /// - [`ArchiveError::Write`] for extract write faults.
 /// - [`ArchiveError::WriteUnknown`] for other extract write failures.
 pub(crate) fn extract_entry(
@@ -48,19 +48,19 @@ pub(crate) fn extract_entry(
     check_member_path(name, source)?;
     let path = pending.join(name);
     if let Err(error) = driver::fs::create_parent(&path) {
-        let _ = driver::fs::remove_dir_all(pending);
+        let _ = std::fs::remove_dir_all(pending);
         return Err(ArchiveError::from_write_io(source, error));
     }
-    let file = match driver::fs::create(&path) {
+    let file = match std::fs::File::create(&path) {
         Ok(file) => file,
         Err(error) => {
-            let _ = driver::fs::remove_dir_all(pending);
+            let _ = std::fs::remove_dir_all(pending);
             return Err(ArchiveError::from_write_io(source, error));
         }
     };
     let mut writer = ShaWriter::new(file);
     if let Err(error) = driver::copy_stream(reader, &mut writer) {
-        let _ = driver::fs::remove_dir_all(pending);
+        let _ = std::fs::remove_dir_all(pending);
         return Err(from_stream(source, error));
     }
     Ok(ExtractedMember {

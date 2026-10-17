@@ -1,5 +1,5 @@
 //! Block expansion
-//! Userdata plus namespace expansion for impl blocks.
+//! Userdata and namespace expansion for impl blocks.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;

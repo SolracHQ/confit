@@ -72,7 +72,7 @@ pub(crate) struct FieldFlags {
     pub(crate) default: Option<Option<syn::Path>>,
 }
 
-/// Parse the kind marker plus the union annotation plus hooks.
+/// Parse the kind marker, the union annotation and hooks.
 pub(crate) fn parse_header(
     identifier: &syn::Ident,
     attrs: &[Attribute],

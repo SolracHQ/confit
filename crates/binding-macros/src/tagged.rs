@@ -279,7 +279,7 @@ fn build_inline_payload(
     })
 }
 
-/// Report whether one type reads as Option with inner content.
+/// Report whether one type is Option with inner content.
 fn is_option_shape(ty: &syn::Type) -> bool {
     if let syn::Type::Path(path) = ty
         && let Some(last) = path.path.segments.last()

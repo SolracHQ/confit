@@ -30,11 +30,11 @@ impl ArchiveBackend for TarBackend {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
-    let reader = driver::fs::open(source);
+    let reader = std::fs::File::open(source);
     reader
-        .map(|file| file as Box<dyn std::io::Read>)
+        .map(|file| Box::new(file) as Box<dyn std::io::Read>)
         .map_err(|error| ArchiveError::from_io(source, error))
 }
 
@@ -45,7 +45,7 @@ fn open_source(source: &Path) -> Result<Box<dyn std::io::Read>> {
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::Read`] for failed archive reads.
+/// - [`ArchiveError::Read`] for unreadable archives.
 /// - [`ArchiveError::CorruptedArchive`] for broken archives.
 fn unpack_stream(
     reader: Box<dyn std::io::Read>,

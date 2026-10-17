@@ -14,7 +14,7 @@ use confit_driver::sha::Sha;
 use crate::StoreRoots;
 use crate::faults::AccessFault;
 use crate::handles::{BlobHandle, ResourceHandle};
-use confit_driver::{self as driver};
+use confit_driver as driver;
 use error::{BlobError, Result};
 use file::BlobFile;
 
@@ -61,9 +61,9 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob reads.
+    /// - [`BlobError::Read`] for unreadable blobs.
     /// - [`BlobError::Corrupt`] for bad headers.
-    pub fn open(&self, handle: &BlobHandle) -> Result<Box<dyn std::io::Read>> {
+    pub fn open(&self, handle: &BlobHandle) -> Result<driver::gzip::Decoder<std::fs::File>> {
         let path = self.current_path(handle);
         BlobFile::open(path, handle.sha256())?.body()
     }
@@ -74,7 +74,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed source reads.
+    /// - [`BlobError::Read`] for unreadable sources.
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
@@ -85,14 +85,14 @@ impl BlobStore {
         }
         let path = handle.canonical();
         let mut reader =
-            driver::fs::open(path).map_err(|error| BlobError::from_read_io(&digest, error))?;
-        driver::fs::create_dir_all(&self.cache)
-            .map_err(|error| BlobError::from_write_io(&self.cache, error))?;
-        let pending = driver::pending_path(&self.cache.join(digest.hex()));
-        let sink = driver::fs::create(&pending)
-            .map_err(|error| BlobError::from_write_io(&pending, error))?;
+            std::fs::File::open(path).map_err(|error| BlobError::from_read_io(&digest, error))?;
+        let dest = self.cache.join(digest.hex());
+        let staged = driver::StagedFile::stage(&dest)
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
+        let sink = std::fs::File::create(staged.path())
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let mut writer = BlobFile::create(sink, &digest, size)
-            .map_err(|error| BlobError::from_write_io(&pending, error))?;
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
         driver::copy_stream(&mut reader, &mut writer).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
                 BlobError::from_read_io(&digest, error)
@@ -101,10 +101,10 @@ impl BlobStore {
         })?;
         writer
             .finish()
-            .map_err(|error| BlobError::from_write_io(&pending, error))?;
+            .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let handle = BlobHandle::new(digest.clone());
-        let dest = self.cache.join(digest.hex());
-        driver::fs::rename(&pending, &dest)
+        staged
+            .persist(&dest)
             .map_err(|error| BlobError::from_write_io(&dest, error))?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.progress.send(Event::BlobCompressed { done });
@@ -113,8 +113,7 @@ impl BlobStore {
 
     /// Report whether one content hash is present in the cache or pool.
     fn present(&self, sha: &Sha) -> bool {
-        driver::fs::exists(&self.cache.join(sha.hex()))
-            || driver::fs::exists(&self.pool.join(sha.hex()))
+        self.cache.join(sha.hex()).exists() || self.pool.join(sha.hex()).exists()
     }
 
     /// Reuse one present blob without compression.
@@ -133,17 +132,17 @@ impl BlobStore {
     /// # Errors
     ///
     /// - [`BlobError::Corrupt`] for member and hash mismatches.
-    /// - [`BlobError::Read`] for failed member reads.
+    /// - [`BlobError::Read`] for unreadable members.
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     pub fn receive(&self, sha: &Sha, source: &ResourceHandle) -> Result<()> {
         BlobFile::open(source.canonical().to_path_buf(), sha)?;
         let dest = self.cache.join(sha.hex());
-        if driver::fs::exists(&dest) {
+        if dest.exists() {
             return Ok(());
         }
         driver::atomic_write(&dest, |pending| {
-            driver::fs::copy(source.canonical(), pending).map(|_| ())
+            std::fs::copy(source.canonical(), pending).map(|_| ())
         })
         .map_err(|error| BlobError::from_write_io(&dest, error))
     }
@@ -152,9 +151,9 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob reads.
+    /// - [`BlobError::Read`] for unreadable blobs.
     /// - [`BlobError::Corrupt`] for bad headers.
-    pub fn open_object(&self, handle: &BlobHandle) -> Result<(u64, Box<dyn std::io::Read>)> {
+    pub fn open_object(&self, handle: &BlobHandle) -> Result<(u64, std::fs::File)> {
         let path = self.current_path(handle);
         let file = BlobFile::open(path, handle.sha256())?;
         file.raw()
@@ -164,7 +163,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob reads.
+    /// - [`BlobError::Read`] for unreadable blobs.
     /// - [`BlobError::Corrupt`] for bad headers.
     pub fn len(&self, handle: &BlobHandle) -> Result<u64> {
         let path = self.current_path(handle);
@@ -177,7 +176,7 @@ impl BlobStore {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed cache reads.
+    /// - [`BlobError::Read`] for unreadable cache entries.
     /// - [`BlobError::Write`] for pool write faults.
     /// - [`BlobError::WriteUnknown`] for other pool write failures.
     pub fn persist(&self, blobs: &[BlobHandle]) -> Result<()> {
@@ -187,18 +186,18 @@ impl BlobStore {
         for blob in blobs {
             let dest = self.pool.join(blob.sha256().hex());
             let source = self.cache.join(blob.sha256().hex());
-            if driver::fs::exists(&dest) {
+            if dest.exists() {
                 // Cache copies clean best-effort; the OS reaps the rest.
-                let _ = driver::fs::remove_file(&source);
+                let _ = std::fs::remove_file(&source);
                 continue;
             }
-            if driver::fs::is_missing(&source) {
+            if !source.exists() {
                 continue;
             }
             match driver::atomic_write(&dest, |pending| move_cache_copy(&source, pending)) {
                 Ok(()) => {
                     // Cache copies clean best-effort; the OS reaps the rest.
-                    let _ = driver::fs::remove_file(&source);
+                    let _ = std::fs::remove_file(&source);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(BlobError::from_write_io(&dest, error)),
@@ -212,7 +211,7 @@ impl BlobStore {
     /// - The cache copy wins over the pool.
     fn current_path(&self, handle: &BlobHandle) -> PathBuf {
         let cached = self.cache.join(handle.sha256().hex());
-        if driver::fs::exists(&cached) {
+        if cached.exists() {
             cached
         } else {
             self.pool.join(handle.sha256().hex())
@@ -243,12 +242,12 @@ impl BlobStore {
 /// - io failures from rename, open, and copy carry the cache file.
 /// - a vanished cache file reports as NotFound.
 fn move_cache_copy(source: &Path, pending: &Path) -> std::io::Result<()> {
-    match driver::fs::rename(source, pending) {
+    match std::fs::rename(source, pending) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(error),
         Err(_) => {
-            let mut reader = driver::fs::open(source)?;
-            let mut writer = driver::fs::create(pending)?;
+            let mut reader = std::fs::File::open(source)?;
+            let mut writer = std::fs::File::create(pending)?;
             driver::copy_stream(&mut reader, &mut writer)?;
             Ok(())
         }
@@ -262,7 +261,7 @@ fn move_cache_copy(source: &Path, pending: &Path) -> std::io::Result<()> {
 /// - [`BlobError::Read`] for failed source stats.
 fn describe_source(handle: &ResourceHandle) -> Result<(Sha, u64)> {
     let digest = handle.sha256().clone();
-    let size = driver::fs::metadata(handle.canonical())
+    let size = std::fs::metadata(handle.canonical())
         .map_err(|error| BlobError::from_read_io(&digest, error))?
         .len();
     Ok((digest, size))
@@ -289,7 +288,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> Result<usize> {
         if held(&path, keep) {
             continue;
         }
-        driver::fs::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
+        std::fs::remove_file(&path).map_err(|error| BlobError::from_write_io(&path, error))?;
         removed += 1;
     }
     Ok(removed)
@@ -312,8 +311,6 @@ mod tests {
     use std::io::Read as _;
 
     use crate::handles::ResourceHandle;
-
-    use confit_driver::fs::TestGuard;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -345,8 +342,8 @@ mod tests {
 
     fn seed_file(dir: &Path, name: &str, body: &[u8]) {
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
-        confit_driver::fs::write(&project.join(name), body).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(name), body).unwrap();
     }
 
     fn source_of(dir: &Path, name: &str, body: &[u8]) -> ResourceHandle {
@@ -368,7 +365,6 @@ mod tests {
     #[test]
     fn put_open_round_trip_with_content_names() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -380,7 +376,11 @@ mod tests {
             "content hash matches bytes"
         );
         assert!(
-            driver::fs::exists(&roots.temp_base.join("blobs").join(handle.sha256().hex())),
+            roots
+                .temp_base
+                .join("blobs")
+                .join(handle.sha256().hex())
+                .exists(),
             "the file name carries the content hash"
         );
         assert!(
@@ -399,7 +399,6 @@ mod tests {
     #[test]
     fn put_extracts_into_cache_with_zero_pool_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -415,7 +414,11 @@ mod tests {
             "a preview writes zero config bytes with cache bytes allowed"
         );
         assert!(
-            driver::fs::exists(&roots.temp_base.join("blobs").join(handle.sha256().hex())),
+            roots
+                .temp_base
+                .join("blobs")
+                .join(handle.sha256().hex())
+                .exists(),
             "the handle points at its cache file"
         );
         assert_eq!(read_open(&store, &handle), b"preview bytes");
@@ -424,7 +427,6 @@ mod tests {
     #[test]
     fn persist_lands_referenced_cache_blobs_in_pool() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -439,7 +441,11 @@ mod tests {
         }
         assert_eq!(pool_entries(&roots).len(), 1, "pool holds one file");
         assert!(
-            !driver::fs::exists(&roots.temp_base.join("blobs").join(handle.sha256().hex())),
+            !roots
+                .temp_base
+                .join("blobs")
+                .join(handle.sha256().hex())
+                .exists(),
             "persist leaves no cache copy"
         );
         assert!(
@@ -460,7 +466,6 @@ mod tests {
     #[test]
     fn cache_wins_while_present() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -473,7 +478,7 @@ mod tests {
         let again = put_bytes(&store, dir.path(), "cache.bin", raw);
         assert_eq!(again, handle, "repeat put keeps identity");
         let pooled = roots.config_base.join("blobs").join(handle.sha256().hex());
-        assert!(driver::fs::exists(&pooled), "pool holds the blob");
+        assert!(pooled.exists(), "pool holds the blob");
         assert_eq!(read_open(&store, &handle), raw, "pool reads bytes");
         assert_eq!(
             read_open(&store, &handle),
@@ -482,11 +487,11 @@ mod tests {
         );
         let remade = put_bytes(&store, dir.path(), "cache.bin", raw);
         assert_eq!(remade, handle, "remade put keeps identity");
-        driver::fs::remove_file(&pooled).unwrap();
+        std::fs::remove_file(&pooled).unwrap();
         let healed = put_bytes(&store, dir.path(), "cache.bin", raw);
         assert_eq!(healed, handle, "absent blobs recompress");
         let cached = roots.temp_base.join("blobs").join(handle.sha256().hex());
-        assert!(driver::fs::exists(&cached), "recompress lands cache");
+        assert!(cached.exists(), "recompress lands cache");
         assert!(
             store.resolve(handle.sha256()).is_ok(),
             "resolve proves from cache alone"
@@ -495,25 +500,25 @@ mod tests {
     }
 
     #[test]
-    fn put_skips_present_blobs_without_writes() {
+    fn put_skips_present_blobs_without_rewrite() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
         let raw = b"skipped bytes";
         let handle = put_bytes(&store, dir.path(), "skipped.bin", raw);
-        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
+        let cached = roots.temp_base.join("blobs");
+        driver::fs::set_mode(&cached, Some(0o555)).unwrap();
         match store.put(&source_of(dir.path(), "skipped.bin", raw)) {
             Ok(again) => assert_eq!(again, handle, "repeat put keeps identity"),
             Err(error) => panic!("present put skips writes: {error}"),
         }
+        driver::fs::set_mode(&cached, Some(0o755)).unwrap();
     }
 
     #[test]
     fn repeat_puts_share_one_file() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -528,22 +533,21 @@ mod tests {
     }
 
     #[test]
-    fn bad_body_fails_reads() {
+    fn bad_body_read_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
         let raw = b"checked bytes";
         let handle = put_bytes(&store, dir.path(), "checked.bin", raw);
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
-        let mut body = match driver::fs::read(&path) {
+        let mut body = match std::fs::read(&path) {
             Ok(found) => found,
             Err(error) => panic!("object reads: {error}"),
         };
         let split = std::mem::size_of::<file::ObjectHeader>();
         body[split] ^= 0xff;
-        driver::fs::write(&path, &body).unwrap();
+        std::fs::write(&path, &body).unwrap();
         match store.open(&handle) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
@@ -553,19 +557,18 @@ mod tests {
             }
             Err(error) => panic!("bad header opens: {error}"),
         }
-        assert!(driver::fs::exists(&path), "bad bodies stay for retry");
+        assert!(path.exists(), "bad bodies stay for retry");
     }
 
     #[test]
     fn tampered_hash_reports_corrupt() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
         let handle = put_bytes(&store, dir.path(), "staled.bin", b"staled bytes");
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
-        let body = match driver::fs::read(&path) {
+        let body = match std::fs::read(&path) {
             Ok(found) => found,
             Err(error) => panic!("object reads: {error}"),
         };
@@ -577,7 +580,7 @@ mod tests {
         header.sha[0] ^= 0xff;
         let mut tampered = bytemuck::bytes_of(&header).to_vec();
         tampered.extend_from_slice(&body[split..]);
-        driver::fs::write(&path, &tampered).unwrap();
+        std::fs::write(&path, &tampered).unwrap();
         match store.len(&handle) {
             Ok(_) => panic!("tampered hash reads"),
             Err(BlobError::Corrupt { sha: found }) => {
@@ -585,23 +588,22 @@ mod tests {
             }
             Err(error) => panic!("wrong tampered variant: {error}"),
         }
-        assert!(driver::fs::exists(&path), "tampered files stay for retry");
+        assert!(path.exists(), "tampered files stay for retry");
     }
 
     #[test]
-    fn truncated_body_fails_reads() {
+    fn truncated_body_read_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
         let handle = put_bytes(&store, dir.path(), "truncated.bin", b"truncated bytes");
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
-        let body = match driver::fs::read(&path) {
+        let body = match std::fs::read(&path) {
             Ok(found) => found,
             Err(error) => panic!("object reads: {error}"),
         };
-        driver::fs::write(
+        std::fs::write(
             &path,
             &body[..std::mem::size_of::<file::ObjectHeader>() + 8],
         )
@@ -615,25 +617,24 @@ mod tests {
             }
             Err(error) => panic!("truncated header opens: {error}"),
         }
-        assert!(driver::fs::exists(&path), "truncated bodies stay for retry");
+        assert!(path.exists(), "truncated bodies stay for retry");
     }
 
     #[test]
     fn filename_mismatch_reports_corrupt() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
         let handle = put_bytes(&store, dir.path(), "named.bin", b"named bytes");
         let home = roots.temp_base.join("blobs");
-        let body = match driver::fs::read(&home.join(handle.sha256().hex())) {
+        let body = match std::fs::read(home.join(handle.sha256().hex())) {
             Ok(found) => found,
             Err(error) => panic!("object reads: {error}"),
         };
         let wrong = Sha::hash(b"other bytes");
         let wrong_path = home.join(wrong.hex());
-        driver::fs::write(&wrong_path, &body).unwrap();
+        std::fs::write(&wrong_path, &body).unwrap();
         let wrong_handle = BlobHandle::new(wrong.clone());
         match store.open(&wrong_handle) {
             Ok(_) => panic!("misnamed blob opens"),
@@ -642,10 +643,7 @@ mod tests {
             }
             Err(error) => panic!("wrong misnamed variant: {error}"),
         }
-        assert!(
-            driver::fs::exists(&wrong_path),
-            "misnamed blobs stay for retry"
-        );
+        assert!(wrong_path.exists(), "misnamed blobs stay for retry");
         assert!(
             store.resolve(handle.sha256()).is_ok(),
             "the true name still resolves"
@@ -655,7 +653,6 @@ mod tests {
     #[test]
     fn receive_refuses_member_and_hash_mismatches() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -674,16 +671,12 @@ mod tests {
             }
             Err(error) => panic!("wrong refusal variant: {error}"),
         }
-        assert!(
-            driver::fs::exists(&object),
-            "refused members stay for retry"
-        );
+        assert!(object.exists(), "refused members stay for retry");
     }
 
     #[test]
     fn put_shares_files_across_store_instances() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -691,17 +684,18 @@ mod tests {
         let handle = put_bytes(&store, dir.path(), "shared.bin", raw);
         let (fresh_sender, _) = crossbeam_channel::unbounded();
         let fresh = BlobStore::new(&roots, fresh_sender);
-        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
+        let cached = roots.temp_base.join("blobs");
+        driver::fs::set_mode(&cached, Some(0o555)).unwrap();
         match fresh.put(&source_of(dir.path(), "shared.bin", raw)) {
             Ok(again) => assert_eq!(again, handle, "fresh stores reuse the file"),
             Err(error) => panic!("present put skips writes: {error}"),
         }
+        driver::fs::set_mode(&cached, Some(0o755)).unwrap();
     }
 
     #[test]
     fn missing_blob_names_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let handle = BlobHandle::new(Sha::hash(b"absent"));
         assert!(
@@ -727,7 +721,6 @@ mod tests {
     #[test]
     fn file_puts_keep_verified_identity() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let raw = b"shared pool bytes";
         seed_file(dir.path(), "shared.bin", raw);
@@ -760,7 +753,6 @@ mod tests {
     #[test]
     fn prune_keeps_referenced_pool_entries() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
@@ -794,28 +786,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn put_reports_write_storage_full() {
+    fn put_reports_write_denied() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&roots, sender);
-        seed_file(dir.path(), "full.bin", b"full disk");
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
-        match store.put(&source_of(dir.path(), "full.bin", b"full disk")) {
-            Ok(_) => panic!("full disk passes"),
+        seed_file(dir.path(), "denied.bin", b"denied disk");
+        let cached = roots.temp_base.join("blobs");
+        std::fs::create_dir_all(&cached).unwrap();
+        driver::fs::set_mode(&cached, Some(0o555)).unwrap();
+        match store.put(&source_of(dir.path(), "denied.bin", b"denied disk")) {
+            Ok(_) => panic!("denied disk passes"),
             Err(BlobError::Write { path, fault }) => {
                 assert!(
-                    matches!(fault, crate::faults::AccessFault::StorageFull),
+                    matches!(fault, crate::faults::AccessFault::Denied),
                     "put keeps the fault"
                 );
-                assert!(
-                    path.starts_with(roots.temp_base.join("blobs")),
-                    "put keeps the cache path"
-                );
+                assert!(path.starts_with(&cached), "put keeps the cache path");
             }
             Err(error) => panic!("wrong put variant: {error}"),
+        }
+        driver::fs::set_mode(&cached, Some(0o755)).unwrap();
+    }
+
+    #[test]
+    fn write_maps_storage_full_fault() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = test_roots(dir.path());
+        let dest = roots.temp_base.join("blobs").join("digest");
+        let error = std::io::Error::new(std::io::ErrorKind::StorageFull, "full disk");
+        match BlobError::from_write_io(&dest, error) {
+            BlobError::Write { path, fault } => {
+                assert_eq!(path, dest, "mapping keeps the path");
+                assert!(
+                    matches!(fault, crate::faults::AccessFault::StorageFull),
+                    "mapping keeps the fault"
+                );
+            }
+            error => panic!("wrong mapping variant: {error}"),
         }
     }
 
@@ -824,7 +834,6 @@ mod tests {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&test_roots(dir.path()), sender);
         let _ = put_bytes(&store, dir.path(), "announced.bin", b"announced bytes");
@@ -841,7 +850,6 @@ mod tests {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&test_roots(dir.path()), sender);
         let _ = put_bytes(&store, dir.path(), "first.bin", b"first bytes");
@@ -861,7 +869,6 @@ mod tests {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&test_roots(dir.path()), sender);
         let raw = b"silent reuse bytes";
@@ -880,7 +887,6 @@ mod tests {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = BlobStore::new(&test_roots(dir.path()), sender);
         let handle = put_bytes(&store, dir.path(), "promoted.bin", b"promoted bytes");

@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use confit_driver as driver;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::Manifest;
 use confit_store::Stores;
@@ -47,7 +46,7 @@ impl PlanRunner<'_> {
     /// - [`crate::error::CliError::NoProfile`] for absent profiles.
     pub fn execute(self) -> Result<PlanReport> {
         let path = plan_profile(&self.args.project, self.args.profile.as_deref());
-        if self.args.profile.is_none() && driver::fs::is_missing(&path) {
+        if self.args.profile.is_none() && !path.exists() {
             return Err(CliError::NoDefaultProfile {
                 project: self.args.project.clone(),
             });
@@ -80,7 +79,7 @@ impl PlanRunner<'_> {
     }
 }
 
-/// Report whether one output value shows a stored state.
+/// Report whether one output value is a stored state.
 fn is_named_output(raw: &Path) -> bool {
     raw.to_str().is_some_and(|text| text.starts_with('@'))
 }

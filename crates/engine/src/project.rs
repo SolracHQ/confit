@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use confit_driver as driver;
-
 use crate::error::{EngineError, Result};
 
 /// Project file name under the project root.
@@ -39,7 +37,7 @@ impl Default for Project {
 pub struct PluginConf {
     /// Plugin tree folder, project relative unless absolute.
     pub folder: PathBuf,
-    /// Whether the folder reads outside the project root.
+    /// Whether the folder is outside the project root.
     pub allow_external_folders: bool,
 }
 
@@ -85,7 +83,7 @@ impl Project {
     /// - [`EngineError::Project`] for malformed files.
     pub fn read(root: &Path) -> Result<Self> {
         let path = root.join(FILE);
-        let bytes = match driver::fs::read(&path) {
+        let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
@@ -139,11 +137,11 @@ impl Project {
     /// - [`EngineError::Read`] for unreadable roots.
     pub fn plugin_root(&self, root: &Path) -> Result<PluginRoot> {
         let joined = root.join(&self.plugins.folder);
-        let root_real = driver::fs::canonicalize(root).map_err(|error| EngineError::Read {
+        let root_real = std::fs::canonicalize(root).map_err(|error| EngineError::Read {
             path: root.display().to_string(),
             reason: error.to_string(),
         })?;
-        let dir = match driver::fs::canonicalize(&joined) {
+        let dir = match std::fs::canonicalize(&joined) {
             Ok(dir) => dir,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => joined,
             Err(error) => {

@@ -148,12 +148,12 @@ fn matched_destinations(
     Ok(matched)
 }
 
-/// Report whether one document holds structured data.
+/// Report whether documents hold structured data.
 fn is_structured(body: &Data) -> bool {
     matches!(body, Data::Structured { .. })
 }
 
-/// Report whether one document holds rc sections.
+/// Report whether documents hold rc sections.
 fn is_rc(body: &Data) -> bool {
     matches!(body, Data::Rc(_))
 }

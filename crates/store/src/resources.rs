@@ -37,7 +37,7 @@ impl Resources {
     /// # Errors
     ///
     /// - [`ResourceError::Escape`] for escaping files.
-    /// - [`ResourceError::Read`] for failed file reads.
+    /// - [`ResourceError::Read`] for unreadable files.
     pub fn resource(&self, relative: &str) -> Result<ResourceHandle> {
         let parts = split_checked(relative, false).map_err(|fault| ResourceError::Escape {
             path: PathBuf::from(relative),
@@ -54,11 +54,11 @@ impl Resources {
                 reason: format!("'{relative}' is outside the project root"),
             });
         }
-        let canonical_full = match driver::fs::canonicalize(&full) {
+        let canonical_full = match std::fs::canonicalize(&full) {
             Ok(resolved) => resolved,
             Err(error) => return Err(ResourceError::from_io(&full, error)),
         };
-        let canonical_root = match driver::fs::canonicalize(exec_root) {
+        let canonical_root = match std::fs::canonicalize(exec_root) {
             Ok(resolved) => resolved,
             Err(error) => return Err(ResourceError::from_io(&full, error)),
         };
@@ -68,7 +68,7 @@ impl Resources {
                 reason: format!("'{relative}' is outside the project root"),
             });
         }
-        let mut file = match driver::fs::open(&canonical_full) {
+        let mut file = match std::fs::File::open(&canonical_full) {
             Ok(file) => file,
             Err(error) => {
                 return Err(ResourceError::from_io(&canonical_full, error));
@@ -83,7 +83,7 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for failed file reads.
+    /// - [`ResourceError::Read`] for unreadable files.
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         read_text(handle.canonical())
     }
@@ -137,10 +137,10 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for failed file reads.
-    pub fn open(&self, handle: &ResourceHandle) -> Result<Box<dyn driver::fs::FsFile>> {
+    /// - [`ResourceError::Read`] for unreadable files.
+    pub fn open(&self, handle: &ResourceHandle) -> Result<std::fs::File> {
         let path = handle.canonical();
-        driver::fs::open(path).map_err(|error| ResourceError::from_io(path, error))
+        std::fs::File::open(path).map_err(|error| ResourceError::from_io(path, error))
     }
 
     /// Load one handle payload into its Lua table.
@@ -161,10 +161,10 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for failed file reads.
+    /// - [`ResourceError::Read`] for unreadable files.
     pub fn mode(&self, handle: &ResourceHandle) -> Result<u32> {
         let path = handle.canonical();
-        if driver::fs::is_link(path) {
+        if path.is_symlink() {
             return Ok(DEFAULT_EXTRACT_MODE);
         }
         driver::fs::mode(path).map_err(|error| ResourceError::from_io(path, error))
@@ -225,9 +225,9 @@ fn normalize(path: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// - [`ResourceError::Read`] for failed file reads.
+/// - [`ResourceError::Read`] for unreadable files.
 fn read_text(path: &Path) -> Result<String> {
-    match driver::fs::read(path) {
+    match std::fs::read(path) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|error| ResourceError::Read {
             path: path.to_path_buf(),
             fault: crate::faults::AccessFault::Unknown {
@@ -346,7 +346,6 @@ fn parse_ini(text: &str) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
     use crate::faults::AccessFault;
-    use confit_driver::fs::TestGuard;
 
     fn test_store(root: &Path) -> Resources {
         Resources::new(&StoreRoots {
@@ -358,11 +357,10 @@ mod tests {
     #[test]
     fn resource_opens_relative_file() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
         let path = root.join("profile.lua");
-        driver::fs::create_dir_all(&root).unwrap();
-        driver::fs::write(&path, b"return {}").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&path, b"return {}").unwrap();
         let store = test_store(&root);
         match store.resource("profile.lua") {
             Ok(handle) => {
@@ -380,9 +378,8 @@ mod tests {
     #[test]
     fn resource_rejects_parent_escape() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let store = test_store(&root);
         match store.resource("../outside.lua") {
             Ok(_) => panic!("escaping resource passes"),
@@ -400,9 +397,8 @@ mod tests {
     #[test]
     fn resource_rejects_absolute_input() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let store = test_store(&root);
         match store.resource("/etc/passwd") {
             Ok(_) => panic!("absolute resource passes"),
@@ -419,9 +415,8 @@ mod tests {
     #[test]
     fn resource_rejects_empty_input() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let store = test_store(&root);
         match store.resource("") {
             Ok(_) => panic!("empty resource passes"),
@@ -435,9 +430,8 @@ mod tests {
     #[test]
     fn resource_rejects_backslash_input() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let store = test_store(&root);
         match store.resource("sub\\note.lua") {
             Ok(_) => panic!("backslash resource passes"),
@@ -454,11 +448,10 @@ mod tests {
     #[test]
     fn resource_names_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
         let store = test_store(&root);
         let missing = root.join("absent.lua");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         match store.resource("absent.lua") {
             Ok(_) => panic!("absent resource passes"),
             Err(error) => {
@@ -472,14 +465,14 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn resource_refuses_outside_symlink() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let outside = dir.path().join("escaped.txt");
-        driver::fs::write(&outside, b"secret").unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
         driver::fs::write_link(&root.join("outside"), &outside).unwrap();
         let store = test_store(&root);
         match store.resource("outside") {
@@ -494,14 +487,14 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn resource_follows_inside_symlink() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         let target = root.join("target.txt");
-        driver::fs::write(&target, b"inside bytes").unwrap();
+        std::fs::write(&target, b"inside bytes").unwrap();
         driver::fs::write_link(&root.join("inside"), Path::new("target.txt")).unwrap();
         let store = test_store(&root);
         match store.resource("inside") {
@@ -520,12 +513,11 @@ mod tests {
     #[test]
     fn read_text_refuses_invalid_text() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let root = dir.path().join("project");
         let store = test_store(&root);
         let path = root.join("binary.lua");
-        driver::fs::create_dir_all(&root).unwrap();
-        driver::fs::write(&path, &[0xFF, 0xFE, b'x']).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&path, [0xFF, 0xFE, b'x']).unwrap();
         match store.resource("binary.lua") {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
@@ -547,16 +539,15 @@ mod tests {
         use std::io::Read as _;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = StoreRoots {
             temp_base: dir.path().join("temp"),
             ..Default::default()
         };
         let store = Resources::new(&roots);
         let extract_dir = roots.temp_base.join("extract").join("abc");
-        driver::fs::create_dir_all(&extract_dir).unwrap();
+        std::fs::create_dir_all(&extract_dir).unwrap();
         let path = extract_dir.join("a.txt");
-        driver::fs::write(&path, b"alpha").unwrap();
+        std::fs::write(&path, b"alpha").unwrap();
         let handle = match store.cache(&extract_dir, "a.txt", Sha::hash(b"alpha")) {
             Ok(handle) => handle,
             Err(error) => panic!("extract creates: {error}"),
@@ -582,7 +573,7 @@ mod tests {
             }
         }
         let outside = dir.path().join("elsewhere");
-        driver::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
         match store.cache(&outside, "a.txt", Sha::hash(b"x")) {
             Ok(_) => panic!("outside extract passes"),
             Err(ResourceError::Escape { .. }) => {}
@@ -593,14 +584,13 @@ mod tests {
     #[test]
     fn open_names_missing_extract() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = StoreRoots {
             temp_base: dir.path().join("temp"),
             ..Default::default()
         };
         let store = Resources::new(&roots);
         let extract_dir = roots.temp_base.join("extract").join("abc");
-        driver::fs::create_dir_all(&extract_dir).unwrap();
+        std::fs::create_dir_all(&extract_dir).unwrap();
         let handle = match store.cache(&extract_dir, "absent.txt", Sha::hash(b"x")) {
             Ok(handle) => handle,
             Err(error) => panic!("absent creates: {error}"),
@@ -618,20 +608,20 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn open_reports_read_denied() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let root = dir.path().join("project");
         let store = test_store(&root);
         let path = root.join("profile.lua");
-        driver::fs::create_dir_all(&root).unwrap();
-        driver::fs::write(&path, b"return {}").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&path, b"return {}").unwrap();
         let handle = match store.resource("profile.lua") {
             Ok(handle) => handle,
             Err(error) => panic!("resource creates: {error}"),
         };
-        guard.fail_reads(std::io::ErrorKind::PermissionDenied);
+        driver::fs::set_mode(&path, Some(0o000)).unwrap();
         match store.open(&handle) {
             Ok(_) => panic!("refused file passes"),
             Err(ResourceError::Read { path: found, fault }) => {
@@ -640,5 +630,6 @@ mod tests {
             }
             Err(error) => panic!("wrong open variant: {error}"),
         }
+        driver::fs::set_mode(&path, Some(0o644)).unwrap();
     }
 }

@@ -28,7 +28,7 @@ impl Payload {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed handle reads.
+    /// - [`BlobError::Read`] for unreadable handle content.
     /// - [`BlobError::Write`] for cache write faults.
     /// - [`BlobError::WriteUnknown`] for other cache write failures.
     /// - [`BlobError::Compress`] for compression failures.
@@ -120,6 +120,7 @@ mod tests {
     use super::*;
     use crate::document::Data;
     use confit_binding::value::Encode;
+    use confit_driver as driver;
     use mlua::{Lua, Value};
 
     fn test_stores(dir: &std::path::Path) -> Stores {
@@ -136,8 +137,8 @@ mod tests {
 
     fn project_handle(stores: &Stores, dir: &std::path::Path, name: &str) -> ResourceHandle {
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
-        confit_driver::fs::write(&project.join(name), b"payload bytes").unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(name), b"payload bytes").unwrap();
         match stores.resources().resource(name) {
             Ok(handle) => handle,
             Err(error) => panic!("project opens: {error}"),
@@ -147,7 +148,6 @@ mod tests {
     #[test]
     fn resolve_compresses_handles_into_the_pool() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let handle = project_handle(&stores, dir.path(), "note.txt");
         let payload = Payload::Handle(handle);
@@ -160,20 +160,20 @@ mod tests {
             Sha::hash(b"payload bytes"),
             "resolve keeps the content hash"
         );
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        let cached = dir.path().join("temp").join("blobs");
+        driver::fs::set_mode(&cached, Some(0o555)).unwrap();
         match payload.resolve(&stores) {
             Ok(again) => assert_eq!(again, first, "repeat resolve reuses the file"),
             Err(error) => panic!("present resolve skips writes: {error}"),
         }
+        driver::fs::set_mode(&cached, Some(0o755)).unwrap();
     }
 
     #[test]
     fn resolve_passes_sealed_refs_without_io() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let blob = Sha::hash(b"sealed");
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
         match Payload::Resolved(blob.clone()).resolve(&stores) {
             Ok(found) => assert_eq!(found, blob, "sealed refs pass through"),
             Err(error) => panic!("sealed resolve skips io: {error}"),
@@ -183,7 +183,6 @@ mod tests {
     #[test]
     fn encode_renders_handles_and_refuses_sealed() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let lua = Lua::new();
         let handle = project_handle(&stores, dir.path(), "note.txt");
@@ -217,7 +216,6 @@ mod tests {
     #[test]
     fn serde_round_trips_sealed_and_refuses_handles() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let handle = project_handle(&stores, dir.path(), "note.txt");
         match serde_json::to_string(&Payload::Handle(handle)) {

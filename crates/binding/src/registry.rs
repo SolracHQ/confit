@@ -58,7 +58,7 @@ impl Registry {
         self.order.is_empty()
     }
 
-    /// Report whether the registry holds one name.
+    /// Report whether one name is in the registry.
     pub fn contains(&self, name: &str) -> bool {
         self.seen.contains(name)
     }

@@ -93,7 +93,6 @@ mod tests {
     use mlua::Value;
     use std::path::Path;
 
-    use confit_driver::fs::TestGuard;
     use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
 
@@ -126,7 +125,6 @@ mod tests {
     #[test]
     fn serves_scripted_bodies_reading_text() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         confit_driver::http::clear();
         confit_driver::http::serve(URL, b"1.2.3");
         let stores = test_stores(dir.path());
@@ -148,7 +146,6 @@ mod tests {
     #[test]
     fn dead_urls_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         confit_driver::http::clear();
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);
@@ -172,7 +169,6 @@ mod tests {
     #[test]
     fn sha_pins_match_passing() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         confit_driver::http::clear();
         confit_driver::http::serve(URL, b"1.2.3");
         let stores = test_stores(dir.path());
@@ -192,7 +188,6 @@ mod tests {
     #[test]
     fn sha_pin_mismatches_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         confit_driver::http::clear();
         confit_driver::http::serve(URL, b"1.2.3");
         let stores = test_stores(dir.path());
@@ -220,7 +215,6 @@ mod tests {
     #[test]
     fn foreign_inputs_raise_showing_want() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);
         let source = r#"return fetch(1)"#;
@@ -244,7 +238,6 @@ mod tests {
     #[test]
     fn operational_failures_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         confit_driver::http::clear();
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);

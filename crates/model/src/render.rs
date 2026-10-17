@@ -26,6 +26,7 @@ pub fn inline_bytes(data: &Data) -> Result<Vec<u8>> {
             }
         }
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+        #[cfg(unix)]
         Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(data).into_bytes()),
         Data::Opaque { handle: blob, .. } => Err(Error::Parse {

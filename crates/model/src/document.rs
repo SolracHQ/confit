@@ -11,6 +11,7 @@ use confit_binding_macros::Face;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(unix, test))]
 use crate::routes::Route;
 use confit_driver::sha::Sha;
 use confit_store::handles::ResourceHandle;
@@ -74,6 +75,7 @@ pub enum DocumentKind {
     /// Plain text file from declaration content.
     Text,
     /// Symlink placement from declaration target.
+    #[cfg(unix)]
     Link,
     /// Per-shell rc data object.
     Rc,
@@ -89,6 +91,7 @@ impl DocumentKind {
         match self {
             Self::Structured => "structured",
             Self::Text => "text",
+            #[cfg(unix)]
             Self::Link => "link",
             Self::Rc => "rc",
             Self::Opaque => "opaque",
@@ -105,7 +108,7 @@ impl std::fmt::Display for DocumentKind {
 
 /// One tree member.
 ///
-/// A bare handle takes the default mode. A table names
+/// Bare handles take the default mode. Tables refer to
 /// the handle with a required mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(untagged)]
@@ -169,6 +172,7 @@ pub enum Data {
         unmanaged: bool,
     },
     /// Symbolic Link Document.
+    #[cfg(unix)]
     Link {
         /// The link target route.
         target: Route,
@@ -202,6 +206,7 @@ impl Data {
         match self {
             Self::Structured { .. } => DocumentKind::Structured,
             Self::Text { .. } => DocumentKind::Text,
+            #[cfg(unix)]
             Self::Link { .. } => DocumentKind::Link,
             Self::Rc(_) => DocumentKind::Rc,
             Self::Opaque { .. } => DocumentKind::Opaque,
@@ -213,7 +218,10 @@ impl Data {
     pub fn mode(&self) -> Option<u32> {
         match self {
             Self::Text { mode, .. } | Self::Opaque { mode, .. } => Some(*mode),
+            #[cfg(unix)]
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => None,
+            #[cfg(not(unix))]
+            Self::Structured { .. } | Self::Rc(_) | Self::Tree { .. } => None,
         }
     }
 
@@ -221,7 +229,10 @@ impl Data {
     pub fn unmanaged(&self) -> bool {
         match self {
             Self::Text { unmanaged, .. } | Self::Opaque { unmanaged, .. } => *unmanaged,
+            #[cfg(unix)]
             Self::Structured { .. } | Self::Link { .. } | Self::Rc(_) | Self::Tree { .. } => false,
+            #[cfg(not(unix))]
+            Self::Structured { .. } | Self::Rc(_) | Self::Tree { .. } => false,
         }
     }
 
@@ -238,9 +249,12 @@ impl Data {
         match self {
             Self::Opaque { handle: blob, .. } => vec![blob],
             Self::Tree { members } => members.values().map(TreeMember::blob).collect(),
+            #[cfg(unix)]
             Self::Structured { .. } | Self::Text { .. } | Self::Link { .. } | Self::Rc(_) => {
                 Vec::new()
             }
+            #[cfg(not(unix))]
+            Self::Structured { .. } | Self::Text { .. } | Self::Rc(_) => Vec::new(),
         }
     }
 
@@ -524,7 +538,6 @@ mod tests {
 
     #[test]
     fn opaque_mode_encodes_strings() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (_directory, lua, stores) = opened_lua();
         let handle = stores.resources().resource("note.txt").unwrap();
         let source = Data::Opaque {
@@ -541,6 +554,7 @@ mod tests {
         let _: mlua::AnyUserData = table.get("handle").unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn link_decodes_target_route() {
         let lua = test_lua();
@@ -560,18 +574,29 @@ mod tests {
     #[test]
     fn mixed_markers_fail_showing_keys() {
         let lua = test_lua();
-        let text = body_error(
-            &lua,
-            r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
-        );
-        assert!(
-            text.contains("Document_Text"),
-            "the text shows the arm: {text}"
-        );
-        assert!(
-            text.contains("Document_Link"),
-            "the text shows the arm: {text}"
-        );
+        #[cfg(unix)]
+        {
+            let text = body_error(
+                &lua,
+                r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
+            );
+            assert!(
+                text.contains("Document_Text"),
+                "the text shows the arm: {text}"
+            );
+            assert!(
+                text.contains("Document_Link"),
+                "the text shows the arm: {text}"
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            let text = body_error(&lua, r#"{ text = "hi", nope = 1 }"#);
+            assert!(
+                text.contains("Document_Text"),
+                "the text shows the arm: {text}"
+            );
+        }
         let bare = body_error(&lua, r#"{ nope = 1 }"#);
         assert!(bare.contains("nope"), "the error shows the key: {bare}");
     }
@@ -579,9 +604,9 @@ mod tests {
     fn opened_lua() -> (tempfile::TempDir, Lua, Stores) {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("project");
-        confit_driver::fs::create_dir_all(&root).unwrap();
-        confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
-        confit_driver::fs::write(&root.join("other.txt"), b"world").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("note.txt"), b"hello").unwrap();
+        std::fs::write(root.join("other.txt"), b"world").unwrap();
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(
             confit_store::StoreRoots {
@@ -608,7 +633,6 @@ mod tests {
 
     #[test]
     fn opaque_decodes_from_handles() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let documents = documents_of(
@@ -649,7 +673,6 @@ mod tests {
 
     #[test]
     fn tree_decodes_flat_paths_into_members() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let other = handle_of(&lua, &stores, &directory, "other.txt");
@@ -693,7 +716,6 @@ mod tests {
 
     #[test]
     fn decode_bare_handle_with_default_mode() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let body = format!(r#"{{ members = {{ ["top.txt"] = {note} }} }}"#);
@@ -717,7 +739,6 @@ mod tests {
 
     #[test]
     fn decode_full_table_with_explicit_mode() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let body =
@@ -743,7 +764,6 @@ mod tests {
 
     #[test]
     fn decode_mixed_members_in_one_table() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let other = handle_of(&lua, &stores, &directory, "other.txt");
@@ -784,7 +804,6 @@ mod tests {
 
     #[test]
     fn reject_table_without_mode() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let text = body_error(
@@ -845,7 +864,7 @@ mod tests {
 
     fn no_blob_files(directory: &tempfile::TempDir) -> bool {
         let cache = directory.path().join("temp").join("blobs");
-        !confit_driver::fs::exists(&cache)
+        !cache.exists()
             || confit_driver::fs::read_dir(&cache)
                 .unwrap_or_default()
                 .is_empty()
@@ -853,10 +872,8 @@ mod tests {
 
     #[test]
     fn opaque_decodes_handles_without_writes() {
-        let guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
         let documents = documents_of(
             &lua,
             &format!(r#"{{ handle = {note}, mode = "644", unmanaged = true }}"#),
@@ -873,11 +890,9 @@ mod tests {
 
     #[test]
     fn tree_decodes_handles_without_writes() {
-        let guard = confit_driver::fs::TestGuard::install();
         let (directory, lua, stores) = opened_lua();
         let note = handle_of(&lua, &stores, &directory, "note.txt");
         let other = handle_of(&lua, &stores, &directory, "other.txt");
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
         let body = format!(
             r#"{{
             members = {{
@@ -904,7 +919,6 @@ mod tests {
 
     #[test]
     fn ref_tables_fail_where_handles_belong() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (_directory, lua, _stores) = opened_lua();
         let text = body_error(&lua, r#"{ handle = { sha256 = "aa" }, mode = "644" }"#);
         assert!(
@@ -938,7 +952,6 @@ mod tests {
 
     #[test]
     fn unsealed_documents_refuse_serialize() {
-        let _guard = confit_driver::fs::TestGuard::install();
         let (_directory, _lua, stores) = opened_lua();
         let handle = match stores.resources().resource("note.txt") {
             Ok(found) => found,

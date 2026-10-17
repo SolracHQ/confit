@@ -8,7 +8,7 @@ use confit_model::routes::Route;
 
 use crate::error::{EngineError, Result};
 
-/// Reject repeated config names. The error holds the first repeat.
+/// Reject repeated config names. Errors hold the first repeat.
 ///
 /// # Errors
 ///
@@ -26,7 +26,7 @@ pub(super) fn check_names(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-/// Reject requirement edges showing unknown configs. The error holds the hint.
+/// Reject requirement edges showing unknown configs. Errors hold the hint.
 ///
 /// - Configs match by exact name in profile order with targets in key order.
 ///

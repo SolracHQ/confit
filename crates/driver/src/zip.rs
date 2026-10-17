@@ -18,7 +18,7 @@ pub struct Member<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Report whether one head window holds zip bytes.
+/// Report whether zip bytes fill one head window.
 ///
 /// Local file magic and empty archive magic return true, short and plain
 /// heads return false.
@@ -32,7 +32,7 @@ pub fn valid(head: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// - Stream reads fail as zip errors.
+/// - Unreadable streams fail as zip errors.
 /// - [InvalidPassword] when entries are locked.
 /// - [UnsupportedArchive] when features are unknown.
 /// - [CompressionMethodNotSupported] when methods refuse.

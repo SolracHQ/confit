@@ -1,10 +1,12 @@
-//! Disk reads with writes and removals.
+//! Disk input with writes and removals.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_driver as driver;
-use confit_model::document::{Data, Payload, TreeMember};
+#[cfg(any(unix, test))]
+use confit_model::document::Data;
+use confit_model::document::{Payload, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
 use confit_store::blob::error::BlobError;
@@ -59,18 +61,22 @@ pub fn disk_doc(document: &Document) -> Disk {
             };
         }
     };
-    let is_link = matches!(document.data, Data::Link { .. });
-    let target = match driver::fs::read_link(&expanded) {
+    #[cfg(unix)]
+    let link_doc = matches!(document.data, Data::Link { .. });
+    #[cfg(not(unix))]
+    let link_doc = false;
+    let target = match std::fs::read_link(&expanded) {
         Ok(link) => join_link_target(&expanded, &link),
         Err(_) => expanded.clone(),
     };
-    if is_link {
+    if link_doc {
         return match driver::fs::read_link_bytes(&expanded) {
             Ok(bytes) => Disk::Present {
                 reader: Box::new(std::io::Cursor::new(bytes)),
                 mode: None,
             },
-            Err(_) => match driver::fs::open(&expanded) {
+            Err(_) if expanded.is_dir() => dir_unreadable(&expanded),
+            Err(_) => match std::fs::File::open(&expanded) {
                 Ok(file) => Disk::Present {
                     reader: Box::new(file),
                     mode: file_mode(&expanded),
@@ -82,7 +88,10 @@ pub fn disk_doc(document: &Document) -> Disk {
             },
         };
     }
-    match driver::fs::open(&target) {
+    if target.is_dir() {
+        return dir_unreadable(&target);
+    }
+    match std::fs::File::open(&target) {
         Ok(file) => Disk::Present {
             reader: Box::new(file),
             mode: file_mode(&target),
@@ -91,6 +100,17 @@ pub fn disk_doc(document: &Document) -> Disk {
         Err(error) => Disk::Unreadable {
             fault: disk_fault(error),
         },
+    }
+}
+
+/// Open one directory destination as unreadable.
+fn dir_unreadable(target: &Path) -> Disk {
+    let error = std::io::Error::new(
+        std::io::ErrorKind::IsADirectory,
+        format!("is a directory '{}'", target.display()),
+    );
+    Disk::Unreadable {
+        fault: disk_fault(error),
     }
 }
 
@@ -111,9 +131,9 @@ pub fn open_member(destination: &Route, relative: &str) -> Option<Box<dyn std::i
     if let Ok(bytes) = driver::fs::read_link_bytes(&path) {
         return Some(Box::new(std::io::Cursor::new(bytes)) as Box<dyn std::io::Read>);
     }
-    driver::fs::open(&path)
+    std::fs::File::open(&path)
         .ok()
-        .map(|file| file as Box<dyn std::io::Read>)
+        .map(|file| Box::new(file) as Box<dyn std::io::Read>)
 }
 
 /// Write one tree destination member by member.
@@ -134,7 +154,7 @@ pub fn write_tree(
     for (relative, member) in members {
         let path = dest.join(relative);
         copy_blob(dest, &path, member.blob(), stores)?;
-        driver::fs::set_mode(&path, member.mode())
+        driver::fs::set_mode(&path, Some(member.mode()))
             .map_err(|error| RuntimeError::from_write_io(&path, error))?;
     }
     Ok(1)
@@ -142,10 +162,10 @@ pub fn write_tree(
 
 /// Remove one backend path and report whether anything remains.
 pub fn remove(path: &Path) -> std::io::Result<bool> {
-    if driver::fs::is_missing(path) {
+    if !path.exists() {
         return Ok(false);
     }
-    driver::fs::remove_file(path)?;
+    std::fs::remove_file(path)?;
     Ok(true)
 }
 
@@ -181,7 +201,7 @@ fn walk_tree(root: &Path, dir: &Path, out: &mut BTreeMap<String, DiskMember>) {
             );
             continue;
         }
-        match driver::fs::open(&child) {
+        match std::fs::File::open(&child) {
             Ok(file) => {
                 out.insert(
                     name.to_string(),
@@ -232,7 +252,7 @@ fn join_link_target(link: &Path, target: &Path) -> std::path::PathBuf {
 
 /// Read unix permission bits for one path.
 fn file_mode(path: &Path) -> Option<u32> {
-    if driver::fs::is_link(path) {
+    if path.is_symlink() {
         return None;
     }
     driver::fs::mode(path).ok()
@@ -267,8 +287,8 @@ pub(crate) fn copy_blob(
         .map_err(|error| map_pool(error, dest, target))?;
     driver::fs::create_parent(target)
         .map_err(|error| RuntimeError::from_write_io(target, error))?;
-    let mut out =
-        driver::fs::create(target).map_err(|error| RuntimeError::from_write_io(target, error))?;
+    let mut out = std::fs::File::create(target)
+        .map_err(|error| RuntimeError::from_write_io(target, error))?;
     std::io::copy(&mut reader, &mut out)
         .map_err(|error| RuntimeError::from_write_io(target, error))?;
     out.flush()
@@ -346,7 +366,6 @@ fn disk_fault(error: std::io::Error) -> AccessFault {
 #[cfg(test)]
 mod disk_tests {
     use super::*;
-    use confit_driver::fs::TestGuard;
     use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &Path) -> Route {
@@ -366,7 +385,6 @@ mod disk_tests {
 
     #[test]
     fn absent_doc_reads_absent() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         match disk_doc(&text_doc(&dir.path().join("absent.txt"))) {
             Disk::Absent => {}
@@ -379,12 +397,11 @@ mod disk_tests {
 
     #[test]
     fn present_doc_streams_bytes_plus_mode() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("present.txt");
         driver::fs::create_parent(&path).unwrap();
-        driver::fs::write(&path, b"disk bytes").unwrap();
-        driver::fs::set_mode(&path, 0o755).unwrap();
+        std::fs::write(&path, b"disk bytes").unwrap();
+        driver::fs::set_mode(&path, Some(0o755)).unwrap();
         match disk_doc(&text_doc(&path)) {
             Disk::Present { mut reader, mode } => {
                 let mut seen = Vec::new();
@@ -401,10 +418,9 @@ mod disk_tests {
 
     #[test]
     fn unreadable_doc_names_the_reason() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blocked.txt");
-        driver::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
         match disk_doc(&text_doc(&path)) {
             Disk::Unreadable { fault } => assert!(
                 !fault.cause().is_empty(),
@@ -417,12 +433,11 @@ mod disk_tests {
 
     #[test]
     fn member_absence_reads_as_map_miss() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("tree");
         let path = root.join("present.txt");
         driver::fs::create_parent(&path).unwrap();
-        driver::fs::write(&path, b"member bytes").unwrap();
+        std::fs::write(&path, b"member bytes").unwrap();
         let document = Document::new(
             literal(&root),
             Data::Tree {

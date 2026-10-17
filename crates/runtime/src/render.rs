@@ -26,6 +26,7 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
             StructuredFormat::Yaml => Ok(render_yaml(&document.destination, data)?.into_bytes()),
         },
         Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+        #[cfg(unix)]
         Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(&document.destination, data)?.into_bytes()),
         Data::Opaque { handle: blob, .. } => {

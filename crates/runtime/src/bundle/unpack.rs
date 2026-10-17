@@ -18,7 +18,7 @@ impl Bundler {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleRead`] for unreadable bundles.
     /// - [`RuntimeError::BundleVersion`] for unsupported versions.
     /// - [`RuntimeError::BundleMissing`] for missing blobs.
     pub fn read(&self, path: &Path) -> Result<Manifest> {
@@ -51,7 +51,7 @@ impl Bundler {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for failed member reads.
+    /// - [`RuntimeError::BundleRead`] for unreadable members.
     /// - [`RuntimeError::BundleVersion`] for stale versions.
     fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
         let member = self
@@ -74,7 +74,7 @@ impl Bundler {
     /// # Errors
     ///
     /// - [`RuntimeError::BundleCorrupt`] for corrupt members.
-    /// - [`RuntimeError::BundleRead`] for failed member reads.
+    /// - [`RuntimeError::BundleRead`] for unreadable members.
     /// - [`RuntimeError::BundleWrite`] for receive write faults.
     /// - [`RuntimeError::BundleWriteUnknown`] for other receive write
     ///   failures.
@@ -102,7 +102,7 @@ impl Bundler {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::BundleRead`] for failed bundle reads.
+/// - [`RuntimeError::BundleRead`] for unreadable bundles.
 /// - [`RuntimeError::BundleVersion`] for stale codec versions.
 fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
     let mut has_manifest = false;
@@ -196,7 +196,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use confit_driver as driver;
-    use confit_driver::fs::TestGuard;
     use confit_model::document::{Data, Payload};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -216,11 +215,11 @@ mod tests {
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
         let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}.bin");
-            confit_driver::fs::write(&project.join(&name), body).unwrap();
+            std::fs::write(project.join(&name), body).unwrap();
             let source = match stores.resources().resource(&name) {
                 Ok(handle) => handle,
                 Err(error) => panic!("project opens: {error}"),
@@ -246,17 +245,14 @@ mod tests {
 
     fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
         let build = |path: &Path| {
-            let members: Vec<driver::tar::BuildMember<'_>> = entries
-                .iter()
-                .map(|(name, bytes)| driver::tar::BuildMember {
-                    name: (*name).to_owned(),
-                    len: bytes.len() as u64,
-                    reader: Box::new(std::io::Cursor::new(bytes.as_slice())),
-                    mode: 0o644,
-                })
-                .collect();
-            let sink = driver::fs::create(path)?;
-            driver::tar::build_plain(sink, members)
+            let sink = std::fs::File::create(path)?;
+            let mut builder = driver::tar::TarBuilder::create(sink);
+            for (name, bytes) in entries {
+                let mut reader = std::io::Cursor::new(bytes.as_slice());
+                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+            }
+            builder.finish()?;
+            Ok(())
         };
         if let Err(error) = driver::atomic_write(dest, build) {
             panic!("fixture bundle builds: {error}");
@@ -264,7 +260,7 @@ mod tests {
     }
 
     fn entry_names(path: &Path) -> Vec<String> {
-        let file = driver::fs::open(path).unwrap();
+        let file = std::fs::File::open(path).unwrap();
         let mut archive = tar::Archive::new(file);
         let mut names = Vec::new();
         for entry in archive.entries().unwrap() {
@@ -277,7 +273,6 @@ mod tests {
     #[test]
     fn round_trip_writes_manifest_first_with_sorted_blobs() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
         let plan = dir.path().join("plan");
         let written = match store.write(&manifest, &plan) {
@@ -321,7 +316,6 @@ mod tests {
     #[test]
     fn read_refuses_stale_version() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, _) = opaque_manifest(dir.path(), &[]);
         let stale = serde_json::json!({"version": 0u32, "documents": []});
         let raw = serde_json::to_vec(&stale).unwrap();
@@ -342,14 +336,13 @@ mod tests {
         use confit_store::Stores;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
         let store = Bundler::new(&stores);
         let project = dir.path().join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
-        confit_driver::fs::write(&project.join("wanted.bin"), b"wanted bytes").unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("wanted.bin"), b"wanted bytes").unwrap();
         let source = match stores.resources().resource("wanted.bin") {
             Ok(handle) => handle,
             Err(error) => panic!("project opens: {error}"),
@@ -390,7 +383,6 @@ mod tests {
     #[test]
     fn read_names_holding_document_for_corrupt_blob() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha"]);
         let refs = manifest.refs();
         let raw = serde_json::to_vec(&manifest).unwrap();
@@ -423,7 +415,6 @@ mod tests {
     #[test]
     fn read_rejects_duplicate_and_unexpected_and_bad_ids() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
         let manifest = serde_json::to_vec(&Manifest::empty()).unwrap();
@@ -479,14 +470,13 @@ mod tests {
     #[test]
     fn write_builds_plain_tar_envelope() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);
         let plan = dir.path().join("plan");
         let written = match store.write(&manifest, &plan) {
             Ok(written) => written,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        let raw = driver::fs::read(written.canonical()).unwrap();
+        let raw = std::fs::read(written.canonical()).unwrap();
         assert!(raw.len() >= 512, "plain holds one block");
         assert_eq!(&raw[257..262], b"ustar", "plain envelope carries tar magic");
     }

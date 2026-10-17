@@ -210,7 +210,7 @@ mod tests {
     use crate::userdata::{MethodParameter, MethodReturn};
 
     #[test]
-    fn method_block_reads_colon_call_without_receiver() {
+    fn method_block_emits_colon_call_without_receiver() {
         let method = MethodDescriptor {
             name: "members",
             documentation: "List the archive member names, else nil with reason.",

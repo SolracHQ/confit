@@ -250,8 +250,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    use confit_driver as driver;
-    use confit_driver::fs::TestGuard;
     use confit_model::document::Data;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
@@ -326,7 +324,6 @@ mod tests {
 
     #[test]
     fn landed_mise_binary_resolves_post_write() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
@@ -346,7 +343,6 @@ mod tests {
 
     #[test]
     fn requires_sees_hook_path_dirs() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
@@ -369,13 +365,12 @@ mod tests {
 
     #[test]
     fn exists_condition_sees_just_written_file() {
-        let _guard = TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("tool");
-        driver::fs::create_dir_all(&bindir).unwrap();
-        driver::fs::write(&binary, b"run").unwrap();
-        driver::fs::set_mode(&binary, 0o755).unwrap();
+        std::fs::create_dir_all(&bindir).unwrap();
+        std::fs::write(&binary, b"run").unwrap();
+        driver::fs::set_mode(&binary, Some(0o755)).unwrap();
         let sentinel = dir.path().join("sentinel.txt");
         let mut hook = tool_hook(&bindir);
         hook.requires = Condition::Exists {

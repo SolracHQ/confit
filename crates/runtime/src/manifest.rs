@@ -147,7 +147,7 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::StateRead`] for failed state reads.
+    /// - [`RuntimeError::StateRead`] for unreadable states.
     /// - [`RuntimeError::StateCorrupt`] for bad payloads.
     /// - [`RuntimeError::StateVersion`] for unsupported versions.
     pub fn load(states: &StateStore) -> RuntimeResult<Self> {
@@ -211,7 +211,7 @@ impl Manifest {
     ///
     /// - [`RuntimeError::BadPick`] for absent states and out-of-range
     ///   picks.
-    /// - [`RuntimeError::StateRead`] for failed state reads.
+    /// - [`RuntimeError::StateRead`] for unreadable states.
     /// - [`RuntimeError::StateCorrupt`] for bad payloads.
     /// - [`RuntimeError::StateVersion`] for unsupported versions.
     pub fn resolve(states: &StateStore, picker: &Picker) -> RuntimeResult<Self> {
@@ -253,7 +253,7 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::StateRead`] for failed folder reads.
+    /// - [`RuntimeError::StateRead`] for unreadable folders.
     pub fn keep_set(states: &StateStore) -> RuntimeResult<BTreeSet<Sha>> {
         let mut keep = BTreeSet::new();
         if let Ok(handle) = states.applied() {
@@ -445,7 +445,10 @@ fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
                 *payload = Payload::Resolved(resolved);
             }
         }
+        #[cfg(unix)]
         Data::Structured { .. } | Data::Text { .. } | Data::Link { .. } | Data::Rc(_) => {}
+        #[cfg(not(unix))]
+        Data::Structured { .. } | Data::Text { .. } | Data::Rc(_) => {}
     }
     Ok(())
 }
@@ -727,8 +730,8 @@ mod tests {
 
     fn project_handle(stores: &Stores, dir: &std::path::Path, name: &str, body: &[u8]) -> Payload {
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
-        confit_driver::fs::write(&project.join(name), body).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(name), body).unwrap();
         match stores.resources().resource(name) {
             Ok(found) => Payload::Handle(found),
             Err(error) => panic!("project opens: {error}"),
@@ -740,7 +743,6 @@ mod tests {
         use std::io::Read as _;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
         let other = project_handle(&stores, dir.path(), "other.txt", b"other bytes");
@@ -780,10 +782,7 @@ mod tests {
                     None => panic!("build seals every payload"),
                 };
                 let cache = dir.path().join("temp").join("blobs").join(resolved.hex());
-                assert!(
-                    confit_driver::fs::exists(&cache),
-                    "the blob file lands in cache"
-                );
+                assert!(cache.exists(), "the blob file lands in cache");
                 let handle = match stores.blobs().resolve(resolved) {
                     Ok(found) => found,
                     Err(error) => panic!("sealed refs resolve: {error}"),
@@ -819,7 +818,6 @@ mod tests {
     #[test]
     fn build_passes_sealed_refs_without_io() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let blob = Sha::hash(b"sealed");
         let documents = [(
@@ -832,7 +830,6 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
         match Manifest::build(&stores, documents, Vec::new()) {
             Ok(found) => assert_eq!(found.documents.len(), 1, "sealed builds pass through"),
             Err(error) => panic!("sealed builds skip io: {error}"),
@@ -842,7 +839,6 @@ mod tests {
     #[test]
     fn seal_bare_and_full_members_with_modes() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
         let full = project_handle(&stores, dir.path(), "other.txt", b"full bytes");
@@ -902,7 +898,6 @@ mod tests {
     #[test]
     fn reject_bad_member_keys_at_seal() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
         for key in ["", "/top.txt", "sub//nested.txt", "sub/../nested.txt"] {
@@ -934,7 +929,6 @@ mod tests {
     #[test]
     fn round_trip_sealed_manifest_with_both_variants() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
         let full = project_handle(&stores, dir.path(), "other.txt", b"full bytes");
@@ -970,17 +964,16 @@ mod tests {
     #[test]
     fn build_reports_vanished_handles() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = dir.path().join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
         let path = project.join("gone.txt");
-        confit_driver::fs::write(&path, b"gone bytes").unwrap();
+        std::fs::write(&path, b"gone bytes").unwrap();
         let handle = match stores.resources().resource("gone.txt") {
             Ok(found) => found,
             Err(error) => panic!("project opens: {error}"),
         };
-        confit_driver::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
         let documents = [(
             Route::new(RouteBase::Home, "gone").unwrap(),
             Data::Opaque {

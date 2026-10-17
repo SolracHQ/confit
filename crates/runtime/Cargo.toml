@@ -23,6 +23,6 @@ confit-binding-macros = { version = "0.9.0", path = "../binding-macros" }
 mlua = { workspace = true, features = ["lua54", "vendored"] }
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }
 tar.workspace = true
 tempfile.workspace = true

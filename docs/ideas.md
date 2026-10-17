@@ -54,12 +54,12 @@ Pain: On windows scoop installs mise and mise install needs mise present, but sc
 
 What I have in my head
 ```lua
-config:add_hook(confit.hook.run({ "scoop", "install", "mise" }))
+config:add_hook(confit.hook.run({ "scoop", "install", "mise" }, { id = "scoop" }))
 config:add_hook(confit.hook.run({ "mise", "install" }, {
-  after = { { "scoop", "install", "mise" } },
+  after = { "scoop" },
 }))
 ```
-Hooks already answer to argv everywhere, so dependencies name argv too. Cycles fail the plan. Declaration order still decides the rest.
+Hooks carry ids already for patches, so dependencies refer to ids too. Unknown ids fail the plan like unknown targets do. Cycles fail the plan. I left declaration order for the rest.
 
 ---
 

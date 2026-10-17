@@ -10,7 +10,6 @@ use common::{repo_path, seed_file, seed_tree, test_sinks, test_stores};
 use confit_cli::actions::plan::PlanRunner;
 use confit_cli::cli::PlanArgs;
 use confit_cli::error::CliError;
-use confit_driver::fs::TestGuard;
 
 /// Fetch-free profile over the shared sugar plugin.
 const SUGAR_MAIN: &str = r#"
@@ -63,7 +62,6 @@ fn run_plan(dir: &Path, project: &Path, profile: Option<&Path>, output: Option<P
 #[test]
 fn plan_shows_preview_for_example_project() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let site = example_project(dir.path());
     let text = run_plan(dir.path(), &site, None, None);
     assert!(
@@ -79,20 +77,18 @@ fn plan_shows_preview_for_example_project() {
 #[test]
 fn plan_bundle_lands_on_temp_path() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let site = example_project(dir.path());
     let output = dir.path().join("plan.cb");
     let _ = run_plan(dir.path(), &site, None, Some(output.clone()));
-    let bytes = confit_driver::fs::read(&output).unwrap();
+    let bytes = std::fs::read(&output).unwrap();
     assert!(!bytes.is_empty(), "the bundle holds bytes");
 }
 
 #[test]
 fn plan_without_main_lua_fails() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let site = dir.path().join("nest").join("site");
-    confit_driver::fs::create_dir_all(&site).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
     let stores = test_stores(dir.path(), "nest/site");
     let args = PlanArgs {
         project: site,
@@ -115,7 +111,6 @@ fn plan_without_main_lua_fails() {
 #[test]
 fn plan_explicit_profile_beats_default() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let site = example_project(dir.path());
     seed_file(&site.join("laptop.lua"), ALT_MAIN.as_bytes());
     let text = run_plan(dir.path(), &site, Some(Path::new("laptop.lua")), None);

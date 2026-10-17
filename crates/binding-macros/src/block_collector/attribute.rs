@@ -1,5 +1,5 @@
 //! Attribute reading
-//! Namespace plus optional markers from face attributes.
+//! Namespace and optional markers from face attributes.
 
 use proc_macro::TokenStream;
 

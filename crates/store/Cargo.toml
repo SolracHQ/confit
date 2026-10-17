@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 confit-driver = { version = "0.9.0", path = "../driver" }
-dirs.workspace = true
 mlua = { workspace = true, features = ["lua54", "vendored"] }
 sha2.workspace = true
 thiserror.workspace = true
@@ -23,7 +22,7 @@ serini = "0.3.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }
 crossbeam-channel = "0.5.17"
 flate2.workspace = true
 tar.workspace = true

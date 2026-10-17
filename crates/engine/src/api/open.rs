@@ -37,7 +37,6 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    use confit_driver::fs::TestGuard;
     use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
     use mlua::Value;
@@ -68,17 +67,16 @@ mod tests {
 
     fn project_root(dir: &Path) -> PathBuf {
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
         project
     }
 
     #[test]
     fn opens_files_reading_text_with_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(&project.join("note.txt"), b"hello").unwrap();
+        std::fs::write(project.join("note.txt"), b"hello").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(open("note.txt"))
@@ -105,7 +103,6 @@ mod tests {
     #[test]
     fn escapes_raise_where_written() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -136,7 +133,6 @@ mod tests {
     #[test]
     fn misses_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -160,7 +156,6 @@ mod tests {
     #[test]
     fn foreign_inputs_raise_showing_want() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -177,11 +172,10 @@ mod tests {
     #[test]
     fn loads_toml_ignoring_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(
-            &project.join("payload.txt"),
+        std::fs::write(
+            project.join("payload.txt"),
             b"title = \"starship\"\n[settings]\nenabled = true\n",
         )
         .unwrap();
@@ -203,11 +197,10 @@ mod tests {
     #[test]
     fn loads_json_ignoring_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(
-            &project.join("payload.toml"),
+        std::fs::write(
+            project.join("payload.toml"),
             br#"{"name": "starship", "enabled": true}"#,
         )
         .unwrap();
@@ -229,11 +222,10 @@ mod tests {
     #[test]
     fn loads_yaml_ignoring_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(
-            &project.join("payload.json"),
+        std::fs::write(
+            project.join("payload.json"),
             b"name: starship\nenabled: true\n",
         )
         .unwrap();
@@ -255,11 +247,10 @@ mod tests {
     #[test]
     fn loads_ini_ignoring_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(
-            &project.join("payload.yaml"),
+        std::fs::write(
+            project.join("payload.yaml"),
             b"[server]\nhost = localhost\nport = 8080\n",
         )
         .unwrap();
@@ -281,10 +272,9 @@ mod tests {
     #[test]
     fn loads_unknown_kind_showing_kind() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(&project.join("mystery.bin"), b"\x89PNG\r\n\x1a\nbinary").unwrap();
+        std::fs::write(project.join("mystery.bin"), b"\x89PNG\r\n\x1a\nbinary").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(open("mystery.bin"))
@@ -312,10 +302,9 @@ mod tests {
     #[test]
     fn loads_missing_files_as_text_does() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(&project.join("gone.toml"), b"title = \"gone\"\n").unwrap();
+        std::fs::write(project.join("gone.toml"), b"title = \"gone\"\n").unwrap();
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(open("gone.toml"))
@@ -327,7 +316,7 @@ mod tests {
             Err(error) => panic!("project opens its file: {error}"),
         };
         lua.globals().set("saved", handle).unwrap();
-        confit_driver::fs::remove_file(&project.join("gone.toml")).unwrap();
+        std::fs::remove_file(project.join("gone.toml")).unwrap();
         let source = r#"
             local found, reason = saved:load()
             assert(found == nil)

@@ -1,6 +1,6 @@
 //! Lua faces from Rust declarations.
 //!
-//! The derive emits Decode plus Encode plus stubs from one marker.
+//! The derive emits Decode, Encode and stubs from one marker.
 
 use proc_macro::TokenStream;
 
@@ -58,8 +58,8 @@ mod untagged;
 /// }
 /// ```
 ///
-/// Proxy fields route through hook functions. The decode hook reads
-/// the Lua value. The encode hook returns the proxy value and the
+/// Proxy fields route through hook functions. Decode hooks take
+/// the Lua value. Encode hooks emit the proxy value and the
 /// derive encodes it.
 ///
 /// ```rust,no_run
@@ -87,11 +87,11 @@ pub fn derive_face(input: TokenStream) -> TokenStream {
     face_derive::expand(input)
 }
 
-/// Userdata methods plus static namespaces from one impl block.
+/// Userdata methods and static namespaces from one impl block.
 ///
 /// Blocks without a namespace hold &self methods alone. Blocks with
-/// a namespace hold statics alone and answer NAMESPACE plus VERBS
-/// plus register plus stubs on the type itself. Statics accept
+/// a namespace hold statics alone and answer NAMESPACE, VERBS,
+/// register and stubs on the type itself. Statics accept
 /// #[face(optional)] with missing filling Default.
 ///
 /// ```rust,no_run

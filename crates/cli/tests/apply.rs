@@ -10,7 +10,7 @@ use common::{seed_file, test_sinks, test_stores};
 use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::ApplyArgs;
 use confit_cli::error::CliError;
-use confit_driver::fs::TestGuard;
+use confit_driver::paths::BaseDirs;
 
 /// Build one profile with a single text document at the relative path.
 fn profile_text(relative: &str) -> String {
@@ -50,16 +50,21 @@ fn run_apply(dir: &Path, answer: &[u8], force: bool) -> Result<usize, CliError> 
         .map(|report| report.written)
 }
 
-/// Read one home destination through the memory backend.
+/// Read one home destination under the shared test root.
 fn home_bytes(relative: &str) -> Vec<u8> {
-    let home = dirs::home_dir().unwrap();
-    confit_driver::fs::read(&home.join(relative)).unwrap()
+    let home = BaseDirs::new().home.unwrap();
+    std::fs::read(home.join(relative)).unwrap()
+}
+
+/// Report whether one home destination stays absent.
+fn home_absent(relative: &str) -> bool {
+    let home = BaseDirs::new().home.unwrap();
+    !home.join(relative).exists()
 }
 
 #[test]
 fn apply_force_writes_without_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     seed_project(dir.path(), "confit-force-note");
     match run_apply(dir.path(), b"", true) {
         Ok(written) => assert_eq!(written, 1, "one document lands"),
@@ -75,7 +80,6 @@ fn apply_force_writes_without_prompt() {
 #[test]
 fn apply_yes_writes_documents() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     seed_project(dir.path(), "confit-yes-note");
     match run_apply(dir.path(), b"yes\n", false) {
         Ok(written) => assert_eq!(written, 1, "one document lands"),
@@ -91,16 +95,14 @@ fn apply_yes_writes_documents() {
 #[test]
 fn apply_no_leaves_disk_alone() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     seed_project(dir.path(), "confit-no-note");
     match run_apply(dir.path(), b"no\n", false) {
         Err(CliError::Aborted) => {}
         Err(other) => panic!("refused apply flattens: {other}"),
         Ok(_) => panic!("refused apply passes"),
     }
-    let home = dirs::home_dir().unwrap();
     assert!(
-        !confit_driver::fs::exists(&home.join("confit-no-note")),
+        home_absent("confit-no-note"),
         "the refused destination stays absent"
     );
 }

@@ -1,7 +1,7 @@
 //! Doc sections
-//! Arguments plus Returns bullets with ordered documentation.
+//! Arguments and Returns bullets with ordered documentation.
 
-/// Split doc lines into summary plus section bodies.
+/// Split doc lines into summary and section bodies.
 pub(crate) struct SectionSplit {
     pub(crate) summary: Vec<String>,
     pub(crate) arguments: Vec<String>,
@@ -10,7 +10,7 @@ pub(crate) struct SectionSplit {
     pub(crate) has_returns: bool,
 }
 
-/// Split doc lines into summary plus section bodies.
+/// Split doc lines into summary and section bodies.
 pub(crate) fn split_sections(
     class_name: &str,
     method_name: &str,
@@ -61,7 +61,7 @@ pub(crate) fn split_sections(
     })
 }
 
-/// Parse one Arguments bullet into its name plus description.
+/// Parse one Arguments bullet into its name and description.
 pub(crate) fn parse_argument_bullet(
     class_name: &str,
     method_name: &str,

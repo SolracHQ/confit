@@ -162,7 +162,7 @@ pub fn table_keys(table: &Table, shape: &str) -> Result<Vec<String>, Mismatch> {
 ///
 /// The matched family index with stranger keys.
 pub enum FamilyRoute {
-    /// Exactly one family holds every input key.
+    /// All input keys sit in exactly one family.
     Match(usize),
     /// Input keys land outside every known family.
     Stranger(Vec<String>),
@@ -212,7 +212,7 @@ pub fn read_field(table: &Table, shape: &str, field: &str) -> Result<Value, Mism
 
 /// Decode one field through its convert function.
 ///
-/// - The convert function reads the value with Lua access.
+/// - Convert functions access the value with Lua.
 /// - Failures carry the field path.
 ///
 /// # Errors

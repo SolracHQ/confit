@@ -1,5 +1,5 @@
 //! Collector tests
-//! Expansion plus rejection coverage for impl blocks.
+//! Expansion and rejection coverage for impl blocks.
 
 use syn::ItemImpl;
 

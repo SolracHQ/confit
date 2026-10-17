@@ -4,7 +4,6 @@ use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
 use confit_cli::presentation::spinner::Terminal;
 use confit_cli::sinks::Sinks;
-use confit_driver as driver;
 use confit_store::{StoreRoots, Stores};
 
 fn main() {
@@ -21,7 +20,7 @@ fn run() -> confit_cli::error::Result<()> {
     let logs_dir = resolve_logs_dir(cli.logs_dir.as_deref());
     let log_path = logs_dir.join(APP_LOG_NAME);
     let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
-    driver::fs::create_dir_all(&hooks_dir)
+    std::fs::create_dir_all(&hooks_dir)
         .map_err(|error| confit_cli::error::CliError::from_write_io(&hooks_dir, error))?;
     let dispatch = fern::Dispatch::new()
         .format(|out, message, _record| {
@@ -87,7 +86,7 @@ fn run_apply(
     let terminal = Terminal::new();
     let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
-    roots.project_root = if driver::fs::is_dir(&args.source) {
+    roots.project_root = if args.source.is_dir() {
         args.source.clone()
     } else {
         apply_root(&args.source)

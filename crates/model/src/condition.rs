@@ -65,12 +65,12 @@ impl Default for Condition {
 }
 
 impl Condition {
-    /// Report whether one condition holds true in simplified form.
+    /// Report whether one condition is true in simplified form.
     pub fn is_true(&self) -> bool {
         self.simplified() == Self::default()
     }
 
-    /// Report whether one condition tree holds a changed leaf.
+    /// Report whether condition trees hold a changed leaf.
     pub fn holds_changed(&self) -> bool {
         match self {
             Self::Changed { .. } => true,

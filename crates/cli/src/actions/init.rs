@@ -98,11 +98,11 @@ fn scaffold(root: &std::path::Path, project: &Project) -> Result<InitReport> {
     let mut destinations = vec![profile.clone(), project_path.clone()];
     destinations.extend(stub_destinations.iter().cloned());
     destinations.extend(PLUGIN_FILES.iter().map(|entry| plugins_dir.join(entry.0)));
-    if driver::fs::exists(&stubs_dir) {
+    if stubs_dir.exists() {
         return Err(CliError::Exists { path: stubs_dir });
     }
     for destination in &destinations {
-        if driver::fs::exists(destination) {
+        if destination.exists() {
             return Err(CliError::Exists {
                 path: destination.clone(),
             });
@@ -205,6 +205,5 @@ fn escape(text: &str) -> String {
 fn write_file(destination: &std::path::Path, text: &[u8]) -> Result<()> {
     driver::fs::create_parent(destination)
         .map_err(|error| CliError::from_write_io(destination, error))?;
-    driver::fs::write(destination, text)
-        .map_err(|error| CliError::from_write_io(destination, error))
+    std::fs::write(destination, text).map_err(|error| CliError::from_write_io(destination, error))
 }

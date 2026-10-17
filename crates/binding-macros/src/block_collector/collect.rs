@@ -1,5 +1,5 @@
 //! Method collection
-//! Receiver-checked method plus static collection.
+//! Receiver-checked method and static collection.
 
 use syn::{FnArg, Pat, ReturnType, Type, ext::IdentExt};
 

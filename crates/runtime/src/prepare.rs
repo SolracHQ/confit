@@ -28,7 +28,7 @@ pub struct Prepared {
 ///
 /// # Errors
 ///
-/// - [`crate::error::RuntimeError::StateRead`] for state reads.
+/// - [`crate::error::RuntimeError::StateRead`] for unreadable states.
 pub fn prepare(stores: &Stores, desired: Manifest) -> Result<Prepared> {
     let previous = Manifest::load(&stores.states())?;
     log_processed(&desired, &previous);

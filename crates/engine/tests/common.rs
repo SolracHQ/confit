@@ -524,8 +524,8 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
 /// Build one opaque document pair backed by a project blob.
 pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Data) {
     let root = stores.resources().roots.project_root.clone();
-    confit_driver::fs::create_dir_all(&root).unwrap();
-    confit_driver::fs::write(&root.join("blob.bin"), b"hi").unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("blob.bin"), b"hi").unwrap();
     let resource = stores.resources().resource("blob.bin").unwrap();
     let opened = stores.blobs().put(&resource).unwrap();
     (
@@ -703,7 +703,7 @@ pub fn test_engine(dir: &Path) -> Engine {
 /// Create the project root under the given dir.
 pub fn project_root(dir: &Path) -> PathBuf {
     let root = dir.join("project");
-    confit_driver::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
     root
 }
 
@@ -711,7 +711,7 @@ pub fn project_root(dir: &Path) -> PathBuf {
 pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     let root = project_root(dir);
     let profile = root.join("profile.lua");
-    confit_driver::fs::write(&profile, source.as_bytes()).unwrap();
+    std::fs::write(&profile, source.as_bytes()).unwrap();
     (root, profile)
 }
 

@@ -345,7 +345,7 @@ mod tests {
 
     fn project_root(dir: &Path) -> PathBuf {
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
         project
     }
 
@@ -362,23 +362,20 @@ mod tests {
 
     fn tarball(dir: &Path, members: &[(&str, &[u8])]) -> Vec<u8> {
         let dest = dir.join("scratch.tar.gz");
-        let framed: Vec<confit_driver::tar::BuildMember<'_>> = members
-            .iter()
-            .map(|(name, bytes)| confit_driver::tar::BuildMember {
-                name: (*name).to_owned(),
-                len: bytes.len() as u64,
-                reader: Box::new(std::io::Cursor::new(*bytes)),
-                mode: 0o644,
-            })
-            .collect();
         let build = |path: &Path| {
-            let sink = confit_driver::fs::create(path)?;
-            confit_driver::tar::build_gzipped(sink, framed, 6)
+            let sink = std::fs::File::create(path)?;
+            let mut builder = confit_driver::tar::TarBuilder::create_gzipped(sink, 6);
+            for (name, bytes) in members {
+                let mut reader = std::io::Cursor::new(*bytes);
+                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+            }
+            builder.finish_gzipped()?;
+            Ok(())
         };
         if let Err(error) = confit_driver::atomic_write(&dest, build) {
             panic!("fixture builds: {error}");
         }
-        confit_driver::fs::read(&dest).unwrap()
+        std::fs::read(&dest).unwrap()
     }
 
     fn zipball(members: &[(&str, &[u8])]) -> Vec<u8> {
@@ -402,10 +399,9 @@ mod tests {
     #[test]
     fn reads_text_with_hash_through_lua() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(&project.join("note.txt"), b"hello").unwrap();
+        std::fs::write(project.join("note.txt"), b"hello").unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "note.txt"))
@@ -427,11 +423,10 @@ mod tests {
     #[test]
     fn loads_toml_through_lua() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(
-            &project.join("payload.txt"),
+        std::fs::write(
+            project.join("payload.txt"),
             b"title = \"starship\"\n[settings]\nenabled = true\n",
         )
         .unwrap();
@@ -455,11 +450,10 @@ mod tests {
     #[test]
     fn tarball_round_trips_through_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
-        confit_driver::fs::write(&project.join("fonts.tar.gz"), &raw).unwrap();
+        std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))
@@ -487,11 +481,10 @@ mod tests {
     #[test]
     fn zip_round_trips_through_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = zipball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
-        confit_driver::fs::write(&project.join("fonts.zip"), &raw).unwrap();
+        std::fs::write(project.join("fonts.zip"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.zip"))
@@ -519,11 +512,10 @@ mod tests {
     #[test]
     fn missing_member_names_member() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(dir.path(), &[("a.txt", b"alpha")]);
-        confit_driver::fs::write(&project.join("fonts.tar.gz"), &raw).unwrap();
+        std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))
@@ -550,10 +542,9 @@ mod tests {
     #[test]
     fn non_archive_reports_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        confit_driver::fs::write(&project.join("note.txt"), b"plain text").unwrap();
+        std::fs::write(project.join("note.txt"), b"plain text").unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "note.txt"))
@@ -577,15 +568,14 @@ mod tests {
     }
 
     #[test]
-    fn repeated_member_reads_reuse_unpack() {
+    fn member_reread_reuses_unpack() {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = confit_driver::fs::TestGuard::install();
         let (stores, receiver) = test_stores_with_events(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
-        confit_driver::fs::write(&project.join("fonts.tar.gz"), &raw).unwrap();
+        std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))

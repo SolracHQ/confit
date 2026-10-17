@@ -1,57 +1,124 @@
-//! Atomic file writes and exact streaming copies over unique pending names.
+//! Atomic file writes through staged sibling temp files.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Pending suffix for sibling scratch files.
-const PENDING_SUFFIX: &str = ".part";
 
 /// Streaming chunk for exact copies.
 const COPY_CHUNK: usize = 8192;
 
-/// Sequence for unique pending names per process.
-static PENDING_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Staged scratch file under one destination folder.
+///
+/// Drop removes the scratch file. Persist moves it onto the destination.
+pub struct StagedFile {
+    /// The staged scratch file.
+    file: tempfile::NamedTempFile,
+}
 
-/// Derive the sibling scratch path for one destination.
-pub fn pending_path(dest: &Path) -> PathBuf {
-    let seq = PENDING_SEQ.fetch_add(1, Ordering::Relaxed);
-    let mut pending = dest.as_os_str().to_owned();
-    pending.push(format!("{PENDING_SUFFIX}-{}-{seq}", std::process::id()));
-    PathBuf::from(pending)
+impl StagedFile {
+    /// Stage one empty scratch file under the destination folder.
+    ///
+    /// - Parent folders build first.
+    ///
+    /// # Errors
+    ///
+    /// - [NotFound] for missing parents.
+    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [Other] for scratch staging failures.
+    pub fn stage(dest: &Path) -> std::io::Result<Self> {
+        crate::fs::create_parent(dest)?;
+        tempfile::NamedTempFile::new_in(scratch_dir(dest)).map(|file| Self { file })
+    }
+
+    /// Return the scratch path for direct writes.
+    pub fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    /// Move the scratch file onto the destination.
+    ///
+    /// - A present destination stays on persist failures.
+    ///
+    /// # Errors
+    ///
+    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [Other] for persist failures with an absent destination.
+    pub fn persist(self, dest: &Path) -> std::io::Result<()> {
+        match self.file.persist(dest) {
+            Ok(_) => Ok(()),
+            Err(_) if dest.exists() => Ok(()),
+            Err(error) => Err(error.error),
+        }
+    }
+}
+
+/// Staged scratch dir under one destination folder.
+///
+/// Drop removes the scratch dir. Persist renames it onto the destination.
+pub struct StagedDir {
+    /// The staged scratch dir.
+    dir: tempfile::TempDir,
+}
+
+impl StagedDir {
+    /// Stage one empty scratch dir under the destination folder.
+    ///
+    /// - Parent folders build first.
+    ///
+    /// # Errors
+    ///
+    /// - [NotFound] for missing parents.
+    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [Other] for scratch staging failures.
+    pub fn stage(dest: &Path) -> std::io::Result<Self> {
+        crate::fs::create_parent(dest)?;
+        tempfile::TempDir::new_in(scratch_dir(dest)).map(|dir| Self { dir })
+    }
+
+    /// Return the scratch path for direct writes.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// Rename the scratch dir onto the destination.
+    ///
+    /// - A present destination stays on rename failures.
+    ///
+    /// # Errors
+    ///
+    /// - [NotFound] for missing scratch entries.
+    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [Other] for rename failures with an absent destination.
+    pub fn persist(self, dest: &Path) -> std::io::Result<()> {
+        match std::fs::rename(self.path(), dest) {
+            Ok(()) => {
+                let _ = self.dir.keep();
+                Ok(())
+            }
+            Err(_) if dest.exists() => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// Write one file atomically through a sibling rename.
 ///
 /// - Parent folders build first.
-/// - Closure failures remove pending and report the closure error.
+/// - Closure failures remove the scratch file and report the closure error.
 /// - Rename failures with a present destination report success with the
 ///   present entry kept.
 ///
 /// # Errors
 ///
-/// - Parent build, closure, and rename failures fail
-///   as io errors.
+/// - [NotFound] for missing parents.
+/// - [PermissionDenied] when the destination refuses writes.
+/// - [Other] for staging failures.
 pub fn atomic_write(
     dest: &Path,
     write: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    crate::fs::create_parent(dest)?;
-    let pending = pending_path(dest);
-    if let Err(error) = write(&pending) {
-        let _ = crate::fs::remove_file(&pending);
-        return Err(error);
-    }
-    match crate::fs::rename(&pending, dest) {
-        Ok(()) => Ok(()),
-        Err(_) if crate::fs::metadata(dest).is_ok() => {
-            let _ = crate::fs::remove_file(&pending);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = crate::fs::remove_file(&pending);
-            Err(error)
-        }
-    }
+    let staged = StagedFile::stage(dest)?;
+    let pending = staged.path().to_path_buf();
+    write(&pending)?;
+    staged.persist(dest)
 }
 
 /// Stream one reader into one writer exactly.
@@ -75,6 +142,13 @@ pub fn copy_stream(
     }
 }
 
+/// Resolve the scratch parent for one destination.
+fn scratch_dir(dest: &Path) -> PathBuf {
+    dest.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,26 +156,21 @@ mod tests {
 
     #[test]
     fn atomic_write_round_trip() {
-        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        atomic_write(&dest, |pending| crate::fs::write(pending, b"atomic bytes")).unwrap();
-        assert_eq!(crate::fs::read(&dest).unwrap(), b"atomic bytes");
+        atomic_write(&dest, |pending| std::fs::write(pending, b"atomic bytes")).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"atomic bytes");
     }
 
     #[test]
     fn atomic_write_failure_cleans_pending() {
-        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
         let outcome = atomic_write(&dest, |_| {
             Err(std::io::Error::other("scripted write failure"))
         });
         assert!(outcome.is_err(), "closure failure reports loud");
-        assert!(
-            !crate::fs::exists(&dest),
-            "failed write leaves no destination"
-        );
+        assert!(!dest.exists(), "failed write leaves no destination");
         let parent = dest.parent().unwrap().to_path_buf();
         let leftovers = crate::fs::read_dir(&parent).unwrap_or_default();
         assert!(leftovers.is_empty(), "failed write leaves no pending entry");
@@ -109,13 +178,24 @@ mod tests {
 
     #[test]
     fn atomic_write_overwrites_present_destination() {
-        let _guard = crate::fs::TestGuard::install();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        crate::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-        crate::fs::write(&dest, b"winner").unwrap();
-        atomic_write(&dest, |pending| crate::fs::write(pending, b"newcomer")).unwrap();
-        assert_eq!(crate::fs::read(&dest).unwrap(), b"newcomer");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"winner").unwrap();
+        atomic_write(&dest, |pending| std::fs::write(pending, b"newcomer")).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"newcomer");
+    }
+
+    #[test]
+    fn staged_file_persists_and_cleans() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("staged").join("note.bin");
+        let staged = StagedFile::stage(&dest).unwrap();
+        std::fs::write(staged.path(), b"staged bytes").unwrap();
+        staged.persist(&dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"staged bytes");
+        let leftovers = crate::fs::read_dir(dest.parent().unwrap()).unwrap();
+        assert_eq!(leftovers, vec![dest]);
     }
 
     #[test]

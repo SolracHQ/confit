@@ -3,9 +3,10 @@
 
 #![deny(missing_docs)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use confit_driver::paths::BaseDirs;
 use confit_driver::progress::ProgressSender;
 
 pub mod archive;
@@ -24,8 +25,8 @@ use state::StateStore;
 
 /// Base folders for every write-backed capability.
 ///
-/// All three bases travel together from one construction site. Empty paths are
-/// unset.
+/// Config, temp, and project roots travel together from one
+/// construction site. Empty paths are unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
     /// State and history storage base.
@@ -56,23 +57,36 @@ pub struct Stores {
 impl StoreRoots {
     /// Build standard host roots from environment folders.
     ///
-    /// - Config uses the `dirs` config folder under `confit`, temp uses the
+    /// - Config uses the system config folder under `confit`, temp uses the
     ///   process temp folder under `confit`, and the project root is the
     ///   working folder.
     /// - Unset folders fall back to relative `confit` folders, an unavailable
     ///   working folder falls back to `.`.
     pub fn standard() -> Self {
-        let config_base = dirs::config_dir()
+        let config_base = BaseDirs::new()
+            .config
             .map(|base| base.join("confit"))
             .unwrap_or_else(|| PathBuf::from("confit"));
-        let temp_base = std::env::temp_dir().join("confit");
-        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             config_base,
-            temp_base,
-            project_root,
+            temp_base: std::env::temp_dir().join("confit"),
+            project_root: current_dir(),
         }
     }
+
+    /// Build roots under one temp folder for tests.
+    pub fn under(temp: &Path, project_root: &Path) -> Self {
+        Self {
+            config_base: temp.join("confit"),
+            temp_base: temp.join("confit-temp"),
+            project_root: project_root.to_path_buf(),
+        }
+    }
+}
+
+/// Read the working folder with a relative fallback.
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 impl Stores {

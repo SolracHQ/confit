@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use confit_driver as driver;
 use confit_driver::sha::Sha;
-use confit_driver::{self as driver};
 use serde::{Deserialize, Serialize};
 
 /// Recorded member hash with size and mtime.
@@ -29,7 +29,7 @@ fn manifest_path(dest: &Path) -> PathBuf {
 
 /// Load one manifest, bad payloads read empty.
 fn load(dest: &Path) -> Manifest {
-    let bytes = match driver::fs::read(&manifest_path(dest)) {
+    let bytes = match std::fs::read(manifest_path(dest)) {
         Ok(bytes) => bytes,
         Err(_) => return Manifest::default(),
     };
@@ -44,13 +44,13 @@ fn store(dest: &Path, manifest: &Manifest) {
         Ok(bytes) => bytes,
         Err(_) => return,
     };
-    let _ = driver::fs::write(&manifest_path(dest), &bytes);
+    let _ = std::fs::write(manifest_path(dest), &bytes);
 }
 
 /// Read one file size with mtime. Unknown mtimes read absent.
 fn stat_tick(path: &Path) -> Option<(u64, u64)> {
-    let facts = driver::fs::metadata(path).ok()?;
-    let modified = facts.modified();
+    let facts = std::fs::metadata(path).ok()?;
+    let modified = driver::fs::modified_nanos(&facts);
     if modified == 0 {
         return None;
     }

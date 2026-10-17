@@ -1,9 +1,10 @@
 //! Cli
 //! Argument shapes for the terminal surface.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use confit_driver::paths::BaseDirs;
 
 /// Configuration as code for one user and plan before apply.
 #[derive(Debug, Parser)]
@@ -104,12 +105,8 @@ pub struct DeleteArgs {
     pub name: String,
 }
 
-/// Expand one leading `~` against the OS home folder.
-///
-/// Bare `~` and `~/` inputs map against the home folder.
-///
-/// - Other inputs and unknown homes pass through unchanged.
-pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
+/// Expand one leading `~` against the home folder.
+pub fn expand_tilde(path: &Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
     };
@@ -120,7 +117,7 @@ pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     } else {
         return path.to_path_buf();
     };
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = BaseDirs::new().home else {
         return path.to_path_buf();
     };
     if rest.is_empty() {
@@ -174,12 +171,12 @@ pub const HOOKS_DIR_NAME: &str = "hooks";
 /// - Explicit flags win over the environment.
 /// - `CONFIT_LOG_DIR` fills the gap before the default.
 /// - Omitted values use a per-process temp dir.
-pub fn resolve_logs_dir(explicit: Option<&std::path::Path>) -> PathBuf {
+pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(dir) = explicit {
         return expand_tilde(dir);
     }
     if let Some(dir) = std::env::var_os(LOGS_DIR_ENV) {
-        return expand_tilde(std::path::Path::new(&dir));
+        return expand_tilde(Path::new(&dir));
     }
     std::env::temp_dir().join(format!("confit-{}", std::process::id()))
 }
@@ -235,5 +232,33 @@ mod tests {
             PathBuf::from("/elsewhere/laptop.lua"),
             "absolute names stay as is"
         );
+    }
+
+    #[test]
+    fn expand_tilde_bare_home() {
+        let home = BaseDirs::new().home.unwrap();
+        assert_eq!(expand_tilde(Path::new("~")), home);
+    }
+
+    #[test]
+    fn expand_tilde_joins_suffix() {
+        let home = BaseDirs::new().home.unwrap();
+        assert_eq!(
+            expand_tilde(Path::new("~/site/main.lua")),
+            home.join("site/main.lua")
+        );
+    }
+
+    #[test]
+    fn logs_dir_prefers_explicit_over_env() {
+        let home = BaseDirs::new().home.unwrap();
+        let out = resolve_logs_dir(Some(Path::new("~/logs")));
+        assert_eq!(out, home.join("logs"));
+    }
+
+    #[test]
+    fn logs_dir_defaults_below_temp() {
+        let out = resolve_logs_dir(None);
+        assert!(out.starts_with(std::env::temp_dir()));
     }
 }

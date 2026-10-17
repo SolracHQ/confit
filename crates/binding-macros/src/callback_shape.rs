@@ -21,7 +21,7 @@ struct CallbackField {
     live: bool,
 }
 
-/// Report whether one type names a Lua function.
+/// Report whether one type is a Lua function.
 fn is_function_ty(ty: &Type) -> bool {
     if let Type::Path(path) = ty
         && let Some(last) = path.path.segments.last()

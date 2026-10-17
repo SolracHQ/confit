@@ -636,6 +636,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
                 content.split('\n').map(str::to_string).collect()
             }
         }
+        #[cfg(unix)]
         Data::Link { target } => vec![target.display()],
         Data::Opaque { handle: blob, .. } => {
             vec![format!("opaque {}", opaque_ref_label(blob.sha256()))]
@@ -681,6 +682,7 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
         (Data::Structured { data: new, .. }, Data::Structured { data: old, .. }) => {
             structured_update_lines(painter, new, old)
         }
+        #[cfg(unix)]
         (Data::Link { target: new }, Data::Link { target: old }) => {
             if old == new {
                 Vec::new()

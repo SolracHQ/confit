@@ -1,7 +1,9 @@
 //! Destination writes with deleted removal.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_driver::progress::{Event, ProgressSender};
@@ -49,14 +51,14 @@ impl Writer {
         for document in documents {
             let expanded = expand_destination(document)?;
             if document.data.unmanaged()
-                && driver::fs::exists(&expanded)
+                && expanded.exists()
                 && !changed.contains(&document.destination)
             {
                 continue;
             }
             if let Data::Tree { members } = &document.data {
                 let count = write_tree(&expanded, members, &self.stores)?;
-                driver::fs::set_mode_if_present(&expanded, document.mode())
+                driver::fs::set_mode(&expanded, document.mode())
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
                 self.emit_written(&document.destination, done, total);
@@ -68,7 +70,7 @@ impl Writer {
                     return Err(RuntimeError::from_write_io(&expanded, error));
                 }
                 copy_blob(&expanded, &expanded, blob, &self.stores)?;
-                driver::fs::set_mode_if_present(&expanded, document.mode())
+                driver::fs::set_mode(&expanded, document.mode())
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
                 self.emit_written(&document.destination, done, total);
@@ -76,6 +78,7 @@ impl Writer {
                 continue;
             }
             let outcome = match &document.data {
+                #[cfg(unix)]
                 Data::Link { target } => {
                     let link = target.display();
                     driver::fs::write_link(&expanded, Path::new(&link))
@@ -89,7 +92,7 @@ impl Writer {
                     if let Err(error) = driver::fs::create_parent(&expanded) {
                         return Err(RuntimeError::from_write_io(&expanded, error));
                     }
-                    driver::fs::write(&expanded, &bytes)
+                    std::fs::write(&expanded, &bytes)
                         .map_err(|error| RuntimeError::from_write_io(&expanded, error))
                 }
                 Data::Tree { .. } | Data::Opaque { .. } => {
@@ -97,7 +100,7 @@ impl Writer {
                 }
             };
             outcome?;
-            driver::fs::set_mode_if_present(&expanded, document.mode())
+            driver::fs::set_mode(&expanded, document.mode())
                 .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
             done += 1;
             self.emit_written(&document.destination, done, total);
@@ -221,7 +224,6 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::fs::TestGuard;
     use confit_driver::progress::Event;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -244,7 +246,6 @@ mod tests {
     #[test]
     fn remove_deleted_announces_document_removed() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = StoreRoots {
             config_base: dir.path().join("config"),
             temp_base: dir.path().join("temp"),
@@ -257,7 +258,7 @@ mod tests {
         };
         let path = dir.path().join("deleted.txt");
         driver::fs::create_parent(&path).unwrap();
-        driver::fs::write(&path, b"deleted bytes").unwrap();
+        std::fs::write(&path, b"deleted bytes").unwrap();
         let recorded = vec![text_doc(&path)];
         match writer.remove_deleted(&recorded, &[]) {
             Ok(removed) => assert_eq!(removed, 1, "deleted leaves disk"),
@@ -277,7 +278,6 @@ mod tests {
     #[test]
     fn batch_moves_remove_counters_across_deleted() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = StoreRoots {
             config_base: dir.path().join("config"),
             temp_base: dir.path().join("temp"),
@@ -291,8 +291,8 @@ mod tests {
         let first = dir.path().join("first.txt");
         let second = dir.path().join("second.txt");
         driver::fs::create_parent(&first).unwrap();
-        driver::fs::write(&first, b"deleted bytes").unwrap();
-        driver::fs::write(&second, b"deleted bytes").unwrap();
+        std::fs::write(&first, b"deleted bytes").unwrap();
+        std::fs::write(&second, b"deleted bytes").unwrap();
         let recorded = vec![text_doc(&first), text_doc(&second)];
         match writer.remove_deleted(&recorded, &[]) {
             Ok(removed) => assert_eq!(removed, 2, "both deleted leave disk"),
@@ -321,7 +321,6 @@ mod tests {
         use std::collections::BTreeSet;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = StoreRoots {
             config_base: dir.path().join("config"),
             temp_base: dir.path().join("temp"),

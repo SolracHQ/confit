@@ -1,5 +1,5 @@
 //! Registration emission
-//! Descriptor plus runtime registration tokens.
+//! Descriptor and runtime registration tokens.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;

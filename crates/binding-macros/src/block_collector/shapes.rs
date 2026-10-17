@@ -1,9 +1,9 @@
 //! Type shapes
-//! Lua, result, plus tuple queries over signature types.
+//! Lua, result and tuple queries over signature types.
 
 use syn::Type;
 
-/// Report whether one type reads as the Lua context by reference.
+/// Report whether one type is the Lua context by reference.
 pub(crate) fn is_lua_ref(ty: &Type) -> bool {
     if let Type::Reference(reference) = ty
         && reference.mutability.is_none()
@@ -15,7 +15,7 @@ pub(crate) fn is_lua_ref(ty: &Type) -> bool {
     false
 }
 
-/// Report whether one type contains the Lua context in any shape.
+/// Report whether one type is the Lua context in any shape.
 pub(crate) fn names_lua(ty: &Type) -> bool {
     match ty {
         Type::Reference(reference) => names_lua(&reference.elem),
@@ -41,7 +41,7 @@ pub(crate) fn unwrap_result(ty: &Type) -> Type {
     ty.clone()
 }
 
-/// Report whether one type reads as a result.
+/// Report whether one type is a result.
 pub(crate) fn is_result(ty: &Type) -> bool {
     if let Type::Path(path) = ty
         && let Some(last) = path.path.segments.last()
@@ -60,7 +60,7 @@ pub(crate) fn return_arity(returns: &Option<Type>) -> usize {
     }
 }
 
-/// Report whether one type reads as a tuple return.
+/// Report whether one type is a tuple return.
 pub(crate) fn is_tuple(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(_))
 }

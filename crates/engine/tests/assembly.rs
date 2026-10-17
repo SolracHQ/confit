@@ -143,12 +143,11 @@ fn survivors_order_by_route() {
 
 #[test]
 fn placed_documents_convert_every_kind() {
-    let _guard = confit_driver::fs::TestGuard::install();
     let lua = Lua::new();
     let (_held, stores) = test_stores();
     let root = stores.resources().roots.project_root.clone();
-    confit_driver::fs::create_dir_all(&root).unwrap();
-    confit_driver::fs::write(&root.join("glyph.ttf"), b"ttf").unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("glyph.ttf"), b"ttf").unwrap();
     let resource = stores.resources().resource("glyph.ttf").unwrap();
     let opened = stores.blobs().put(&resource).unwrap();
     let blob = opened.sha256().clone();
@@ -170,6 +169,7 @@ fn placed_documents_convert_every_kind() {
     let documents = vec![
         placed_text("note.txt", "hi"),
         placed_structured("config.json"),
+        #[cfg(unix)]
         (
             Route::new(RouteBase::Home, "linked").unwrap(),
             Data::Link {
@@ -186,7 +186,10 @@ fn placed_documents_convert_every_kind() {
     let profile = profile_of(documents, vec![]);
     match assemble(&lua, &profile) {
         Ok(found) => {
+            #[cfg(unix)]
             assert_eq!(found.len(), 6);
+            #[cfg(not(unix))]
+            assert_eq!(found.len(), 5);
             let by_display = |display: &str| {
                 found
                     .iter()
@@ -213,6 +216,7 @@ fn placed_documents_convert_every_kind() {
                 }
                 _ => panic!("structured stays structured"),
             }
+            #[cfg(unix)]
             match by_display("home('linked')") {
                 Data::Link { target } => assert_eq!(target.display(), "home('origin')"),
                 _ => panic!("link stays link"),

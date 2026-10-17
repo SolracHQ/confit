@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
+use confit_driver::paths::BaseDirs;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
@@ -119,12 +120,13 @@ impl Route {
     ///
     /// - [`Error::Base`] for unresolvable base folders.
     pub fn expand(&self) -> Result<PathBuf> {
+        let bases = BaseDirs::new();
         let base = match self.base {
             RouteBase::Literal => return Ok(self.relative.clone()),
-            RouteBase::Home => dir_or_fail(RouteBase::Home, dirs::home_dir())?,
-            RouteBase::Config => dir_or_fail(RouteBase::Config, dirs::config_dir())?,
-            RouteBase::Data => dir_or_fail(RouteBase::Data, dirs::data_dir())?,
-            RouteBase::Cache => dir_or_fail(RouteBase::Cache, dirs::cache_dir())?,
+            RouteBase::Home => dir_or_fail(RouteBase::Home, bases.home)?,
+            RouteBase::Config => dir_or_fail(RouteBase::Config, bases.config)?,
+            RouteBase::Data => dir_or_fail(RouteBase::Data, bases.data)?,
+            RouteBase::Cache => dir_or_fail(RouteBase::Cache, bases.cache)?,
         };
         Ok(base.join(&self.relative))
     }
@@ -169,18 +171,19 @@ mod tests {
     }
 
     #[test]
-    fn expand_matches_host_mapping_for_every_base() {
+    fn expand_joins_each_base_under_shared_root() {
         let relative = Path::new("starship/starship.toml");
+        let bases = BaseDirs::new();
         let cases = [
-            (RouteBase::Home, dirs::home_dir()),
-            (RouteBase::Config, dirs::config_dir()),
-            (RouteBase::Data, dirs::data_dir()),
-            (RouteBase::Cache, dirs::cache_dir()),
+            (RouteBase::Home, bases.home.clone()),
+            (RouteBase::Config, bases.config.clone()),
+            (RouteBase::Data, bases.data.clone()),
+            (RouteBase::Cache, bases.cache.clone()),
         ];
         for (base, found) in cases {
             let route = Route::new(base, relative).unwrap();
             match found {
-                Some(home) => assert_eq!(route.expand().unwrap(), home.join(relative)),
+                Some(root) => assert_eq!(route.expand().unwrap(), root.join(relative)),
                 None => assert!(route.expand().is_err()),
             }
         }

@@ -25,19 +25,72 @@ pub struct Member<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// One tar build member.
-pub struct BuildMember<'a> {
-    /// Container name with forward slashes.
-    pub name: String,
-    /// Byte count recorded in the header.
-    pub len: u64,
-    /// Reader for exactly `len` bytes.
-    pub reader: Box<dyn io::Read + 'a>,
-    /// Unix permission bits for the entry.
-    pub mode: u32,
+/// Streaming tar writer.
+pub struct TarBuilder<W: io::Write> {
+    inner: tar::Builder<W>,
 }
 
-/// Report whether one head window holds tar or gzip bytes.
+impl<W: io::Write> TarBuilder<W> {
+    /// Plain tar over one sink.
+    pub fn create(sink: W) -> Self {
+        Self {
+            inner: tar::Builder::new(sink),
+        }
+    }
+
+    /// Single entry with its header.
+    ///
+    /// - Exact `len` bytes from the reader.
+    /// - Forward slashes in the entry name.
+    ///
+    /// # Errors
+    ///
+    /// - Io errors from the sink and the entries.
+    pub fn member<R: io::Read>(
+        &mut self,
+        name: &str,
+        len: u64,
+        mode: u32,
+        reader: &mut R,
+    ) -> io::Result<()> {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(len);
+        header.set_mode(mode);
+        header.set_cksum();
+        self.inner.append_data(&mut header, name, reader)?;
+        Ok(())
+    }
+
+    /// Final tar tail with the sink.
+    ///
+    /// # Errors
+    ///
+    /// - Io errors from the sink and the entries.
+    pub fn finish(self) -> io::Result<W> {
+        self.inner.into_inner()
+    }
+}
+
+impl<W: io::Write> TarBuilder<gzip::Encoder<W>> {
+    /// Gzipped tar over one sink at one level.
+    pub fn create_gzipped(sink: W, level: u32) -> Self {
+        Self {
+            inner: tar::Builder::new(gzip::Encoder::open(sink, level)),
+        }
+    }
+
+    /// Final tar tail with gzip tail and the sink.
+    ///
+    /// # Errors
+    ///
+    /// - Io errors from the sink and the entries.
+    pub fn finish_gzipped(self) -> io::Result<W> {
+        let encoder = self.inner.into_inner()?;
+        encoder.finish()
+    }
+}
+
+/// Report whether tar or gzip bytes fill one head window.
 ///
 /// Gzip magic and tar magic return true, short and plain heads return false.
 pub fn handles(head: &[u8]) -> bool {
@@ -52,7 +105,7 @@ pub fn handles(head: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// - Stream reads fail as io errors.
+/// - Unreadable streams fail as io errors.
 /// - [InvalidData] when gzip bytes refuse.
 /// - [UnexpectedEof] when gzip bytes cut mid stream.
 /// - [Other] when tar framing fails and when an empty
@@ -98,41 +151,6 @@ pub fn walk(
     single_walk(windowed.stream, fallback, visit)
 }
 
-/// Build one plain tar.
-///
-/// # Errors
-///
-/// - Sink and entry writes fail as io errors.
-pub fn build_plain(sink: impl io::Write, members: Vec<BuildMember<'_>>) -> io::Result<()> {
-    let mut builder = tar::Builder::new(sink);
-    for member in members {
-        append_member(&mut builder, member)?;
-    }
-    builder.into_inner()?;
-    Ok(())
-}
-
-/// Build one gzipped tar.
-///
-/// # Errors
-///
-/// - Sink and entry writes fail as io errors.
-pub fn build_gzipped(
-    sink: impl io::Write,
-    members: Vec<BuildMember<'_>>,
-    level: u32,
-) -> io::Result<()> {
-    let level = flate2::Compression::new(level);
-    let encoder = flate2::write::GzEncoder::new(sink, level);
-    let mut builder = tar::Builder::new(encoder);
-    for member in members {
-        append_member(&mut builder, member)?;
-    }
-    let encoder = builder.into_inner()?;
-    encoder.finish()?;
-    Ok(())
-}
-
 /// One probed stream with its gzip verdict.
 struct Probed<R> {
     gzipped: bool,
@@ -143,7 +161,7 @@ struct Probed<R> {
 ///
 /// # Errors
 ///
-/// - Stream reads fail as io errors.
+/// - Unreadable streams fail as io errors.
 fn probe<R: io::Read>(mut reader: R) -> io::Result<Probed<R>> {
     let mut prefix = Vec::with_capacity(GZIP_MAGIC.len());
     let mut byte = [0u8; 1];
@@ -159,12 +177,12 @@ fn probe<R: io::Read>(mut reader: R) -> io::Result<Probed<R>> {
     Ok(Probed { gzipped, stream })
 }
 
-/// Report whether one head window holds gzip magic.
+/// Report whether gzip bytes fill one head window.
 fn is_gzip(head: &[u8]) -> bool {
     head.starts_with(&GZIP_MAGIC)
 }
 
-/// Report whether one head window holds tar magic.
+/// Report whether tar bytes fill one head window.
 fn is_tar(head: &[u8]) -> bool {
     head.get(TAR_MAGIC_OFFSET..TAR_MAGIC_OFFSET + TAR_MAGIC.len())
         .is_some_and(|tag| tag == TAR_MAGIC)
@@ -180,11 +198,11 @@ struct Windowed<R: io::Read> {
 
 /// Decode one tar block window and chain bytes back.
 ///
-/// - Short reads end the window.
+/// - Short inputs end the window.
 ///
 /// # Errors
 ///
-/// - Stream reads fail as io errors.
+/// - Unreadable streams fail as io errors.
 /// - [InvalidData] when gzip bytes refuse.
 /// - [UnexpectedEof] when gzip bytes cut mid stream.
 fn gunzip_window<R: io::Read>(reader: R) -> io::Result<Windowed<R>> {
@@ -235,7 +253,7 @@ fn single_walk<'a, R: io::Read + 'a>(
 ///
 /// # Errors
 ///
-/// - Stream and entry reads fail as io errors.
+/// - Unreadable streams and entries fail as io errors.
 /// - [Other] when tar framing fails.
 fn plain_names(reader: impl io::Read) -> io::Result<Vec<String>> {
     let mut archive = tar::Archive::new(reader);
@@ -298,29 +316,6 @@ fn file_name<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> io::Result<Option<St
     } else {
         Ok(Some(name))
     }
-}
-
-/// Append one member under its own header.
-///
-/// # Errors
-///
-/// - Header and append failures fail as io errors.
-fn append_member<'a, W: io::Write>(
-    builder: &mut tar::Builder<W>,
-    member: BuildMember<'a>,
-) -> io::Result<()> {
-    let BuildMember {
-        name,
-        len,
-        mut reader,
-        mode,
-    } = member;
-    let mut header = tar::Header::new_gnu();
-    header.set_size(len);
-    header.set_mode(mode);
-    header.set_cksum();
-    builder.append_data(&mut header, name, &mut reader)?;
-    Ok(())
 }
 
 #[cfg(test)]

@@ -1,14 +1,12 @@
 mod common;
 
 use common::*;
-use confit_driver::fs::TestGuard;
 use confit_model::document::{Data, StructuredFormat};
 use confit_model::routes::{Route, RouteBase};
 
 #[test]
 fn evaluates_text_in_destination_order() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), PAIR);
     match engine.evaluate(&profile) {
@@ -35,7 +33,6 @@ fn evaluates_text_in_destination_order() {
 #[test]
 fn evaluates_structured_with_filled_hash() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), STRUCTURED);
     match engine.evaluate(&profile) {
@@ -61,7 +58,6 @@ fn evaluates_structured_with_filled_hash() {
 #[test]
 fn duplicate_destinations_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), DUPLICATE);
     match engine.evaluate(&profile) {
@@ -79,14 +75,13 @@ fn duplicate_destinations_fail() {
 #[test]
 fn root_rides_stores() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let root = project_root(dir.path());
-    confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
+    std::fs::write(root.join("note.txt"), b"hello").unwrap();
     let elsewhere = dir.path().join("elsewhere");
-    confit_driver::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
     let profile = elsewhere.join("profile.lua");
-    confit_driver::fs::write(&profile, PROJECT_TEXT.as_bytes()).unwrap();
+    std::fs::write(&profile, PROJECT_TEXT.as_bytes()).unwrap();
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
@@ -99,12 +94,11 @@ fn root_rides_stores() {
 #[test]
 fn project_text_flows_into_documents() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let root = project_root(dir.path());
-    confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
+    std::fs::write(root.join("note.txt"), b"hello").unwrap();
     let profile = root.join("profile.lua");
-    confit_driver::fs::write(&profile, PROJECT_TEXT.as_bytes()).unwrap();
+    std::fs::write(&profile, PROJECT_TEXT.as_bytes()).unwrap();
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
@@ -117,7 +111,6 @@ fn project_text_flows_into_documents() {
 #[test]
 fn patches_apply_over_declared_documents() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), PATCHED);
     match engine.evaluate(&profile) {
@@ -146,7 +139,6 @@ fn patches_apply_over_declared_documents() {
 #[test]
 fn duplicate_names_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), DUPLICATE_NAMES);
     match engine.evaluate(&profile) {
@@ -165,7 +157,6 @@ fn duplicate_names_fail() {
 #[test]
 fn two_patches_merge_both_keys() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MERGED_PATCHES);
     match engine.evaluate(&profile) {
@@ -193,7 +184,6 @@ fn two_patches_merge_both_keys() {
 #[test]
 fn missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MISSING_TARGET);
     match engine.evaluate(&profile) {
@@ -211,7 +201,6 @@ fn missing_targets_fail_showing_targets() {
 #[test]
 fn text_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), TEXT_BASE);
     match engine.evaluate(&profile) {
@@ -230,7 +219,6 @@ fn text_bases_fail() {
 #[test]
 fn failing_callbacks_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FAILING_CALLBACK);
     match engine.evaluate(&profile) {
@@ -245,7 +233,6 @@ fn failing_callbacks_fail() {
 #[test]
 fn format_gaps_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FORMAT_GAP);
     match engine.evaluate(&profile) {
@@ -265,7 +252,6 @@ fn format_gaps_fail() {
 #[test]
 fn rc_two_patches_merge_entries() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_MERGED);
     match engine.evaluate(&profile) {
@@ -288,7 +274,6 @@ fn rc_two_patches_merge_entries() {
 #[test]
 fn rc_missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_MISSING);
     match engine.evaluate(&profile) {
@@ -306,7 +291,6 @@ fn rc_missing_targets_fail_showing_targets() {
 #[test]
 fn rc_text_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_TEXT_BASE);
     match engine.evaluate(&profile) {
@@ -326,7 +310,6 @@ fn rc_text_bases_fail() {
 #[test]
 fn rc_failing_callbacks_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_FAILING);
     match engine.evaluate(&profile) {
@@ -341,7 +324,6 @@ fn rc_failing_callbacks_fail() {
 #[test]
 fn rc_format_gaps_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_FORMAT_GAP);
     match engine.evaluate(&profile) {
@@ -361,7 +343,6 @@ fn rc_format_gaps_fail() {
 #[test]
 fn mixed_sides_merge_live_targets() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_SPLIT);
     match engine.evaluate(&profile) {
@@ -393,7 +374,6 @@ fn mixed_sides_merge_live_targets() {
 #[test]
 fn rc_patches_over_structured_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_OVER_STRUCTURED);
     match engine.evaluate(&profile) {
@@ -413,7 +393,6 @@ fn rc_patches_over_structured_bases_fail() {
 #[test]
 fn mixed_structured_formats_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_FORMATS);
     match engine.evaluate(&profile) {
@@ -439,7 +418,6 @@ fn mixed_structured_formats_fail() {
 #[test]
 fn mixed_kind_same_target_gaps() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_SAME_TARGET);
     match engine.evaluate(&profile) {
@@ -459,7 +437,6 @@ fn mixed_kind_same_target_gaps() {
 #[test]
 fn foreign_patch_keys_fail_showing_keys() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FOREIGN_PATCH_KEY);
     match engine.evaluate(&profile) {
@@ -474,7 +451,6 @@ fn foreign_patch_keys_fail_showing_keys() {
 #[test]
 fn evaluation_carries_hooks_through() {
     let dir = tempfile::tempdir().unwrap();
-    let _guard = TestGuard::install();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), HOOKS_THROUGH);
     match engine.evaluate(&profile) {

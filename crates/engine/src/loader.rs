@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use mlua::{Lua, Table, Value};
 
-use confit_driver as driver;
 use confit_store::Stores;
 
 use crate::api::builtin;
@@ -115,7 +114,7 @@ pub fn load_chunk(lua: &Lua, path: &Path) -> Result<Value> {
 /// - [`EngineError::Utf8`] for non-UTF8 files.
 fn read_text(path: &Path) -> Result<String> {
     let display = path.display().to_string();
-    let bytes = driver::fs::read(path).map_err(|error| EngineError::Read {
+    let bytes = std::fs::read(path).map_err(|error| EngineError::Read {
         path: display.clone(),
         reason: error.to_string(),
     })?;
@@ -128,7 +127,7 @@ fn read_text(path: &Path) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for failed global reads and table writes.
+/// - [`EngineError::Lua`] for unreadable globals and unwritable tables.
 fn environment(lua: &Lua, caller: Option<PathBuf>) -> Result<Table> {
     let env = lua.create_table()?;
     let globals = lua.globals();
@@ -255,7 +254,7 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
 ///
 /// - [`EngineError::Read`] for unreadable roots.
 fn canonical_root(root: &Path) -> Result<PathBuf> {
-    driver::fs::canonicalize(root).map_err(|error| EngineError::Read {
+    std::fs::canonicalize(root).map_err(|error| EngineError::Read {
         path: root.display().to_string(),
         reason: error.to_string(),
     })
@@ -281,10 +280,10 @@ fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<Pa
         entry.push(part);
     }
     entry.push(INIT_ENTRY);
-    let found = match driver::fs::canonicalize(&direct) {
+    let found = match std::fs::canonicalize(&direct) {
         Ok(hit) => hit,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            driver::fs::canonicalize(&entry).map_err(|error| match error.kind() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::canonicalize(&entry)
+            .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => EngineError::UnknownModule {
                     name: name.to_owned(),
                 },
@@ -292,8 +291,7 @@ fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<Pa
                     path: entry.display().to_string(),
                     reason: error.to_string(),
                 },
-            })?
-        }
+            })?,
         Err(error) => {
             return Err(EngineError::Read {
                 path: direct.display().to_string(),
@@ -341,7 +339,7 @@ fn audit(plugins: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Re
     let Some(caller) = caller else {
         return Ok(());
     };
-    let Ok(caller_real) = driver::fs::canonicalize(caller) else {
+    let Ok(caller_real) = std::fs::canonicalize(caller) else {
         return Ok(());
     };
     if caller_real.starts_with(plugins) && !target.starts_with(plugins) {
@@ -390,7 +388,7 @@ fn scoped(scope: &Path, full: PathBuf, name: &str) -> Result<PathBuf> {
 /// - [`EngineError::Lua`] for Lua syntax and runtime failures.
 fn load_file(lua: &Lua, path: &Path, name: &str) -> Result<Value> {
     let display = path.display().to_string();
-    let bytes = driver::fs::read(path).map_err(|error| match error.kind() {
+    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => EngineError::UnknownModule {
             name: name.to_owned(),
         },
@@ -442,7 +440,6 @@ fn stored_root(lua: &Lua) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::fs::TestGuard;
     use confit_store::{StoreRoots, Stores};
 
     fn test_stores(dir: &Path) -> Stores {
@@ -459,7 +456,7 @@ mod tests {
 
     fn project_root(dir: &Path) -> PathBuf {
         let root = dir.join("project");
-        driver::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         root
     }
 
@@ -478,7 +475,6 @@ mod tests {
     #[test]
     fn missing_profiles_fail_structured() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let lua = test_lua(&stores);
@@ -498,11 +494,10 @@ mod tests {
     #[test]
     fn encoded_profiles_fail_structured() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let profile = root.join("profile.lua");
-        driver::fs::write(&profile, &[0xff, 0xfe]).unwrap();
+        std::fs::write(&profile, [0xff, 0xfe]).unwrap();
         let lua = test_lua(&stores);
         match load_chunk(&lua, &profile) {
             Ok(_) => panic!("encoded profile passes"),
@@ -519,10 +514,9 @@ mod tests {
     #[test]
     fn encoded_modules_fail_structured() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        driver::fs::write(&root.join("broken.lua"), &[0xff, 0xfe]).unwrap();
+        std::fs::write(root.join("broken.lua"), [0xff, 0xfe]).unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"broken\")") {
             Ok(_) => panic!("encoded module passes"),
@@ -541,7 +535,6 @@ mod tests {
     #[test]
     fn unknown_names_fail() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -564,10 +557,9 @@ mod tests {
     #[test]
     fn file_modules_load_under_root() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        driver::fs::write(&root.join("helper.lua"), b"return 41").unwrap();
+        std::fs::write(root.join("helper.lua"), b"return 41").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
@@ -579,12 +571,11 @@ mod tests {
     #[test]
     fn dotted_names_map_to_slashes() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let folder = root.join("nested");
-        driver::fs::create_dir_all(&folder).unwrap();
-        driver::fs::write(&folder.join("helper.lua"), b"return 41").unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"nested.helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
@@ -596,12 +587,11 @@ mod tests {
     #[test]
     fn empty_components_collapse() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let folder = root.join("nested");
-        driver::fs::create_dir_all(&folder).unwrap();
-        driver::fs::write(&folder.join("helper.lua"), b"return 41").unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
         let lua = test_lua(&stores);
         for name in ["nested..helper", "nested//helper"] {
             let source = format!("return require({name:?})");
@@ -616,14 +606,13 @@ mod tests {
     #[test]
     fn dotdot_collapses_inside_root() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        driver::fs::write(&root.join("tools.lua"), b"return 3").unwrap();
+        std::fs::write(root.join("tools.lua"), b"return 3").unwrap();
         let nested = root.join("profiles");
-        driver::fs::create_dir_all(&nested).unwrap();
-        driver::fs::write(
-            &nested.join("mainframe.lua"),
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("mainframe.lua"),
             b"return require(\"../tools\") * 14",
         )
         .unwrap();
@@ -638,10 +627,9 @@ mod tests {
     #[test]
     fn lua_suffix_misses_like_stock() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        driver::fs::write(&root.join("helper.lua"), b"return 41").unwrap();
+        std::fs::write(root.join("helper.lua"), b"return 41").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"helper.lua\")") {
             Ok(_) => panic!("suffixed name passes"),
@@ -658,16 +646,15 @@ mod tests {
     #[test]
     fn cycles_name_the_loop() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        driver::fs::write(
-            &root.join("loop_a.lua"),
+        std::fs::write(
+            root.join("loop_a.lua"),
             b"local _ = require(\"loop_b\") return 1",
         )
         .unwrap();
-        driver::fs::write(
-            &root.join("loop_b.lua"),
+        std::fs::write(
+            root.join("loop_b.lua"),
             b"local _ = require(\"loop_a\") return 2",
         )
         .unwrap();
@@ -688,7 +675,6 @@ mod tests {
     #[test]
     fn bare_confit_global_stays_nil() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -727,7 +713,6 @@ mod tests {
     #[test]
     fn proxies_reject_writes_showing_readonly() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
@@ -753,12 +738,11 @@ mod tests {
     #[test]
     fn init_entries_resolve() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let entry = root.join("plugins").join("alice").join("tool");
-        driver::fs::create_dir_all(&entry).unwrap();
-        driver::fs::write(&entry.join("init.lua"), b"return 77").unwrap();
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return 77").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"plugins.alice.tool\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 77),
@@ -770,14 +754,13 @@ mod tests {
     #[test]
     fn deep_plugin_paths_load() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let entry = root.join("plugins").join("_").join("sugar");
-        driver::fs::create_dir_all(&entry).unwrap();
-        driver::fs::write(&entry.join("helper.lua"), b"return 7").unwrap();
-        driver::fs::write(
-            &entry.join("init.lua"),
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("helper.lua"), b"return 7").unwrap();
+        std::fs::write(
+            entry.join("init.lua"),
             b"local helper = require(\"plugins._.sugar.helper\") return helper * 6",
         )
         .unwrap();
@@ -792,15 +775,14 @@ mod tests {
     #[test]
     fn plugin_callers_hold_inside_plugins() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let tools = root.join("tools");
-        driver::fs::create_dir_all(&tools).unwrap();
-        driver::fs::write(&tools.join("helper.lua"), b"return 1").unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("helper.lua"), b"return 1").unwrap();
         let entry = root.join("plugins").join("_").join("sugar");
-        driver::fs::create_dir_all(&entry).unwrap();
-        driver::fs::write(&entry.join("init.lua"), b"return require(\"tools.helper\")").unwrap();
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return require(\"tools.helper\")").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"plugins._.sugar\")") {
             Ok(_) => panic!("plugin escape passes"),
@@ -814,12 +796,11 @@ mod tests {
     #[test]
     fn project_callers_require_anything_contained() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let entry = root.join("plugins").join("_").join("sugar");
-        driver::fs::create_dir_all(&entry).unwrap();
-        driver::fs::write(&entry.join("init.lua"), b"return 9").unwrap();
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return 9").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"plugins._.sugar\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 9),
@@ -850,12 +831,11 @@ mod tests {
     #[test]
     fn nested_requires_stay_root_relative() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let folder = root.join("nested");
-        driver::fs::create_dir_all(&folder).unwrap();
-        driver::fs::write(&folder.join("helper.lua"), b"return 41").unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"nested/helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),

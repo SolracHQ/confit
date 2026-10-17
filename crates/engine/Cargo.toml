@@ -21,6 +21,6 @@ toml.workspace = true
 workspace = true
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }
 crossbeam-channel = "0.5.17"
 tempfile.workspace = true

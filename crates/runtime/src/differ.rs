@@ -308,6 +308,7 @@ fn disk_difference(
                 Vec::new()
             }
         }
+        #[cfg(unix)]
         Data::Link { target } => {
             let disk_target = String::from_utf8_lossy(disk);
             if disk_target.as_ref() != target.display() {
@@ -461,8 +462,6 @@ fn unreadable_reason(fault: &AccessFault) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver as driver;
-    use confit_driver::fs::TestGuard;
     use confit_model::document::{Data, RcData, RcEntry};
     use confit_model::routes::{Route, RouteBase};
 
@@ -472,21 +471,11 @@ mod tests {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "confit-runtime-difference-{}-{name}",
-            std::process::id()
-        ));
-        driver::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn difference_renders_routes_expanded_like_for_like() {
-        let _guard = TestGuard::install();
-        let dir = scratch("rc");
-        let dest = dir.join("shellrc");
-        let sourced = dir.join("sourced.sh");
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("shellrc");
+        let sourced = dir.path().join("sourced.sh");
         let document = Document::new(
             literal(&dest),
             Data::Rc(RcData::new(
@@ -508,7 +497,7 @@ mod tests {
             !text.contains("literal:"),
             "rendered bytes carry no display alias"
         );
-        driver::fs::write(&dest, &recorded).unwrap();
+        std::fs::write(&dest, &recorded).unwrap();
         let manifest = crate::manifest::Manifest {
             version: MANIFEST_VERSION,
             documents: vec![document.clone()],
@@ -516,7 +505,10 @@ mod tests {
         };
         let (sender, _) = crossbeam_channel::unbounded();
         let differ = Differ {
-            stores: confit_store::Stores::new(confit_store::StoreRoots::default(), sender),
+            stores: confit_store::Stores::new(
+                confit_store::StoreRoots::under(dir.path(), dir.path()),
+                sender,
+            ),
         };
         let found = differ.differences(&manifest, DifferenceOrder::RecordedFirst);
         assert!(
@@ -528,7 +520,5 @@ mod tests {
             dest.to_str().unwrap(),
             "literal display renders the bare host path"
         );
-        driver::fs::remove_file(&dest).unwrap();
-        let _ = driver::fs::remove_file(&dir);
     }
 }

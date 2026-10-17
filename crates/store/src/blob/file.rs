@@ -44,7 +44,7 @@ pub(crate) struct BlobFile {
 /// Object body writer with its header written.
 pub(crate) struct BodyWriter {
     /// Gzip encoder over the object sink.
-    encoder: driver::gzip::Encoder<Box<dyn driver::fs::FsFile>>,
+    encoder: driver::gzip::Encoder<std::fs::File>,
 }
 
 impl ObjectHeader {
@@ -64,12 +64,12 @@ impl BlobFile {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob reads.
+    /// - [`BlobError::Read`] for unreadable blobs.
     /// - [`BlobError::Corrupt`] for truncated files, bad headers,
-    ///   and filename plus header mismatches.
+    ///   and filename and header mismatches.
     pub(crate) fn open(path: PathBuf, expected: &Sha) -> Result<Self> {
         let mut file =
-            driver::fs::open(&path).map_err(|error| BlobError::from_read_io(expected, error))?;
+            std::fs::File::open(&path).map_err(|error| BlobError::from_read_io(expected, error))?;
         let mut raw = [0u8; std::mem::size_of::<ObjectHeader>()];
         if let Err(error) = file.read_exact(&mut raw) {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -97,7 +97,7 @@ impl BlobFile {
     ///
     /// - Sink write failures report as io errors.
     pub(crate) fn create(
-        mut sink: Box<dyn driver::fs::FsFile>,
+        mut sink: std::fs::File,
         sha: &Sha,
         size: u64,
     ) -> std::io::Result<BodyWriter> {
@@ -117,30 +117,28 @@ impl BlobFile {
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed blob opens.
-    pub(crate) fn body(&self) -> Result<Box<dyn std::io::Read>> {
-        let mut file = driver::fs::open(&self.path)
+    pub(crate) fn body(&self) -> Result<driver::gzip::Decoder<std::fs::File>> {
+        let mut file = std::fs::File::open(&self.path)
             .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
         file.seek(std::io::SeekFrom::Start(
             std::mem::size_of::<ObjectHeader>() as u64,
         ))
         .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
-        Ok(Box::new(driver::gzip::Decoder::open(
-            file as Box<dyn std::io::Read>,
-        )))
+        Ok(driver::gzip::Decoder::open(file))
     }
 
     /// Load raw object bytes with their encoded length.
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob reads.
-    pub(crate) fn raw(&self) -> Result<(u64, Box<dyn std::io::Read>)> {
-        let total = driver::fs::metadata(&self.path)
+    /// - [`BlobError::Read`] for unreadable blobs.
+    pub(crate) fn raw(&self) -> Result<(u64, std::fs::File)> {
+        let total = std::fs::metadata(&self.path)
             .map_err(|error| BlobError::from_read_io(&self.sha, error))?
             .len();
-        let file = driver::fs::open(&self.path)
+        let file = std::fs::File::open(&self.path)
             .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
-        Ok((total, file as Box<dyn std::io::Read>))
+        Ok((total, file))
     }
 }
 

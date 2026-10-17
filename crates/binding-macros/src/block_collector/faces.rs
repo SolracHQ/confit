@@ -1,5 +1,5 @@
 //! Collected faces
-//! Method plus static shapes with stub faces.
+//! Method and static shapes with stub faces.
 
 use syn::{Pat, Type};
 

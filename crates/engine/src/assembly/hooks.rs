@@ -39,7 +39,7 @@ pub(super) fn collect_hooks(
     Ok(hooks)
 }
 
-/// Reject repeated hook ids. The error holds the first repeat.
+/// Reject repeated hook ids. Errors hold the first repeat.
 ///
 /// # Errors
 ///

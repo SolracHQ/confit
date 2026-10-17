@@ -117,7 +117,6 @@ check! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::fs::TestGuard;
     use mlua::{Lua, Value};
 
     fn test_lua() -> Lua {
@@ -130,8 +129,8 @@ mod tests {
     fn opened_lua() -> (tempfile::TempDir, Lua) {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("project");
-        confit_driver::fs::create_dir_all(&root).unwrap();
-        confit_driver::fs::write(&root.join("note.txt"), b"hello").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("note.txt"), b"hello").unwrap();
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = confit_store::Stores::new(
             confit_store::StoreRoots {
@@ -163,7 +162,6 @@ mod tests {
 
     #[test]
     fn document_returns_true_with_nil_on_good_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.document({ text = "hi" })
@@ -178,7 +176,6 @@ mod tests {
 
     #[test]
     fn document_returns_false_with_reason_on_bad_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.document({ nope = 1 })
@@ -201,7 +198,6 @@ mod tests {
 
     #[test]
     fn config_returns_true_with_nil_on_good_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
@@ -219,7 +215,6 @@ mod tests {
 
     #[test]
     fn config_returns_false_with_reason_on_bad_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({ name = "tools/test", nope = 1 })
@@ -232,7 +227,6 @@ mod tests {
 
     #[test]
     fn config_returns_false_with_reason_on_missing_names() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
@@ -250,7 +244,6 @@ mod tests {
 
     #[test]
     fn patch_returns_true_with_nil_on_good_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.patch({
@@ -269,7 +262,6 @@ mod tests {
 
     #[test]
     fn patch_accepts_rc_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.patch({
@@ -287,7 +279,6 @@ mod tests {
 
     #[test]
     fn patch_returns_false_with_reason_on_bad_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let cases = [
             (
@@ -335,7 +326,6 @@ mod tests {
 
     #[test]
     fn patch_rejects_foreign_shapes_showing_keys() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         let cases = [
             (
@@ -383,11 +373,11 @@ mod tests {
 
     #[test]
     fn document_checks_every_body_kind() {
-        let _guard = TestGuard::install();
         let (_held, lua) = opened_lua();
         let cases = [
             r#"{ text = "hi", mode = "644", unmanaged = true }"#,
             r#"{ format = "json", data = { alpha = "one" } }"#,
+            #[cfg(unix)]
             r#"{ target = { base = "home", relative = "linked" } }"#,
             r#"{ profile = { { env = { name = "EDITOR", value = "hx" } } } }"#,
             r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
@@ -409,9 +399,7 @@ mod tests {
 
     #[test]
     fn document_checks_blob_bodies_without_writes() {
-        let guard = TestGuard::install();
-        let (_held, lua) = opened_lua();
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
+        let (held, lua) = opened_lua();
         for body in [
             r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
             r#"{ members = { ["top.txt"] = assert(open("note.txt")) } }"#,
@@ -427,25 +415,36 @@ mod tests {
                 _ => panic!("good body passes without writes: {body}"),
             }
         }
+        let cache = held.path().join("temp").join("blobs");
+        assert!(
+            !cache.exists()
+                || confit_driver::fs::read_dir(&cache)
+                    .unwrap_or_default()
+                    .is_empty(),
+            "checks write zero blob files"
+        );
     }
 
     #[test]
     fn document_names_mixed_markers() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
-        for (body, first, second) in [
-            (
-                r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
-                "Document_Text",
-                "Document_Link",
-            ),
+        let mut cases = vec![
             (r#"{ nope = 1 }"#, "unknown field", "nope"),
             (
                 r#"{ profile = { { frobnicate = { name = "x" } } } }"#,
                 "unknown tag",
                 "profile",
             ),
-        ] {
+        ];
+        #[cfg(unix)]
+        cases.push((
+            r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
+            "Document_Text",
+            "Document_Link",
+        ));
+        #[cfg(not(unix))]
+        cases.push((r#"{ text = "hi", nope = 1 }"#, "Document_Text", "nope"));
+        for (body, first, second) in cases {
             let source = [
                 "local found, reason = validate.document(",
                 body,
@@ -460,7 +459,6 @@ mod tests {
 
     #[test]
     fn every_check_verb_rejects_numbers_with_reasons() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         for verb in [
             "document",
@@ -484,7 +482,6 @@ mod tests {
 
     #[test]
     fn new_check_verbs_pass_good_shapes() {
-        let _guard = TestGuard::install();
         let lua = test_lua();
         for (verb, body) in [
             ("hook", r#"{ argv = { "true" } }"#),

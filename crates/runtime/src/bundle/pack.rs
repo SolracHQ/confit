@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use confit_driver as driver;
 use confit_driver::sha::Sha;
-use confit_driver::{self as driver};
 use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
 use confit_store::handles::ArchiveHandle;
@@ -21,14 +21,14 @@ const BUNDLE_ENTRY_MODE: u32 = 0o644;
 impl Bundler {
     /// Write one portable bundle with the manifest and the blobs.
     ///
-    /// The verified handle shows the written file.
+    /// The verified handle is the written file.
     ///
     /// - Destinations carry the bundle extension.
     /// - Members sort manifest-first in content-hash order.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleRead`] for unreadable bundles.
     /// - [`RuntimeError::BundleMissing`] for missing blobs.
     /// - [`RuntimeError::BundleWrite`] for write faults.
     /// - [`RuntimeError::BundleWriteUnknown`] for other write
@@ -42,23 +42,8 @@ impl Bundler {
                 path: dest.clone(),
                 source: error,
             })?;
-        let mut members = Vec::with_capacity(manifest.refs().len() + 1);
-        members.push(driver::tar::BuildMember {
-            name: BUNDLE_MANIFEST.to_owned(),
-            len: text.len() as u64,
-            reader: Box::new(std::io::Cursor::new(text.as_bytes())),
-            mode: BUNDLE_ENTRY_MODE,
-        });
-        for blob in sorted_blobs(manifest) {
-            let (name, len, reader) = self.object_member(&blob, &dest)?;
-            members.push(driver::tar::BuildMember {
-                name,
-                len,
-                reader,
-                mode: BUNDLE_ENTRY_MODE,
-            });
-        }
-        self.write_staged(&dest, members)
+        let blobs = sorted_blobs(manifest);
+        self.write_staged(&dest, &text, &blobs)
     }
 
     /// Open one blob reader with its member name and length.
@@ -66,12 +51,8 @@ impl Bundler {
     /// # Errors
     ///
     /// - [`RuntimeError::BundleMissing`] for missing blobs.
-    /// - [`RuntimeError::BundleRead`] for other failed blob reads.
-    fn object_member(
-        &self,
-        blob: &Sha,
-        dest: &Path,
-    ) -> Result<(String, u64, Box<dyn std::io::Read>)> {
+    /// - [`RuntimeError::BundleRead`] for other unreadable blobs.
+    fn object_member(&self, blob: &Sha, dest: &Path) -> Result<(String, u64, std::fs::File)> {
         let handle = self.blobs.resolve(blob).map_err(|error| match error {
             BlobError::Read {
                 sha,
@@ -105,24 +86,36 @@ impl Bundler {
 
     /// Write one staged bundle into its destination file.
     ///
-    /// The verified handle carries the finished file path and its content hash.
+    /// Verified handle with the finished file path and its content hash.
     ///
-    /// - Member order is as given.
+    /// - Member order as given.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for failed bundle reads.
+    /// - [`RuntimeError::BundleRead`] for unreadable bundles.
     /// - [`RuntimeError::BundleWrite`] for write faults.
     /// - [`RuntimeError::BundleWriteUnknown`] for other build and hash
     ///   failures.
-    fn write_staged(
-        &self,
-        dest: &Path,
-        members: Vec<driver::tar::BuildMember<'_>>,
-    ) -> Result<ArchiveHandle> {
+    fn write_staged(&self, dest: &Path, text: &str, blobs: &[Sha]) -> Result<ArchiveHandle> {
+        let mut staged = Vec::with_capacity(blobs.len());
+        for blob in blobs {
+            staged.push(self.object_member(blob, dest)?);
+        }
         driver::atomic_write(dest, |path| {
-            let sink = driver::fs::create(path)?;
-            driver::tar::build_plain(sink, members)
+            let sink = std::fs::File::create(path)?;
+            let mut builder = driver::tar::TarBuilder::create(sink);
+            let mut manifest_reader = std::io::Cursor::new(text.as_bytes());
+            builder.member(
+                BUNDLE_MANIFEST,
+                text.len() as u64,
+                BUNDLE_ENTRY_MODE,
+                &mut manifest_reader,
+            )?;
+            for (name, len, mut reader) in staged {
+                builder.member(&name, len, BUNDLE_ENTRY_MODE, &mut reader)?;
+            }
+            builder.finish()?;
+            Ok(())
         })
         .map_err(|error| RuntimeError::from_bundle_write_io(dest, error))?;
         self.archives
@@ -148,8 +141,8 @@ mod tests {
     use std::io::Read as _;
 
     use super::*;
+    use confit_driver as driver;
     use confit_driver::sha::Sha;
-    use confit_driver::{self as driver, fs::TestGuard};
     use confit_model::document::{Data, Payload};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -169,11 +162,11 @@ mod tests {
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
         let project = dir.join("project");
-        confit_driver::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
         let mut documents = BTreeMap::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}.bin");
-            confit_driver::fs::write(&project.join(&name), body).unwrap();
+            std::fs::write(project.join(&name), body).unwrap();
             let source = match stores.resources().resource(&name) {
                 Ok(handle) => handle,
                 Err(error) => panic!("project opens: {error}"),
@@ -198,7 +191,7 @@ mod tests {
     }
 
     fn entry_names(path: &Path) -> Vec<String> {
-        let file = driver::fs::open(path).unwrap();
+        let file = std::fs::File::open(path).unwrap();
         let mut archive = tar::Archive::new(file);
         let mut names = Vec::new();
         for entry in archive.entries().unwrap() {
@@ -209,7 +202,7 @@ mod tests {
     }
 
     fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {
-        let file = driver::fs::open(path).unwrap();
+        let file = std::fs::File::open(path).unwrap();
         let mut archive = tar::Archive::new(file);
         let mut bodies = Vec::new();
         for entry in archive.entries().unwrap() {
@@ -228,7 +221,6 @@ mod tests {
     #[test]
     fn write_sources_cache_with_empty_pool() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"cache-only bytes"]);
         let roots = test_roots(dir.path());
         assert!(
@@ -250,7 +242,6 @@ mod tests {
     #[test]
     fn write_registers_finished_file_with_streamed_blobs() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
         let plan = dir.path().join("plan");
         let written = match store.write(&manifest, &plan) {
@@ -262,7 +253,7 @@ mod tests {
             dir.path().join("plan.cb").as_path(),
             "write points at the destination"
         );
-        let raw = driver::fs::read(written.canonical()).unwrap();
+        let raw = std::fs::read(written.canonical()).unwrap();
         assert_eq!(
             written.sha256(),
             &Sha::hash(&raw),
@@ -293,7 +284,6 @@ mod tests {
         use confit_store::blob::BlobStore;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"pool bytes"]);
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
@@ -314,7 +304,7 @@ mod tests {
             Err(error) => panic!("cache lists: {error}"),
         };
         for path in cached {
-            driver::fs::remove_file(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
         }
         let plan = dir.path().join("plan");
         let written = match store.write(&manifest, &plan) {
@@ -326,27 +316,26 @@ mod tests {
         assert_eq!(names.len(), 2, "the pool blob is included");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn write_reports_write_storage_full() {
+    fn write_reports_write_denied() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"written bytes"]);
-        guard.fail_writes(std::io::ErrorKind::StorageFull);
-        let dest = dir.path().join("plan");
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        driver::fs::set_mode(&locked, Some(0o555)).unwrap();
+        let dest = locked.join("plan");
         match store.write(&manifest, &dest) {
-            Ok(_) => panic!("full disk passes"),
+            Ok(_) => panic!("denied disk passes"),
             Err(RuntimeError::BundleWrite { path, fault }) => {
                 assert!(
-                    matches!(fault, confit_store::faults::AccessFault::StorageFull),
+                    matches!(fault, confit_store::faults::AccessFault::Denied),
                     "write keeps the fault"
                 );
-                assert_eq!(
-                    path,
-                    dir.path().join("plan.cb"),
-                    "write keeps the destination"
-                );
+                assert_eq!(path, locked.join("plan.cb"), "write keeps the destination");
             }
             Err(error) => panic!("wrong write variant: {error}"),
         }
+        driver::fs::set_mode(&locked, Some(0o755)).unwrap();
     }
 }

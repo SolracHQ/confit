@@ -18,7 +18,7 @@ use crate::StoreRoots;
 use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
 use crate::resources::error::ResourceError;
-use confit_driver::{self as driver};
+use confit_driver as driver;
 use error::{ArchiveError, Result};
 use extract::{ExtractedMember, check_backend_names, check_member_path};
 use tar::TarBackend;
@@ -36,7 +36,7 @@ trait ArchiveBackend {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed source reads.
+    /// - [`ArchiveError::Read`] for unreadable sources.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
@@ -46,7 +46,7 @@ trait ArchiveBackend {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed source reads.
+    /// - [`ArchiveError::Read`] for unreadable sources.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
@@ -88,7 +88,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed source reads.
+    /// - [`ArchiveError::Read`] for unreadable sources.
     /// - [`ArchiveError::NotArchive`] for non-archive sources.
     pub fn register_archive(&self, source: &Path) -> Result<ArchiveHandle> {
         let sha = file_sha(source)?;
@@ -100,7 +100,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed archive reads.
+    /// - [`ArchiveError::Read`] for unreadable archives.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
@@ -124,7 +124,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed archive reads.
+    /// - [`ArchiveError::Read`] for unreadable archives.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
     /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
@@ -137,7 +137,7 @@ impl ArchiveStore {
             .temp_base
             .join(EXTRACT_DIR)
             .join(archive.sha256().hex());
-        if driver::fs::is_dir(&dest) {
+        if dest.is_dir() {
             return extracted_handles(&dest, source, &self.resources);
         }
         match sniff(source)? {
@@ -173,7 +173,7 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for failed archive reads.
+    /// - [`ArchiveError::Read`] for unreadable archives.
     /// - [`ArchiveError::Write`] for extract write faults.
     /// - [`ArchiveError::WriteUnknown`] for other extract write failures.
     fn run_backend(
@@ -182,40 +182,20 @@ impl ArchiveStore {
         dest: &Path,
         backend: &dyn ArchiveBackend,
     ) -> Result<Vec<ResourceHandle>> {
-        let mut built: Option<Vec<ExtractedMember>> = None;
-        let mut failure: Option<ArchiveError> = None;
-        let mut pended: Option<PathBuf> = None;
-        let outcome = driver::atomic_write(dest, |path| {
-            pended = Some(path.to_path_buf());
-            match extract_members(source, path, backend) {
-                Ok(extracted) => built = Some(extracted),
-                Err(error) => {
-                    let _ = driver::fs::remove_dir_all(path);
-                    failure = Some(error);
-                    return Err(std::io::Error::other("archive extract failed"));
-                }
-            }
-            Ok(())
+        let staged = driver::StagedDir::stage(dest)
+            .map_err(|error| ArchiveError::from_write_io(source, error))?;
+        let members = extract_members(source, staged.path(), backend)?;
+        staged
+            .persist(dest)
+            .map_err(|error| ArchiveError::from_write_io(source, error))?;
+        let handles = streamed_handles(dest, members.as_slice(), &self.resources)?;
+        hashes::record(dest, &member_shas(&members));
+        let total = handles.len();
+        let _ = self.progress.send(Event::Unpacked {
+            archive: source.display().to_string(),
+            total,
         });
-        match outcome {
-            Ok(()) => {
-                let members = built.unwrap_or_default();
-                let handles = streamed_handles(dest, members.as_slice(), &self.resources)?;
-                hashes::record(dest, &member_shas(&members));
-                let total = handles.len();
-                let _ = self.progress.send(Event::Unpacked {
-                    archive: source.display().to_string(),
-                    total,
-                });
-                Ok(handles)
-            }
-            Err(error) => {
-                if let Some(path) = &pended {
-                    let _ = driver::fs::remove_dir_all(path);
-                }
-                Err(failure.unwrap_or_else(|| ArchiveError::from_write_io(source, error)))
-            }
-        }
+        Ok(handles)
     }
 
     /// Pick one archive member by its archive-relative name.
@@ -231,9 +211,9 @@ impl ArchiveStore {
             .temp_base
             .join(EXTRACT_DIR)
             .join(archive.sha256().hex());
-        if driver::fs::is_dir(&dest) {
+        if dest.is_dir() {
             let wanted = dest.join(name);
-            if driver::fs::is_file(&wanted) {
+            if wanted.is_file() {
                 if let Some(sha) = hashes::fresh(&dest, name) {
                     return self
                         .resources
@@ -264,7 +244,7 @@ impl ArchiveStore {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed archive reads.
+/// - [`ArchiveError::Read`] for unreadable archives.
 /// - [`ArchiveError::Write`] for extract write faults.
 /// - [`ArchiveError::WriteUnknown`] for other extract write failures.
 /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
@@ -275,8 +255,7 @@ fn extract_members(
     pending: &Path,
     backend: &dyn ArchiveBackend,
 ) -> Result<Vec<ExtractedMember>> {
-    driver::fs::create_dir_all(pending)
-        .map_err(|error| ArchiveError::from_write_io(source, error))?;
+    std::fs::create_dir_all(pending).map_err(|error| ArchiveError::from_write_io(source, error))?;
     backend.unpack(source, pending)
 }
 
@@ -284,19 +263,19 @@ fn extract_members(
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 fn file_sha(source: &Path) -> Result<Sha> {
     let mut file =
-        driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
+        std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
     Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
 }
 
-/// Prove one source holds a compressed archive.
+/// Prove one source is a compressed archive.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::NotArchive`] for plain sources.
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 fn check_compressed_source(source: &Path) -> Result<()> {
     match sniff(source)? {
         Shape::Zip => ZipBackend
@@ -365,7 +344,7 @@ enum Shape {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 fn sniff(source: &Path) -> Result<Shape> {
     let head = read_head(source)?;
     if driver::zip::valid(&head) {
@@ -381,9 +360,9 @@ fn sniff(source: &Path) -> Result<Shape> {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed source reads.
+/// - [`ArchiveError::Read`] for unreadable sources.
 fn read_head(source: &Path) -> Result<Vec<u8>> {
-    let file = driver::fs::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
+    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
     let mut head = Vec::new();
     std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
         .map_err(|error| ArchiveError::from_io(source, error))?;
@@ -396,7 +375,7 @@ fn read_head(source: &Path) -> Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed extract reads.
+/// - [`ArchiveError::Read`] for unreadable extracted files.
 /// - [`ArchiveError::UnknownMember`] for missing members.
 fn extracted_handles(
     dest: &Path,
@@ -429,7 +408,7 @@ fn extracted_handles(
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::Read`] for failed extract reads.
+/// - [`ArchiveError::Read`] for unreadable extracted files.
 fn fresh_handles(
     dest: &Path,
     names: &[String],
@@ -452,10 +431,10 @@ fn fresh_handles(
 /// # Errors
 ///
 /// - [`ArchiveError::UnknownMember`] for missing members.
-/// - [`ArchiveError::Read`] for failed member reads.
+/// - [`ArchiveError::Read`] for unreadable members.
 fn extract_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
     let mut file =
-        driver::fs::open(path).map_err(|error| extract_read_error(error, source, name))?;
+        std::fs::File::open(path).map_err(|error| extract_read_error(error, source, name))?;
     Sha::read(&mut file).map_err(|error| extract_read_error(error, source, name))
 }
 
@@ -473,11 +452,11 @@ fn collect_extract_names(
     let entries =
         driver::fs::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
     for path in entries {
-        if driver::fs::is_dir(&path) {
+        if path.is_dir() {
             collect_extract_names(&path, root, names, source)?;
             continue;
         }
-        if driver::fs::is_file(&path) {
+        if path.is_file() {
             let relative = path
                 .strip_prefix(root)
                 .map_err(|error| ArchiveError::Read {
@@ -526,8 +505,6 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
-    use confit_driver::fs::TestGuard;
-
     /// Deflate level feeding container fixtures.
     const LEVEL: u32 = 6;
 
@@ -551,23 +528,20 @@ mod tests {
 
     fn tar_gz_bytes(dir: &Path, members: &[(&str, &[u8])]) -> Vec<u8> {
         let dest = dir.join("scratch.tar.gz");
-        let framed: Vec<driver::tar::BuildMember<'_>> = members
-            .iter()
-            .map(|(name, bytes)| driver::tar::BuildMember {
-                name: (*name).to_owned(),
-                len: bytes.len() as u64,
-                reader: Box::new(std::io::Cursor::new(*bytes)),
-                mode: 0o644,
-            })
-            .collect();
         let build = |path: &Path| {
-            let sink = driver::fs::create(path)?;
-            driver::tar::build_gzipped(sink, framed, LEVEL)
+            let sink = std::fs::File::create(path)?;
+            let mut builder = driver::tar::TarBuilder::create_gzipped(sink, LEVEL);
+            for (name, bytes) in members {
+                let mut reader = std::io::Cursor::new(*bytes);
+                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+            }
+            builder.finish_gzipped()?;
+            Ok(())
         };
         if let Err(error) = driver::atomic_write(&dest, build) {
             panic!("fixture builds: {error}");
         }
-        driver::fs::read(&dest).unwrap()
+        std::fs::read(&dest).unwrap()
     }
 
     fn evil_tar_gz_bytes() -> Vec<u8> {
@@ -599,9 +573,9 @@ mod tests {
     fn write_archive(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         let path = dir.join(name);
         if let Some(parent) = path.parent() {
-            driver::fs::create_dir_all(parent).unwrap();
+            std::fs::create_dir_all(parent).unwrap();
         }
-        driver::fs::write(&path, bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         path
     }
 
@@ -641,7 +615,6 @@ mod tests {
     #[test]
     fn create_registers_compressed_source() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
@@ -658,7 +631,6 @@ mod tests {
     #[test]
     fn create_rejects_plain_and_missing_sources() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let path = write_archive(dir.path(), "note.txt", b"plain text");
         let source =
@@ -685,7 +657,6 @@ mod tests {
     #[test]
     fn members_lists_files_skipping_folders() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -702,7 +673,6 @@ mod tests {
     #[test]
     fn extract_returns_extracted_handles_with_stable_hashes() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -738,7 +708,7 @@ mod tests {
             handle_sha(&handles, "sub/c.txt")
         );
         assert_eq!(
-            driver::fs::read(handles[0].canonical()).unwrap(),
+            std::fs::read(handles[0].canonical()).unwrap(),
             b"same".as_slice()
         );
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
@@ -750,11 +720,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_through_member_handle_showing_missing() {
+    fn handle_opens_present_and_missing_members() {
         use crate::resources::error::ResourceError;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let archive = fixture_archive(
@@ -809,7 +778,6 @@ mod tests {
         use crate::resources::error::ResourceError;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let archive = fixture_archive(
@@ -845,7 +813,6 @@ mod tests {
     #[test]
     fn open_tracks_current_extract_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let archive = fixture_archive(
@@ -866,7 +833,7 @@ mod tests {
             }
             Err(error) => panic!("member opens from extract: {error}"),
         }
-        driver::fs::write(handles[0].canonical(), b"patched").unwrap();
+        std::fs::write(handles[0].canonical(), b"patched").unwrap();
         match resources.open(&handles[0]) {
             Ok(mut reader) => {
                 let mut found = Vec::new();
@@ -878,9 +845,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_member_reads_wanted_file_alone() {
+    fn extract_member_resolves_present_rejects_absent() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -897,7 +863,7 @@ mod tests {
             .join("temp")
             .join(EXTRACT_DIR)
             .join(archive.sha256().hex());
-        driver::fs::remove_file(&extract_dir.join("sub").join("b.txt")).unwrap();
+        std::fs::remove_file(extract_dir.join("sub").join("b.txt")).unwrap();
         match store.extract_member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
             Err(error) => panic!("present member resolves: {error}"),
@@ -918,7 +884,6 @@ mod tests {
     #[test]
     fn unpack_records_member_hashes_beside_extract() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -930,7 +895,7 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("archive extracts: {error}"),
         }
-        let text = match driver::fs::read_to_string(&extract_manifest(dir.path(), &archive)) {
+        let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
             Ok(text) => text,
             Err(error) => panic!("manifest reads: {error}"),
         };
@@ -944,7 +909,6 @@ mod tests {
     #[test]
     fn touched_members_rehash_and_refresh_records() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -962,12 +926,12 @@ mod tests {
             .join(EXTRACT_DIR)
             .join(archive.sha256().hex())
             .join("a.txt");
-        driver::fs::write(&member, b"omega").unwrap();
+        std::fs::write(&member, b"omega").unwrap();
         match store.extract_member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"omega")),
             Err(error) => panic!("touched member rehashes: {error}"),
         }
-        let text = match driver::fs::read_to_string(&extract_manifest(dir.path(), &archive)) {
+        let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
             Ok(text) => text,
             Err(error) => panic!("manifest reads: {error}"),
         };
@@ -980,7 +944,6 @@ mod tests {
     #[test]
     fn bad_manifests_fall_back_to_rehash() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -992,7 +955,7 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("archive extracts: {error}"),
         }
-        driver::fs::write(&extract_manifest(dir.path(), &archive), b"{bad").unwrap();
+        std::fs::write(extract_manifest(dir.path(), &archive), b"{bad").unwrap();
         match store.extract_member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
             Err(error) => panic!("bad manifest still resolves: {error}"),
@@ -1002,7 +965,6 @@ mod tests {
     #[test]
     fn extract_rejects_escaping_members() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(&store, dir.path(), "evil.tar.gz", &evil_tar_gz_bytes());
         match store.extract(&archive) {
@@ -1011,7 +973,7 @@ mod tests {
             Err(error) => panic!("wrong escape variant: {error}"),
         }
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        if driver::fs::exists(&extract_base) {
+        if extract_base.exists() {
             let left = driver::fs::read_dir(&extract_base).unwrap().len();
             assert_eq!(left, 0);
         }
@@ -1022,7 +984,6 @@ mod tests {
         use std::io::Write as _;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
@@ -1051,7 +1012,6 @@ mod tests {
     #[test]
     fn members_rejects_missing_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let missing = dir.path().join("absent.tar.gz");
         let handle = ArchiveHandle::new(&missing, Sha::hash(b"absent")).unwrap();
@@ -1067,7 +1027,6 @@ mod tests {
     #[test]
     fn extract_keeps_one_extract_per_handle_sha() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
         let sha_a = Sha::hash(b"archive-a");
@@ -1116,7 +1075,6 @@ mod tests {
     #[test]
     fn extract_and_open_streams_large_member() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
@@ -1218,7 +1176,6 @@ mod tests {
     #[test]
     fn zip_create_registers_and_rejects_plain() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let raw = zip_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.zip", &raw);
@@ -1245,7 +1202,6 @@ mod tests {
     #[test]
     fn zip_members_lists_files_skipping_dirs() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(&store, dir.path(), "fonts.zip", &zip_bytes_with_dir());
         match store.members(&archive) {
@@ -1257,7 +1213,6 @@ mod tests {
     #[test]
     fn zip_extract_unpacks_reuses_and_rejects_escape() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
@@ -1276,7 +1231,7 @@ mod tests {
             .iter()
             .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
             .unwrap();
-        assert_eq!(driver::fs::read(picked.canonical()).unwrap(), b"beta");
+        assert_eq!(std::fs::read(picked.canonical()).unwrap(), b"beta");
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
         assert_no_pending(&extract_base);
         match store.extract(&archive) {
@@ -1290,14 +1245,13 @@ mod tests {
             Err(error) => panic!("wrong escape variant: {error}"),
         }
         let evil_extract = extract_base.join(evil.sha256().hex());
-        assert!(!driver::fs::exists(&evil_extract));
+        assert!(!evil_extract.exists());
         assert_no_pending(&extract_base);
     }
 
     #[test]
     fn zip_symlink_skips_without_extract() {
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let store = test_store(dir.path());
         let archive = fixture_archive(&store, dir.path(), "link.zip", &symlink_zip_bytes());
         match store.members(&archive) {
@@ -1311,7 +1265,7 @@ mod tests {
         assert!(handles.is_empty());
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
         let extract_dir = extract_base.join(archive.sha256().hex());
-        if driver::fs::exists(&extract_dir) {
+        if extract_dir.exists() {
             let left = driver::fs::read_dir(&extract_dir).unwrap().len();
             assert_eq!(left, 0);
         }
@@ -1319,29 +1273,24 @@ mod tests {
     }
 
     #[test]
-    fn extract_reports_write_quota() {
+    fn extract_maps_write_quota() {
         let dir = tempfile::tempdir().unwrap();
-        let guard = TestGuard::install();
         let store = test_store(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
         encoder.write_all(b"plain").unwrap();
         let raw = encoder.finish().unwrap();
         let archive = fixture_archive(&store, dir.path(), "note.gz", &raw);
-        guard.fail_writes(std::io::ErrorKind::QuotaExceeded);
-        match store.extract(&archive) {
-            Ok(_) => panic!("capped disk passes"),
-            Err(ArchiveError::Write { path, fault }) => {
+        let source = archive.canonical().to_path_buf();
+        let error = std::io::Error::new(std::io::ErrorKind::QuotaExceeded, "capped disk");
+        match ArchiveError::from_write_io(&source, error) {
+            ArchiveError::Write { path, fault } => {
                 assert!(
                     matches!(fault, crate::faults::AccessFault::QuotaExceeded),
-                    "extract keeps the fault"
+                    "mapping keeps the fault"
                 );
-                assert_eq!(
-                    path,
-                    archive.canonical().to_path_buf(),
-                    "extract keeps the source"
-                );
+                assert_eq!(path, source, "mapping keeps the source");
             }
-            Err(error) => panic!("wrong extract variant: {error}"),
+            error => panic!("wrong mapping variant: {error}"),
         }
     }
 
@@ -1350,7 +1299,6 @@ mod tests {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
-        let _guard = TestGuard::install();
         let roots = test_roots(dir.path());
         let resources = std::sync::Arc::new(Resources::new(&roots));
         let (sender, receiver) = crossbeam_channel::unbounded();

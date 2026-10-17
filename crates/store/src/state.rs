@@ -107,7 +107,7 @@ impl StateStore {
     ///
     /// - [`StateError::BadPick`] for absent states and out-of-range
     ///   picks.
-    /// - [`StateError::Read`] for failed folder reads.
+    /// - [`StateError::Read`] for unreadable folders.
     pub fn resolve(&self, picker: &Picker) -> Result<StateHandle> {
         match picker {
             Picker::Applied => self.applied(),
@@ -138,11 +138,11 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`StateError::Read`] for failed state reads.
+    /// - [`StateError::Read`] for unreadable states.
     pub fn open(&self, handle: &StateHandle) -> Result<Box<dyn Read>> {
         let path = handle.canonical();
-        driver::fs::open(path)
-            .map(|file| file as Box<dyn Read>)
+        std::fs::File::open(path)
+            .map(|file| Box::new(file) as Box<dyn Read>)
             .map_err(|error| StateError::from_io(path, error))
     }
 
@@ -150,10 +150,10 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`StateError::Read`] for failed state reads.
+    /// - [`StateError::Read`] for unreadable states.
     pub fn read(&self, handle: &StateHandle) -> Result<Vec<u8>> {
         let path = handle.canonical();
-        driver::fs::read(path).map_err(|error| StateError::from_io(path, error))
+        std::fs::read(path).map_err(|error| StateError::from_io(path, error))
     }
 
     /// Create one state handle with an empty file.
@@ -172,14 +172,14 @@ impl StateStore {
     pub fn create(&self, picker: &Picker) -> Result<StateHandle> {
         match picker {
             Picker::Applied => {
-                if driver::fs::is_missing(&self.state) {
+                if !self.state.exists() {
                     store_bytes(&self.state, &mut std::io::empty())?;
                 }
                 checked(self.state.clone(), String::new())
             }
             Picker::Named(name) => {
                 let path = self.named_path(name)?;
-                if driver::fs::is_missing(&path) {
+                if !path.exists() {
                     store_bytes(&path, &mut std::io::empty())?;
                 }
                 checked(path, format!("@{name}"))
@@ -208,7 +208,7 @@ impl StateStore {
     /// - [`StateError::WriteUnknown`] for other removal failures.
     pub fn remove(&self, handle: &StateHandle) -> Result<()> {
         let path = handle.canonical();
-        driver::fs::remove_file(path).map_err(|error| StateError::from_write_io(path, error))
+        std::fs::remove_file(path).map_err(|error| StateError::from_write_io(path, error))
     }
 
     /// List history handles newest first.
@@ -217,7 +217,7 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`StateError::Read`] for failed folder reads beyond missing
+    /// - [`StateError::Read`] for unreadable folders beyond missing
     ///   folders.
     pub fn list(&self) -> Result<Vec<StateHandle>> {
         let mut files = history_files(&self.history)?;
@@ -231,7 +231,7 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`StateError::Read`] for failed folder reads beyond missing
+    /// - [`StateError::Read`] for unreadable folders beyond missing
     ///   folders.
     pub fn list_named(&self) -> Result<Vec<StateHandle>> {
         Ok(history_files(&self.states)?
@@ -256,7 +256,7 @@ impl StateStore {
             message: error.to_string(),
         })?;
         let mut destination = self.history.join(format!("{stamp}.json"));
-        while driver::fs::exists(&destination) {
+        while destination.exists() {
             stamp += 1;
             destination = self.history.join(format!("{stamp}.json"));
         }
@@ -265,7 +265,7 @@ impl StateStore {
         let files = history_files(&self.history)?;
         if files.len() > HISTORY_KEPT {
             for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-                driver::fs::remove_file(stale)
+                std::fs::remove_file(stale)
                     .map_err(|error| StateError::from_write_io(stale, error))?;
             }
         }
@@ -274,7 +274,7 @@ impl StateStore {
 
     /// Report whether this is the first run.
     pub fn is_first_run(&self) -> bool {
-        driver::fs::is_missing(&self.state)
+        !self.state.exists()
     }
 
     /// Resolve the state path for one validated name.
@@ -295,7 +295,7 @@ impl StateStore {
 ///
 /// - [`StateError::BadPick`] for absent states.
 fn checked(path: PathBuf, input: String) -> Result<StateHandle> {
-    if driver::fs::is_missing(&path) {
+    if !path.exists() {
         return Err(StateError::BadPick { input });
     }
     Ok(StateHandle::new(path))
@@ -307,7 +307,7 @@ fn checked(path: PathBuf, input: String) -> Result<StateHandle> {
 ///
 /// # Errors
 ///
-/// - [`StateError::Read`] for failed folder reads beyond missing
+/// - [`StateError::Read`] for unreadable folders beyond missing
 ///   folders.
 fn history_files(directory: &Path) -> Result<Vec<PathBuf>> {
     match driver::fs::read_dir(directory) {
@@ -369,9 +369,9 @@ fn check_state_name(name: &str) -> Result<()> {
 /// - [`StateError::WriteUnknown`] for other write failures.
 fn store_bytes(path: &Path, source: &mut impl Read) -> Result<()> {
     driver::atomic_write(path, |pending| {
-        let mut pended = driver::fs::create(pending)?;
+        let mut pended = std::fs::File::create(pending)?;
         driver::copy_stream(&mut *source, &mut pended)?;
-        pended.sync()
+        pended.sync_all()
     })
     .map_err(|error| StateError::from_write_io(path, error))
 }
