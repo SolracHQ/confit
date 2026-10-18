@@ -1,30 +1,15 @@
 --- @meta confit.validate
---- Check one body table.
---- @param body any The body table under checking.
+--- Check one document table, else nil with reason.
+--- @param body any The document table under checking.
 --- @return Document? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function document(body) end
 
---- One document payload.
---- @alias Document Document_Structured | Document_Text | Document_Link | RcData | Document_Opaque | Document_Tree
-
---- Structured Text Document.
+--- Structured data file.
 --- @class Document_Structured
+--- @field path Route The destination route.
 --- @field format StructuredFormat The serialization format.
 --- @field data {[string]: any} Structured content for the file.
-
---- Serialization format for structured documents.
---- @alias StructuredFormat "json" | "toml" | "yaml"
-
---- Plain Text Document.
---- @class Document_Text
---- @field text string The exact file text.
---- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
---- @field unmanaged boolean? Existence-only document flag.
-
---- Symbolic Link Document.
---- @class Document_Link
---- @field target Route The link target route.
 
 --- Portable route over standard folders.
 --- @class Route
@@ -34,8 +19,24 @@ function document(body) end
 --- Portable standard folders enum.
 --- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
 
---- Shell RC Document.
---- @class RcData
+--- Serialization format for structured documents.
+--- @alias StructuredFormat "json" | "toml" | "yaml"
+
+--- Plain text file.
+--- @class Document_Text
+--- @field path Route The destination route.
+--- @field text string The exact file text.
+--- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
+--- @field unmanaged boolean? Existence-only document flag.
+
+--- Symbolic link.
+--- @class Document_Link
+--- @field path Route The destination route.
+--- @field target Route The link target route.
+
+--- Per-shell rc data object.
+--- @class Document_Rc
+--- @field path Route The destination route.
 --- @field profile RcEntry[]? Entries before the guard.
 --- @field config RcEntry[]? Entries after the guard.
 --- @field final RcEntry[]? Entries last.
@@ -103,8 +104,9 @@ function document(body) end
 --- @field path Route File route for sourcing.
 --- @field when Condition? The shell session guard.
 
---- Binary Document.
+--- Raw binary file.
 --- @class Document_Opaque
+--- @field path Route The destination route.
 --- @field handle ResourceHandle The opaque file handle.
 --- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 --- @field unmanaged boolean? Existence-only document flag.
@@ -147,19 +149,26 @@ function ArchiveHandle:members() end
 --- @return string? Failure reason, else nil.
 function ArchiveHandle:member(name) end
 
---- File Tree Document.
+--- Managed file set.
 --- @class Document_Tree
+--- @field path Route The destination route.
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
---- One tree member.  A bare handle takes the default mode. A table names the handle with a required mode.
---- @alias TreeMember ResourceHandle | TreeMember_Full
+--- One tree member.  Bare handles take the default mode. Tables refer to the handle with a required mode.
+--- @alias TreeMember Payload | TreeMember_Full
+
+--- Blob payload as a live handle or sealed bytes.
+--- @alias Payload ResourceHandle
 
 --- Handle with explicit mode.
 --- @class TreeMember_Full
 --- @field handle ResourceHandle The file payload.
 --- @field mode string File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 
---- Check one config table.
+--- One declared document with its destination path.  One flat Lua table with the path beside body fields.
+--- @alias Document Document_Structured | Document_Text | Document_Link | Document_Rc | Document_Opaque | Document_Tree
+
+--- Check one config table, else nil with reason.
 --- @param config any The config table under checking.
 --- @return Config? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
@@ -168,7 +177,7 @@ function config(config) end
 --- One decoded config.
 --- @class Config
 --- @field name string The config name.
---- @field documents {[Route]: Document}? Documents keyed by destination route.
+--- @field documents Document[]? Documents in declaration order with destination paths.
 --- @field patches Patch[]? Patches in profile return order.
 --- @field hooks Hook[]? Hooks in profile return order.
 --- @field requirements {[string]: string}? Requirements keyed by config name with hints.
@@ -179,10 +188,20 @@ function config(config) end
 --- One structured patch table.
 --- @class StructuredPatch
 --- @field target Route? The patch target route.
---- @field filter fun()? The patch filter callback.
+--- @field filter (fun(route: Route): boolean)? The patch filter callback.
 --- @field format StructuredFormat The structured format under patching.
---- @field apply fun() The patch callback over current data.
+--- @field apply fun(document: Document_Structured) The patch callback over the live document.
 --- @field priority Level? The patch merge level. Higher levels apply first.
+StructuredPatch = {}
+
+--- The patch filter callback.
+--- @param route Route Target route of the candidate document.
+--- @return boolean
+function StructuredPatch.filter(route) end
+
+--- The patch callback over the live document.
+--- @param document Document_Structured Live structured document under patching.
+function StructuredPatch.apply(document) end
 
 --- Patch merge level.  - Names parse case-insensitively.
 --- @alias Level "minor" | "low" | "normal" | "high" | "major"
@@ -190,18 +209,29 @@ function config(config) end
 --- One rc patch table.
 --- @class RcPatch
 --- @field target Route? The patch target route.
---- @field filter fun()? The patch filter callback.
---- @field apply fun() The patch callback over current sections.
+--- @field filter (fun(route: Route): boolean)? The patch filter callback.
+--- @field apply fun(document: Document_Rc) The patch callback over the live document.
 --- @field priority Level? The patch merge level. Higher levels apply first.
+RcPatch = {}
+
+--- The patch filter callback.
+--- @param route Route Target route of the candidate document.
+--- @return boolean
+function RcPatch.filter(route) end
+
+--- The patch callback over the live document.
+--- @param document Document_Rc Live rc document under patching.
+function RcPatch.apply(document) end
 
 --- One hook patch table.
 --- @class HookPatch
 --- @field target string The hook id under patching.
 --- @field apply fun(hook: Hook) The hook callback over the live hook.
+HookPatch = {}
 
---- Face for hook patch callbacks.
+--- The hook callback over the live hook.
 --- @param hook Hook Live hook under patching.
-function HookArgs(hook) end
+function HookPatch.apply(hook) end
 
 --- One post-config step with conditions and checks.
 --- @class Hook
@@ -213,31 +243,31 @@ function HookArgs(hook) end
 --- @field check Condition? The run condition.
 --- @field timeout string? The run cap in seconds.
 
---- Check one patch table.
+--- Check one patch table, else nil with reason.
 --- @param patch any The patch table under checking.
 --- @return Patch? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function patch(patch) end
 
---- Check one hook table.
+--- Check one hook table, else nil with reason.
 --- @param value any The hook table under checking.
 --- @return Hook? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function hook(value) end
 
---- Check one condition table.
+--- Check one condition table, else nil with reason.
 --- @param value any The condition table under checking.
 --- @return Condition? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function condition(value) end
 
---- Check one rc entry table.
+--- Check one rc entry table, else nil with reason.
 --- @param value any The entry table under checking.
 --- @return RcEntry? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function entry(value) end
 
---- Check one route table.
+--- Check one route table, else nil with reason.
 --- @param value any The route table under checking.
 --- @return Route? The decoded value, else nil.
 --- @return string? The failure reason, else nil.

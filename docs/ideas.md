@@ -38,9 +38,9 @@ Pain: My dotfiles plan peaks at 1.7GB RSS in 6.6s and example 3 alone hits 1.3GB
 
 My suspects so far:
 
-- On store I am storing whole gzips in vectors. Raw blobs get cloned beside the originals, the parallel compression holds all inputs plus all outputs at once, and the whole bundle gzip gets built in memory before a single byte hits disk.
+- On store I am storing whole gzips in vectors. Raw blobs get cloned beside the originals, the parallel compression holds all inputs and all outputs at once, and the whole bundle gzip gets built in memory before a single byte hits disk.
 - On compress we pass all the childs of the compressed files as literal lua strings putting pressure in the gc, while Rust keeps the same bytes alive. There is not one explicit GC call in the whole run.
-- Built plus previous bundles stay alive together through presentation, so all the peaks overlap instead of sequencing.
+- Built and previous bundles stay alive together through presentation, so all the peaks overlap instead of sequencing.
 
 What I have in my head
 
@@ -65,7 +65,7 @@ Hooks carry ids already for patches, so dependencies refer to ids too. Unknown i
 
 Idea: Take secret sources from commands at apply time, never store them
 Importance: Lowest
-Pain: I want my setup to run from my 1password ssh key to a full git config that clones my private repos after my confit call. That means bytes I refuse to store, only how to create them. A Lua script source does not work, user code plus upvalues cannot be extracted and re-run later. Some day this wants to be a plugin shaped like a command whose stdout becomes the bytes at apply time, and the result never lands in a bundle or a preview. Hooks cover it poorly today, a hook output is not file content and secrets in argv touch the process list. Anything running user code over credentials inherits security duty I do not want yet, so this parks at the bottom until unmanaged exists to build on.
+Pain: I want my setup to run from my 1password ssh key to a full git config that clones my private repos after my confit call. That means bytes I refuse to store, only how to create them. A Lua script source does not work, user code and upvalues cannot be extracted and re-run later. Some day this wants to be a plugin shaped like a command whose stdout becomes the bytes at apply time, and the result never lands in a bundle or a preview. Hooks cover it poorly today, a hook output is not file content and secrets in argv touch the process list. Anything running user code over credentials inherits security duty I do not want yet, so this parks at the bottom until unmanaged exists to build on.
 
 What I have in my head:
 
@@ -80,7 +80,7 @@ confit.document.secret(
 
 Idea: Let tree callbacks return a boolean or a table
 Importance: Mid
-Pain: The tree callback returns a path today, and that return does triple duty as filter plus relocate plus implicit keep. My nerd fonts callback relocates only to flatten, which a boolean would say better. Lua is flexible and we do not take advantage of it. The shape I want is nil skips, true keeps at the same path, a table overrides. The table would carry path plus mode, because tarballs keep permissions but some compress formats drop them, and that half needs real research on which formats lose what before I bless a mode key.
+Pain: The tree callback returns a path today, and that return does triple duty as filter, relocate and implicit keep. My nerd fonts callback relocates only to flatten, which a boolean would say better. Lua is flexible and we do not take advantage of it. The shape I want is nil skips, true keeps at the same path, a table overrides. The table would carry path and mode, because tarballs keep permissions but some compress formats drop them, and that half needs real research on which formats lose what before I bless a mode key.
 
 What I have in my head:
 
@@ -101,7 +101,7 @@ return { path = "renamed.ttf", mode = "755" }
 
 Idea: Decide what default plugins deserve to exist before 1.0
 Importance: Low
-Pain: Mise plus nerd fonts do specific things and read well thought. Merge plus template do different tiny things each, too small to group under one good name, which makes me ask if they need to ship at all. Anyone can write those helpers, but shipping them is DX like a stdlib. Maybe my plugins are the stdlib and these two ride there, maybe they fold into utils, maybe they drop to userland. Breaking in alpha is free, after 1.0 it is not, so this has a deadline even with no urgency.
+Pain: Mise and nerd fonts do specific things and read well thought. Merge and template do different tiny things each, too small to group under one good name, which makes me ask if they need to ship at all. Anyone can write those helpers, but shipping them is DX like a stdlib. Maybe my plugins are the stdlib and these two ride there, maybe they fold into utils, maybe they drop to userland. Breaking in alpha is free, after 1.0 it is not, so this has a deadline even with no urgency.
 
 What I have in my head:
 
@@ -114,7 +114,7 @@ tool:add_document(confit.utils.template(path, { src = "page.txt", vars = vars })
 
 Idea: Let profiles set the compression level
 Importance: Low
-Pain: My tests say level 6 is my sweet spot of time per compressed MB. Over 6 takes too long and saves few MBs, under grows several MBs for little time back. But those are my files and my data, other users feel different things. One profile field validated 0 to 9, defaults stay 6 for blobs plus 0 for the outer tar. Profile level, not per document, one knob nobody needs to measure per file. This rides under the memory card, streaming the bundle matters more than re-leveling it.
+Pain: My tests say level 6 is my sweet spot of time per compressed MB. Over 6 takes too long and saves few MBs, under grows several MBs for little time back. But those are my files and my data, other users feel different things. One profile field validated 0 to 9, defaults stay 6 for blobs and 0 for the outer tar. Profile level, not per document, one knob nobody needs to measure per file. This rides under the memory card, streaming the bundle matters more than re-leveling it.
 
 What I have in my head:
 
@@ -131,11 +131,11 @@ return {
 
 Idea: Let trees group hand-built documents, not only archives
 Importance: Mid
-Pain: Related configs spray many small documents across the plan. One config needing 20 text documents in the same folder reads as noise next to the thing they serve. Separate documents diff better, grouped trees read better, both are valid, so the tool should offer the choice. Today tree only grows from compressed archives, so hand grouping has no home.
+Pain: Related configs spray many small documents across the plan. One config needing 20 text documents in the same folder shows as noise next to the thing they serve. Separate documents diff better, grouped trees read better, both are valid, so the tool should offer the choice. Today tree only grows from compressed archives, so hand grouping has no home.
 
 What I have in my head
 
-Tree becomes a namespace with more than one source. The compressed road stays exactly as today, plus a from-data road that takes a list of documents and lands them under one destination. There are too many things open yet. I do not know if tree reuses documents and overwrites the paths or builds new constructors only for the tree. I am not even sure of the shape of the method. This is just a sketch, I will think on it when the moment of planning comes.
+Tree becomes a namespace with more than one source. The compressed road stays exactly as today, and a from-data road that takes a list of documents and lands them under one destination. There are too many things open yet. I do not know if tree reuses documents and overwrites the paths or builds new constructors only for the tree. I am not even sure of the shape of the method. This is just a sketch, I will think on it when the moment of planning comes.
 
 ```lua
 local bundle = confit.document.tree.from_data(dest, { doc1, doc2 })

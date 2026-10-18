@@ -7,6 +7,8 @@ use super::error::{ArchiveError, Result};
 use super::extract::{ExtractedMember, extract_entry};
 use confit_driver as driver;
 
+use crate::faults::AccessFault;
+
 /// Seekable zip member listing and extraction.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZipBackend;
@@ -72,7 +74,7 @@ fn from_zip(source: &Path, error: driver::zip::ZipError) -> ArchiveError {
 fn read_unknown(source: &Path, message: String) -> ArchiveError {
     ArchiveError::Read {
         path: source.to_path_buf(),
-        fault: crate::faults::AccessFault::Unknown { message },
+        fault: AccessFault::Unknown { message },
     }
 }
 /// Unpack zip entries with per-entry streaming hashes.

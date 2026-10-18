@@ -5,21 +5,19 @@ use proc_macro2::TokenStream as Tokens;
 use quote::quote;
 use syn::Attribute;
 
-use super::parse::{ContainerKind, doc_lines, kind_tokens, parse_variant_flags, payload_of};
+use super::parse::{doc_lines, parse_variant_flags, payload_of};
 
 /// Build the derive expansion for one probe enum.
 pub(crate) fn expand_probe_enum(
     name: &syn::Ident,
     data: &syn::DataEnum,
     attrs: &[Attribute],
-    kind: ContainerKind,
     validate: &Option<syn::Path>,
     rename: &Option<String>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
     let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
-    let marker = kind_tokens(kind);
     let count = data.variants.len();
     if count == 0 {
         return Err(syn::Error::new_spanned(
@@ -27,15 +25,20 @@ pub(crate) fn expand_probe_enum(
             format!("{outer}: probe faces need one variant at least"),
         ));
     }
-    let mut descriptors = Vec::new();
+    let mut arms = Vec::new();
     let mut faces = Vec::new();
-    let mut members = Vec::new();
     let mut dispatch = Vec::new();
     let mut encodes = Vec::new();
     for (index, variant) in data.variants.iter().enumerate() {
         let variant_name = variant.ident.to_string();
         let ident = variant.ident.clone();
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
+        if flags.skip_decode || flags.skip_encode {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                format!("{outer}.{variant_name}: untagged faces are expected for skip options"),
+            ));
+        }
         if flags.rename.is_some() || flags.tag.is_some() {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
@@ -51,20 +54,20 @@ pub(crate) fn expand_probe_enum(
         let payload = payload_of(&outer, variant, "probe")?;
         let docs = doc_lines(&variant.attrs).join(" ");
         let path = format!("{outer}.{variant_name}");
-        descriptors.push(quote! {
-            ::confit_binding::face::VariantDescriptor {
+        arms.push(quote! {
+            ::confit_binding::face::UnionArm {
                 name: stringify!(#ident),
                 documentation: #docs,
                 face: ::std::borrow::Cow::Owned(
                     <#payload as ::confit_binding::face::Face>::face_name(),
                 ),
+                fields: ::std::vec::Vec::new(),
+                collect: <#payload as ::confit_binding::face::Face>::collect,
+                skipped: false,
             }
         });
         faces.push(quote! {
             <#payload as ::confit_binding::face::Face>::face_name()
-        });
-        members.push(quote! {
-            <#payload as ::confit_binding::face::Face>::collect(collector)?;
         });
         encodes.push(quote! {
             Self::#ident(inner) => {
@@ -164,23 +167,19 @@ pub(crate) fn expand_probe_enum(
                 #display.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_alias(
-                    #display,
-                    #type_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                #marker
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Union {
+                    documentation: #type_docs,
+                    arms: ::std::vec![#(#arms),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(#members)*
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
                 }
                 ::std::result::Result::Ok(())
             }
@@ -227,4 +226,39 @@ pub(crate) fn expand_probe_enum(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand(source: &str) -> String {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Enum(data) = &input.data else {
+            panic!("want enum input");
+        };
+        expand_probe_enum(&input.ident, data, &input.attrs, &None, &None)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn probe_arms_emit_methods() {
+        let expanded = expand(
+            r#"
+            #[face(table, probe)]
+            pub enum Probed {
+                /// First arm.
+                #[face(probe = "alpha")]
+                First(ProbeA),
+                /// Fallback arm.
+                Second(ProbeB),
+            }
+            "#,
+        );
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("UnionArm"));
+    }
 }

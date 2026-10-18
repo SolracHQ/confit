@@ -99,7 +99,7 @@ function nerd_fonts.font(name, version)
 	local dest = font_route(name)
 	local config = {
 		name = name,
-		documents = { [dest] = { members = ttf_members(archive) } },
+		documents = { { path = dest, members = ttf_members(archive) } },
 		hooks = { refresh_hook(dest) },
 	}
 	check_config(config)

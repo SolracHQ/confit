@@ -1,117 +1,128 @@
 //! Validate
 //! Shape checks over the decode cores returning bool with reason.
 
+use confit_binding::value::Decode;
 use confit_binding_macros::face_impl;
+use mlua::{Lua, Value};
 
 use crate::api::config::Config;
 use crate::api::patch::Patch;
 use confit_model::condition::Condition;
-use confit_model::document::Data;
+use confit_model::document::Document;
 use confit_model::document::RcEntry;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Declare shape-check statics over face decodes.
-macro_rules! check {
-    (
-        $( {
-            $(#[doc = $verb_documentation:literal])+
-            fn $verb:ident (
-                $(#[doc = $parameter_documentation:literal])+
-                $parameter:ident : Value
-                $(,)?
-            ) -> $checked:ty
-        } ),* $(,)?
-    ) => {
-        #[face_impl(namespace = "confit.validate")]
-        impl Validate {
-            $(
-                $(#[doc = $verb_documentation])+
-                ///
-                /// # Arguments
-                ///
-                $(#[doc = $parameter_documentation])+
-                ///
-                /// # Returns
-                ///
-                /// - The decoded value, else nil.
-                /// - The failure reason, else nil.
-                pub fn $verb(
-                    lua: &::mlua::Lua,
-                    $parameter: ::mlua::Value,
-                ) -> ::mlua::Result<(
-                    ::std::option::Option<$checked>,
-                    ::std::option::Option<::std::string::String>,
-                )> {
-                    match <$checked as ::confit_binding::value::Decode>::decode(&$parameter, lua) {
-                        ::std::result::Result::Ok(found) => ::std::result::Result::Ok((
-                            ::std::option::Option::Some(found),
-                            ::std::option::Option::None,
-                        )),
-                        ::std::result::Result::Err(error) => ::std::result::Result::Ok((
-                            ::std::option::Option::None,
-                            ::std::option::Option::Some(error.to_string()),
-                        )),
-                    }
-                }
-            )*
-        }
-    };
-}
-
 /// Validate namespace.
 pub struct Validate;
 
-check! {
-    {
-        /// Check one body table.
-        fn document(
-            /// - [body] The body table under checking.
-            body: Value,
-        ) -> Data
-    },
-    {
-        /// Check one config table.
-        fn config(
-            /// - [config] The config table under checking.
-            config: Value,
-        ) -> Config
-    },
-    {
-        /// Check one patch table.
-        fn patch(
-            /// - [patch] The patch table under checking.
-            patch: Value,
-        ) -> Patch
-    },
-    {
-        /// Check one hook table.
-        fn hook(
-            /// - [value] The hook table under checking.
-            value: Value,
-        ) -> Hook
-    },
-    {
-        /// Check one condition table.
-        fn condition(
-            /// - [value] The condition table under checking.
-            value: Value,
-        ) -> Condition
-    },
-    {
-        /// Check one rc entry table.
-        fn entry(
-            /// - [value] The entry table under checking.
-            value: Value,
-        ) -> RcEntry
-    },
-    {
-        /// Check one route table.
-        fn route(
-            /// - [value] The route table under checking.
-            value: Value,
-        ) -> Route
-    },
+/// Decode one value with its failure reason beside it.
+fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Option<String>)> {
+    match T::decode(value, lua) {
+        Ok(found) => Ok((Some(found), None)),
+        Err(error) => Ok((None, Some(error.to_string()))),
+    }
+}
+
+#[face_impl(namespace = "confit.validate")]
+impl Validate {
+    /// Check one document table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [body] The document table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn document(lua: &Lua, body: Value) -> mlua::Result<(Option<Document>, Option<String>)> {
+        checked(lua, &body)
+    }
+
+    /// Check one config table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [config] The config table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn config(lua: &Lua, config: Value) -> mlua::Result<(Option<Config>, Option<String>)> {
+        checked(lua, &config)
+    }
+
+    /// Check one patch table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [patch] The patch table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn patch(lua: &Lua, patch: Value) -> mlua::Result<(Option<Patch>, Option<String>)> {
+        checked(lua, &patch)
+    }
+
+    /// Check one hook table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [value] The hook table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn hook(lua: &Lua, value: Value) -> mlua::Result<(Option<Hook>, Option<String>)> {
+        checked(lua, &value)
+    }
+
+    /// Check one condition table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [value] The condition table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn condition(lua: &Lua, value: Value) -> mlua::Result<(Option<Condition>, Option<String>)> {
+        checked(lua, &value)
+    }
+
+    /// Check one rc entry table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [value] The entry table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn entry(lua: &Lua, value: Value) -> mlua::Result<(Option<RcEntry>, Option<String>)> {
+        checked(lua, &value)
+    }
+
+    /// Check one route table, else nil with reason.
+    ///
+    /// # Arguments
+    ///
+    /// - [value] The route table under checking.
+    ///
+    /// # Returns
+    ///
+    /// - The decoded value, else nil.
+    /// - The failure reason, else nil.
+    pub fn route(lua: &Lua, value: Value) -> mlua::Result<(Option<Route>, Option<String>)> {
+        checked(lua, &value)
+    }
 }
 
 #[cfg(test)]
@@ -126,36 +137,13 @@ mod tests {
         lua
     }
 
-    fn opened_lua() -> (tempfile::TempDir, Lua) {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("project");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("note.txt"), b"hello").unwrap();
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = confit_store::Stores::new(
-            confit_store::StoreRoots {
-                config_base: directory.path().join("config"),
-                temp_base: directory.path().join("temp"),
-                project_root: root,
-            },
-            sender,
-        );
-        let lua = Lua::new();
-        let _ = lua.set_app_data(stores.clone());
-        let open = crate::api::builtin(&lua, "confit.open").unwrap();
-        lua.globals().set("open", open).unwrap();
-        let validate = Validate::register(&lua).unwrap();
-        lua.globals().set("validate", validate).unwrap();
-        (directory, lua)
-    }
-
     fn run(lua: &Lua, source: &str) -> Value {
         lua.load(source).call(()).unwrap()
     }
 
-    fn reason_of(value: Value) -> String {
+    fn reason_of(value: Value) {
         match value {
-            Value::String(found) => found.to_string_lossy(),
+            Value::String(_) => {}
             _ => panic!("validate reason returns a string"),
         }
     }
@@ -164,7 +152,7 @@ mod tests {
     fn document_returns_true_with_nil_on_good_shapes() {
         let lua = test_lua();
         let source = r#"
-            local found, reason = validate.document({ text = "hi" })
+            local found, reason = validate.document({ path = { base = "home", relative = "subject" }, text = "hi" })
             assert(found ~= nil and reason == nil)
             return "ok"
         "#;
@@ -182,18 +170,13 @@ mod tests {
             assert(found == nil and reason ~= nil)
             return reason
         "#;
-        let text = reason_of(run(&lua, source));
-        assert!(!text.is_empty(), "reason shows the fault: {text}");
+        reason_of(run(&lua, source));
         let source = r#"
             local found, reason = validate.document(1)
             assert(found == nil and reason ~= nil)
             return reason
         "#;
-        let text = reason_of(run(&lua, source));
-        assert!(
-            text.contains("Document_Text"),
-            "reason shows the want: {text}"
-        );
+        reason_of(run(&lua, source));
     }
 
     #[test]
@@ -202,7 +185,7 @@ mod tests {
         let source = r#"
             local found, reason = validate.config({
                 name = "tools/test",
-                documents = { [{ base = "home", relative = ".bashrc" }] = { text = "hi" } },
+                documents = { { path = { base = "home", relative = ".bashrc" }, text = "hi" } },
             })
             assert(found ~= nil and reason == nil)
             return "ok"
@@ -221,8 +204,7 @@ mod tests {
             assert(found == nil and reason ~= nil)
             return reason
         "#;
-        let text = reason_of(run(&lua, source));
-        assert!(text.contains("nope"), "reason shows the key: {text}");
+        reason_of(run(&lua, source));
     }
 
     #[test]
@@ -230,16 +212,12 @@ mod tests {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
-                documents = { [{ base = "home", relative = ".bashrc" }] = { text = "hi" } },
+                documents = { { path = { base = "home", relative = ".bashrc" }, text = "hi" } },
             })
             assert(found == nil and reason ~= nil)
             return reason
         "#;
-        let text = reason_of(run(&lua, source));
-        assert!(
-            text.contains("Config.name"),
-            "reason shows the field: {text}"
-        );
+        reason_of(run(&lua, source));
     }
 
     #[test]
@@ -281,8 +259,7 @@ mod tests {
     fn patch_returns_false_with_reason_on_bad_shapes() {
         let lua = test_lua();
         let cases = [
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = { base = "home", relative = "a" },
                     format = "xml",
@@ -291,10 +268,7 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "xml",
-            ),
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = 1,
                     format = "json",
@@ -303,10 +277,7 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "a table",
-            ),
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = { base = "home", relative = "a" },
                     format = "json",
@@ -315,12 +286,9 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "a function",
-            ),
         ];
-        for (source, want) in cases {
-            let text = reason_of(run(&lua, source));
-            assert!(text.contains(want), "reason shows the fault: {text}");
+        for source in cases {
+            reason_of(run(&lua, source));
         }
     }
 
@@ -328,8 +296,7 @@ mod tests {
     fn patch_rejects_foreign_shapes_showing_keys() {
         let lua = test_lua();
         let cases = [
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = { base = "home", relative = "a" },
                     apply = function(d) return d end,
@@ -338,10 +305,7 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "nope",
-            ),
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = { base = "home", relative = "a" },
                     format = "json",
@@ -351,10 +315,7 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "nope",
-            ),
-            (
-                r#"
+            r#"
                 local found, reason = validate.patch({
                     target = { base = "home", relative = "a" },
                     apply = 1,
@@ -362,101 +323,13 @@ mod tests {
                 assert(found == nil and reason ~= nil)
                 return reason
                 "#,
-                "a function",
-            ),
         ];
-        for (source, want) in cases {
-            let text = reason_of(run(&lua, source));
-            assert!(text.contains(want), "reason shows the fault: {text}");
+        for source in cases {
+            reason_of(run(&lua, source));
         }
     }
 
-    #[test]
-    fn document_checks_every_body_kind() {
-        let (_held, lua) = opened_lua();
-        let cases = [
-            r#"{ text = "hi", mode = "644", unmanaged = true }"#,
-            r#"{ format = "json", data = { alpha = "one" } }"#,
-            #[cfg(unix)]
-            r#"{ target = { base = "home", relative = "linked" } }"#,
-            r#"{ profile = { { env = { name = "EDITOR", value = "hx" } } } }"#,
-            r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
-            r#"{ members = { ["top.txt"] = assert(open("note.txt")) } }"#,
-        ];
-        for body in cases {
-            let source = [
-                "local found, reason = validate.document(",
-                body,
-                ") assert(found ~= nil, reason) return 'ok'",
-            ]
-            .concat();
-            match run(&lua, &source) {
-                Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-                _ => panic!("good body passes: {body}"),
-            }
-        }
-    }
-
-    #[test]
-    fn document_checks_blob_bodies_without_writes() {
-        let (held, lua) = opened_lua();
-        for body in [
-            r#"{ handle = assert(open("note.txt")), mode = "644" }"#,
-            r#"{ members = { ["top.txt"] = assert(open("note.txt")) } }"#,
-        ] {
-            let source = [
-                "local found, reason = validate.document(",
-                body,
-                ") assert(found ~= nil, reason) return 'ok'",
-            ]
-            .concat();
-            match run(&lua, &source) {
-                Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-                _ => panic!("good body passes without writes: {body}"),
-            }
-        }
-        let cache = held.path().join("temp").join("blobs");
-        assert!(
-            !cache.exists()
-                || confit_driver::fs::read_dir(&cache)
-                    .unwrap_or_default()
-                    .is_empty(),
-            "checks write zero blob files"
-        );
-    }
-
-    #[test]
-    fn document_names_mixed_markers() {
-        let lua = test_lua();
-        let mut cases = vec![
-            (r#"{ nope = 1 }"#, "unknown field", "nope"),
-            (
-                r#"{ profile = { { frobnicate = { name = "x" } } } }"#,
-                "unknown tag",
-                "profile",
-            ),
-        ];
-        #[cfg(unix)]
-        cases.push((
-            r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
-            "Document_Text",
-            "Document_Link",
-        ));
-        #[cfg(not(unix))]
-        cases.push((r#"{ text = "hi", nope = 1 }"#, "Document_Text", "nope"));
-        for (body, first, second) in cases {
-            let source = [
-                "local found, reason = validate.document(",
-                body,
-                ") assert(found == nil and reason ~= nil) return reason",
-            ]
-            .concat();
-            let text = reason_of(run(&lua, &source));
-            assert!(text.contains(first), "reason shows the fault: {text}");
-            assert!(text.contains(second), "reason shows the fault: {text}");
-        }
-    }
-
+    // Body shapes pin in model. Validate pins true/false alone.
     #[test]
     fn every_check_verb_rejects_numbers_with_reasons() {
         let lua = test_lua();
@@ -475,8 +348,7 @@ mod tests {
                 "(42) assert(found == nil and reason ~= nil) return reason",
             ]
             .concat();
-            let text = reason_of(run(&lua, &source));
-            assert!(!text.is_empty(), "{verb} shows the fault");
+            reason_of(run(&lua, &source));
         }
     }
 

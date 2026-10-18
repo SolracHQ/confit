@@ -5,10 +5,11 @@ use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_engine::project::{FILE as PROJECT_FILE, Project};
+use confit_engine::stubs::generate_stubs;
 
 use crate::error::{CliError, Result};
 
-use crate::cli::InitArgs;
+use crate::cli::{DEFAULT_PROFILE, InitArgs};
 
 const PROFILE_TEXT: &str = include_str!("../../resources/main.lua");
 
@@ -86,11 +87,11 @@ impl InitRunner<'_> {
 /// - [`CliError::Write`] with [`CliError::WriteUnknown`]
 ///   for scaffold writes.
 fn scaffold(root: &std::path::Path, project: &Project) -> Result<InitReport> {
-    let profile = root.join(crate::cli::DEFAULT_PROFILE);
+    let profile = root.join(DEFAULT_PROFILE);
     let stubs_dir = root.join(&project.stubs.folder);
     let project_path = root.join(PROJECT_FILE);
     let plugins_dir = root.join(&project.plugins.folder);
-    let documents = confit_engine::stubs::generate_stubs()?;
+    let documents = generate_stubs()?;
     let stub_destinations: Vec<PathBuf> = documents
         .iter()
         .map(|document| stubs_dir.join(format!("{}.d.lua", document.namespace)))
@@ -132,7 +133,7 @@ fn scaffold(root: &std::path::Path, project: &Project) -> Result<InitReport> {
 /// - [`CliError::Write`] with [`CliError::WriteUnknown`]
 ///   for stub writes.
 fn write_stubs(dir: &std::path::Path) -> Result<InitReport> {
-    let documents = confit_engine::stubs::generate_stubs()?;
+    let documents = generate_stubs()?;
     for document in &documents {
         let destination = dir.join(format!("{}.d.lua", document.namespace));
         write_file(&destination, document.text.as_bytes())?;

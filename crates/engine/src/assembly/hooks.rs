@@ -1,12 +1,12 @@
 //! Collect profile hooks with hook patches over declared hooks.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use mlua::{Lua, Value};
 
 use crate::api::profile::Profile;
 use confit_binding::value::{Decode, Encode};
-use confit_model::document::Data;
+use confit_model::document::Document;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
@@ -27,7 +27,7 @@ use crate::error::{EngineError, Result};
 pub(super) fn collect_hooks(
     lua: &Lua,
     profile: &Profile,
-    documents: &BTreeMap<Route, Data>,
+    documents: &[Document],
 ) -> Result<Vec<Hook>> {
     check_hook_ids(profile)?;
     let mut hooks = Vec::new();
@@ -96,8 +96,11 @@ fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> Resul
 /// # Errors
 ///
 /// - [`EngineError::ChangedUnknown`] for conditions showing unbuilt routes.
-fn validate_changed(hooks: &[Hook], documents: &BTreeMap<Route, Data>) -> Result<()> {
-    let built: BTreeSet<Route> = documents.keys().cloned().collect();
+fn validate_changed(hooks: &[Hook], documents: &[Document]) -> Result<()> {
+    let built: BTreeSet<Route> = documents
+        .iter()
+        .map(|document| document.path.clone())
+        .collect();
     let mut paths = Vec::new();
     for hook in hooks {
         hook.requires.collect_changed(&mut paths);

@@ -7,7 +7,7 @@ local bat = require("tools.bat")
 return {
 	configs = { installer, bat },
 	documents = {
-		[sugar.home(".bashrc")] = sugar.rc(),
-		[sugar.home(".zshrc")] = sugar.rc(),
+		sugar.rc(sugar.home(".bashrc")),
+		sugar.rc(sugar.home(".zshrc")),
 	},
 }

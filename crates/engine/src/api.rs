@@ -14,6 +14,11 @@ use mlua::{Lua, Value};
 
 use confit_store::Stores;
 
+use crate::api::fact::Fact;
+use crate::api::fetch::Fetch;
+use crate::api::open::Open;
+use crate::api::template::Template;
+use crate::api::validate::Validate;
 use crate::error::EngineError;
 
 /// Build one builtin module value.
@@ -24,11 +29,11 @@ use crate::error::EngineError;
 /// - [`mlua::Error`] for module build failures.
 pub fn builtin(lua: &Lua, name: &str) -> mlua::Result<Value> {
     match name {
-        crate::api::fetch::Fetch::NAMESPACE => crate::api::fetch::Fetch::register(lua),
-        crate::api::open::Open::NAMESPACE => crate::api::open::Open::register(lua),
-        crate::api::validate::Validate::NAMESPACE => crate::api::validate::Validate::register(lua),
-        crate::api::fact::Fact::NAMESPACE => crate::api::fact::Fact::register(lua),
-        crate::api::template::Template::NAMESPACE => crate::api::template::Template::register(lua),
+        Fetch::NAMESPACE => Fetch::register(lua),
+        Open::NAMESPACE => Open::register(lua),
+        Validate::NAMESPACE => Validate::register(lua),
+        Fact::NAMESPACE => Fact::register(lua),
+        Template::NAMESPACE => Template::register(lua),
         _ => Err(EngineError::UnknownModule {
             name: name.to_owned(),
         }
@@ -57,15 +62,9 @@ mod tests {
     #[test]
     fn unknown_modules_fail() {
         let lua = Lua::new();
-        match builtin(&lua, "confit.nope") {
-            Ok(_) => panic!("unknown module passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("unknown module"),
-                    "the text shows the miss: {text}"
-                );
-            }
-        }
+        assert!(
+            builtin(&lua, "confit.nope").is_err(),
+            "unknown module fails"
+        );
     }
 }

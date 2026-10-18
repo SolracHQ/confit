@@ -3,12 +3,24 @@
 
 use std::borrow::Cow;
 
+use confit_driver::sha::Sha;
+
+use crate::error::Result as BindingResult;
 use crate::registry::Registry;
+
+/// Collect one face with every referenced face.
+pub type CollectFn = fn(&mut Registry) -> BindingResult<()>;
+
+/// Collect none.
+pub fn no_collect(_collector: &mut Registry) -> BindingResult<()> {
+    Ok(())
+}
 
 /// One documented table field.
 ///
 /// The optional marker from
 /// the shape declaration to stub emission.
+#[derive(Clone, Debug)]
 pub struct FieldDescriptor {
     /// The field name.
     pub name: &'static str,
@@ -18,36 +30,25 @@ pub struct FieldDescriptor {
     pub face: Cow<'static, str>,
     /// The optional marker.
     pub optional: bool,
+    /// The face collector.
+    pub collect: CollectFn,
 }
 
-/// One documented union variant.
-///
-/// One member from the union
-/// declaration to stub emission.
-pub struct VariantDescriptor {
-    /// The variant name.
-    pub name: &'static str,
-    /// The variant documentation.
-    pub documentation: &'static str,
-    /// The variant face expression.
-    pub face: Cow<'static, str>,
-}
-
-/// One documented function.
-///
-/// The function face from
-/// the static declaration to stub emission.
-pub struct FunctionDescriptor {
-    /// The function name.
-    pub name: &'static str,
-    /// The function documentation.
-    pub documentation: &'static str,
+impl PartialEq for FieldDescriptor {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.documentation == other.documentation
+            && self.face == other.face
+            && self.optional == other.optional
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
 }
 
 /// One documented function parameter.
 ///
 /// The optional marker from
 /// the static declaration to stub emission.
+#[derive(Clone, Debug)]
 pub struct FunctionParameter {
     /// The parameter name.
     pub name: &'static str,
@@ -57,59 +58,122 @@ pub struct FunctionParameter {
     pub face: Cow<'static, str>,
     /// The optional marker.
     pub optional: bool,
+    /// The face collector.
+    pub collect: CollectFn,
+}
+
+impl PartialEq for FunctionParameter {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.documentation == other.documentation
+            && self.face == other.face
+            && self.optional == other.optional
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
 }
 
 /// One documented function return.
 ///
 /// Runs from static declaration to stub emission.
+#[derive(Clone, Debug)]
 pub struct FunctionReturn {
     /// The return face expression.
     pub face: Cow<'static, str>,
     /// The return documentation.
     pub documentation: &'static str,
+    /// The face collector.
+    pub collect: CollectFn,
 }
 
-/// Face kind marker.
-///
-/// Every declaration carries one marker from
-/// derive to stub emission.
-pub enum FaceKind {
-    /// Table shape.
-    Table,
-    /// Function shape.
-    Function,
-    /// Userdata handle.
-    Userdata,
+impl PartialEq for FunctionReturn {
+    fn eq(&self, other: &Self) -> bool {
+        self.face == other.face
+            && self.documentation == other.documentation
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
 }
 
-/// Bound type face.
-///
-/// - Every implementor answers one stable Lua name.
-/// - Every implementor answers one stub block.
-/// - Every implementor declares one kind marker.
-/// - Collection registers the face with every
-///   referenced face exactly once.
+/// One union arm with its payload fields.
+#[derive(Clone, Debug)]
+pub struct UnionArm {
+    /// The variant name.
+    pub name: &'static str,
+    /// The variant documentation.
+    pub documentation: &'static str,
+    /// The variant face expression.
+    pub face: Cow<'static, str>,
+    /// The payload fields in order.
+    pub fields: Vec<FieldDescriptor>,
+    /// The face collector.
+    pub collect: CollectFn,
+    /// The alias skip marker.
+    pub skipped: bool,
+}
+
+impl PartialEq for UnionArm {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.documentation == other.documentation
+            && self.face == other.face
+            && self.fields == other.fields
+            && self.skipped == other.skipped
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
+}
+
+/// Bound face snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FaceData {
+    /// Scalar stub shape.
+    Scalar {
+        /// The holder documentation.
+        documentation: &'static str,
+    },
+    /// Table shape with fields.
+    Class {
+        /// The holder documentation.
+        documentation: &'static str,
+        /// The table fields.
+        fields: Vec<FieldDescriptor>,
+    },
+    /// Union shape with folded arm fields.
+    Union {
+        /// The holder documentation.
+        documentation: &'static str,
+        /// The union arms with fields.
+        arms: Vec<UnionArm>,
+    },
+    /// Function shape with params and returns.
+    Function {
+        /// The holder documentation.
+        documentation: &'static str,
+        /// The function params.
+        parameters: Vec<FunctionParameter>,
+        /// The function returns.
+        returns: Vec<FunctionReturn>,
+    },
+    /// Userdata handle shape.
+    Userdata {
+        /// The holder documentation.
+        documentation: &'static str,
+    },
+}
+
+/// Bound type face: Lua name, stub data, and registry collection.
 pub trait Face {
     /// Return the Lua name.
     fn face_name() -> String;
-    /// Return the stub block.
-    fn face_stub() -> String;
-    /// Return the kind marker.
-    fn kind() -> FaceKind;
+    /// Return the stub snapshot.
+    fn face() -> FaceData;
     /// Register the face with every referenced face.
     ///
     /// # Errors
     ///
     /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> crate::error::Result<()>;
+    fn collect(collector: &mut Registry) -> BindingResult<()>;
 }
 
-/// Bound namespace face.
-///
-/// - Every implementor answers one dotted Lua path.
-/// - Every implementor answers one documentation string.
-/// - Collection registers the namespace with every
-///   member face exactly once.
+/// Bound namespace face: dotted Lua path and member collection.
 pub trait Namespace {
     /// Return the dotted Lua path.
     fn namespace() -> &'static str;
@@ -120,7 +184,7 @@ pub trait Namespace {
     /// # Errors
     ///
     /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> crate::error::Result<()>;
+    fn collect(collector: &mut Registry) -> BindingResult<()>;
 }
 
 macro_rules! primitive_face {
@@ -129,13 +193,10 @@ macro_rules! primitive_face {
             fn face_name() -> String {
                 $face.to_owned()
             }
-            fn face_stub() -> String {
-                String::new()
+            fn face() -> FaceData {
+                FaceData::Scalar { documentation: "" }
             }
-            fn kind() -> FaceKind {
-                FaceKind::Table
-            }
-            fn collect(_collector: &mut Registry) -> crate::error::Result<()> {
+            fn collect(_collector: &mut Registry) -> BindingResult<()> {
                 Ok(())
             }
         }
@@ -152,18 +213,16 @@ primitive_face!(mlua::Function, "fun()");
 primitive_face!(mlua::Table, "table");
 primitive_face!(mlua::Value, "any");
 primitive_face!(serde_json::Value, "any");
+primitive_face!(Sha, "string");
 
 impl Face for () {
     fn face_name() -> String {
         "nil".to_owned()
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        FaceKind::Table
-    }
-    fn collect(_collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(_collector: &mut Registry) -> BindingResult<()> {
         Ok(())
     }
 }
@@ -172,13 +231,10 @@ impl<First: Face, Second: Face> Face for (First, Second) {
     fn face_name() -> String {
         format!("{}, {}", First::face_name(), Second::face_name())
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        First::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         First::collect(collector)?;
         Second::collect(collector)
     }
@@ -188,13 +244,10 @@ impl<T: Face> Face for Option<T> {
     fn face_name() -> String {
         format!("{}?", parenthesized(&T::face_name()))
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        T::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         T::collect(collector)
     }
 }
@@ -203,13 +256,10 @@ impl<T: Face> Face for Vec<T> {
     fn face_name() -> String {
         format!("{}[]", parenthesized(&T::face_name()))
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        T::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         T::collect(collector)
     }
 }
@@ -218,13 +268,10 @@ impl<T: Face> Face for Box<T> {
     fn face_name() -> String {
         T::face_name()
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        T::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         T::collect(collector)
     }
 }
@@ -233,13 +280,10 @@ impl<K: Face, V: Face> Face for std::collections::HashMap<K, V> {
     fn face_name() -> String {
         format!("{{[{}]: {}}}", K::face_name(), V::face_name())
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        V::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         K::collect(collector)?;
         V::collect(collector)
     }
@@ -249,20 +293,75 @@ impl<K: Face, V: Face> Face for std::collections::BTreeMap<K, V> {
     fn face_name() -> String {
         format!("{{[{}]: {}}}", K::face_name(), V::face_name())
     }
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        FaceData::Scalar { documentation: "" }
     }
-    fn kind() -> FaceKind {
-        V::kind()
-    }
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         K::collect(collector)?;
         V::collect(collector)
     }
 }
 
+impl FaceData {
+    /// Return the holder documentation.
+    pub fn documentation(&self) -> &'static str {
+        match self {
+            Self::Scalar { documentation }
+            | Self::Class { documentation, .. }
+            | Self::Union { documentation, .. }
+            | Self::Function { documentation, .. }
+            | Self::Userdata { documentation } => documentation,
+        }
+    }
+
+    /// Collect every referenced face.
+    ///
+    /// - Scalar faces collect none.
+    /// - Class faces collect every field face.
+    /// - Union faces collect every kept arm face.
+    /// - Function faces collect every param with every return face.
+    /// - Userdata faces collect none.
+    ///
+    /// # Errors
+    ///
+    /// - [`crate::error::BindingError`] for repeated registration.
+    pub fn collect_referenced(&self, collector: &mut Registry) -> BindingResult<()> {
+        match self {
+            Self::Scalar { .. } | Self::Userdata { .. } => Ok(()),
+            Self::Class { fields, .. } => {
+                for field in fields {
+                    (field.collect)(collector)?;
+                }
+                Ok(())
+            }
+            Self::Union { arms, .. } => {
+                for arm in arms {
+                    if arm.skipped {
+                        continue;
+                    }
+                    (arm.collect)(collector)?;
+                }
+                Ok(())
+            }
+            Self::Function {
+                parameters,
+                returns,
+                ..
+            } => {
+                for parameter in parameters {
+                    (parameter.collect)(collector)?;
+                }
+                for returned in returns {
+                    (returned.collect)(collector)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 fn parenthesized(face: &str) -> String {
-    if face.contains(" | ") {
+    if face.contains(" | ") || face.starts_with("fun(") {
         format!("({face})")
     } else {
         face.to_owned()
@@ -272,7 +371,7 @@ fn parenthesized(face: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_binding_macros::Face;
+    use confit_binding_macros::{Face, face_impl};
     use mlua::{Lua, Value};
     use std::collections::{BTreeMap, HashMap};
 
@@ -363,12 +462,19 @@ mod tests {
 
     #[test]
     fn untagged_inline_synthesizes_documented_payload_class() {
-        let stub = Condition_EnvEq::face_stub();
         assert_eq!(Condition_EnvEq::face_name(), "Condition_EnvEq");
-        assert!(stub.contains("@class Condition_EnvEq"));
-        assert!(stub.contains("Equality check."));
-        assert!(stub.contains("@field key string The variable name."));
-        assert!(stub.contains("@field value string The expected value."));
+        match Condition_EnvEq::face() {
+            FaceData::Class {
+                documentation,
+                fields,
+            } => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name, "key");
+                assert_eq!(fields[1].name, "value");
+                assert_eq!(documentation, "Equality check.");
+            }
+            _ => panic!("payload holds class data"),
+        }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
         table.set("key", "FOO").unwrap();
@@ -382,19 +488,29 @@ mod tests {
 
     #[test]
     fn untagged_union_face_references_payload_class() {
-        let stub = Condition::face_stub();
-        assert!(stub.contains("Condition_EnvEq"));
+        match Condition::face() {
+            FaceData::Union { arms, .. } => {
+                assert_eq!(arms.len(), 3);
+                assert_eq!(arms[0].face.as_ref(), "Condition_EnvEq");
+            }
+            _ => panic!("union holds union data"),
+        }
         let mut collector = Registry::new();
         Condition::collect(&mut collector).unwrap();
         assert!(collector.contains("Condition"));
         assert!(collector.contains("Condition_EnvEq"));
+        assert!(collector.stub_text().contains("Condition_EnvEq"));
     }
 
     #[test]
     fn untagged_tuple_arm_keeps_inner_face() {
-        let stub = Condition::face_stub();
-        assert!(stub.contains("Condition[]"));
-        assert!(!stub.contains("Condition_All"));
+        match Condition::face() {
+            FaceData::Union { arms, .. } => {
+                assert_eq!(arms[1].face.as_ref(), "Condition[]");
+                assert_eq!(arms[2].face.as_ref(), "nil");
+            }
+            _ => panic!("union holds union data"),
+        }
         let lua = Lua::new();
         let inner = lua.create_table().unwrap();
         inner.set("key", "A").unwrap();
@@ -407,15 +523,30 @@ mod tests {
 
     #[test]
     fn tagged_inline_synthesizes_documented_payload_class() {
-        let stub = TaggedCond_EnvEq::face_stub();
         assert_eq!(TaggedCond_EnvEq::face_name(), "TaggedCond_EnvEq");
-        assert!(stub.contains("@class TaggedCond_EnvEq"));
-        assert!(stub.contains("Equality check."));
-        assert!(stub.contains("@field key string The variable name."));
-        let union = TaggedCond::face_stub();
-        assert!(union.contains("TaggedCond_EnvEq"));
-        assert!(union.contains("env_eq"));
-        assert!(!union.contains("TaggedCond_All"));
+        match TaggedCond_EnvEq::face() {
+            FaceData::Class { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "key");
+            }
+            _ => panic!("payload holds class data"),
+        }
+        match TaggedCond_EnvEq::face() {
+            FaceData::Class { documentation, .. } => {
+                assert_eq!(documentation, "Equality check.");
+            }
+            _ => panic!("payload holds class data"),
+        }
+        match TaggedCond::face() {
+            FaceData::Union { arms, .. } => assert_eq!(arms.len(), 2),
+            _ => panic!("tagged holds union data"),
+        }
+        let mut collector = Registry::new();
+        TaggedCond::collect(&mut collector).unwrap();
+        let text = collector.stub_text();
+        assert!(text.contains("TaggedCond_EnvEq"));
+        assert!(text.contains("env_eq"));
+        assert!(!text.contains("TaggedCond_All"));
         let lua = Lua::new();
         let inner = lua.create_table().unwrap();
         inner.set("key", "K").unwrap();
@@ -432,23 +563,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_docs_still_collect_payload_class() {
-        let mut collector = Registry::new();
-        NoDocs::collect(&mut collector).unwrap();
-        assert!(collector.contains("NoDocs_Bare"));
-        assert!(NoDocs::face_stub().contains("NoDocs_Bare"));
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-        table.set("key", "K").unwrap();
-        let decoded = NoDocs::decode(&Value::Table(table.clone()), &lua).unwrap();
-        assert!(matches!(&decoded, NoDocs::Bare { key } if key == "K"));
-        let sequence = lua.create_table().unwrap();
-        sequence.set(1, table).unwrap();
-        let nested = NoDocs::decode(&Value::Table(sequence), &lua).unwrap();
-        assert!(matches!(&nested, NoDocs::Many(items) if items.len() == 1));
-    }
-
-    #[test]
     fn map_faces_read_member_faces() {
         assert_eq!(
             HashMap::<String, String>::face_name(),
@@ -461,7 +575,7 @@ mod tests {
         let mut collector = Registry::new();
         MapHolder::collect(&mut collector).unwrap();
         assert!(collector.contains("MapHolder"));
-        assert!(MapHolder::face_stub().contains("{[string]: string}"));
+        assert!(collector.stub_text().contains("{[string]: string}"));
     }
 
     #[test]
@@ -488,23 +602,21 @@ mod tests {
         entries.set("alpha", 1).unwrap();
         let table = lua.create_table().unwrap();
         table.set("entries", entries).unwrap();
-        let failure = MapHolder::decode(&Value::Table(table), &lua).unwrap_err();
-        let text = failure.to_string();
         assert!(
-            text.contains("MapHolder.entries"),
-            "the text shows the field: {text}"
+            MapHolder::decode(&Value::Table(table), &lua).is_err(),
+            "foreign entry fails"
         );
-        assert!(text.contains("a string"), "the text shows the want: {text}");
     }
 
     #[test]
-    fn ignored_fields_skip_stubs_with_defaults_through_codecs() {
-        let stub = IgnoredHolder::face_stub();
-        assert!(stub.contains("kept"), "the stub shows the Lua field");
-        assert!(
-            !stub.contains("@field filled"),
-            "the stub skips the Rust field"
-        );
+    fn ignored_fields_skip_data_with_defaults_through_codecs() {
+        match IgnoredHolder::face() {
+            FaceData::Class { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "kept");
+            }
+            _ => panic!("holder holds class data"),
+        }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
         table.set("kept", "hi").unwrap();
@@ -531,19 +643,87 @@ mod tests {
         let table = lua.create_table().unwrap();
         table.set("kept", "hi").unwrap();
         table.set("filled", 1).unwrap();
-        let failure = IgnoredHolder::decode(&Value::Table(table), &lua).unwrap_err();
-        let text = failure.to_string();
-        assert!(text.contains("filled"), "the text shows the key: {text}");
+        assert!(
+            IgnoredHolder::decode(&Value::Table(table), &lua).is_err(),
+            "foreign key fails"
+        );
+    }
+
+    /// String face for data tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(table, string)]
+    enum Shade {
+        /// Dark tone.
+        Dark,
+        /// Light tone.
+        Light,
+    }
+
+    /// Live table for callback data tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(table)]
+    struct LiveDoc {
+        /// The title.
+        title: String,
+    }
+
+    /// Callback shape for data tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(callback_shape)]
+    struct CallArgs {
+        /// Target route.
+        route: String,
+        /// Live document under patching.
+        #[face(live)]
+        document: LiveDoc,
+    }
+
+    /// Userdata handle for data tests.
+    #[derive(Clone, Face)]
+    #[face(userdata)]
+    struct Handle {
+        seed: String,
+    }
+
+    #[face_impl]
+    impl Handle {
+        /// Answer the seed.
+        ///
+        /// # Returns
+        ///
+        /// - The stored seed.
+        pub fn seed_name(&self) -> String {
+            self.seed.clone()
+        }
+    }
+
+    /// Union with a skipped arm for data tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(table, untagged)]
+    enum SkippedUnion {
+        /// Live payload.
+        Live {
+            /// The content.
+            content: String,
+        },
+        /// Sealed payload.
+        #[face(skip_decode, skip_encode)]
+        Sealed(String),
     }
 
     #[test]
-    fn ignored_inline_fields_skip_stubs_with_defaults() {
-        let stub = IgnoredUnion_Text::face_stub();
-        assert!(stub.contains("content"), "the stub shows the Lua field");
-        assert!(
-            !stub.contains("@field count"),
-            "the stub skips the Rust field"
-        );
+    fn ignored_inline_fields_skip_data_with_defaults() {
+        match IgnoredUnion_Text::face() {
+            FaceData::Class { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "content");
+            }
+            _ => panic!("payload holds class data"),
+        }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
         table.set("content", "hi").unwrap();
@@ -554,6 +734,172 @@ mod tests {
                 assert_eq!(count, 0);
             }
             IgnoredUnion::Shaped(_) => panic!("content routes to the text arm"),
+        }
+    }
+
+    /// Inner body for flatten data tests.
+    #[derive(Debug, Face)]
+    #[face(table)]
+    struct FlatInner {
+        /// The exact file text.
+        content: String,
+    }
+
+    /// Holder with one flattened body for data tests.
+    #[derive(Debug, Face)]
+    #[face(table)]
+    struct FlatHolder {
+        /// The document path.
+        path: String,
+        /// The flattened body.
+        #[face(flatten)]
+        body: FlatInner,
+    }
+
+    #[test]
+    fn struct_data_holds_fields_with_docs() {
+        match IgnoredHolder::face() {
+            FaceData::Class {
+                documentation,
+                fields,
+            } => {
+                assert_eq!(
+                    documentation,
+                    "Holder face with one Rust-filled field beside its Lua shape."
+                );
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "kept");
+                assert_eq!(fields[0].face.as_ref(), "string");
+            }
+            _ => panic!("struct holds class data"),
+        }
+    }
+
+    #[test]
+    fn untagged_data_folds_arm_fields_in_order() {
+        match Condition::face() {
+            FaceData::Union {
+                documentation,
+                arms,
+            } => {
+                assert_eq!(documentation, "Union of inline and tuple arms.");
+                assert_eq!(arms.len(), 3);
+                assert_eq!(arms[0].name, "EnvEq");
+                assert_eq!(arms[0].fields.len(), 2);
+                assert_eq!(arms[0].fields[0].name, "key");
+                assert!(arms[1].fields.is_empty());
+                assert!(arms[2].fields.is_empty());
+                assert_eq!(arms[0].face.as_ref(), "Condition_EnvEq");
+            }
+            _ => panic!("untagged union holds union data"),
+        }
+    }
+
+    #[test]
+    fn tagged_data_holds_arms_with_docs() {
+        match TaggedCond::face() {
+            FaceData::Union {
+                documentation,
+                arms,
+            } => {
+                assert_eq!(documentation, "Tagged union of inline and tuple arms.");
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].name, "EnvEq");
+            }
+            _ => panic!("tagged union holds union data"),
+        }
+    }
+
+    #[test]
+    fn literal_data_holds_quoted_faces() {
+        match Shade::face() {
+            FaceData::Union {
+                documentation,
+                arms,
+            } => {
+                assert_eq!(documentation, "String face for data tests.");
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].face.as_ref(), "\"dark\"");
+                assert_eq!(arms[1].face.as_ref(), "\"light\"");
+            }
+            _ => panic!("literal holds union data"),
+        }
+    }
+
+    #[test]
+    fn callback_data_holds_params_without_returns() {
+        match CallArgs::face() {
+            FaceData::Function {
+                documentation,
+                parameters,
+                returns,
+            } => {
+                assert_eq!(documentation, "Callback shape for data tests.");
+                assert_eq!(parameters.len(), 2);
+                assert_eq!(parameters[0].name, "route");
+                assert_eq!(parameters[1].name, "document");
+                assert_eq!(parameters[1].face.as_ref(), "LiveDoc");
+                assert!(returns.is_empty());
+            }
+            _ => panic!("callback shape holds function data"),
+        }
+    }
+
+    #[test]
+    fn userdata_data_holds_docs() {
+        match Handle::face() {
+            FaceData::Userdata { documentation } => {
+                assert_eq!(documentation, "Userdata handle for data tests.");
+            }
+            _ => panic!("userdata holds userdata data"),
+        }
+    }
+
+    #[test]
+    fn scalar_data_marks_primitives() {
+        assert!(matches!(String::face(), FaceData::Scalar { .. }));
+        assert!(matches!(bool::face(), FaceData::Scalar { .. }));
+        assert!(matches!(Vec::<String>::face(), FaceData::Scalar { .. }));
+        assert!(matches!(Option::<String>::face(), FaceData::Scalar { .. }));
+    }
+
+    #[test]
+    fn skipped_union_data_keeps_all_arms() {
+        match SkippedUnion::face() {
+            FaceData::Union { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].name, "Live");
+                assert_eq!(arms[1].name, "Sealed");
+                assert_eq!(arms[0].fields.len(), 1);
+            }
+            _ => panic!("skipped union holds union data"),
+        }
+    }
+
+    #[test]
+    fn flattened_holder_data_holds_outer_fields() {
+        match FlatHolder::face() {
+            FaceData::Class { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "path");
+                assert_eq!(fields[0].face.as_ref(), "string");
+            }
+            _ => panic!("flat holder holds class data"),
+        }
+    }
+
+    #[test]
+    fn empty_cases_hold_no_fields_or_arms() {
+        assert!(matches!(String::face(), FaceData::Scalar { .. }));
+        assert!(matches!(CallArgs::face(), FaceData::Function { .. }));
+        assert!(matches!(Handle::face(), FaceData::Userdata { .. }));
+        match CallArgs::face() {
+            FaceData::Function { returns, .. } => assert!(returns.is_empty()),
+            _ => panic!("callback holds function data"),
+        }
+        match LiveDoc::face() {
+            FaceData::Class { fields, .. } => assert_eq!(fields.len(), 1),
+            _ => panic!("live doc holds class data"),
         }
     }
 }

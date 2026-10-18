@@ -75,7 +75,8 @@ through with bare shape kept.
 
 ### Content hashes
 
-The build fills one data hash per document from rendered bytes.
+The build fills one hash per document into the hashes section
+from rendered bytes.
 Opaque hashes copy the blob reference. Tree hashes cover
 canonical manifest bytes over blob references. Documents sort
 by path after hashing. Blob refs attach beside the manifest
@@ -94,7 +95,7 @@ the first run.
 
 A present file parses in two steps:
 
-- Version probe runs first. Version 7 passes. Other versions fail as unsupported. A missing version fails as a plan error showing the file.
+- Version probe runs first. Version 8 passes. Other versions fail as unsupported. A missing version fails as a plan error showing the file.
 - Manifest cast runs second. Unknown fields fail the load.
 
 Hashes persist

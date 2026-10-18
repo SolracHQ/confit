@@ -5,9 +5,7 @@ use proc_macro2::TokenStream as Tokens;
 use quote::{format_ident, quote};
 use syn::{Attribute, Fields, Variant, ext::IdentExt};
 
-use super::parse::{
-    ContainerKind, doc_lines, kind_tokens, parse_field_flags, parse_variant_flags, payload_of,
-};
+use super::parse::{doc_lines, parse_field_flags, parse_variant_flags, payload_of};
 
 /// Payload class synthesized from one inline struct variant.
 struct InlinePayload {
@@ -40,7 +38,6 @@ fn build_inline_payload(
     let mut declarations = Vec::new();
     let mut descriptors = Vec::new();
     let mut decoders = Vec::new();
-    let mut members = Vec::new();
     let mut field_idents = Vec::new();
     let mut field_names = Vec::new();
     let mut field_lua_keys = Vec::new();
@@ -63,6 +60,7 @@ fn build_inline_payload(
             || flags.encode_hook.is_some()
             || flags.opaque
             || flags.ignore
+            || flags.flatten
         {
             return Err(syn::Error::new_spanned(
                 &field_ident,
@@ -117,6 +115,7 @@ fn build_inline_payload(
                         ),
                     ),
                     optional: true,
+                    collect: <#field_type as ::confit_binding::face::Face>::collect,
                 }
             });
         } else {
@@ -129,6 +128,7 @@ fn build_inline_payload(
                         <#field_type as ::confit_binding::face::Face>::face_name(),
                     ),
                     optional: #marked,
+                    collect: <#field_type as ::confit_binding::face::Face>::collect,
                 }
             });
         }
@@ -188,9 +188,6 @@ fn build_inline_payload(
                         })?;
             });
         }
-        members.push(quote! {
-            <#field_type as ::confit_binding::face::Face>::collect(collector)?;
-        });
         field_idents.push(field_ident);
         if !field_names.iter().any(|key| key == &lua_key) {
             field_names.push(lua_key);
@@ -211,23 +208,19 @@ fn build_inline_payload(
                 #class_name.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_class(
-                    #class_name,
-                    #class_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                ::confit_binding::face::FaceKind::Table
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Class {
+                    documentation: #class_docs,
+                    fields: ::std::vec![#(#descriptors),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(#members)*
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
                 }
                 ::std::result::Result::Ok(())
             }
@@ -310,16 +303,13 @@ pub(crate) fn expand_tagged_enum(
     name: &syn::Ident,
     data: &syn::DataEnum,
     attrs: &[Attribute],
-    kind: ContainerKind,
     validate: &Option<syn::Path>,
     rename: &Option<String>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
     let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
-    let marker = kind_tokens(kind);
-    let mut descriptors = Vec::new();
-    let mut members = Vec::new();
+    let mut union_arms = Vec::new();
     let mut arms = Vec::new();
     let mut encodes = Vec::new();
     let mut tags = Vec::new();
@@ -334,6 +324,12 @@ pub(crate) fn expand_tagged_enum(
         let variant_name = variant.ident.to_string();
         let ident = variant.ident.clone();
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
+        if flags.skip_decode || flags.skip_encode {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                format!("{outer}.{variant_name}: untagged faces are expected for skip options"),
+            ));
+        }
         if flags.rename.is_some() || !flags.probe.is_empty() {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
@@ -350,8 +346,8 @@ pub(crate) fn expand_tagged_enum(
             let field_keys = payload.lua_keys.clone();
             let field_shapes = payload.shapes.clone();
             payloads.push(payload.expansion);
-            descriptors.push(quote! {
-                ::confit_binding::face::VariantDescriptor {
+            union_arms.push(quote! {
+                ::confit_binding::face::UnionArm {
                     name: stringify!(#ident),
                     documentation: #docs,
                     face: ::std::borrow::Cow::Owned(::std::format!(
@@ -359,10 +355,10 @@ pub(crate) fn expand_tagged_enum(
                         #tag,
                         <#identifier as ::confit_binding::face::Face>::face_name(),
                     )),
+                    fields: ::std::vec::Vec::new(),
+                    collect: <#identifier as ::confit_binding::face::Face>::collect,
+                    skipped: false,
                 }
-            });
-            members.push(quote! {
-                <#identifier as ::confit_binding::face::Face>::collect(collector)?;
             });
             if let Some(hook) = validate {
                 arms.push(quote! {
@@ -424,8 +420,8 @@ pub(crate) fn expand_tagged_enum(
             continue;
         }
         let payload = payload_of(&outer, variant, "tagged")?;
-        descriptors.push(quote! {
-            ::confit_binding::face::VariantDescriptor {
+        union_arms.push(quote! {
+            ::confit_binding::face::UnionArm {
                 name: stringify!(#ident),
                 documentation: #docs,
                 face: ::std::borrow::Cow::Owned(::std::format!(
@@ -433,10 +429,10 @@ pub(crate) fn expand_tagged_enum(
                     #tag,
                     <#payload as ::confit_binding::face::Face>::face_name(),
                 )),
+                fields: ::std::vec::Vec::new(),
+                collect: <#payload as ::confit_binding::face::Face>::collect,
+                skipped: false,
             }
-        });
-        members.push(quote! {
-            <#payload as ::confit_binding::face::Face>::collect(collector)?;
         });
         encodes.push(quote! {
             Self::#ident(inner) => {
@@ -492,23 +488,19 @@ pub(crate) fn expand_tagged_enum(
                 #display.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_alias(
-                    #display,
-                    #type_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                #marker
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Union {
+                    documentation: #type_docs,
+                    arms: ::std::vec![#(#union_arms),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(#members)*
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
                 }
                 ::std::result::Result::Ok(())
             }
@@ -560,16 +552,9 @@ mod tests {
         let syn::Data::Enum(data) = &input.data else {
             panic!("want enum input");
         };
-        expand_tagged_enum(
-            &input.ident,
-            data,
-            &input.attrs,
-            ContainerKind::Table,
-            &None,
-            rename,
-        )
-        .unwrap()
-        .to_string()
+        expand_tagged_enum(&input.ident, data, &input.attrs, &None, rename)
+            .unwrap()
+            .to_string()
     }
 
     #[test]
@@ -589,10 +574,13 @@ mod tests {
             "#,
         );
         assert!(expanded.contains("TaggedCond_EnvEq"));
-        assert!(expanded.contains("emit_class"));
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
         assert!(expanded.contains("Equality check"));
         assert!(expanded.contains("The variable name"));
         assert!(expanded.contains("env_eq"));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("UnionArm"));
     }
 
     #[test]
@@ -611,10 +599,12 @@ mod tests {
             }
             "#,
         );
-        assert!(expanded.contains("emit_alias"));
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
         assert!(expanded.contains("TaggedCond_EnvEq"));
         assert!(expanded.contains("{}: {}"));
         assert!(!expanded.contains("{} = {}"));
+        assert!(expanded.contains("face"));
     }
 
     #[test]
@@ -639,38 +629,29 @@ mod tests {
     }
 
     #[test]
-    fn missing_docs_still_synthesize_payload_class() {
-        let expanded = expand(
+    fn skip_options_fail_the_build() {
+        let input: syn::DeriveInput = syn::parse_str(
             r#"
             #[face(table, tagged)]
-            pub enum NoDocs {
-                Bare { key: String },
-                Many(Vec<String>),
-            }
-            "#,
-        );
-        assert!(expanded.contains("NoDocs_Bare"));
-        assert!(!expanded.contains("NoDocs_Many"));
-    }
-
-    #[test]
-    fn container_rename_propagates_to_payload_class() {
-        let expanded = expand_named(
-            r#"
-            #[face(table, tagged, rename = "Document")]
-            pub enum Data {
-                /// Plain text payload.
-                Text {
-                    /// The exact file text.
-                    content: String,
+            pub enum TaggedCond {
+                /// Equality check.
+                EnvEq {
+                    /// The variable name.
+                    key: String,
                 },
-                /// Structured payload.
-                Shaped(Vec<String>),
+                /// Sealed payload.
+                #[face(skip_decode)]
+                Sealed(Vec<String>),
             }
             "#,
-            &Some("Document".to_owned()),
+        )
+        .unwrap();
+        let syn::Data::Enum(data) = &input.data else {
+            panic!("want enum input");
+        };
+        assert!(
+            expand_tagged_enum(&input.ident, data, &input.attrs, &None, &None).is_err(),
+            "foreign shape fails the build"
         );
-        assert!(expanded.contains("Document_Text"));
-        assert!(!expanded.contains("Data_Text"));
     }
 }

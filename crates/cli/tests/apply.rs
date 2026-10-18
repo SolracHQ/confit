@@ -20,7 +20,7 @@ return {{
     configs = {{
         {{
             name = "note",
-            documents = {{ [{{ base = "home", relative = "{relative}" }}] = {{ text = "hello" }} }},
+            documents = {{ {{ path = {{ base = "home", relative = "{relative}" }}, text = "hello" }} }},
         }},
     }},
 }}

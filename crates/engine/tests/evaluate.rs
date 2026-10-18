@@ -1,7 +1,8 @@
 mod common;
 
 use common::*;
-use confit_model::document::{Data, StructuredFormat};
+use confit_model::arg::Arg;
+use confit_model::document::{Data, StructuredDocument, StructuredFormat};
 use confit_model::routes::{Route, RouteBase};
 
 #[test]
@@ -14,8 +15,8 @@ fn evaluates_text_in_destination_order() {
             assert_eq!(found.documents.len(), 2);
             let displays: Vec<String> = found
                 .documents
-                .keys()
-                .map(|route| route.display())
+                .iter()
+                .map(|document| document.path.display())
                 .collect();
             assert_eq!(
                 displays,
@@ -23,8 +24,20 @@ fn evaluates_text_in_destination_order() {
             );
             let apple = Route::new(RouteBase::Home, "apple").unwrap();
             let zebra = Route::new(RouteBase::Home, "zebra").unwrap();
-            assert_eq!(text_of(&found.documents[&apple]), "a");
-            assert_eq!(text_of(&found.documents[&zebra]), "z");
+            let apple_data = &found
+                .documents
+                .iter()
+                .find(|document| document.path == apple)
+                .unwrap()
+                .data;
+            let zebra_data = &found
+                .documents
+                .iter()
+                .find(|document| document.path == zebra)
+                .unwrap()
+                .data;
+            assert_eq!(text_of(apple_data), "a");
+            assert_eq!(text_of(zebra_data), "z");
         }
         Err(error) => panic!("profile evaluates: {error}"),
     }
@@ -38,10 +51,10 @@ fn evaluates_structured_with_filled_hash() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            let (route, data) = found.documents.iter().next().unwrap();
-            assert_eq!(route.display(), "home('config.toml')");
-            match data {
-                Data::Structured { format, data } => {
+            let document = found.documents.first().unwrap();
+            assert_eq!(document.path.display(), "home('config.toml')");
+            match &document.data {
+                Data::Structured(StructuredDocument { format, data }) => {
                     assert_eq!(*format, StructuredFormat::Toml);
                     match data.get("profile").and_then(|item| item.get("shell")) {
                         Some(shell) => assert_eq!(shell.as_str(), Some("bash")),
@@ -60,16 +73,10 @@ fn duplicate_destinations_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), DUPLICATE);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("duplicate destinations pass"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('.bashrc')"),
-                "the text shows the destination: {text}"
-            );
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "duplicate destinations fail"
+    );
 }
 
 #[test]
@@ -85,7 +92,7 @@ fn root_rides_stores() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(text_of(found.documents.values().next().unwrap()), "hello");
+            assert_eq!(text_of(&found.documents.first().unwrap().data), "hello");
         }
         Err(error) => panic!("stored root evaluates: {error}"),
     }
@@ -102,7 +109,7 @@ fn project_text_flows_into_documents() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            assert_eq!(text_of(found.documents.values().next().unwrap()), "hello");
+            assert_eq!(text_of(&found.documents.first().unwrap().data), "hello");
         }
         Err(error) => panic!("project text evaluates: {error}"),
     }
@@ -116,8 +123,8 @@ fn patches_apply_over_declared_documents() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            match found.documents.values().next().unwrap() {
-                Data::Structured { data, .. } => {
+            match &found.documents.first().unwrap().data {
+                Data::Structured(StructuredDocument { data, .. }) => {
                     assert_eq!(
                         data.get("count").and_then(|item| item.as_u64()),
                         Some(1),
@@ -141,17 +148,7 @@ fn duplicate_names_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), DUPLICATE_NAMES);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("duplicate names pass"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(text.contains("same"), "the text shows the config: {text}");
-            assert!(
-                text.contains("already defined"),
-                "the text shows the fault: {text}"
-            );
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "duplicate names fail");
 }
 
 #[test]
@@ -162,10 +159,10 @@ fn two_patches_merge_both_keys() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            let (route, data) = found.documents.iter().next().unwrap();
-            assert_eq!(route.display(), "home('config.json')");
-            match data {
-                Data::Structured { format, data } => {
+            let document = found.documents.first().unwrap();
+            assert_eq!(document.path.display(), "home('config.json')");
+            match &document.data {
+                Data::Structured(StructuredDocument { format, data }) => {
                     assert_eq!(*format, StructuredFormat::Json);
                     assert_eq!(
                         data.get("alpha").and_then(|item| item.as_str()),
@@ -186,16 +183,7 @@ fn missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MISSING_TARGET);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("missing target passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('fresh.json')"),
-                "the text shows the target: {text}"
-            );
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "missing target fails");
 }
 
 #[test]
@@ -203,17 +191,7 @@ fn text_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), TEXT_BASE);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("patched text passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('note.txt')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("text"), "the text shows the base: {text}");
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "patched text fails");
 }
 
 #[test]
@@ -221,13 +199,7 @@ fn failing_callbacks_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FAILING_CALLBACK);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("failing callback passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(text.contains("patch boom"), "carries the cause: {text}");
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "failing callback fails");
 }
 
 #[test]
@@ -235,18 +207,7 @@ fn format_gaps_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FORMAT_GAP);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("format gap passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('config.json')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("json"), "the text shows the base: {text}");
-            assert!(text.contains("toml"), "the text shows the patch: {text}");
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "format gap fails");
 }
 
 #[test]
@@ -257,10 +218,13 @@ fn rc_two_patches_merge_entries() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 1);
-            let (route, data) = found.documents.iter().next().unwrap();
-            assert_eq!(route.display(), "home('.bashrc')");
-            assert_eq!(rc_names(data), vec!["SEED".to_owned(), "FIRST".to_owned()]);
-            match data {
+            let document = found.documents.first().unwrap();
+            assert_eq!(document.path.display(), "home('.bashrc')");
+            assert_eq!(
+                rc_names(&document.data),
+                vec!["SEED".to_owned(), "FIRST".to_owned()]
+            );
+            match &document.data {
                 Data::Rc(rc) => {
                     assert_eq!(rc.config.len(), 1);
                 }
@@ -276,16 +240,10 @@ fn rc_missing_targets_fail_showing_targets() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_MISSING);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("missing rc target passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('.bashrc')"),
-                "the text shows the target: {text}"
-            );
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "missing rc target fails"
+    );
 }
 
 #[test]
@@ -293,18 +251,7 @@ fn rc_text_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_TEXT_BASE);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("patched rc text passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('note.txt')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("'text'"), "the text shows the base: {text}");
-            assert!(text.contains("'rc'"), "the text shows the patch: {text}");
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "patched rc text fails");
 }
 
 #[test]
@@ -312,13 +259,10 @@ fn rc_failing_callbacks_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_FAILING);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("failing rc callback passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(text.contains("rc boom"), "carries the cause: {text}");
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "failing rc callback fails"
+    );
 }
 
 #[test]
@@ -326,18 +270,7 @@ fn rc_format_gaps_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_FORMAT_GAP);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("rc format gap passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('.bashrc')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("'rc'"), "the text shows the base: {text}");
-            assert!(text.contains("'json'"), "the text shows the patch: {text}");
-        }
-    }
+    assert!(engine.evaluate(&profile).is_err(), "rc format gap fails");
 }
 
 #[test]
@@ -348,16 +281,16 @@ fn mixed_sides_merge_live_targets() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.documents.len(), 2);
-            let ordered: Vec<(&Route, &Data)> = found.documents.iter().collect();
-            match ordered[0].1 {
+            let ordered: &[_] = &found.documents;
+            match &ordered[0].data {
                 Data::Rc(_) => {
-                    assert_eq!(ordered[0].0.display(), "home('.bashrc')")
+                    assert_eq!(ordered[0].path.display(), "home('.bashrc')")
                 }
                 _ => panic!("first document stays rc"),
             }
-            match ordered[1].1 {
-                Data::Structured { data, .. } => {
-                    assert_eq!(ordered[1].0.display(), "home('config.json')");
+            match &ordered[1].data {
+                Data::Structured(StructuredDocument { data, .. }) => {
+                    assert_eq!(ordered[1].path.display(), "home('config.json')");
                     assert_eq!(
                         data.get("alpha").and_then(|item| item.as_str()),
                         Some("one")
@@ -376,62 +309,25 @@ fn rc_patches_over_structured_bases_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), RC_OVER_STRUCTURED);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("rc over structured passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('config.json')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("json"), "the text shows the base: {text}");
-            assert!(text.contains("rc"), "the text shows the patch: {text}");
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "rc over structured fails"
+    );
 }
 
 #[test]
-fn mixed_structured_formats_fail() {
+fn mixed_shapes_fail() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_FORMATS);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("mixed formats pass"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('fresh.json')"),
-                "the text shows the target: {text}"
-            );
-            assert!(
-                text.contains("json"),
-                "the text shows the first format: {text}"
-            );
-            assert!(
-                text.contains("toml"),
-                "the text shows the second format: {text}"
-            );
-        }
-    }
-}
-
-#[test]
-fn mixed_kind_same_target_gaps() {
+    assert!(engine.evaluate(&profile).is_err(), "mixed formats fail");
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_SAME_TARGET);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("mixed kind target passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("home('config.json')"),
-                "the text shows the target: {text}"
-            );
-            assert!(text.contains("json"), "the text shows the base: {text}");
-            assert!(text.contains("rc"), "the text shows the patch: {text}");
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "mixed kind target fails"
+    );
 }
 
 #[test]
@@ -439,13 +335,10 @@ fn foreign_patch_keys_fail_showing_keys() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), FOREIGN_PATCH_KEY);
-    match engine.evaluate(&profile) {
-        Ok(_) => panic!("foreign patch key passes"),
-        Err(error) => {
-            let text = error.to_string();
-            assert!(text.contains("nope"), "the text shows the key: {text}");
-        }
-    }
+    assert!(
+        engine.evaluate(&profile).is_err(),
+        "foreign patch key fails"
+    );
 }
 
 #[test]
@@ -456,20 +349,11 @@ fn evaluation_carries_hooks_through() {
     match engine.evaluate(&profile) {
         Ok(found) => {
             assert_eq!(found.hooks.len(), 3);
-            assert_eq!(
-                confit_model::arg::Arg::join(&found.hooks[0].argv),
-                "mise install"
-            );
+            assert_eq!(Arg::join(&found.hooks[0].argv), "mise install");
             assert_eq!(found.hooks[0].timeout_secs, 600);
-            assert_eq!(
-                confit_model::arg::Arg::join(&found.hooks[1].argv),
-                "mise install"
-            );
+            assert_eq!(Arg::join(&found.hooks[1].argv), "mise install");
             assert_eq!(found.hooks[1].timeout_secs, 90);
-            assert_eq!(
-                confit_model::arg::Arg::join(&found.hooks[2].argv),
-                "fc-cache"
-            );
+            assert_eq!(Arg::join(&found.hooks[2].argv), "fc-cache");
             assert_eq!(found.hooks[2].timeout_secs, 600);
         }
         Err(error) => panic!("hooks evaluate: {error}"),

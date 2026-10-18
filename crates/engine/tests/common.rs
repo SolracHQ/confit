@@ -3,15 +3,21 @@
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use confit_binding::callback::Callback;
 use confit_binding::value::Decode;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
 use confit_engine::api::profile::Profile;
-use confit_model::document::{Data, Payload, RcData, RcEntry, StructuredFormat};
+use confit_model::arg::Arg;
+use confit_model::condition::Condition;
+use confit_model::document::{
+    Data, Document, OpaqueDocument, Payload, RcData, RcEntry, StructuredDocument, StructuredFormat,
+    TextDocument,
+};
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::{StoreRoots, Stores};
@@ -23,11 +29,11 @@ pub const PAIR: &str = r#"
             configs = {
                 {
                     name = "first",
-                    documents = { [{ base = "home", relative = "zebra" }] = { text = "z" } },
+                    documents = { { path = { base = "home", relative = "zebra" }, text = "z" } },
                 },
                 {
                     name = "second",
-                    documents = { [{ base = "home", relative = "apple" }] = { text = "a" } },
+                    documents = { { path = { base = "home", relative = "apple" }, text = "a" } },
                 },
             },
         }
@@ -37,8 +43,8 @@ pub const PAIR: &str = r#"
 pub const DUPLICATE: &str = r#"
         return {
             configs = {
-                { name = "first", documents = { [{ base = "home", relative = ".bashrc" }] = { text = "one" } } },
-                { name = "second", documents = { [{ base = "home", relative = ".bashrc" }] = { text = "two" } } },
+                { name = "first", documents = { { path = { base = "home", relative = ".bashrc" }, text = "one" } } },
+                { name = "second", documents = { { path = { base = "home", relative = ".bashrc" }, text = "two" } } },
             },
         }
     "#;
@@ -50,7 +56,8 @@ pub const STRUCTURED: &str = r#"
                 {
                     name = "tools/bat",
                     documents = {
-                        [{ base = "home", relative = "config.toml" }] = {
+                        {
+                            path = { base = "home", relative = "config.toml" },
                             format = "toml",
                             data = { profile = { shell = "bash" } },
                         },
@@ -64,8 +71,8 @@ pub const STRUCTURED: &str = r#"
 pub const DUPLICATE_NAMES: &str = r#"
         return {
             configs = {
-                { name = "same", documents = { [{ base = "home", relative = "a" }] = { text = "one" } } },
-                { name = "same", documents = { [{ base = "home", relative = "b" }] = { text = "two" } } },
+                { name = "same", documents = { { path = { base = "home", relative = "a" }, text = "one" } } },
+                { name = "same", documents = { { path = { base = "home", relative = "b" }, text = "two" } } },
             },
         }
     "#;
@@ -77,7 +84,8 @@ pub const MERGED_PATCHES: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -86,12 +94,12 @@ pub const MERGED_PATCHES: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) d.data.alpha = "one" end,
+                            apply = function(d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) d.data.beta = "two" end,
+                            apply = function(d) d.data.beta = "two" end,
                         },
                     },
                 },
@@ -109,7 +117,7 @@ pub const MISSING_TARGET: &str = r#"
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "json",
-                            apply = function(_, d) d.data.made = "yes" end,
+                            apply = function(d) d.data.made = "yes" end,
                         },
                     },
                 },
@@ -123,12 +131,12 @@ pub const TEXT_BASE: &str = r#"
             configs = {
                 {
                     name = "tools/app",
-                    documents = { [{ base = "home", relative = "note.txt" }] = { text = "hi" } },
+                    documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                     patches = {
                         {
                             target = { base = "home", relative = "note.txt" },
                             format = "json",
-                            apply = function(_, d) d.data.x = 1 end,
+                            apply = function(d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -143,7 +151,8 @@ pub const FAILING_CALLBACK: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -152,7 +161,7 @@ pub const FAILING_CALLBACK: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) error("patch boom") end,
+                            apply = function(d) error("patch boom") end,
                         },
                     },
                 },
@@ -167,18 +176,19 @@ pub const RC_MERGED: &str = r#"
                 {
                     name = "tools/shell",
                     documents = {
-                        [{ base = "home", relative = ".bashrc" }] = {
+                        {
+                            path = { base = "home", relative = ".bashrc" },
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(_, d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
+                            apply = function(d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
                         },
                     },
                 },
@@ -195,7 +205,7 @@ pub const RC_MISSING: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -209,11 +219,11 @@ pub const RC_TEXT_BASE: &str = r#"
             configs = {
                 {
                     name = "tools/shell",
-                    documents = { [{ base = "home", relative = "note.txt" }] = { text = "hi" } },
+                    documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                     patches = {
                         {
                             target = { base = "home", relative = "note.txt" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -228,14 +238,15 @@ pub const RC_FAILING: &str = r#"
                 {
                     name = "tools/shell",
                     documents = {
-                        [{ base = "home", relative = ".bashrc" }] = {
+                        {
+                            path = { base = "home", relative = ".bashrc" },
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(_, d) error("rc boom") end,
+                            apply = function(d) error("rc boom") end,
                         },
                     },
                 },
@@ -250,7 +261,8 @@ pub const RC_FORMAT_GAP: &str = r#"
                 {
                     name = "tools/shell",
                     documents = {
-                        [{ base = "home", relative = ".bashrc" }] = {
+                        {
+                            path = { base = "home", relative = ".bashrc" },
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
@@ -258,7 +270,7 @@ pub const RC_FORMAT_GAP: &str = r#"
                         {
                             target = { base = "home", relative = ".bashrc" },
                             format = "json",
-                            apply = function(_, d) d.data.x = 1 end,
+                            apply = function(d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -273,7 +285,8 @@ pub const FORMAT_GAP: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -282,7 +295,7 @@ pub const FORMAT_GAP: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "toml",
-                            apply = function(_, d) d.data.x = 1 end,
+                            apply = function(d) d.data.x = 1 end,
                         },
                     },
                 },
@@ -298,7 +311,7 @@ pub const PROJECT_TEXT: &str = r#"
             configs = {
                 {
                     name = "tools/bat",
-                    documents = { [{ base = "home", relative = ".bashrc" }] = { text = assert(handle:text()) } },
+                    documents = { { path = { base = "home", relative = ".bashrc" }, text = assert(handle:text()) } },
                 },
             },
         }
@@ -311,7 +324,8 @@ pub const PATCHED: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { count = 1 },
                         },
@@ -320,7 +334,7 @@ pub const PATCHED: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) d.data.count = 2 d.data.extra = "yes" end,
+                            apply = function(d) d.data.count = 2 d.data.extra = "yes" end,
                         },
                     },
                 },
@@ -335,11 +349,13 @@ pub const MIXED_SPLIT: &str = r#"
                 {
                     name = "tools/both",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
-                        [{ base = "home", relative = ".bashrc" }] = {
+                        {
+                            path = { base = "home", relative = ".bashrc" },
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
@@ -347,11 +363,11 @@ pub const MIXED_SPLIT: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) d.data.alpha = "one" end,
+                            apply = function(d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = ".bashrc" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                     },
                 },
@@ -366,7 +382,8 @@ pub const RC_OVER_STRUCTURED: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -374,7 +391,7 @@ pub const RC_OVER_STRUCTURED: &str = r#"
                     patches = {
                         {
                             target = { base = "home", relative = "config.json" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -389,7 +406,8 @@ pub const MIXED_FORMATS: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "fresh.json" }] = {
+                        {
+                            path = { base = "home", relative = "fresh.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -398,12 +416,12 @@ pub const MIXED_FORMATS: &str = r#"
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "json",
-                            apply = function(_, d) d.data.a = 1 end,
+                            apply = function(d) d.data.a = 1 end,
                         },
                         {
                             target = { base = "home", relative = "fresh.json" },
                             format = "toml",
-                            apply = function(_, d) d.data.b = 2 end,
+                            apply = function(d) d.data.b = 2 end,
                         },
                     },
                 },
@@ -418,7 +436,8 @@ pub const MIXED_SAME_TARGET: &str = r#"
                 {
                     name = "tools/app",
                     documents = {
-                        [{ base = "home", relative = "config.json" }] = {
+                        {
+                            path = { base = "home", relative = "config.json" },
                             format = "json",
                             data = { seed = 0 },
                         },
@@ -427,11 +446,11 @@ pub const MIXED_SAME_TARGET: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) d.data.alpha = "one" end,
+                            apply = function(d) d.data.alpha = "one" end,
                         },
                         {
                             target = { base = "home", relative = "config.json" },
-                            apply = function(_, d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
                 },
@@ -449,7 +468,7 @@ pub const FOREIGN_PATCH_KEY: &str = r#"
                         {
                             target = { base = "home", relative = "config.json" },
                             format = "json",
-                            apply = function(_, d) return d end,
+                            apply = function(d) return d end,
                             nope = 1,
                         },
                     },
@@ -464,7 +483,7 @@ pub const HOOKS_THROUGH: &str = r#"
                 configs = {
                     {
                         name = "tools/app",
-                        documents = { [{ base = "home", relative = "note.txt" }] = { text = "hi" } },
+                        documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                         hooks = {
                             { argv = { "mise", "install" } },
                             { argv = { "mise", "install" }, timeout = "90" },
@@ -475,34 +494,34 @@ pub const HOOKS_THROUGH: &str = r#"
             }
         "#;
 
-/// Build one text document pair under the home base.
-pub fn placed_text(relative: &str, text: &str) -> (Route, Data) {
-    (
+/// Build one text document with its destination path.
+pub fn placed_text(relative: &str, text: &str) -> Document {
+    Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
-        Data::Text {
+        Data::Text(TextDocument {
             content: text.to_owned(),
             mode: 0o644,
             unmanaged: false,
-        },
+        }),
     )
 }
 
-/// Build one rc document pair with profile entries.
-pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> (Route, Data) {
-    (
+/// Build one rc document with profile entries and its destination path.
+pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
+    Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Rc(RcData::new(entries, Vec::new(), Vec::new())),
     )
 }
 
-/// Build one seeded json document pair.
-pub fn placed_structured(relative: &str) -> (Route, Data) {
-    (
+/// Build one seeded json document with its destination path.
+pub fn placed_structured(relative: &str) -> Document {
+    Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
-        Data::Structured {
+        Data::Structured(StructuredDocument {
             format: StructuredFormat::Json,
-            data: serde_json::json!({"seed": 0}),
-        },
+            data: BTreeMap::from([("seed".to_owned(), serde_json::json!(0))]),
+        }),
     )
 }
 
@@ -511,7 +530,7 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
     let dir = tempfile::tempdir().unwrap();
     let (sender, _) = crossbeam_channel::unbounded();
     let stores = Stores::new(
-        confit_store::StoreRoots {
+        StoreRoots {
             config_base: dir.path().join("config"),
             temp_base: dir.path().join("temp"),
             project_root: dir.path().join("project"),
@@ -521,34 +540,34 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
     (dir, stores)
 }
 
-/// Build one opaque document pair backed by a project blob.
-pub fn placed_opaque(stores: &Stores, relative: &str) -> (Route, Data) {
+/// Build one opaque document backed by a project blob with its destination path.
+pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
     let root = stores.resources().roots.project_root.clone();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("blob.bin"), b"hi").unwrap();
     let resource = stores.resources().resource("blob.bin").unwrap();
     let opened = stores.blobs().put(&resource).unwrap();
-    (
+    Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
-        Data::Opaque {
+        Data::Opaque(OpaqueDocument {
             handle: Payload::Resolved(opened.sha256().clone()),
             mode: 0o644,
             unmanaged: true,
-        },
+        }),
     )
 }
 
-/// Build one profile.
-pub fn profile_of(documents: Vec<(Route, Data)>, patches: Vec<Patch>) -> Profile {
+/// Build one profile with declared documents and patches.
+pub fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
     Profile::new(
         vec![Config::new(
             "tools/test".to_owned(),
-            documents.into_iter().collect(),
+            documents,
             patches,
             Vec::new(),
             HashMap::new(),
         )],
-        HashMap::new(),
+        Vec::new(),
     )
 }
 
@@ -574,7 +593,7 @@ pub fn structured_patch_of(
         target: Some(Route::new(RouteBase::Home, relative).unwrap()),
         filter: None,
         format,
-        apply,
+        apply: Callback::new(apply),
         priority,
     }
 }
@@ -585,7 +604,7 @@ pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> 
     RcPatch {
         target: Some(Route::new(RouteBase::Home, relative).unwrap()),
         filter: None,
-        apply,
+        apply: Callback::new(apply),
         priority,
     }
 }
@@ -602,9 +621,9 @@ pub fn structured_filter_of(
     let apply: Function = lua.load(source).call(()).unwrap();
     StructuredPatch {
         target: None,
-        filter: Some(filter),
+        filter: Some(Callback::new(filter)),
         format,
-        apply,
+        apply: Callback::new(apply),
         priority,
     }
 }
@@ -615,8 +634,8 @@ pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &st
     let apply: Function = lua.load(source).call(()).unwrap();
     RcPatch {
         target: None,
-        filter: Some(filter),
-        apply,
+        filter: Some(Callback::new(filter)),
+        apply: Callback::new(apply),
         priority,
     }
 }
@@ -651,13 +670,13 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
     Hook {
         argv: argv
             .iter()
-            .map(|item| confit_model::arg::Arg::Text((*item).to_owned()))
+            .map(|item| Arg::Text((*item).to_owned()))
             .collect(),
         path: Vec::new(),
         id: None,
-        requires: confit_model::condition::Condition::default(),
-        when: confit_model::condition::Condition::default(),
-        check: confit_model::condition::Condition::default(),
+        requires: Condition::default(),
+        when: Condition::default(),
+        check: Condition::default(),
         timeout_secs,
     }
 }
@@ -681,9 +700,9 @@ pub fn hook_patch_of(lua: &Lua, target: &str, source: &str) -> HookPatch {
     }
 }
 
-/// Build one profile.
+/// Build one profile with hooks and zero documents.
 pub fn profile_with_hooks(configs: Vec<Config>) -> Profile {
-    Profile::new(configs, HashMap::new())
+    Profile::new(configs, Vec::new())
 }
 
 /// Build one engine over isolated stores under the given dir.
@@ -718,7 +737,7 @@ pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
 /// Collect text content from one finished payload.
 pub fn text_of(data: &Data) -> &str {
     match data {
-        Data::Text { content, .. } => content,
+        Data::Text(found) => &found.content,
         _ => panic!("expected a text document"),
     }
 }

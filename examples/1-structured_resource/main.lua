@@ -7,7 +7,7 @@ local starship = require("tools.starship")({ command_timeout = 10000 })
 return {
 	configs = { installer, starship },
 	documents = {
-		[sugar.home(".bashrc")] = sugar.rc(),
-		[sugar.home(".zshrc")] = sugar.rc(),
+		sugar.rc(sugar.home(".bashrc")),
+		sugar.rc(sugar.home(".zshrc")),
 	},
 }

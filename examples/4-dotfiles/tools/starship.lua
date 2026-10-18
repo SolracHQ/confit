@@ -14,7 +14,7 @@ local config = mise.package({
 		},
 	},
 })
-config.documents = { [STARSHIP_TOML] = { format = "toml", data = base } }
+config.documents = { { path = STARSHIP_TOML, format = "toml", data = base } }
 
 ---@return Config Starship config for the profile configs array.
 return config

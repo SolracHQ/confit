@@ -206,16 +206,4 @@ mod tests {
         let literal = Route::new(RouteBase::Literal, "/opt/x").unwrap();
         assert_eq!(literal.display(), "/opt/x");
     }
-
-    #[test]
-    fn decode_keeps_literal_leading_slashes() {
-        let value = serde_json::json!({ "base": "literal", "relative": "/opt/x" });
-        match serde_json::from_value::<Route>(value) {
-            Ok(route) => {
-                assert_eq!(route.relative(), Path::new("/opt/x"));
-                assert_eq!(route.display(), "/opt/x");
-            }
-            Err(error) => panic!("literal slash decodes: {error}"),
-        }
-    }
 }

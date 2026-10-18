@@ -40,14 +40,15 @@ function sugar.literal(path)
 	return { base = "literal", relative = path }
 end
 
----@return table Empty rc sections for shell documents.
-function sugar.rc()
-	return { profile = {}, config = {}, final = {} }
+---@param path Route Destination route for the shell document.
+---@return table Flat rc document with the path beside empty sections.
+function sugar.rc(path)
+	return { path = path, profile = {}, config = {}, final = {} }
 end
 
 ---@param target Route Document route under patching.
----@param apply fun(route: Route, data: table) Callback receiving route beside live data.
----@return table Patch table holding target plus apply.
+---@param apply fun(document: Document_Rc) Callback receiving the live shell document.
+---@return table Patch table holding target with apply.
 function sugar.patch(target, apply)
 	return { target = target, apply = apply }
 end

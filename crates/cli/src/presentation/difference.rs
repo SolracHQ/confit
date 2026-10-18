@@ -71,19 +71,22 @@ pub fn leaf_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Flatten one value into dotted leaf entries.
-pub fn flatten_table(value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+/// Flatten one map into dotted leaf entries.
+pub fn flatten_table(
+    value: &BTreeMap<String, serde_json::Value>,
+) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
-    if let serde_json::Value::Object(map) = value {
-        for (key, item) in map {
-            flatten_value(key, item, &mut out);
-        }
+    for (key, item) in value {
+        flatten_value(key, item, &mut out);
     }
     out
 }
 
-/// Collect leaf differences between two values.
-pub fn leaf_changes(old: &serde_json::Value, new: &serde_json::Value) -> Vec<LeafChange> {
+/// Collect leaf differences between two maps.
+pub fn leaf_changes(
+    old: &BTreeMap<String, serde_json::Value>,
+    new: &BTreeMap<String, serde_json::Value>,
+) -> Vec<LeafChange> {
     let old_flat = flatten_table(old);
     let new_flat = flatten_table(new);
     let mut keys = BTreeSet::new();

@@ -10,6 +10,7 @@ use common::seed_file;
 use confit_cli::actions::init::{InitOutcome, InitRunner};
 use confit_cli::cli::InitArgs;
 use confit_cli::error::CliError;
+use confit_driver::fs::read_dir;
 
 /// Scaffold one temp dir with default flags.
 fn scaffold(dir: &Path) -> PathBuf {
@@ -38,9 +39,9 @@ fn init_writes_scaffold_with_stubs_and_plugins() {
     for path in [root.join("main.lua"), root.join("project.toml")] {
         assert!(path.exists(), "the scaffold holds {}", path.display());
     }
-    let stubs = confit_driver::fs::read_dir(&root.join("stubs")).unwrap();
+    let stubs = read_dir(&root.join("stubs")).unwrap();
     assert!(!stubs.is_empty(), "the scaffold holds stubs");
-    let plugins = confit_driver::fs::read_dir(&root.join("plugins")).unwrap();
+    let plugins = read_dir(&root.join("plugins")).unwrap();
     assert!(!plugins.is_empty(), "the scaffold holds plugins");
 }
 
@@ -66,7 +67,7 @@ fn init_refuses_present_scaffold() {
 fn init_flags_rewrite_stubs_plugins_and_lsp() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());
-    let stubs = confit_driver::fs::read_dir(&root.join("stubs")).unwrap();
+    let stubs = read_dir(&root.join("stubs")).unwrap();
     seed_file(&stubs[0], b"garbage");
     let args = InitArgs {
         dir: Some(root.clone()),

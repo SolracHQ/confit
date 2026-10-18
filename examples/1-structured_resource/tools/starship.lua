@@ -19,13 +19,14 @@ return function(user_config)
 			},
 		},
 	})
-	config.documents = { [STARSHIP_TOML] = { format = "toml", data = base } }
+	config.documents = { { path = STARSHIP_TOML, format = "toml", data = base } }
 	table.insert(config.patches, {
 		target = STARSHIP_TOML,
 		format = "toml",
-		apply = function(_, data)
+		---@param document Document_Structured Live TOML document under patching.
+		apply = function(document)
 			for key, value in pairs(user_config) do
-				data.data[key] = value
+				document.data[key] = value
 			end
 		end,
 	})

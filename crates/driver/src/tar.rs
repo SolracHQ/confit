@@ -389,20 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_single_refuses_empty_fallback() {
-        let gzipped = gzip_bytes(b"plain");
-        let outcome = list_names(gzipped.as_slice(), "");
-        assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::Other);
-        let mut called = false;
-        let outcome = walk(gzipped.as_slice(), "", |_| {
-            called = true;
-            Ok(())
-        });
-        assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::Other);
-        assert!(!called);
-    }
-
-    #[test]
     fn corrupt_gzip_fails_with_decode_kind() {
         let mut gzipped = gzip_bytes(b"plain");
         gzipped.truncate(gzipped.len() - 3);

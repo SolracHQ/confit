@@ -3,8 +3,10 @@
 
 use std::path::Path;
 
+use confit_engine::Engine;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::Manifest;
+use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
 
@@ -51,9 +53,9 @@ impl PlanRunner<'_> {
                 project: self.args.project.clone(),
             });
         }
-        let evaluated = confit_engine::Engine::new(self.stores.clone()).evaluate(&path)?;
+        let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
         let desired = Manifest::build(&self.stores, evaluated.documents, evaluated.hooks)?;
-        let prepared = confit_runtime::prepare(&self.stores, desired)?;
+        let prepared = prepare(&self.stores, desired)?;
         let text = render_prepared(&prepared);
         if let Some(output) = self.args.output.as_deref() {
             if is_named_output(output) {

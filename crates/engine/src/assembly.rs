@@ -8,14 +8,11 @@ mod merge;
 pub(crate) mod owned;
 mod patches;
 
-use std::collections::BTreeMap;
-
 use mlua::Lua;
 
 use crate::api::profile::Profile;
-use confit_model::document::Data;
+use confit_model::document::Document;
 use confit_model::hook::Hook;
-use confit_model::routes::Route;
 
 use crate::error::Result;
 
@@ -35,12 +32,13 @@ impl<'a> Assembler<'a> {
         self.lua
     }
 
-    /// Collect one profile into payloads keyed by destination route.
+    /// Collect one profile into documents in destination order.
     ///
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
+    /// - Groups follow first-seen declaration order.
     /// - Filters fan out over matched destinations in destination order.
-    /// - Callbacks run with the target route beside live data.
+    /// - Callbacks run over live documents.
     /// - Unknown targets fail the plan.
     /// - Unknown requirement names fail the plan with the hint.
     ///
@@ -54,12 +52,12 @@ impl<'a> Assembler<'a> {
     /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
     ///   hooks-only changed leaves.
     /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-    pub fn assemble(&self, profile: &Profile) -> Result<BTreeMap<Route, Data>> {
+    pub fn assemble(&self, profile: &Profile) -> Result<Vec<Document>> {
         collect::check_names(profile)?;
         collect::check_requirements(profile)?;
         let placed = collect::dedupe(profile)?;
         let owned = patches::split_patches(profile);
-        let mut finished = BTreeMap::new();
+        let mut finished: Vec<Document> = Vec::new();
         self.apply_structured(
             &placed,
             &patches::grouped_structured(self.lua, &placed, &owned)?,
@@ -70,12 +68,13 @@ impl<'a> Assembler<'a> {
             &patches::grouped_rc(self.lua, &placed, &owned)?,
             &mut finished,
         )?;
-        for (destination, body) in placed {
-            if finished.contains_key(&destination) {
+        for document in &placed {
+            if finished.iter().any(|found| found.path == document.path) {
                 continue;
             }
-            finished.insert(destination, body);
+            finished.push(document.clone());
         }
+        finished.sort_by(|left, right| left.path.cmp(&right.path));
         freeze::check_rc_guards(&finished)?;
         Ok(finished)
     }
@@ -93,21 +92,18 @@ impl<'a> Assembler<'a> {
     /// - [`crate::error::EngineError::ChangedUnknown`] for conditions with
     ///   unbuilt routes.
     /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-    pub fn collect_hooks(
-        &self,
-        profile: &Profile,
-        documents: &BTreeMap<Route, Data>,
-    ) -> Result<Vec<Hook>> {
+    pub fn collect_hooks(&self, profile: &Profile, documents: &[Document]) -> Result<Vec<Hook>> {
         hooks::collect_hooks(self.lua, profile, documents)
     }
 }
 
-/// Collect one profile into payloads keyed by destination route.
+/// Collect one profile into documents in destination order.
 ///
 /// - Patches merge in rank-descending level order over structured maps and rc
 ///   sections with first writes winning.
+/// - Groups follow first-seen declaration order.
 /// - Filters fan out over matched destinations in destination order.
-/// - Callbacks run with the target route beside live data.
+/// - Callbacks run over live documents.
 /// - Unknown targets fail the plan.
 /// - Unknown requirement names fail the plan with the hint.
 ///
@@ -121,6 +117,6 @@ impl<'a> Assembler<'a> {
 /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
 ///   hooks-only changed leaves.
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-pub fn assemble(lua: &Lua, profile: &Profile) -> Result<BTreeMap<Route, Data>> {
+pub fn assemble(lua: &Lua, profile: &Profile) -> Result<Vec<Document>> {
     Assembler::new(lua).assemble(profile)
 }

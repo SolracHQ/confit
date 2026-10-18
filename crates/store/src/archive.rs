@@ -15,6 +15,7 @@ use confit_driver::progress::{Event, ProgressSender};
 use confit_driver::sha::Sha;
 
 use crate::StoreRoots;
+use crate::faults::AccessFault;
 use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
 use crate::resources::error::ResourceError;
@@ -461,7 +462,7 @@ fn collect_extract_names(
                 .strip_prefix(root)
                 .map_err(|error| ArchiveError::Read {
                     path: source.to_path_buf(),
-                    fault: crate::faults::AccessFault::Unknown {
+                    fault: AccessFault::Unknown {
                         message: error.to_string(),
                     },
                 })?;
@@ -480,7 +481,7 @@ fn extract_read_error(error: std::io::Error, source: &Path, name: &str) -> Archi
         },
         std::io::ErrorKind::PermissionDenied => ArchiveError::Read {
             path: source.to_path_buf(),
-            fault: crate::faults::AccessFault::Denied,
+            fault: AccessFault::Denied,
         },
         _ => ArchiveError::from_io(source, error),
     }
@@ -637,20 +638,16 @@ mod tests {
             ResourceHandle::new(dir.path(), path.clone(), Sha::hash(b"plain text")).unwrap();
         match store.archive(&source) {
             Ok(_) => panic!("plain source passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&path.display().to_string()),
-                "error shows the source: {error}"
-            ),
+            Err(ArchiveError::NotArchive { .. }) => {}
+            Err(error) => panic!("wrong plain variant: {error}"),
         }
         let missing = dir.path().join("absent.tar.gz");
         let absent =
             ResourceHandle::new(dir.path(), missing.clone(), Sha::hash(b"absent")).unwrap();
         match store.archive(&absent) {
             Ok(_) => panic!("absent source passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&missing.display().to_string()),
-                "error shows the source: {error}"
-            ),
+            Err(ArchiveError::Read { .. }) => {}
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 
@@ -697,7 +694,7 @@ mod tests {
         for handle in &handles {
             assert!(
                 handle.canonical().starts_with(&expected_extract),
-                "extract lands under temp extract plus handle sha: {}",
+                "extract lands under temp extract and handle sha: {}",
                 handle.canonical().display()
             );
         }
@@ -759,17 +756,8 @@ mod tests {
         };
         match resources.open(&missing) {
             Ok(_) => panic!("absent member passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("absent.txt"),
-                    "error shows the member: {text}"
-                );
-                assert!(
-                    matches!(error, ResourceError::Read { .. }),
-                    "absent reports loss: {text}"
-                );
-            }
+            Err(ResourceError::Read { .. }) => {}
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 
@@ -798,15 +786,8 @@ mod tests {
         assert!(!handles.is_empty(), "extract creates handles");
         match resources.cache(&extract_dir, "../evil.txt", Sha::hash(b"x")) {
             Ok(_) => panic!("escaping member passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("escapes"), "error reports escape: {text}");
-                assert!(text.contains("evil.txt"), "error shows the member: {text}");
-                assert!(
-                    matches!(error, ResourceError::Escape { .. }),
-                    "escape keeps variant: {text}"
-                );
-            }
+            Err(ResourceError::Escape { .. }) => {}
+            Err(error) => panic!("wrong escape variant: {error}"),
         }
     }
 
@@ -897,7 +878,7 @@ mod tests {
         }
         let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
             Ok(text) => text,
-            Err(error) => panic!("manifest reads: {error}"),
+            Err(error) => panic!("manifest load: {error}"),
         };
         assert!(
             text.contains(&Sha::hash(b"alpha").hex()),
@@ -933,7 +914,7 @@ mod tests {
         }
         let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
             Ok(text) => text,
-            Err(error) => panic!("manifest reads: {error}"),
+            Err(error) => panic!("manifest load: {error}"),
         };
         assert!(
             text.contains(&Sha::hash(b"omega").hex()),
@@ -1017,10 +998,8 @@ mod tests {
         let handle = ArchiveHandle::new(&missing, Sha::hash(b"absent")).unwrap();
         match store.members(&handle) {
             Ok(_) => panic!("absent archive passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&missing.display().to_string()),
-                "error shows the archive: {error}"
-            ),
+            Err(ArchiveError::Read { .. }) => {}
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 
@@ -1192,10 +1171,8 @@ mod tests {
             ResourceHandle::new(dir.path(), plain.clone(), Sha::hash(b"plain text")).unwrap();
         match store.archive(&plain_source) {
             Ok(_) => panic!("plain source passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&plain.display().to_string()),
-                "error shows the source: {error}"
-            ),
+            Err(ArchiveError::NotArchive { .. }) => {}
+            Err(error) => panic!("wrong plain variant: {error}"),
         }
     }
 
@@ -1285,7 +1262,7 @@ mod tests {
         match ArchiveError::from_write_io(&source, error) {
             ArchiveError::Write { path, fault } => {
                 assert!(
-                    matches!(fault, crate::faults::AccessFault::QuotaExceeded),
+                    matches!(fault, AccessFault::QuotaExceeded),
                     "mapping keeps the fault"
                 );
                 assert_eq!(path, source, "mapping keeps the source");

@@ -1,10 +1,16 @@
 //! Stubs
 //! Stub documents from live faces.
 
+use confit_binding::error::Result as BindingResult;
 use confit_binding::registry::Registry;
 use confit_binding::stub::{StubDocument, StubEmitter};
 
-use crate::error::Result;
+use crate::api::fact::Fact;
+use crate::api::fetch::Fetch;
+use crate::api::open::Open;
+use crate::api::template::Template;
+use crate::api::validate::Validate;
+use crate::error::{EngineError, Result};
 
 /// Generate stub documents from live faces.
 ///
@@ -17,31 +23,11 @@ use crate::error::Result;
 /// - [`crate::error::EngineError::Lua`] for stub parse failures.
 pub fn generate_stubs() -> Result<Vec<StubDocument>> {
     let documents = vec![
-        module_document(
-            crate::api::fetch::Fetch::NAMESPACE,
-            crate::api::fetch::Fetch::VERBS,
-            crate::api::fetch::Fetch::stubs,
-        )?,
-        module_document(
-            crate::api::open::Open::NAMESPACE,
-            crate::api::open::Open::VERBS,
-            crate::api::open::Open::stubs,
-        )?,
-        module_document(
-            crate::api::validate::Validate::NAMESPACE,
-            crate::api::validate::Validate::VERBS,
-            crate::api::validate::Validate::stubs,
-        )?,
-        module_document(
-            crate::api::fact::Fact::NAMESPACE,
-            crate::api::fact::Fact::VERBS,
-            crate::api::fact::Fact::stubs,
-        )?,
-        module_document(
-            crate::api::template::Template::NAMESPACE,
-            crate::api::template::Template::VERBS,
-            crate::api::template::Template::stubs,
-        )?,
+        module_document(Fetch::NAMESPACE, Fetch::VERBS, Fetch::stubs)?,
+        module_document(Open::NAMESPACE, Open::VERBS, Open::stubs)?,
+        module_document(Validate::NAMESPACE, Validate::VERBS, Validate::stubs)?,
+        module_document(Fact::NAMESPACE, Fact::VERBS, Fact::stubs)?,
+        module_document(Template::NAMESPACE, Template::VERBS, Template::stubs)?,
     ];
     for document in &documents {
         check_parse(&document.namespace, &document.text)?;
@@ -57,7 +43,7 @@ pub fn generate_stubs() -> Result<Vec<StubDocument>> {
 fn module_document(
     namespace: &'static str,
     verbs: &[&str],
-    collect: fn(&mut Registry) -> confit_binding::error::Result<()>,
+    collect: fn(&mut Registry) -> BindingResult<()>,
 ) -> Result<StubDocument> {
     let mut registry = Registry::new();
     collect(&mut registry)?;
@@ -102,7 +88,7 @@ fn check_parse(namespace: &str, text: &str) -> Result<()> {
         .set_name(format!("@{namespace}"))
         .exec()
         .map_err(|error| {
-            crate::error::EngineError::Lua(mlua::Error::RuntimeError(format!(
+            EngineError::Lua(mlua::Error::RuntimeError(format!(
                 "stub '{namespace}' fails to parse: {error}"
             )))
         })

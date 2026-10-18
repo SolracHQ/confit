@@ -137,13 +137,12 @@ fn sorted_blobs(manifest: &Manifest) -> Vec<Sha> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::io::Read as _;
 
     use super::*;
     use confit_driver as driver;
     use confit_driver::sha::Sha;
-    use confit_model::document::{Data, Payload};
+    use confit_model::document::{Data, Document, OpaqueDocument, Payload};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -163,7 +162,7 @@ mod tests {
         let stores = Stores::new(roots, sender);
         let project = dir.join("project");
         std::fs::create_dir_all(&project).unwrap();
-        let mut documents = BTreeMap::new();
+        let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}.bin");
             std::fs::write(project.join(&name), body).unwrap();
@@ -175,14 +174,14 @@ mod tests {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.insert(
+            documents.push(Document::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
-                Data::Opaque {
+                Data::Opaque(OpaqueDocument {
                     handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
-                },
-            );
+                }),
+            ));
         }
         match Manifest::build(&stores, documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
@@ -329,7 +328,7 @@ mod tests {
             Ok(_) => panic!("denied disk passes"),
             Err(RuntimeError::BundleWrite { path, fault }) => {
                 assert!(
-                    matches!(fault, confit_store::faults::AccessFault::Denied),
+                    matches!(fault, AccessFault::Denied),
                     "write keeps the fault"
                 );
                 assert_eq!(path, locked.join("plan.cb"), "write keeps the destination");

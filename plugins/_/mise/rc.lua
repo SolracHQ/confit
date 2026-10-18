@@ -69,10 +69,10 @@ local function rc_patches(bin, rc)
 	return {
 		{
 			filter = is_shell,
-			---@param data RcData Live shell sections under patching.
-			apply = function(_, data)
+			---@param document Document_Rc Live shell document under patching.
+			apply = function(document)
 				for _, item in ipairs(items) do
-					table.insert(data[item[1]], item[2])
+					table.insert(document[item[1]], item[2])
 				end
 			end,
 		},

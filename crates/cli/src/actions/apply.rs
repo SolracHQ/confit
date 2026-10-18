@@ -5,10 +5,13 @@ use std::io::BufRead;
 use std::io::Write as _;
 use std::path::PathBuf;
 
+use confit_driver::sha::Sha;
+use confit_engine::Engine;
 use confit_model::arg::Arg;
+use confit_model::document::{Data, Payload};
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::Manifest;
-use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
+use confit_runtime::{HookDecision, HookRunner, Prepared, Writer, prepare, refresh};
 use confit_store::Stores;
 use confit_store::state::Picker;
 
@@ -88,7 +91,7 @@ impl<'a> ApplyRunner<'a> {
                     project: positional.to_path_buf(),
                 });
             }
-            let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(&path)?;
+            let evaluated = Engine::new(stores.clone()).evaluate(&path)?;
             Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
         } else {
             if args.profile.is_some() {
@@ -101,10 +104,10 @@ impl<'a> ApplyRunner<'a> {
                     path: positional.to_path_buf(),
                 });
             }
-            let evaluated = confit_engine::Engine::new(stores.clone()).evaluate(positional)?;
+            let evaluated = Engine::new(stores.clone()).evaluate(positional)?;
             Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
         };
-        let prepared = confit_runtime::prepare(&stores, desired)?;
+        let prepared = prepare(&stores, desired)?;
         Ok(Self {
             prepared,
             force: args.force,
@@ -136,7 +139,7 @@ impl<'a> ApplyRunner<'a> {
         if !self.force && !self.sinks.confirm(self.input)? {
             return Err(CliError::Aborted);
         }
-        let fresh = confit_runtime::refresh(&self.stores, &self.prepared);
+        let fresh = refresh(&self.stores, &self.prepared);
         if fresh != self.prepared.differences {
             for line in difference_lines(&fresh) {
                 self.sinks.print_line(line);
@@ -172,7 +175,15 @@ impl<'a> ApplyRunner<'a> {
         Manifest::store(&self.stores.states(), built)?;
         let mut handles = Vec::new();
         for document in &built.documents {
-            for payload in document.data.payloads() {
+            let payloads: Vec<&Payload> = match &document.data {
+                Data::Opaque(found) => vec![&found.handle],
+                Data::Tree(found) => found.members.values().map(|member| member.blob()).collect(),
+                #[cfg(unix)]
+                Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => Vec::new(),
+            };
+            for payload in payloads {
                 let resolved = payload.resolve(&self.stores)?;
                 handles.push(self.stores.blobs().resolve(&resolved)?);
             }
@@ -235,7 +246,7 @@ fn hook_file_name(argv: &str) -> String {
     if slug.len() > 40 {
         slug.truncate(40);
     }
-    let hash = confit_driver::sha::Sha::hash(argv.as_bytes()).short();
+    let hash = Sha::hash(argv.as_bytes()).short();
     format!("{slug}-{hash}.log")
 }
 

@@ -1,14 +1,12 @@
 //! Engine
 //! Evaluate Lua profiles into documents with hooks.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use mlua::Lua;
 
-use confit_model::document::Data;
+use confit_model::document::Document;
 use confit_model::hook::Hook;
-use confit_model::routes::Route;
 use confit_store::Stores;
 
 use confit_binding::value::Decode;
@@ -16,11 +14,13 @@ use confit_binding::value::Decode;
 use crate::api::profile::Profile;
 use crate::assembly::Assembler;
 use crate::error::Result;
+use crate::loader::{install, load_chunk};
+use crate::project::Project;
 
 /// Evaluated profile documents with hooks.
 pub struct Evaluated {
-    /// Placed payloads keyed by destination route with empty hashes.
-    pub documents: BTreeMap<Route, Data>,
+    /// Assembled documents in destination order.
+    pub documents: Vec<Document>,
     /// Collected hooks in first-seen order.
     pub hooks: Vec<Hook>,
 }
@@ -44,7 +44,7 @@ impl Engine {
 
     /// Evaluate one profile file into documents with hooks.
     ///
-    /// - Documents hold placed payloads keyed by route with empty hashes.
+    /// - Documents arrive assembled in destination order.
     /// - Patches merge in rank-descending level order over structured maps
     ///   and rc sections with first writes winning.
     /// - Filters fan out over matched destinations in destination order.
@@ -69,10 +69,10 @@ impl Engine {
     pub fn evaluate(&self, profile: &Path) -> Result<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
         let root = self.stores.resources().roots.project_root.clone();
-        let project = crate::project::Project::read(&root)?;
+        let project = Project::read(&root)?;
         self.lua.set_app_data(project.plugin_root(&root)?);
-        crate::loader::install(&self.lua)?;
-        let value = crate::loader::load_chunk(&self.lua, profile)?;
+        install(&self.lua)?;
+        let value = load_chunk(&self.lua, profile)?;
         let decoded = Profile::decode(&value, &self.lua)?;
         let assembler = Assembler::new(&self.lua);
         let documents = assembler.assemble(&decoded)?;

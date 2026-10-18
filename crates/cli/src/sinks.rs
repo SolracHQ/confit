@@ -57,13 +57,13 @@ impl Sinks {
         }
         log::debug!("prompt waiting for answer");
         let mut answer = String::new();
-        let reads = input
+        let got = input
             .read_line(&mut answer)
             .map_err(|error| CliError::Unknown {
                 context: "prompt".to_owned(),
                 message: error.to_string(),
             })?;
-        log::debug!("prompt read {reads} bytes");
+        log::debug!("prompt read {got} bytes");
         Ok(answer.trim() == "yes")
     }
 }

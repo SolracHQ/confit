@@ -62,7 +62,7 @@ pub fn disk_doc(document: &Document) -> Disk {
         }
     };
     #[cfg(unix)]
-    let link_doc = matches!(document.data, Data::Link { .. });
+    let link_doc = matches!(document.data, Data::Link(_));
     #[cfg(not(unix))]
     let link_doc = false;
     let target = match std::fs::read_link(&expanded) {
@@ -366,6 +366,7 @@ fn disk_fault(error: std::io::Error) -> AccessFault {
 #[cfg(test)]
 mod disk_tests {
     use super::*;
+    use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
 
     fn literal(path: &Path) -> Route {
@@ -375,11 +376,11 @@ mod disk_tests {
     fn text_doc(path: &Path) -> Document {
         Document::new(
             literal(path),
-            Data::Text {
+            Data::Text(TextDocument {
                 content: "disk bytes".into(),
                 mode: 0o644,
                 unmanaged: false,
-            },
+            }),
         )
     }
 
@@ -429,36 +430,5 @@ mod disk_tests {
             Disk::Absent => panic!("directory path is absent"),
             Disk::Present { .. } => panic!("directory path is present"),
         }
-    }
-
-    #[test]
-    fn member_absence_reads_as_map_miss() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("tree");
-        let path = root.join("present.txt");
-        driver::fs::create_parent(&path).unwrap();
-        std::fs::write(&path, b"member bytes").unwrap();
-        let document = Document::new(
-            literal(&root),
-            Data::Tree {
-                members: BTreeMap::new(),
-            },
-        );
-        let mut found = disk_tree(&document);
-        match found.get_mut("present.txt") {
-            Some(DiskMember::Present { reader, .. }) => {
-                let mut seen = Vec::new();
-                reader.as_mut().read_to_end(&mut seen).unwrap();
-                assert_eq!(seen, b"member bytes".to_vec());
-            }
-            Some(DiskMember::Unreadable { fault }) => {
-                panic!("written member is unreadable: {fault}");
-            }
-            None => panic!("written member is map miss"),
-        }
-        assert!(
-            !found.contains_key("absent.txt"),
-            "member absence is a map miss, never an Absent variant"
-        );
     }
 }

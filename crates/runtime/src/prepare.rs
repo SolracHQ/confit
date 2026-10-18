@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::manifest::DocumentStatus;
+use confit_model::document::Data;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -93,7 +94,7 @@ fn changed_paths(
     let mut out = BTreeSet::new();
     for document in &built.documents {
         if !matches!(
-            document.status(&previous.documents),
+            document.status(&previous.documents, &built.hashes, &previous.hashes),
             DocumentStatus::Unchanged
         ) {
             out.insert(document.destination.clone());
@@ -127,7 +128,7 @@ fn tree_member_of(destination: &Route, path: &Route) -> bool {
 /// Log finished documents with lifecycle status.
 fn log_processed(built: &Manifest, previous: &Manifest) {
     for document in &built.documents {
-        let status = match document.status(&previous.documents) {
+        let status = match document.status(&previous.documents, &built.hashes, &previous.hashes) {
             DocumentStatus::Create => "create",
             DocumentStatus::Update => "update",
             DocumentStatus::Unchanged => "unchanged",
@@ -135,7 +136,15 @@ fn log_processed(built: &Manifest, previous: &Manifest) {
         log::debug!(
             "document processed path={} kind={} status={status}",
             document.destination.display(),
-            document.data.kind().name()
+            match &document.data {
+                Data::Structured(_) => "structured",
+                Data::Text(_) => "text",
+                #[cfg(unix)]
+                Data::Link(_) => "link",
+                Data::Rc(_) => "rc",
+                Data::Opaque(_) => "opaque",
+                Data::Tree(_) => "tree",
+            }
         );
     }
 }

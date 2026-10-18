@@ -32,13 +32,13 @@ pub(crate) fn expand_block(
     if !block.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &block.generics,
-            "`#[face_impl]` reads impl blocks with no generics",
+            "`#[face_impl]` expected impl blocks with no generics",
         ));
     }
     if let Some(clause) = &block.generics.where_clause {
         return Err(syn::Error::new_spanned(
             clause,
-            "`#[face_impl]` reads impl blocks with no where clause",
+            "`#[face_impl]` expected impl blocks with no where clause",
         ));
     }
     if block.trait_.is_some() {
@@ -50,19 +50,19 @@ pub(crate) fn expand_block(
     let Type::Path(path) = &*block.self_ty else {
         return Err(syn::Error::new_spanned(
             &block.self_ty,
-            "`#[face_impl]` reads a simple path type",
+            "`#[face_impl]` expected a simple path type",
         ));
     };
     let Some(last) = path.path.segments.last() else {
         return Err(syn::Error::new_spanned(
             &block.self_ty,
-            "`#[face_impl]` reads a simple path type",
+            "`#[face_impl]` expected a simple path type",
         ));
     };
     if !matches!(last.arguments, syn::PathArguments::None) {
         return Err(syn::Error::new_spanned(
             &block.self_ty,
-            "`#[face_impl]` reads a simple path type",
+            "`#[face_impl]` expected a simple path type",
         ));
     }
     let class_name = last.ident.to_string();
@@ -77,7 +77,6 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
     let self_ty = &block.self_ty;
     let mut faces = Vec::new();
     let mut registrations: Vec<Tokens> = Vec::new();
-    let mut collectors: Vec<Tokens> = Vec::new();
     for item in &block.items {
         match item {
             ImplItem::Fn(method) => {
@@ -91,17 +90,6 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
                     ));
                 }
                 let face = parse_method(class_name, method)?;
-                for param in &face.params {
-                    let shape = &param.shape;
-                    collectors.push(quote! {
-                        <#shape as ::confit_binding::face::Face>::collect(collector)?;
-                    });
-                }
-                if let Some(returns) = &face.returns {
-                    collectors.push(quote! {
-                        <#returns as ::confit_binding::face::Face>::collect(collector)?;
-                    });
-                }
                 registrations.push(method_of(&face));
                 faces.push(descriptor_of(&face));
             }
@@ -129,22 +117,6 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
                 #class_name
             }
 
-            fn class_stub() -> String {
-                let mut out =
-                    <Self as ::confit_binding::face::Face>::face_stub();
-                out.push('\n');
-                out.push_str(Self::class_name());
-                out.push_str(" = {}");
-                for method in Self::methods() {
-                    out.push_str("\n\n");
-                    out.push_str(&::confit_binding::stub::emit_method(
-                        Self::class_name(),
-                        &method,
-                    ));
-                }
-                out
-            }
-
             fn methods() -> Vec<::confit_binding::userdata::MethodDescriptor> {
                 vec![#(#faces),*]
             }
@@ -152,8 +124,15 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::class_name().to_owned(), Self::class_stub()) {
-                    #(#collectors)*
+                let methods = Self::methods();
+                if collector.register_userdata(
+                    Self::class_name(),
+                    <Self as ::confit_binding::face::Face>::face().documentation(),
+                    methods.clone(),
+                ) {
+                    for method in &methods {
+                        method.collect_referenced(collector)?;
+                    }
                 }
                 ::std::result::Result::Ok(())
             }

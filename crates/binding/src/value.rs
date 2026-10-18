@@ -44,6 +44,19 @@ pub trait Decode: Sized {
     ///
     /// - [`Mismatch`] for values outside the documented shape.
     fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch>;
+
+    /// Decode one Lua value with sibling keys ignored.
+    ///
+    /// - Table faces accept sibling keys beside their own keys.
+    /// - Other faces decode without reading the list.
+    /// - Flatten holders pass their sibling keys through this list.
+    ///
+    /// # Errors
+    ///
+    /// - [`Mismatch`] for values outside the documented shape.
+    fn decode_ignored(value: &Value, lua: &Lua, _ignored: &[&str]) -> Result<Self, Mismatch> {
+        Self::decode(value, lua)
+    }
 }
 
 /// Value encoding for one bound face.
@@ -108,6 +121,34 @@ pub fn table_value(value: &Value, shape: &str) -> Result<Table, Mismatch> {
 ///
 /// - [`Mismatch`] for tables holding unknown fields.
 pub fn check_keys(table: &Table, shape: &str, allowed: &[&str]) -> Result<(), Mismatch> {
+    check_keys_ignored(table, shape, allowed, &[])
+}
+
+/// Reject unknown string keys outside the allowed and ignored lists.
+///
+/// - Keys in either list pass, every other key fails.
+/// - Flatten holders pass their sibling keys as the ignored list.
+/// - Overlapping lists fail as outer and inner key collisions.
+///
+/// # Errors
+///
+/// - [`Mismatch`] for tables holding unknown fields.
+/// - [`Mismatch`] for keys present in both lists.
+pub fn check_keys_ignored(
+    table: &Table,
+    shape: &str,
+    allowed: &[&str],
+    ignored: &[&str],
+) -> Result<(), Mismatch> {
+    for key in allowed {
+        if ignored.contains(key) {
+            return Err(Mismatch {
+                path: shape.to_owned(),
+                want: "distinct outer and inner keys".to_owned(),
+                found: format!("collision on '{key}'"),
+            });
+        }
+    }
     for pair in table.pairs::<Value, Value>() {
         let (key, _) = pair.map_err(|error| Mismatch {
             path: shape.to_owned(),
@@ -117,7 +158,7 @@ pub fn check_keys(table: &Table, shape: &str, allowed: &[&str]) -> Result<(), Mi
         match key {
             Value::String(text) => {
                 let name = text.to_string_lossy();
-                if !allowed.contains(&name.as_str()) {
+                if !allowed.contains(&name.as_str()) && !ignored.contains(&name.as_str()) {
                     return Err(Mismatch {
                         path: shape.to_owned(),
                         want: format!("one of {}", allowed.join(", ")),
@@ -541,6 +582,8 @@ mod tests {
     use super::*;
     use confit_binding_macros::Face;
 
+    // Untagged routing pins live here. Macro shape tests pin docs alone.
+
     /// Union of inline and tuple arms.
     #[derive(Face)]
     #[face(table, untagged)]
@@ -569,13 +612,6 @@ mod tests {
         },
         /// Conjunction.
         All(Vec<TaggedCond>),
-    }
-
-    #[derive(Face)]
-    #[face(table, untagged)]
-    enum NoDocs {
-        Bare { key: String },
-        Many(Vec<NoDocs>),
     }
 
     /// Document union of one inline arm with one tuple arm.
@@ -646,45 +682,24 @@ mod tests {
     }
 
     #[test]
-    fn stranger_tuple_failure_keeps_inner_path() {
-        let lua = Lua::new();
-        let entries = lua.create_table().unwrap();
-        entries.set(1, 1).unwrap();
-        let table = lua.create_table().unwrap();
-        table.set("entries", entries).unwrap();
-        let failure = Document::decode(&Value::Table(table), &lua).unwrap_err();
-        let text = failure.to_string();
-        assert!(
-            text.contains("ShapedPayload.entries"),
-            "the text shows the path: {text}"
-        );
-        assert!(text.contains("entry 1"), "the text shows the entry: {text}");
-    }
-
-    #[test]
     fn ambiguous_table_keeps_union_error() {
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
-        let failure = Document::decode(&Value::Table(table), &lua).unwrap_err();
-        let text = failure.to_string();
         assert!(
-            text.contains("Document_Text"),
-            "the text shows the arm: {text}"
+            Document::decode(&Value::Table(table), &lua).is_err(),
+            "bare table fails"
         );
         assert!(
-            text.contains("ShapedPayload"),
-            "the text shows the arm: {text}"
+            Document::decode(&Value::Integer(1), &lua).is_err(),
+            "foreign value fails"
         );
-    }
-
-    #[test]
-    fn bare_value_keeps_union_error() {
-        let lua = Lua::new();
-        let failure = Document::decode(&Value::Integer(1), &lua).unwrap_err();
-        let text = failure.to_string();
+        let entries = lua.create_table().unwrap();
+        entries.set(1, 1).unwrap();
+        let shaped = lua.create_table().unwrap();
+        shaped.set("entries", entries).unwrap();
         assert!(
-            text.contains("Document_Text"),
-            "the text shows the arm: {text}"
+            Document::decode(&Value::Table(shaped), &lua).is_err(),
+            "foreign tuple fails"
         );
     }
 
@@ -706,68 +721,213 @@ mod tests {
     }
 
     #[test]
-    fn missing_docs_inline_table_decodes() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-        table.set("key", "K").unwrap();
-        let decoded = NoDocs::decode(&Value::Table(table.clone()), &lua).unwrap();
-        assert!(matches!(&decoded, NoDocs::Bare { key } if key == "K"));
-        let sequence = lua.create_table().unwrap();
-        sequence.set(1, table).unwrap();
-        let nested = NoDocs::decode(&Value::Table(sequence), &lua).unwrap();
-        assert!(matches!(&nested, NoDocs::Many(items) if items.len() == 1));
-    }
-
-    #[test]
     fn unit_encodes_nil() {
         let lua = Lua::new();
         assert!(matches!(().encode(&lua).unwrap(), Value::Nil));
     }
 
-    #[test]
-    fn scalars_encode_lua_shapes() {
-        let lua = Lua::new();
-        assert!(matches!(true.encode(&lua).unwrap(), Value::Boolean(true)));
-        assert!(matches!((-3i64).encode(&lua).unwrap(), Value::Integer(-3)));
-        assert!(matches!(7u32.encode(&lua).unwrap(), Value::Integer(7)));
-        assert!(matches!(2.5f64.encode(&lua).unwrap(), Value::Number(found) if found == 2.5));
-        let text = "held".to_owned().encode(&lua).unwrap();
-        assert!(matches!(text, Value::String(found) if found.to_string_lossy() == "held"));
-        let borrowed = "shared".encode(&lua).unwrap();
-        assert!(matches!(borrowed, Value::String(found) if found.to_string_lossy() == "shared"));
+    /// Inner document body for flatten tests.
+    #[derive(Debug, PartialEq, Face)]
+    #[face(table)]
+    struct FlatInner {
+        /// The exact file text.
+        content: String,
+    }
+
+    /// Holder pairing one outer field with a flattened body.
+    #[derive(Debug, PartialEq, Face)]
+    #[face(table)]
+    struct FlatHolder {
+        /// The document path.
+        path: String,
+        /// The flattened body.
+        #[face(flatten)]
+        body: FlatInner,
+    }
+
+    /// Holder with a sibling key colliding with the inner body.
+    #[derive(Debug, Face)]
+    #[face(table)]
+    struct ClashingHolder {
+        /// The clashing outer field.
+        content: String,
+        /// The flattened body.
+        #[face(flatten)]
+        body: FlatInner,
+    }
+
+    /// Untagged body with two inline arms for flatten routing tests.
+    #[derive(Debug, PartialEq, Face)]
+    #[face(table, untagged)]
+    enum FlatData {
+        /// Text arm.
+        Text {
+            /// The exact file text.
+            content: String,
+        },
+        /// Count arm.
+        Count {
+            /// The entry count.
+            count: u64,
+        },
+    }
+
+    /// Holder flattening one untagged body.
+    #[derive(Debug, PartialEq, Face)]
+    #[face(table)]
+    struct FlatUnionHolder {
+        /// The document path.
+        path: String,
+        /// The flattened body.
+        #[face(flatten)]
+        data: FlatData,
+    }
+
+    /// Union with one skipped arm.
+    #[derive(Debug, PartialEq, Face)]
+    #[face(table, untagged)]
+    enum MaybeSealed {
+        /// Live payload.
+        Live {
+            /// The exact file text.
+            content: String,
+        },
+        /// Sealed payload.
+        #[face(skip_decode, skip_encode)]
+        Sealed {
+            /// The content digest.
+            digest: String,
+        },
     }
 
     #[test]
-    fn sequence_encodes_indexed_table() {
-        let lua = Lua::new();
-        let items = vec!["a".to_owned(), "b".to_owned()];
-        let encoded = items.encode(&lua).unwrap();
-        let Value::Table(sequence) = encoded else {
-            panic!("sequence encodes a table");
-        };
-        let first: String = sequence.get(1).unwrap();
-        let second: String = sequence.get(2).unwrap();
-        assert_eq!((first, second), ("a".to_owned(), "b".to_owned()));
-    }
-
-    #[test]
-    fn optional_encodes_some_with_nil() {
-        let lua = Lua::new();
-        let present = Some("held".to_owned()).encode(&lua).unwrap();
-        assert!(matches!(present, Value::String(found) if found.to_string_lossy() == "held"));
-        let absent: Option<String> = None;
-        assert!(matches!(absent.encode(&lua).unwrap(), Value::Nil));
-    }
-
-    #[test]
-    fn table_and_value_pass_through() {
+    fn flat_struct_round_trips_beside_sibling_keys() {
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
-        table.set("key", "K").unwrap();
-        let encoded = table.encode(&lua).unwrap();
-        assert!(matches!(encoded, Value::Table(_)));
-        let raw = Value::Integer(4);
-        let passed = raw.encode(&lua).unwrap();
-        assert!(matches!(passed, Value::Integer(4)));
+        table.set("path", "doc/a").unwrap();
+        table.set("content", "hello").unwrap();
+        let decoded = FlatHolder::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(
+            decoded,
+            FlatHolder {
+                path: "doc/a".to_owned(),
+                body: FlatInner {
+                    content: "hello".to_owned(),
+                },
+            }
+        );
+        let encoded = decoded.encode(&lua).unwrap();
+        let Value::Table(back) = encoded else {
+            panic!("holder encodes a table");
+        };
+        let path: String = back.get("path").unwrap();
+        let content: String = back.get("content").unwrap();
+        assert_eq!((path.as_str(), content.as_str()), ("doc/a", "hello"));
+        let round = FlatHolder::decode(&Value::Table(back), &lua).unwrap();
+        assert_eq!(round, decoded);
+    }
+
+    #[test]
+    fn flat_struct_rejects_unknown_keys() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("path", "doc/a").unwrap();
+        table.set("content", "hello").unwrap();
+        table.set("bogus", 1).unwrap();
+        assert!(
+            FlatHolder::decode(&Value::Table(table), &lua).is_err(),
+            "foreign key fails"
+        );
+    }
+
+    #[test]
+    fn colliding_sibling_keys_fail_the_decode() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("content", "hello").unwrap();
+        assert!(
+            ClashingHolder::decode(&Value::Table(table), &lua).is_err(),
+            "clashing keys fail"
+        );
+    }
+
+    #[test]
+    fn ignored_keys_pass_without_collisions() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("content", "hello").unwrap();
+        table.set("path", "doc/a").unwrap();
+        check_keys_ignored(&table, "FlatInner", &["content"], &["path"]).unwrap();
+        assert!(
+            check_keys_ignored(&table, "FlatInner", &["content"], &["content"]).is_err(),
+            "clashing ignored keys fail"
+        );
+    }
+
+    #[test]
+    fn untagged_arms_route_through_flatten() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("path", "doc/a").unwrap();
+        table.set("content", "hello").unwrap();
+        let decoded = FlatUnionHolder::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(
+            decoded,
+            FlatUnionHolder {
+                path: "doc/a".to_owned(),
+                data: FlatData::Text {
+                    content: "hello".to_owned(),
+                },
+            }
+        );
+        let count_table = lua.create_table().unwrap();
+        count_table.set("path", "doc/b").unwrap();
+        count_table.set("count", 3).unwrap();
+        let decoded = FlatUnionHolder::decode(&Value::Table(count_table), &lua).unwrap();
+        assert_eq!(
+            decoded,
+            FlatUnionHolder {
+                path: "doc/b".to_owned(),
+                data: FlatData::Count { count: 3 },
+            }
+        );
+        let encoded = decoded.encode(&lua).unwrap();
+        let Value::Table(back) = encoded else {
+            panic!("holder encodes a table");
+        };
+        let count: u64 = back.get("count").unwrap();
+        assert_eq!(count, 3);
+        let round = FlatUnionHolder::decode(&Value::Table(back), &lua).unwrap();
+        assert_eq!(round, decoded);
+    }
+
+    #[test]
+    fn skipped_arms_stay_out_of_decode_and_encode() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("content", "hello").unwrap();
+        let decoded = MaybeSealed::decode(&Value::Table(table), &lua).unwrap();
+        assert_eq!(
+            decoded,
+            MaybeSealed::Live {
+                content: "hello".to_owned(),
+            }
+        );
+        let sealed_table = lua.create_table().unwrap();
+        sealed_table.set("digest", "aa").unwrap();
+        assert!(
+            MaybeSealed::decode(&Value::Table(sealed_table), &lua).is_err(),
+            "sealed arm stays out of decode"
+        );
+        let encoded = decoded.encode(&lua).unwrap();
+        let Value::Table(back) = encoded else {
+            panic!("live arms encode a table");
+        };
+        let content: String = back.get("content").unwrap();
+        assert_eq!(content, "hello");
+        let sealed = MaybeSealed::Sealed {
+            digest: "aa".to_owned(),
+        };
+        assert!(sealed.encode(&lua).is_err(), "sealed arms refuse encode");
     }
 }

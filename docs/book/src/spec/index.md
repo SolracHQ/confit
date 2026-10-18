@@ -29,7 +29,7 @@ Usage teaching lives in the manual part of this book.
 `{name}` marks a variable value in a path or command shape.
 A leading `~` marks a path under the OS home folder.
 Version strings name exact contract versions, such as bundle
-format version 7.
+format version 8.
 Fenced blocks hold literal text: commands, paths, and messages.
 The verb reads introduces exact output text from the tool.
 

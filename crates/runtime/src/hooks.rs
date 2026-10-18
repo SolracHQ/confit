@@ -251,6 +251,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use confit_model::document::Data;
+    use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
@@ -264,11 +265,11 @@ mod tests {
     fn text_doc(path: &std::path::Path, mode: u32) -> Document {
         Document::new(
             literal(path),
-            Data::Text {
+            Data::Text(TextDocument {
                 content: "probe bytes".into(),
                 mode,
                 unmanaged: false,
-            },
+            }),
         )
     }
 

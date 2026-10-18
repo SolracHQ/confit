@@ -5,9 +5,7 @@ use proc_macro2::TokenStream as Tokens;
 use quote::{format_ident, quote};
 use syn::{Attribute, Fields, Variant, ext::IdentExt};
 
-use super::parse::{
-    ContainerKind, doc_lines, kind_tokens, parse_field_flags, parse_variant_flags, payload_of,
-};
+use super::parse::{doc_lines, parse_field_flags, parse_variant_flags, payload_of};
 
 /// Payload class synthesized from one inline struct variant.
 struct InlinePayload {
@@ -17,6 +15,8 @@ struct InlinePayload {
     expansion: Tokens,
     /// The payload field names.
     fields: Vec<syn::Ident>,
+    /// The face field literals for the parent arm.
+    descriptors: Vec<Tokens>,
     /// The Lua keys of the keyed payload fields.
     keys: Vec<String>,
     /// The per-field Lua keys in field order.
@@ -107,6 +107,15 @@ fn build_inline_payload(
             &field_name,
             &field.attrs,
         )?;
+        if flags.flatten {
+            return Err(syn::Error::new_spanned(
+                &field_ident,
+                format!(
+                    "{outer}.{variant_name}.{field_name}: flattened faces read \
+                     table structs alone"
+                ),
+            ));
+        }
         if flags.opaque || flags.key_convert.is_some() || flags.value_convert.is_some() {
             return Err(syn::Error::new_spanned(
                 &field_ident,
@@ -160,7 +169,7 @@ fn build_inline_payload(
                 return Err(syn::Error::new_spanned(
                     &field_ident,
                     format!(
-                        "{outer}.{variant_name}.{field_name}: sibling decode_hook reads the table \
+                        "{outer}.{variant_name}.{field_name}: sibling decode_hook expected the table \
                          alone with no key options"
                     ),
                 ));
@@ -204,6 +213,7 @@ fn build_inline_payload(
                         ),
                     ),
                     optional: true,
+                    collect: <#face_tokens as ::confit_binding::face::Face>::collect,
                 }
             });
         } else {
@@ -216,6 +226,7 @@ fn build_inline_payload(
                         <#face_tokens as ::confit_binding::face::Face>::face_name(),
                     ),
                     optional: #marked,
+                    collect: <#face_tokens as ::confit_binding::face::Face>::collect,
                 }
             });
         }
@@ -331,9 +342,6 @@ fn build_inline_payload(
                         })?;
             });
         }
-        members.push(quote! {
-            <#face_tokens as ::confit_binding::face::Face>::collect(collector)?;
-        });
         field_idents.push(field_ident);
         if !field_names.iter().any(|key| key == &lua_key) {
             field_names.push(lua_key);
@@ -375,22 +383,19 @@ fn build_inline_payload(
                 #class_name.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_class(
-                    #class_name,
-                    #class_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                ::confit_binding::face::FaceKind::Table
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Class {
+                    documentation: #class_docs,
+                    fields: ::std::vec![#(#descriptors),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
                     #(#members)*
                 }
                 ::std::result::Result::Ok(())
@@ -402,11 +407,20 @@ fn build_inline_payload(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
             ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+                Self::decode_ignored(value, lua, &[])
+            }
+
+            fn decode_ignored(
+                value: &::mlua::Value,
+                lua: &::mlua::Lua,
+                ignored: &[&str],
+            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
                 let table = ::confit_binding::value::table_value(value, #class_name)?;
-                ::confit_binding::value::check_keys(
+                ::confit_binding::value::check_keys_ignored(
                     &table,
                     #class_name,
                     &[#(#field_names),*],
+                    ignored,
                 )?;
                 #(#decoders)*
                 ::std::result::Result::Ok(Self {
@@ -430,6 +444,7 @@ fn build_inline_payload(
         identifier,
         expansion,
         fields,
+        descriptors,
         keys: field_names,
         lua_keys: field_lua_keys,
         shapes: field_shapes,
@@ -454,6 +469,14 @@ fn validate_check(outer: &str, validate: &Option<syn::Path>) -> Tokens {
     }
 }
 
+/// Render the encode refusal for one skipped variant arm.
+fn refusal(outer: &str, variant_name: &str) -> Tokens {
+    let message = format!("cannot encode {outer}::{variant_name} to Lua");
+    quote! {
+        ::std::result::Result::Err(::mlua::Error::RuntimeError(#message.to_owned()))
+    }
+}
+
 /// Render the decode dispatch for one key family.
 fn family_dispatch(index: usize, family: &Family, check: &Tokens) -> Tokens {
     let mut arms = Vec::new();
@@ -462,9 +485,10 @@ fn family_dispatch(index: usize, family: &Family, check: &Tokens) -> Tokens {
         let payload = &arm.payload;
         let fields = &arm.fields;
         arms.push(quote! {
-            match <#payload as ::confit_binding::value::Decode>::decode(
+            match <#payload as ::confit_binding::value::Decode>::decode_ignored(
                 &::mlua::Value::Table(table.clone()),
                 lua,
+                ignored,
             ) {
                 ::std::result::Result::Ok(inner) => {
                     let result = Self::#variant {
@@ -595,6 +619,10 @@ fn default_body(
         if let ::mlua::Value::Table(table) = value.clone() {
             let keys =
                 ::confit_binding::value::table_keys(&table, stringify!(#name))?;
+            let keys: ::std::vec::Vec<::std::string::String> = keys
+                .into_iter()
+                .filter(|key| !ignored.contains(&key.as_str()))
+                .collect();
             match ::confit_binding::value::route_family(&keys, #mappings) {
                 ::confit_binding::value::FamilyRoute::Match(_index) => {
                     #(#dispatch)*
@@ -625,7 +653,6 @@ pub(crate) fn expand_untagged_enum(
     name: &syn::Ident,
     data: &syn::DataEnum,
     attrs: &[Attribute],
-    kind: ContainerKind,
     probe: &Option<syn::Path>,
     validate: &Option<syn::Path>,
     rename: &Option<String>,
@@ -633,10 +660,8 @@ pub(crate) fn expand_untagged_enum(
     let outer = name.to_string();
     let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
-    let marker = kind_tokens(kind);
-    let mut descriptors = Vec::new();
+    let mut arms = Vec::new();
     let mut faces = Vec::new();
-    let mut members = Vec::new();
     let mut encodes = Vec::new();
     let mut families: Vec<Family> = Vec::new();
     let mut fallback = Vec::new();
@@ -662,6 +687,8 @@ pub(crate) fn expand_untagged_enum(
             ));
         }
         let docs = doc_lines(&variant.attrs).join(" ");
+        let refused = refusal(&outer, &variant_name);
+        let variant_dropped = flags.skip_decode && flags.skip_encode;
         match &variant.fields {
             Fields::Unit => {
                 units += 1;
@@ -674,24 +701,35 @@ pub(crate) fn expand_untagged_enum(
                         ),
                     ));
                 }
-                descriptors.push(quote! {
-                    ::confit_binding::face::VariantDescriptor {
+                arms.push(quote! {
+                    ::confit_binding::face::UnionArm {
                         name: stringify!(#ident),
                         documentation: #docs,
                         face: ::std::borrow::Cow::Borrowed("nil"),
+                        fields: ::std::vec::Vec::new(),
+                        collect: ::confit_binding::face::no_collect,
+                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! { "nil".to_owned() });
-                encodes.push(quote! {
-                    Self::#ident => ::std::result::Result::Ok(::mlua::Value::Nil),
-                });
-                nil_attempt = Some(quote! {
-                    if matches!(value, ::mlua::Value::Nil) {
-                        let result = Self::#ident;
-                        #check
-                        return ::std::result::Result::Ok(result);
-                    }
-                });
+                if flags.skip_encode {
+                    encodes.push(quote! {
+                        Self::#ident => #refused,
+                    });
+                } else {
+                    encodes.push(quote! {
+                        Self::#ident => ::std::result::Result::Ok(::mlua::Value::Nil),
+                    });
+                }
+                if !flags.skip_decode {
+                    nil_attempt = Some(quote! {
+                        if matches!(value, ::mlua::Value::Nil) {
+                            let result = Self::#ident;
+                            #check
+                            return ::std::result::Result::Ok(result);
+                        }
+                    });
+                }
             }
             Fields::Named(named) => {
                 let payload = build_inline_payload(&display, variant, named)?;
@@ -723,20 +761,21 @@ pub(crate) fn expand_untagged_enum(
                     }
                 }
                 payloads.push(payload.expansion);
-                descriptors.push(quote! {
-                    ::confit_binding::face::VariantDescriptor {
+                let arm_fields = payload.descriptors.clone();
+                arms.push(quote! {
+                    ::confit_binding::face::UnionArm {
                         name: stringify!(#ident),
                         documentation: #docs,
                         face: ::std::borrow::Cow::Owned(
                             <#identifier as ::confit_binding::face::Face>::face_name(),
                         ),
+                        fields: ::std::vec![#(#arm_fields),*],
+                        collect: <#identifier as ::confit_binding::face::Face>::collect,
+                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! {
                     <#identifier as ::confit_binding::face::Face>::face_name()
-                });
-                members.push(quote! {
-                    <#identifier as ::confit_binding::face::Face>::collect(collector)?;
                 });
                 let pattern: Tokens = if encode_idents.is_empty() {
                     quote! { .. }
@@ -745,76 +784,97 @@ pub(crate) fn expand_untagged_enum(
                 } else {
                     quote! { #(#encode_idents),*, .. }
                 };
-                encodes.push(quote! {
-                    Self::#ident { #pattern } => {
-                        let table = lua.create_table()?;
-                        #(#arm_stmts)*
-                        ::std::result::Result::Ok(::mlua::Value::Table(table))
-                    },
-                });
-                place_arm(
-                    &mut families,
-                    payload.keys.clone(),
-                    Arm {
-                        variant: ident,
-                        payload: identifier,
-                        fields: field_idents,
-                    },
-                );
+                if flags.skip_encode {
+                    encodes.push(quote! {
+                        Self::#ident { .. } => #refused,
+                    });
+                } else {
+                    encodes.push(quote! {
+                        Self::#ident { #pattern } => {
+                            let table = lua.create_table()?;
+                            #(#arm_stmts)*
+                            ::std::result::Result::Ok(::mlua::Value::Table(table))
+                        },
+                    });
+                }
+                if !flags.skip_decode {
+                    place_arm(
+                        &mut families,
+                        payload.keys.clone(),
+                        Arm {
+                            variant: ident,
+                            payload: identifier,
+                            fields: field_idents,
+                        },
+                    );
+                }
             }
             Fields::Unnamed(_) => {
                 let payload = payload_of(&outer, variant, "untagged")?;
-                descriptors.push(quote! {
-                    ::confit_binding::face::VariantDescriptor {
+                arms.push(quote! {
+                    ::confit_binding::face::UnionArm {
                         name: stringify!(#ident),
                         documentation: #docs,
                         face: ::std::borrow::Cow::Owned(
                             <#payload as ::confit_binding::face::Face>::face_name(),
                         ),
+                        fields: match <#payload as ::confit_binding::face::Face>::face() {
+                            ::confit_binding::face::FaceData::Class { fields, .. } => fields,
+                            _ => ::std::vec::Vec::new(),
+                        },
+                        collect: <#payload as ::confit_binding::face::Face>::collect,
+                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! {
                     <#payload as ::confit_binding::face::Face>::face_name()
                 });
-                members.push(quote! {
-                    <#payload as ::confit_binding::face::Face>::collect(collector)?;
-                });
-                encodes.push(quote! {
-                    Self::#ident(inner) => {
-                        <#payload as ::confit_binding::value::Encode>::encode(inner, lua)
-                    },
-                });
-                fallback.push(quote! {
-                    match <#payload as ::confit_binding::value::Decode>::decode(
-                        &value.clone(),
-                        lua,
-                    ) {
-                        ::std::result::Result::Ok(inner) => {
+                if flags.skip_encode {
+                    encodes.push(quote! {
+                        Self::#ident(..) => #refused,
+                    });
+                } else {
+                    encodes.push(quote! {
+                        Self::#ident(inner) => {
+                            <#payload as ::confit_binding::value::Encode>::encode(inner, lua)
+                        },
+                    });
+                }
+                if !flags.skip_decode {
+                    fallback.push(quote! {
+                        match <#payload as ::confit_binding::value::Decode>::decode_ignored(
+                            &value.clone(),
+                            lua,
+                            ignored,
+                        ) {
+                            ::std::result::Result::Ok(inner) => {
+                                let result = Self::#ident(inner);
+                                #check
+                                return ::std::result::Result::Ok(result);
+                            }
+                            ::std::result::Result::Err(error) => {
+                                if error.path
+                                    != <#payload as ::confit_binding::face::Face>::face_name()
+                                {
+                                    fallback_error = ::std::option::Option::Some(error);
+                                }
+                            }
+                        }
+                    });
+                    discarded.push(quote! {
+                        if let ::std::result::Result::Ok(inner) =
+                            <#payload as ::confit_binding::value::Decode>::decode_ignored(
+                                &value.clone(),
+                                lua,
+                                ignored,
+                            )
+                        {
                             let result = Self::#ident(inner);
                             #check
                             return ::std::result::Result::Ok(result);
                         }
-                        ::std::result::Result::Err(error) => {
-                            if error.path
-                                != <#payload as ::confit_binding::face::Face>::face_name()
-                            {
-                                fallback_error = ::std::option::Option::Some(error);
-                            }
-                        }
-                    }
-                });
-                discarded.push(quote! {
-                    if let ::std::result::Result::Ok(inner) =
-                        <#payload as ::confit_binding::value::Decode>::decode(
-                            &value.clone(),
-                            lua,
-                        )
-                    {
-                        let result = Self::#ident(inner);
-                        #check
-                        return ::std::result::Result::Ok(result);
-                    }
-                });
+                    });
+                }
             }
         }
     }
@@ -823,6 +883,7 @@ pub(crate) fn expand_untagged_enum(
             let nil = nil_attempt.clone();
             quote! {
                 #nil
+                let _ = ignored;
                 let table = ::confit_binding::value::table_value(value, stringify!(#name))?;
                 let result = #hook(lua, &table)?;
                 #check
@@ -846,23 +907,19 @@ pub(crate) fn expand_untagged_enum(
                 #display.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_alias(
-                    #display,
-                    #type_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                #marker
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Union {
+                    documentation: #type_docs,
+                    arms: ::std::vec![#(#arms),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(#members)*
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
                 }
                 ::std::result::Result::Ok(())
             }
@@ -872,6 +929,14 @@ pub(crate) fn expand_untagged_enum(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
+            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+                Self::decode_ignored(value, lua, &[])
+            }
+
+            fn decode_ignored(
+                value: &::mlua::Value,
+                lua: &::mlua::Lua,
+                ignored: &[&str],
             ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
                 #decode_body
             }
@@ -903,17 +968,9 @@ mod tests {
         let syn::Data::Enum(data) = &input.data else {
             panic!("want enum input");
         };
-        expand_untagged_enum(
-            &input.ident,
-            data,
-            &input.attrs,
-            ContainerKind::Table,
-            &None,
-            &None,
-            rename,
-        )
-        .unwrap()
-        .to_string()
+        expand_untagged_enum(&input.ident, data, &input.attrs, &None, &None, rename)
+            .unwrap()
+            .to_string()
     }
 
     #[test]
@@ -933,9 +990,12 @@ mod tests {
             "#,
         );
         assert!(expanded.contains("Condition_EnvEq"));
-        assert!(expanded.contains("emit_class"));
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
         assert!(expanded.contains("Equality check"));
         assert!(expanded.contains("The variable name"));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("UnionArm"));
     }
 
     #[test]
@@ -954,8 +1014,10 @@ mod tests {
             }
             "#,
         );
-        assert!(expanded.contains("emit_alias"));
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
         assert!(expanded.contains("Condition_EnvEq"));
+        assert!(expanded.contains("face"));
     }
 
     #[test]
@@ -977,21 +1039,7 @@ mod tests {
         assert!(!expanded.contains("Condition_All"));
     }
 
-    #[test]
-    fn missing_docs_still_synthesize_payload_class() {
-        let expanded = expand(
-            r#"
-            #[face(table, untagged)]
-            pub enum NoDocs {
-                Bare { key: String },
-                Many(Vec<String>),
-            }
-            "#,
-        );
-        assert!(expanded.contains("NoDocs_Bare"));
-        assert!(!expanded.contains("NoDocs_Many"));
-    }
-
+    // Rename contract lives here. Tagged reuses this shape.
     #[test]
     fn container_rename_propagates_to_payload_class() {
         let expanded = expand_named(
@@ -1011,5 +1059,77 @@ mod tests {
         );
         assert!(expanded.contains("Document_Text"));
         assert!(!expanded.contains("Data_Text"));
+    }
+
+    #[test]
+    fn skipped_tuple_arm_refuses_encode_but_keeps_its_descriptor() {
+        let expanded = expand(
+            r#"
+            #[face(table, untagged)]
+            pub enum MaybeSealed {
+                /// Live payload.
+                Live {
+                    /// The exact file text.
+                    content: String,
+                },
+                /// Sealed payload.
+                #[face(skip_decode, skip_encode)]
+                Sealed(Digest),
+            }
+            "#,
+        );
+        assert!(expanded.contains("cannot encode MaybeSealed::Sealed to Lua"));
+        assert!(expanded.contains("Sealed payload"));
+        assert!(expanded.contains("UnionArm"));
+        assert!(expanded.contains("skipped"));
+    }
+
+    #[test]
+    fn skipped_inline_arm_refuses_encode_but_keeps_its_descriptor() {
+        let expanded = expand(
+            r#"
+            #[face(table, untagged)]
+            pub enum MaybeOld {
+                /// Live payload.
+                Live {
+                    /// The exact file text.
+                    content: String,
+                },
+                /// Retired payload.
+                #[face(skip_decode, skip_encode)]
+                Old {
+                    /// The retired text.
+                    retired: String,
+                },
+            }
+            "#,
+        );
+        assert!(expanded.contains("cannot encode MaybeOld::Old to Lua"));
+        assert!(expanded.contains("Retired payload"));
+        assert!(expanded.contains("UnionArm"));
+    }
+
+    #[test]
+    fn flattened_inline_fields_fail_the_build() {
+        let input: syn::DeriveInput = syn::parse_str(
+            r#"
+            #[face(table, untagged)]
+            pub enum Wrapper {
+                Inner {
+                    path: String,
+                    #[face(flatten)]
+                    body: Inner,
+                },
+            }
+            "#,
+        )
+        .unwrap();
+        let syn::Data::Enum(data) = &input.data else {
+            panic!("want enum input");
+        };
+        assert!(
+            expand_untagged_enum(&input.ident, data, &input.attrs, &None, &None, &None).is_err(),
+            "foreign shape fails the build"
+        );
     }
 }

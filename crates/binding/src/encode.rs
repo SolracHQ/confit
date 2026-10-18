@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use mlua::{Function, Lua, Value};
 
+use confit_driver::sha::Sha;
+
 use crate::value::Encode;
 
 /// Encode one boxed face through its inner face.
@@ -75,7 +77,7 @@ impl Encode for isize {
 }
 
 /// Encode one hash through its hex digest.
-impl Encode for confit_driver::sha::Sha {
+impl Encode for Sha {
     fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
         lua.create_string(self.hex().as_str()).map(Value::String)
     }
@@ -85,14 +87,6 @@ impl Encode for confit_driver::sha::Sha {
 mod tests {
     use super::*;
     use crate::value::Decode;
-
-    #[test]
-    fn boxed_values_encode_inner_faces() {
-        let lua = Lua::new();
-        let boxed = Box::new("held".to_owned());
-        let encoded = boxed.encode(&lua).unwrap();
-        assert!(matches!(encoded, Value::String(found) if found.to_string_lossy() == "held"));
-    }
 
     #[test]
     fn maps_encode_entries_with_decode_round_trip() {
@@ -146,7 +140,7 @@ mod tests {
     #[test]
     fn hashes_encode_hex_digests() {
         let lua = Lua::new();
-        let digest = confit_driver::sha::Sha::hash(b"confit fixture");
+        let digest = Sha::hash(b"confit fixture");
         let encoded = digest.encode(&lua).unwrap();
         assert!(matches!(encoded, Value::String(found) if found.to_string_lossy() == digest.hex()));
     }

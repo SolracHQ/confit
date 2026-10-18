@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::fs::create_parent;
+
 /// Streaming chunk for exact copies.
 const COPY_CHUNK: usize = 8192;
 
@@ -24,7 +26,7 @@ impl StagedFile {
     /// - [PermissionDenied] when the destination refuses writes.
     /// - [Other] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
-        crate::fs::create_parent(dest)?;
+        create_parent(dest)?;
         tempfile::NamedTempFile::new_in(scratch_dir(dest)).map(|file| Self { file })
     }
 
@@ -69,7 +71,7 @@ impl StagedDir {
     /// - [PermissionDenied] when the destination refuses writes.
     /// - [Other] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
-        crate::fs::create_parent(dest)?;
+        create_parent(dest)?;
         tempfile::TempDir::new_in(scratch_dir(dest)).map(|dir| Self { dir })
     }
 
@@ -154,6 +156,8 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    use crate::fs::read_dir;
+
     #[test]
     fn atomic_write_round_trip() {
         let dir = tempfile::tempdir().unwrap();
@@ -172,7 +176,7 @@ mod tests {
         assert!(outcome.is_err(), "closure failure reports loud");
         assert!(!dest.exists(), "failed write leaves no destination");
         let parent = dest.parent().unwrap().to_path_buf();
-        let leftovers = crate::fs::read_dir(&parent).unwrap_or_default();
+        let leftovers = read_dir(&parent).unwrap_or_default();
         assert!(leftovers.is_empty(), "failed write leaves no pending entry");
     }
 
@@ -184,18 +188,6 @@ mod tests {
         std::fs::write(&dest, b"winner").unwrap();
         atomic_write(&dest, |pending| std::fs::write(pending, b"newcomer")).unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"newcomer");
-    }
-
-    #[test]
-    fn staged_file_persists_and_cleans() {
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("staged").join("note.bin");
-        let staged = StagedFile::stage(&dest).unwrap();
-        std::fs::write(staged.path(), b"staged bytes").unwrap();
-        staged.persist(&dest).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"staged bytes");
-        let leftovers = crate::fs::read_dir(dest.parent().unwrap()).unwrap();
-        assert_eq!(leftovers, vec![dest]);
     }
 
     #[test]

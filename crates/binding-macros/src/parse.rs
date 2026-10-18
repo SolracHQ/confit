@@ -1,8 +1,6 @@
 //! Face parsing
 //! Read face attributes into marker selections.
 
-use proc_macro2::TokenStream as Tokens;
-use quote::quote;
 use syn::{Attribute, Fields, Lit, Meta, Type, punctuated::Punctuated, token::Comma};
 
 /// Kind marker reading on every derived type.
@@ -28,6 +26,8 @@ pub(crate) struct VariantFlags {
     pub(crate) rename: Option<String>,
     pub(crate) tag: Option<String>,
     pub(crate) probe: Vec<String>,
+    pub(crate) skip_decode: bool,
+    pub(crate) skip_encode: bool,
 }
 
 /// Container header reading on every derived type.
@@ -43,6 +43,8 @@ pub(crate) struct ContainerHeader {
     pub(crate) probe: Option<syn::Path>,
     /// The validate hook path checking decoded values.
     pub(crate) validate: Option<syn::Path>,
+    /// The callback return face path.
+    pub(crate) returns: Option<syn::Path>,
 }
 
 /// Field flags parsing from one face attribute.
@@ -56,6 +58,8 @@ pub(crate) struct FieldFlags {
     pub(crate) live: bool,
     /// The ignore marker for Rust-filled fields.
     pub(crate) ignore: bool,
+    /// The flatten marker for nested table faces.
+    pub(crate) flatten: bool,
     /// The Lua key override.
     pub(crate) rename: Option<String>,
     /// The Lua face override.
@@ -131,7 +135,7 @@ pub(crate) fn parse_header(
                             return Err(syn::Error::new_spanned(
                                 item,
                                 format!(
-                                    "{type_name}: face option '{ident}' reads \
+                                    "{type_name}: face option '{ident}' expected \
                                      field-level alone"
                                 ),
                             ));
@@ -216,13 +220,29 @@ pub(crate) fn parse_header(
                             };
                             header.rename = Some(text.value());
                         }
+                        "returns" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: face option 'returns' wants a face type"),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: face option 'returns' wants a face type"),
+                                ));
+                            }
+                            header.returns = Some(found.path.clone());
+                        }
                         _ => {
                             return Err(syn::Error::new_spanned(
                                 &pair.path,
                                 format!(
                                     "{type_name}: unknown face option '{key}'; want \
-                                     probe or validate with a hook path, or rename \
-                                     with a string literal"
+                                     probe or validate with a hook path, rename \
+                                     with a string literal, or returns \
+                                     with a face type"
                                 ),
                             ));
                         }
@@ -251,6 +271,12 @@ pub(crate) fn parse_header(
         ));
     };
     header.kind = Some(kind);
+    if header.returns.is_some() && header.kind != Some(ContainerKind::CallbackShape) {
+        return Err(syn::Error::new_spanned(
+            identifier,
+            format!("{type_name}: callback shapes alone support returns"),
+        ));
+    }
     if is_enum && header.union.is_none() {
         return Err(syn::Error::new_spanned(
             identifier,
@@ -295,13 +321,23 @@ pub(crate) fn parse_variant_flags(
                         .get_ident()
                         .map(ToString::to_string)
                         .unwrap_or_default();
-                    return Err(syn::Error::new_spanned(
-                        &item,
-                        format!(
-                            "{outer}.{variant}: face option '{ident}' reads \
-                             container-level alone"
-                        ),
-                    ));
+                    match ident.as_str() {
+                        "skip_decode" => {
+                            flags.skip_decode = true;
+                        }
+                        "skip_encode" => {
+                            flags.skip_encode = true;
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &item,
+                                format!(
+                                    "{outer}.{variant}: face option '{ident}' expected \
+                                     container-level alone"
+                                ),
+                            ));
+                        }
+                    }
                 }
                 Meta::NameValue(pair) => {
                     let key = pair
@@ -392,14 +428,15 @@ pub(crate) fn parse_field_flags(
                         "opaque" => flags.opaque = true,
                         "live" => flags.live = true,
                         "ignore" => flags.ignore = true,
+                        "flatten" => flags.flatten = true,
                         "default" => flags.default = Some(None),
                         _ => {
                             return Err(syn::Error::new_spanned(
                                 &item,
                                 format!(
                                     "{outer}.{field}: unknown face option '{ident}'; \
-                                     want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
-                                     'decode_hook', 'encode_hook', 'key_convert', \
+                                     want 'optional', 'opaque', 'live', 'ignore', 'flatten', \
+                                     'proxy', 'decode_hook', 'encode_hook', 'key_convert', \
                                      'value_convert', 'rename', or 'default'"
                                 ),
                             ));
@@ -555,8 +592,8 @@ pub(crate) fn parse_field_flags(
                                 &pair.path,
                                 format!(
                                     "{outer}.{field}: unknown face option '{key}'; \
-                                     want 'optional', 'opaque', 'live', 'ignore', 'proxy', \
-                                     'decode_hook', 'encode_hook', 'key_convert', \
+                                     want 'optional', 'opaque', 'live', 'ignore', 'flatten', \
+                                     'proxy', 'decode_hook', 'encode_hook', 'key_convert', \
                                      'value_convert', 'rename', or 'default'"
                                 ),
                             ));
@@ -568,7 +605,7 @@ pub(crate) fn parse_field_flags(
                         &item,
                         format!(
                             "{outer}.{field}: unknown face shape; want 'optional', \
-                             'opaque', 'live', 'ignore', 'proxy', 'decode_hook', \
+                             'opaque', 'live', 'ignore', 'flatten', 'proxy', 'decode_hook', \
                              'encode_hook', 'key_convert', \
                              'value_convert', 'rename', or 'default'"
                         ),
@@ -593,6 +630,7 @@ pub(crate) fn parse_field_flags(
         && (flags.optional
             || flags.opaque
             || flags.live
+            || flags.flatten
             || flags.proxy.is_some()
             || flags.decode_hook.is_some()
             || flags.encode_hook.is_some()
@@ -604,6 +642,24 @@ pub(crate) fn parse_field_flags(
         return Err(syn::Error::new_spanned(
             attrs.first(),
             format!("{outer}.{field}: face option 'ignore' stays apart from key options"),
+        ));
+    }
+    if flags.flatten
+        && (flags.optional
+            || flags.opaque
+            || flags.live
+            || flags.ignore
+            || flags.proxy.is_some()
+            || flags.decode_hook.is_some()
+            || flags.encode_hook.is_some()
+            || flags.key_convert.is_some()
+            || flags.value_convert.is_some()
+            || flags.rename.is_some()
+            || flags.default.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face option 'flatten' stays apart from key options"),
         ));
     }
     Ok(flags)
@@ -624,21 +680,6 @@ pub(crate) fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
         }
     }
     lines
-}
-
-/// Render the kind marker path for one container kind.
-pub(crate) fn kind_tokens(kind: ContainerKind) -> Tokens {
-    match kind {
-        ContainerKind::Table => {
-            quote! { ::confit_binding::face::FaceKind::Table }
-        }
-        ContainerKind::CallbackShape => {
-            quote! { ::confit_binding::face::FaceKind::Function }
-        }
-        ContainerKind::Userdata => {
-            quote! { ::confit_binding::face::FaceKind::Userdata }
-        }
-    }
 }
 
 /// Collect the single payload type of one tuple variant.

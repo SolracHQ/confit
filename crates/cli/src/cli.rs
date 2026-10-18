@@ -208,25 +208,17 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn plan_profile_defaults_under_project() {
+    fn plan_profile_pins_path_contract() {
         assert_eq!(
             plan_profile(Path::new("site"), None),
             PathBuf::from("site/main.lua"),
             "omitted profiles use the default"
         );
-    }
-
-    #[test]
-    fn plan_profile_joins_relative_names() {
         assert_eq!(
             plan_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
             PathBuf::from("site/laptop.lua"),
             "relative names stay project relative"
         );
-    }
-
-    #[test]
-    fn plan_profile_keeps_absolute_names() {
         assert_eq!(
             plan_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
             PathBuf::from("/elsewhere/laptop.lua"),
@@ -235,14 +227,9 @@ mod tests {
     }
 
     #[test]
-    fn expand_tilde_bare_home() {
+    fn expand_tilde_pins_home_contract() {
         let home = BaseDirs::new().home.unwrap();
         assert_eq!(expand_tilde(Path::new("~")), home);
-    }
-
-    #[test]
-    fn expand_tilde_joins_suffix() {
-        let home = BaseDirs::new().home.unwrap();
         assert_eq!(
             expand_tilde(Path::new("~/site/main.lua")),
             home.join("site/main.lua")
@@ -250,14 +237,10 @@ mod tests {
     }
 
     #[test]
-    fn logs_dir_prefers_explicit_over_env() {
+    fn logs_dir_pins_explicit_and_default() {
         let home = BaseDirs::new().home.unwrap();
         let out = resolve_logs_dir(Some(Path::new("~/logs")));
         assert_eq!(out, home.join("logs"));
-    }
-
-    #[test]
-    fn logs_dir_defaults_below_temp() {
         let out = resolve_logs_dir(None);
         assert!(out.starts_with(std::env::temp_dir()));
     }

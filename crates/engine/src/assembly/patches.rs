@@ -2,15 +2,14 @@
 //! Group structured with rc patches over matched destinations.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use mlua::{Lua, Value};
+use mlua::Lua;
 
 use crate::api::patch::{FilterArgs, Patch, PatchTarget, StructuredPatch, join_destination};
 use crate::api::profile::Profile;
 use confit_binding::callback::Callback;
-use confit_binding::value::Encode;
-use confit_model::document::{Data, RcData, StructuredFormat};
+use confit_model::document::{Data, Document, RcData, StructuredFormat};
 use confit_model::routes::Route;
 
 use super::owned::{OwnedPatch, assemble_config};
@@ -25,10 +24,11 @@ pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
     owned
 }
 
-/// Group structured patches over matched destinations in rank order.
+/// Group structured patches over matched destinations in first-seen order.
 ///
 /// - Target patches group under their route.
 /// - Filter patches fan out over structured matches.
+/// - Groups follow first-seen declaration order.
 /// - Fan-out follows destination order.
 /// - Vec order feeds the groups, and the stable sort
 ///   keeps it for equal levels.
@@ -39,29 +39,31 @@ pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 pub(super) fn grouped_structured<'a>(
     lua: &Lua,
-    placed: &BTreeMap<Route, Data>,
+    placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Result<BTreeMap<Route, Vec<&'a OwnedPatch>>> {
-    let mut grouped: BTreeMap<Route, Vec<&OwnedPatch>> = BTreeMap::new();
+) -> Result<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+    let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
+    let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
         let Some(found) = patch.structured() else {
             continue;
         };
         let target = join_destination(found.target.clone(), found.filter.clone())?;
         for destination in expanded_destinations(lua, placed, &target, is_structured)? {
-            grouped.entry(destination).or_default().push(patch);
+            push_grouped(&mut grouped, &mut index, destination, patch);
         }
     }
-    for group in grouped.values_mut() {
+    for group in grouped.iter_mut().map(|(_, group)| group) {
         group.sort_by_key(|patch| Reverse(rank_of(patch)));
     }
     Ok(grouped)
 }
 
-/// Group rc patches over matched destinations in rank order.
+/// Group rc patches over matched destinations in first-seen order.
 ///
 /// - Target patches group under their route.
 /// - Filter patches fan out over rc matches.
+/// - Groups follow first-seen declaration order.
 /// - Fan-out follows destination order.
 /// - Vec order feeds the groups, and the stable sort
 ///   keeps it for equal levels.
@@ -72,23 +74,40 @@ pub(super) fn grouped_structured<'a>(
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 pub(super) fn grouped_rc<'a>(
     lua: &Lua,
-    placed: &BTreeMap<Route, Data>,
+    placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Result<BTreeMap<Route, Vec<&'a OwnedPatch>>> {
-    let mut grouped: BTreeMap<Route, Vec<&OwnedPatch>> = BTreeMap::new();
+) -> Result<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+    let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
+    let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
         let Some(found) = patch.rc() else {
             continue;
         };
         let target = join_destination(found.target.clone(), found.filter.clone())?;
         for destination in expanded_destinations(lua, placed, &target, is_rc)? {
-            grouped.entry(destination).or_default().push(patch);
+            push_grouped(&mut grouped, &mut index, destination, patch);
         }
     }
-    for group in grouped.values_mut() {
+    for group in grouped.iter_mut().map(|(_, group)| group) {
         group.sort_by_key(|patch| Reverse(rank_of(patch)));
     }
     Ok(grouped)
+}
+
+/// Push one patch onto its destination group in first-seen order.
+fn push_grouped<'a>(
+    grouped: &mut Vec<(Route, Vec<&'a OwnedPatch>)>,
+    index: &mut HashMap<Route, usize>,
+    destination: Route,
+    patch: &'a OwnedPatch,
+) {
+    match index.get(&destination) {
+        Some(position) => grouped[*position].1.push(patch),
+        None => {
+            index.insert(destination.clone(), grouped.len());
+            grouped.push((destination, vec![patch]));
+        }
+    }
 }
 
 /// Return the merge rank of one owned patch.
@@ -107,9 +126,9 @@ fn rank_of(patch: &OwnedPatch) -> u8 {
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 fn expanded_destinations(
     lua: &Lua,
-    placed: &BTreeMap<Route, Data>,
+    placed: &[Document],
     target: &PatchTarget,
-    area_matches: fn(&Data) -> bool,
+    area_matches: fn(&Document) -> bool,
 ) -> Result<Vec<Route>> {
     match target {
         PatchTarget::Target(route) => Ok(vec![route.clone()]),
@@ -126,36 +145,30 @@ fn expanded_destinations(
 /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
 fn matched_destinations(
     lua: &Lua,
-    placed: &BTreeMap<Route, Data>,
+    placed: &[Document],
     filter: &Callback<FilterArgs>,
-    area_matches: fn(&Data) -> bool,
+    area_matches: fn(&Document) -> bool,
 ) -> Result<Vec<Route>> {
     let mut matched = Vec::new();
-    for (destination, body) in placed {
-        if !area_matches(body) {
+    for document in placed {
+        if !area_matches(document) {
             continue;
         }
-        let Value::Table(route) = destination.encode(lua)? else {
-            return Err(EngineError::Lua(mlua::Error::runtime(
-                "route views hold tables",
-            )));
-        };
-        let keep = filter.call::<bool>(lua, (&route,))?;
-        if keep {
-            matched.push(destination.clone());
+        if filter.call::<bool>(lua, (&document.path,))? {
+            matched.push(document.path.clone());
         }
     }
     Ok(matched)
 }
 
 /// Report whether documents hold structured data.
-fn is_structured(body: &Data) -> bool {
-    matches!(body, Data::Structured { .. })
+fn is_structured(document: &Document) -> bool {
+    matches!(document.data, Data::Structured { .. })
 }
 
 /// Report whether documents hold rc sections.
-fn is_rc(body: &Data) -> bool {
-    matches!(body, Data::Rc(_))
+fn is_rc(document: &Document) -> bool {
+    matches!(document.data, Data::Rc(_))
 }
 
 /// Build one structured patch base with its live data.
@@ -165,15 +178,15 @@ fn is_rc(body: &Data) -> bool {
 /// - [`EngineError::UnknownTarget`] for missing targets.
 /// - [`EngineError::Structured`] for foreign bases with gaps.
 pub(super) fn structured_base_of(
-    placed: &BTreeMap<Route, Data>,
+    placed: &[Document],
     target: &Route,
     first: &StructuredPatch,
     patches: &[&StructuredPatch],
 ) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
-    match placed.get(target) {
-        Some(body) => {
+    match placed.iter().find(|document| document.path == *target) {
+        Some(document) => {
             let display = target.display();
-            structured_declared_base(body, &display, first, patches)
+            structured_declared_base(&document.data, &display, first, patches)
         }
         None => Err(EngineError::UnknownTarget {
             display: target.display(),
@@ -193,22 +206,20 @@ fn structured_declared_base(
     patches: &[&StructuredPatch],
 ) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match body {
-        Data::Structured { format, data } => {
+        Data::Structured(found) => {
             for patch in patches {
-                if patch.format != *format {
-                    return Err(gap(display, format.name(), patch.format.name()));
+                if patch.format != found.format {
+                    return Err(gap(display, found.format.name(), patch.format.name()));
                 }
             }
-            let mut live: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-            if let Some(map) = data.as_object() {
-                for (key, value) in map {
-                    live.insert(key.clone(), value.clone());
-                }
-            }
-            Ok((*format, live))
+            Ok((found.format, found.data.clone()))
         }
         Data::Rc(_) => Err(gap(display, "rc", first.format.name())),
-        _ => Err(gap(display, body.kind().name(), first.format.name())),
+        Data::Text(_) => Err(gap(display, "text", first.format.name())),
+        #[cfg(unix)]
+        Data::Link(_) => Err(gap(display, "link", first.format.name())),
+        Data::Opaque(_) => Err(gap(display, "opaque", first.format.name())),
+        Data::Tree(_) => Err(gap(display, "tree", first.format.name())),
     }
 }
 
@@ -218,12 +229,16 @@ fn structured_declared_base(
 ///
 /// - [`EngineError::UnknownTarget`] for missing targets.
 /// - [`EngineError::Structured`] for foreign bases with gaps.
-pub(super) fn rc_base_of(placed: &BTreeMap<Route, Data>, target: &Route) -> Result<RcData> {
-    match placed.get(target) {
-        Some(body) => match body {
+pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> Result<RcData> {
+    match placed.iter().find(|document| document.path == *target) {
+        Some(document) => match &document.data {
             Data::Rc(found) => Ok(found.clone()),
-            Data::Structured { format, .. } => Err(gap(&target.display(), format.name(), "rc")),
-            _ => Err(gap(&target.display(), body.kind().name(), "rc")),
+            Data::Structured(found) => Err(gap(&target.display(), found.format.name(), "rc")),
+            Data::Text(_) => Err(gap(&target.display(), "text", "rc")),
+            #[cfg(unix)]
+            Data::Link(_) => Err(gap(&target.display(), "link", "rc")),
+            Data::Opaque(_) => Err(gap(&target.display(), "opaque", "rc")),
+            Data::Tree(_) => Err(gap(&target.display(), "tree", "rc")),
         },
         None => Err(EngineError::UnknownTarget {
             display: target.display(),
@@ -245,20 +260,21 @@ mod tests {
     use super::*;
     use crate::api::config::Config;
     use crate::api::patch::{Level, Patch, RcPatch, StructuredPatch};
+    use confit_model::document::{StructuredDocument, TextDocument};
     use confit_model::routes::RouteBase;
     use mlua::{Function, Lua};
-    use std::collections::BTreeMap;
 
-    fn profile_of(documents: Vec<(Route, Data)>, patches: Vec<Patch>) -> Profile {
+    /// Build one profile with declared documents and patches.
+    fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
         Profile::new(
             vec![Config::new(
                 "tools/test".to_owned(),
-                documents.into_iter().collect(),
+                documents,
                 patches,
                 Vec::new(),
                 std::collections::HashMap::new(),
             )],
-            std::collections::HashMap::new(),
+            Vec::new(),
         )
     }
 
@@ -274,7 +290,7 @@ mod tests {
             target: Some(Route::new(RouteBase::Home, relative).unwrap()),
             filter: None,
             format,
-            apply,
+            apply: Callback::new(apply),
             priority,
         }
     }
@@ -284,36 +300,39 @@ mod tests {
         RcPatch {
             target: Some(Route::new(RouteBase::Home, relative).unwrap()),
             filter: None,
-            apply,
+            apply: Callback::new(apply),
             priority,
         }
     }
 
-    fn placed_structured(relative: &str) -> (Route, Data) {
-        (
+    /// Build one seeded json document with its destination path.
+    fn placed_structured(relative: &str) -> Document {
+        Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
-            Data::Structured {
+            Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
-                data: serde_json::json!({"seed": 0}),
-            },
+                data: BTreeMap::from([("seed".to_owned(), serde_json::json!(0))]),
+            }),
         )
     }
 
-    fn placed_rc(relative: &str) -> (Route, Data) {
-        (
+    /// Build one empty rc document with its destination path.
+    fn placed_rc(relative: &str) -> Document {
+        Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
             Data::Rc(RcData::new(Vec::new(), Vec::new(), Vec::new())),
         )
     }
 
-    fn placed_text(relative: &str) -> (Route, Data) {
-        (
+    /// Build one text document with its destination path.
+    fn placed_text(relative: &str) -> Document {
+        Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
-            Data::Text {
+            Data::Text(TextDocument {
                 content: "hi".to_owned(),
                 mode: 0o644,
                 unmanaged: false,
-            },
+            }),
         )
     }
 
@@ -323,9 +342,9 @@ mod tests {
         OwnedPatch::join_patch(
             Patch::Structured(StructuredPatch {
                 target: None,
-                filter: Some(filter),
+                filter: Some(Callback::new(filter)),
                 format: StructuredFormat::Json,
-                apply,
+                apply: Callback::new(apply),
                 priority: Level::Normal,
             }),
             "tools/test",
@@ -338,8 +357,8 @@ mod tests {
         OwnedPatch::join_patch(
             Patch::Rc(RcPatch {
                 target: None,
-                filter: Some(filter),
-                apply,
+                filter: Some(Callback::new(filter)),
+                apply: Callback::new(apply),
                 priority: Level::Normal,
             }),
             "tools/test",
@@ -417,22 +436,21 @@ mod tests {
     #[test]
     fn structured_filters_fan_out_in_destination_order() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Data> = [
-            placed_structured("zebra.json"),
+        let placed = vec![
             placed_structured("apple.json"),
+            placed_structured("zebra.json"),
             placed_rc(".bashrc"),
             placed_text("note.txt"),
-        ]
-        .into_iter()
-        .collect();
+        ];
         let patch = structured_filter_of(
             &lua,
             r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
-            r#"return function(route, document) return end"#,
+            r#"return function(document) return end"#,
         );
         match grouped_structured(&lua, &placed, &[patch]) {
             Ok(grouped) => {
-                let displays: Vec<String> = grouped.keys().map(|route| route.display()).collect();
+                let displays: Vec<String> =
+                    grouped.iter().map(|(route, _)| route.display()).collect();
                 assert_eq!(
                     displays,
                     vec![
@@ -448,25 +466,23 @@ mod tests {
     #[test]
     fn absent_structured_matches_cover_all_of_kind() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Data> = [
-            placed_structured("zebra.json"),
+        let placed = vec![
             placed_structured("apple.json"),
+            placed_structured("zebra.json"),
             placed_rc(".bashrc"),
-        ]
-        .into_iter()
-        .collect();
+        ];
         let patch = structured_filter_of(
             &lua,
             r#"return function(route) return true end"#,
-            r#"return function(route, document) return end"#,
+            r#"return function(document) return end"#,
         );
         match grouped_structured(&lua, &placed, &[patch]) {
             Ok(grouped) => {
                 assert_eq!(grouped.len(), 2);
                 assert!(
                     grouped
-                        .keys()
-                        .all(|route| route.display().contains(".json"))
+                        .iter()
+                        .all(|(route, _)| route.display().contains(".json"))
                 );
             }
             Err(error) => panic!("default filter groups: {error}"),
@@ -476,21 +492,20 @@ mod tests {
     #[test]
     fn rc_filters_fan_out_in_destination_order() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Data> = [
-            placed_rc("zebra.sh"),
+        let placed = vec![
             placed_rc("apple.sh"),
+            placed_rc("zebra.sh"),
             placed_structured("config.json"),
-        ]
-        .into_iter()
-        .collect();
+        ];
         let patch = rc_filter_of(
             &lua,
             r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
-            r#"return function(route, document) return end"#,
+            r#"return function(document) return end"#,
         );
         match grouped_rc(&lua, &placed, &[patch]) {
             Ok(grouped) => {
-                let displays: Vec<String> = grouped.keys().map(|route| route.display()).collect();
+                let displays: Vec<String> =
+                    grouped.iter().map(|(route, _)| route.display()).collect();
                 assert_eq!(
                     displays,
                     vec!["home('apple.sh')".to_owned(), "home('zebra.sh')".to_owned()]
@@ -503,16 +518,14 @@ mod tests {
     #[test]
     fn false_structured_filters_keep_documents_out() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Data> = [
+        let placed = vec![
             placed_structured("zebra.json"),
             placed_structured("apple.json"),
-        ]
-        .into_iter()
-        .collect();
+        ];
         let patch = structured_filter_of(
             &lua,
             r#"return function(route) return false end"#,
-            r#"return function(route, document) return end"#,
+            r#"return function(document) return end"#,
         );
         match grouped_structured(&lua, &placed, &[patch]) {
             Ok(grouped) => {
@@ -525,19 +538,58 @@ mod tests {
     #[test]
     fn failing_structured_filters_fail() {
         let lua = Lua::new();
-        let placed: BTreeMap<Route, Data> =
-            [placed_structured("config.json")].into_iter().collect();
+        let placed = vec![placed_structured("config.json")];
         let patch = structured_filter_of(
             &lua,
             r#"return function(route) error("filter boom") end"#,
-            r#"return function(route, document) return end"#,
+            r#"return function(document) return end"#,
         );
-        match grouped_structured(&lua, &placed, &[patch]) {
-            Ok(_) => panic!("failing filter passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("filter boom"), "carries the cause: {text}");
+        assert!(
+            grouped_structured(&lua, &placed, &[patch]).is_err(),
+            "failing filter fails"
+        );
+    }
+
+    #[test]
+    fn target_groups_follow_first_seen_declaration_order() {
+        let lua = Lua::new();
+        let placed = vec![
+            placed_structured("apple.json"),
+            placed_structured("zebra.json"),
+        ];
+        let zebra = OwnedPatch::join_patch(
+            Patch::Structured(structured_patch_of(
+                &lua,
+                "zebra.json",
+                StructuredFormat::Json,
+                Level::Normal,
+                r#"return function(document) return document end"#,
+            )),
+            "tools/test",
+        );
+        let apple = OwnedPatch::join_patch(
+            Patch::Structured(structured_patch_of(
+                &lua,
+                "apple.json",
+                StructuredFormat::Json,
+                Level::Normal,
+                r#"return function(document) return document end"#,
+            )),
+            "tools/test",
+        );
+        match grouped_structured(&lua, &placed, &[zebra, apple]) {
+            Ok(grouped) => {
+                let displays: Vec<String> =
+                    grouped.iter().map(|(route, _)| route.display()).collect();
+                assert_eq!(
+                    displays,
+                    vec![
+                        "home('zebra.json')".to_owned(),
+                        "home('apple.json')".to_owned()
+                    ]
+                );
             }
+            Err(error) => panic!("target groups: {error}"),
         }
     }
 }

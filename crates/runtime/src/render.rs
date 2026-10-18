@@ -1,6 +1,8 @@
 //! Render
 //! Document payloads to on-disk bytes.
 
+use std::collections::BTreeMap;
+
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
 use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
@@ -20,35 +22,41 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 /// - [`RuntimeError::Render`] for serializer failures.
 pub fn render_document(document: &Document) -> Result<Vec<u8>> {
     match &document.data {
-        Data::Structured { format, data } => match format {
-            StructuredFormat::Toml => Ok(render_toml(&document.destination, data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(&document.destination, data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(&document.destination, data)?.into_bytes()),
+        Data::Structured(found) => match found.format {
+            StructuredFormat::Toml => {
+                Ok(render_toml(&document.destination, &found.data)?.into_bytes())
+            }
+            StructuredFormat::Json => {
+                Ok(render_json(&document.destination, &found.data)?.into_bytes())
+            }
+            StructuredFormat::Yaml => {
+                Ok(render_yaml(&document.destination, &found.data)?.into_bytes())
+            }
         },
-        Data::Text { content, .. } => Ok(content.as_bytes().to_vec()),
+        Data::Text(found) => Ok(found.content.as_bytes().to_vec()),
         #[cfg(unix)]
-        Data::Link { target } => Ok(target.display().as_bytes().to_vec()),
+        Data::Link(found) => Ok(found.target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(&document.destination, data)?.into_bytes()),
-        Data::Opaque { handle: blob, .. } => {
+        Data::Opaque(found) => {
             log::error!(
                 "opaque '{}' uses blob '{}'",
                 document.destination.display(),
-                blob.sha256().hex()
+                found.handle.sha256().hex()
             );
             Err(RuntimeError::Refusal {
                 route: document.destination.clone(),
                 shape: RefusalShape::Opaque,
             })
         }
-        Data::Tree { .. } => Err(RuntimeError::Refusal {
+        Data::Tree(_) => Err(RuntimeError::Refusal {
             route: document.destination.clone(),
             shape: RefusalShape::Tree,
         }),
     }
 }
 
-/// Render a value to TOML text.
-fn render_toml(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+/// Render one map to TOML text.
+fn render_toml(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
     toml::to_string(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as toml failed: {reason}", route.display());
@@ -60,8 +68,8 @@ fn render_toml(route: &confit_model::routes::Route, value: &serde_json::Value) -
     })
 }
 
-/// Render a value to pretty JSON text.
-fn render_json(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+/// Render one map to pretty JSON text.
+fn render_json(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
     serde_json::to_string_pretty(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as json failed: {reason}", route.display());
@@ -73,8 +81,8 @@ fn render_json(route: &confit_model::routes::Route, value: &serde_json::Value) -
     })
 }
 
-/// Render a value to YAML text.
-fn render_yaml(route: &confit_model::routes::Route, value: &serde_json::Value) -> Result<String> {
+/// Render one map to YAML text.
+fn render_yaml(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
     noyalib::to_string(value).map_err(|source| {
         let reason = source.to_string();
         log::error!("render '{}' as yaml failed: {reason}", route.display());
@@ -94,12 +102,12 @@ fn render_yaml(route: &confit_model::routes::Route, value: &serde_json::Value) -
 fn render_rc(route: &Route, data: &RcData) -> Result<String> {
     let profile = section_lines(route, &data.profile)?;
     let config = section_lines(route, &data.config)?;
-    let finals = section_lines(route, &data.final_entries)?;
+    let finals = section_lines(route, &data.r#final)?;
     let mut blocks: Vec<String> = Vec::new();
     if !profile.is_empty() {
         blocks.push(profile.join("\n"));
     }
-    if !data.config.is_empty() || !data.final_entries.is_empty() {
+    if !data.config.is_empty() || !data.r#final.is_empty() {
         blocks.push(GUARD.to_string());
     }
     if !config.is_empty() {

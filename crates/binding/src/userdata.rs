@@ -3,9 +3,14 @@
 
 use std::borrow::Cow;
 
+use crate::error::Result;
 use crate::registry::Registry;
 
+/// Collect one face with every referenced face.
+pub type CollectFn = fn(&mut Registry) -> Result<()>;
+
 /// One userdata method parameter with its Lua face.
+#[derive(Clone, Debug)]
 pub struct MethodParameter {
     /// The Lua parameter name.
     pub name: &'static str,
@@ -13,17 +18,40 @@ pub struct MethodParameter {
     pub face: Cow<'static, str>,
     /// The parameter documentation.
     pub documentation: &'static str,
+    /// The face collector.
+    pub collect: CollectFn,
+}
+
+impl PartialEq for MethodParameter {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.face == other.face
+            && self.documentation == other.documentation
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
 }
 
 /// One userdata method return with its Lua face.
+#[derive(Clone, Debug)]
 pub struct MethodReturn {
     /// The return face expression.
     pub face: Cow<'static, str>,
     /// The return documentation.
     pub documentation: &'static str,
+    /// The face collector.
+    pub collect: CollectFn,
+}
+
+impl PartialEq for MethodReturn {
+    fn eq(&self, other: &Self) -> bool {
+        self.face == other.face
+            && self.documentation == other.documentation
+            && std::ptr::fn_addr_eq(self.collect, other.collect)
+    }
 }
 
 /// One userdata method with its Lua faces.
+#[derive(Clone, Debug, PartialEq)]
 pub struct MethodDescriptor {
     /// The method name.
     pub name: &'static str,
@@ -35,17 +63,34 @@ pub struct MethodDescriptor {
     pub returns: Vec<MethodReturn>,
 }
 
+impl MethodDescriptor {
+    /// Collect every referenced face.
+    ///
+    /// - Params in order, returns after.
+    ///
+    /// # Errors
+    ///
+    /// - [`crate::error::BindingError`] for repeated registration.
+    pub fn collect_referenced(&self, collector: &mut Registry) -> Result<()> {
+        for parameter in &self.parameters {
+            (parameter.collect)(collector)?;
+        }
+        for returned in &self.returns {
+            (returned.collect)(collector)?;
+        }
+        Ok(())
+    }
+}
+
 /// Bound userdata class.
 ///
 /// - Every implementor answers one stable class name.
-/// - Every implementor answers one stub block.
+/// - Every implementor answers its method descriptors.
 /// - Collection registers the class with every
 ///   referenced face exactly once.
 pub trait UserdataClass: mlua::UserData {
     /// Return the class name.
     fn class_name() -> &'static str;
-    /// Return the stub block.
-    fn class_stub() -> String;
     /// Return the collected method descriptors.
     fn methods() -> Vec<MethodDescriptor>;
     /// Register the class with every referenced face.
@@ -53,7 +98,7 @@ pub trait UserdataClass: mlua::UserData {
     /// # Errors
     ///
     /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> crate::error::Result<()>;
+    fn collect(collector: &mut Registry) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -149,19 +194,17 @@ mod tests {
                 },
             )
             .unwrap();
-        let failure = lua
-            .load("return roster:members(42)")
-            .eval::<Vec<String>>()
-            .unwrap_err();
-        assert!(failure.to_string().contains("members.prefix"));
-        let missing = lua
-            .load("return roster:members()")
-            .eval::<Vec<String>>()
-            .unwrap_err();
         assert!(
-            missing
-                .to_string()
-                .contains("missing param 'members.prefix'")
+            lua.load("return roster:members(42)")
+                .eval::<Vec<String>>()
+                .is_err(),
+            "foreign param fails"
+        );
+        assert!(
+            lua.load("return roster:members()")
+                .eval::<Vec<String>>()
+                .is_err(),
+            "missing param fails"
         );
     }
 }

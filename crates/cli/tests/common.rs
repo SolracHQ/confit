@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use confit_cli::sinks::Sinks;
+use confit_driver::fs::create_parent;
 use confit_store::{StoreRoots, Stores};
 
 /// Build stores over one temp dir with silent progress.
@@ -28,7 +29,7 @@ pub fn test_sinks() -> Sinks {
 
 /// Write one file with parent folders first.
 pub fn seed_file(path: &Path, text: &[u8]) {
-    confit_driver::fs::create_parent(path).unwrap();
+    create_parent(path).unwrap();
     std::fs::write(path, text).unwrap();
 }
 

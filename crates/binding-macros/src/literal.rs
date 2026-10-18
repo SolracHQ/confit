@@ -5,22 +5,20 @@ use proc_macro2::TokenStream as Tokens;
 use quote::quote;
 use syn::{Attribute, Fields};
 
-use super::parse::{ContainerKind, doc_lines, kind_tokens, parse_variant_flags};
+use super::parse::{doc_lines, parse_variant_flags};
 
 /// Build the derive expansion for one string enum.
 pub(crate) fn expand_string_enum(
     name: &syn::Ident,
     data: &syn::DataEnum,
     attrs: &[Attribute],
-    kind: ContainerKind,
     validate: &Option<syn::Path>,
     rename: &Option<String>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
     let display = rename.clone().unwrap_or_else(|| outer.clone());
     let type_docs = doc_lines(attrs).join(" ");
-    let marker = kind_tokens(kind);
-    let mut descriptors = Vec::new();
+    let mut arms = Vec::new();
     let mut literals = Vec::new();
     let mut lowers = Vec::new();
     let mut idents = Vec::new();
@@ -33,7 +31,8 @@ pub(crate) fn expand_string_enum(
             ));
         }
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
-        if flags.tag.is_some() || !flags.probe.is_empty() {
+        if flags.tag.is_some() || !flags.probe.is_empty() || flags.skip_decode || flags.skip_encode
+        {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
                 format!("{outer}.{variant_name}: string faces take rename alone"),
@@ -44,11 +43,14 @@ pub(crate) fn expand_string_enum(
         let lowered = literal.to_lowercase();
         let docs = doc_lines(&variant.attrs).join(" ");
         let ident = variant.ident.clone();
-        descriptors.push(quote! {
-            ::confit_binding::face::VariantDescriptor {
+        arms.push(quote! {
+            ::confit_binding::face::UnionArm {
                 name: stringify!(#ident),
                 documentation: #docs,
                 face: ::std::borrow::Cow::Borrowed(#quoted),
+                fields: ::std::vec::Vec::new(),
+                collect: ::confit_binding::face::no_collect,
+                skipped: false,
             }
         });
         literals.push(literal);
@@ -107,22 +109,20 @@ pub(crate) fn expand_string_enum(
                 #display.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_alias(
-                    #display,
-                    #type_docs,
-                    &[#(#descriptors),*],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                #marker
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Union {
+                    documentation: #type_docs,
+                    arms: ::std::vec![#(#arms),*],
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                collector.register(Self::face_name(), Self::face_stub());
+                let data = Self::face();
+                if collector.register(Self::face_name(), &data) {
+                    data.collect_referenced(collector)?;
+                }
                 ::std::result::Result::Ok(())
             }
         }
@@ -159,4 +159,39 @@ pub(crate) fn expand_string_enum(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand(source: &str) -> String {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Enum(data) = &input.data else {
+            panic!("want enum input");
+        };
+        expand_string_enum(&input.ident, data, &input.attrs, &None, &None)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn literal_arms_emit_methods() {
+        let expanded = expand(
+            r#"
+            #[face(table, string)]
+            pub enum Shade {
+                /// Dark tone.
+                Dark,
+                /// Light tone.
+                Light,
+            }
+            "#,
+        );
+        assert!(expanded.contains("register"));
+        assert!(expanded.contains("collect_referenced"));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("UnionArm"));
+        assert!(expanded.contains("no_collect"));
+    }
 }

@@ -15,7 +15,7 @@ use confit_cli::error::CliError;
 const SUGAR_MAIN: &str = r#"
 local sugar = require("plugins._.sugar")
 return {
-    documents = { [sugar.home(".confit-probe")] = sugar.rc() },
+    documents = { sugar.rc(sugar.home(".confit-probe")) },
     configs = {},
 }
 "#;
@@ -26,7 +26,7 @@ return {
     configs = {
         {
             name = "alt",
-            documents = { [{ base = "home", relative = "alt-note" }] = { text = "alt" } },
+            documents = { { path = { base = "home", relative = "alt-note" }, text = "alt" } },
         },
     },
 }

@@ -95,9 +95,10 @@ pub(crate) fn expand_struct_table(
     let mut descriptors = Vec::new();
     let mut decodes = Vec::new();
     let mut encodes = Vec::new();
-    let mut members = Vec::new();
+    let mut extras = Vec::new();
     let mut idents = Vec::new();
     let mut keys: Vec<String> = Vec::new();
+    let mut flat: Option<(syn::Ident, Type)> = None;
     for field in fields {
         let Some(ident) = field.ident.clone() else {
             return Err(syn::Error::new_spanned(
@@ -108,6 +109,25 @@ pub(crate) fn expand_struct_table(
         let field_name = ident.unraw().to_string();
         let flags = parse_field_flags(&outer, &field_name, &field.attrs)?;
         let ty = &field.ty;
+        if flags.flatten {
+            if flat.is_some() {
+                return Err(syn::Error::new_spanned(
+                    &field.ident,
+                    format!("{outer}.{field_name}: structs hold one flattened field at most"),
+                ));
+            }
+            if is_option(ty) {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    format!(
+                        "{outer}.{field_name}: face option 'flatten' expected plain \
+                         types alone"
+                    ),
+                ));
+            }
+            flat = Some((ident, ty.clone()));
+            continue;
+        }
         if flags.ignore {
             decodes.push(quote! {
                 let #ident: #ty = <#ty as ::std::default::Default>::default();
@@ -146,7 +166,7 @@ pub(crate) fn expand_struct_table(
             return Err(syn::Error::new_spanned(
                 ty,
                 format!(
-                    "{outer}.{field_name}: face option 'default' reads plain \
+                    "{outer}.{field_name}: face option 'default' expected plain \
                      types alone"
                 ),
             ));
@@ -156,7 +176,7 @@ pub(crate) fn expand_struct_table(
                 return Err(syn::Error::new_spanned(
                     &field.ident,
                     format!(
-                        "{outer}.{field_name}: sibling decode_hook reads the table \
+                        "{outer}.{field_name}: sibling decode_hook expected the table \
                          alone with no key options"
                     ),
                 ));
@@ -177,7 +197,7 @@ pub(crate) fn expand_struct_table(
                     }
                 })?;
             });
-            members.push(quote! {
+            extras.push(quote! {
                 <#ty as ::confit_binding::face::Face>::collect(collector)?;
             });
             idents.push(ident);
@@ -277,6 +297,7 @@ pub(crate) fn expand_struct_table(
                             ),
                         ),
                         optional: true,
+                        collect: <#ty as ::confit_binding::face::Face>::collect,
                     }
                 });
                 decodes.push(quote! {
@@ -297,6 +318,7 @@ pub(crate) fn expand_struct_table(
                             <#ty as ::confit_binding::face::Face>::face_name(),
                         ),
                         optional: false,
+                        collect: <#ty as ::confit_binding::face::Face>::collect,
                     }
                 });
                 decodes.push(quote! {
@@ -314,10 +336,6 @@ pub(crate) fn expand_struct_table(
                     let #ident: #ty = #decode_map;
                 });
             }
-            members.push(quote! {
-                <#key_ty as ::confit_binding::face::Face>::collect(collector)?;
-                <#value_ty as ::confit_binding::face::Face>::collect(collector)?;
-            });
             encodes.push(quote! {
                 table.set(
                     #lua_key,
@@ -354,6 +372,7 @@ pub(crate) fn expand_struct_table(
                         ),
                     ),
                     optional: true,
+                    collect: <#face_tokens as ::confit_binding::face::Face>::collect,
                 }
             });
         } else {
@@ -366,6 +385,7 @@ pub(crate) fn expand_struct_table(
                         <#face_tokens as ::confit_binding::face::Face>::face_name(),
                     ),
                     optional: #marked,
+                    collect: <#face_tokens as ::confit_binding::face::Face>::collect,
                 }
             });
         }
@@ -475,9 +495,6 @@ pub(crate) fn expand_struct_table(
                         })?;
             });
         }
-        members.push(quote! {
-            <#face_tokens as ::confit_binding::face::Face>::collect(collector)?;
-        });
         if let Some(hook) = flags.encode_hook.as_ref() {
             encodes.push(quote! {
                 table.set(#lua_key, #hook(lua, &self.#ident)?)?;
@@ -496,44 +513,84 @@ pub(crate) fn expand_struct_table(
         }
     }
     let epilogue = validate_epilogue(&outer, validate);
-    Ok(quote! {
-        impl ::confit_binding::face::Face for #name {
-            fn face_name() -> ::std::string::String {
-                #display.to_owned()
-            }
-
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_class(
-                    #display,
-                    #struct_docs,
-                    &[#(#descriptors),*],
+    let decode_impl = match flat.as_ref() {
+        Some((binding, shape)) => {
+            decodes.push(quote! {
+                let mut through: ::std::vec::Vec<&str> = ignored.to_vec();
+                through.extend([#(#keys),*]);
+                let #binding: #shape = <#shape as ::confit_binding::value::Decode>::decode_ignored(
+                    &::mlua::Value::Table(table.clone()),
+                    lua,
+                    &through,
                 )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                ::confit_binding::face::FaceKind::Table
-            }
-
-            fn collect(
-                collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(#members)*
+                .map_err(|error| ::confit_binding::value::Mismatch {
+                    path: ::std::format!("{}: {}", #outer, error.path),
+                    want: error.want,
+                    found: error.found,
+                })?;
+            });
+            let flat_want = format!("{outer}: flattened face encodes a table");
+            encodes.push(quote! {
+                match <#shape as ::confit_binding::value::Encode>::encode(
+                    &self.#binding,
+                    lua,
+                )? {
+                    ::mlua::Value::Table(inner) => {
+                        for pair in inner.pairs::<::mlua::Value, ::mlua::Value>() {
+                            let (key, item) = pair?;
+                            table.set(key, item)?;
+                        }
+                    }
+                    ::mlua::Value::Nil => {}
+                    _ => {
+                        return ::std::result::Result::Err(::mlua::Error::RuntimeError(
+                            #flat_want.to_owned(),
+                        ));
+                    }
                 }
-                ::std::result::Result::Ok(())
+            });
+            quote! {
+                fn decode(
+                    value: &::mlua::Value,
+                    lua: &::mlua::Lua,
+                ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+                    Self::decode_ignored(value, lua, &[])
+                }
+
+                fn decode_ignored(
+                    value: &::mlua::Value,
+                    lua: &::mlua::Lua,
+                    ignored: &[&str],
+                ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+                    let table = ::confit_binding::value::table_value(value, stringify!(#name))?;
+                    #(#decodes)*
+                    let result = Self {
+                        #(#idents,)*
+                        #binding
+                    };
+                    #epilogue
+                }
             }
         }
-
-        impl ::confit_binding::value::Decode for #name {
+        None => quote! {
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
             ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+                Self::decode_ignored(value, lua, &[])
+            }
+
+            fn decode_ignored(
+                value: &::mlua::Value,
+                lua: &::mlua::Lua,
+                ignored: &[&str],
+            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
                 let table = ::confit_binding::value::table_value(value, stringify!(#name))?;
-                ::confit_binding::value::check_keys(
+                ::confit_binding::value::check_keys_ignored(
                     &table,
                     stringify!(#name),
                     &[#(#keys),*],
+                    ignored,
                 )?;
                 #(#decodes)*
                 let result = Self {
@@ -541,6 +598,53 @@ pub(crate) fn expand_struct_table(
                 };
                 #epilogue
             }
+        },
+    };
+    let collect_body = match flat.as_ref() {
+        Some((_, shape)) => quote! {
+            let holder = Self::face();
+            let inner = <#shape as ::confit_binding::face::Face>::face();
+            if ::confit_binding::stub::register_crossed(
+                collector,
+                #display,
+                &holder,
+                &inner,
+            )? {
+                holder.collect_referenced(collector)?;
+                #(#extras)*
+            }
+        },
+        None => quote! {
+            let data = Self::face();
+            if collector.register(Self::face_name(), &data) {
+                data.collect_referenced(collector)?;
+                #(#extras)*
+            }
+        },
+    };
+    Ok(quote! {
+        impl ::confit_binding::face::Face for #name {
+            fn face_name() -> ::std::string::String {
+                #display.to_owned()
+            }
+
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Class {
+                    documentation: #struct_docs,
+                    fields: ::std::vec![#(#descriptors),*],
+                }
+            }
+
+            fn collect(
+                collector: &mut ::confit_binding::registry::Registry,
+            ) -> ::confit_binding::error::Result<()> {
+                #collect_body
+                ::std::result::Result::Ok(())
+            }
+        }
+
+        impl ::confit_binding::value::Decode for #name {
+            #decode_impl
         }
 
         impl ::confit_binding::value::Encode for #name {
@@ -598,12 +702,10 @@ pub(crate) fn expand_struct_userdata(
                 #display.to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_class(#display, #struct_docs, &[])
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                ::confit_binding::face::FaceKind::Userdata
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Userdata {
+                    documentation: #struct_docs,
+                }
             }
 
             fn collect(
@@ -651,4 +753,108 @@ pub(crate) fn expand_struct_userdata(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand(source: &str) -> String {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Struct(data) = &input.data else {
+            panic!("want struct input");
+        };
+        expand_struct_table(&input.ident, data, &input.attrs, &None, &None)
+            .unwrap()
+            .to_string()
+    }
+
+    fn reject(source: &str) {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Struct(data) = &input.data else {
+            panic!("want struct input");
+        };
+        assert!(
+            expand_struct_table(&input.ident, data, &input.attrs, &None, &None).is_err(),
+            "foreign shape fails the build"
+        );
+    }
+
+    #[test]
+    fn plain_struct_threads_the_ignored_list() {
+        let expanded = expand(
+            r#"
+            #[face(table)]
+            pub struct Holder {
+                /// The kept field.
+                kept: String,
+            }
+            "#,
+        );
+        assert!(expanded.contains("decode_ignored"));
+        assert!(expanded.contains("check_keys_ignored"));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("FaceData :: Class"));
+    }
+
+    #[test]
+    fn flattened_struct_merges_the_inner_table() {
+        let expanded = expand(
+            r#"
+            #[face(table)]
+            pub struct Holder {
+                /// The outer field.
+                path: String,
+                /// The flattened body.
+                #[face(flatten)]
+                body: Inner,
+            }
+            "#,
+        );
+        assert!(expanded.contains("decode_ignored"));
+        assert!(expanded.contains("register_crossed"));
+        assert!(expanded.contains("collect_referenced"));
+        assert!(!expanded.contains("collector . collect"));
+        assert!(expanded.contains("flattened face encodes a table"));
+        assert!(!expanded.contains("check_keys("));
+        assert!(expanded.contains("face"));
+        assert!(expanded.contains("FaceData :: Class"));
+    }
+
+    #[test]
+    fn foreign_flattens_fail_the_build() {
+        for option in ["optional", "default", "rename = \"body\""] {
+            reject(&format!(
+                r#"
+                #[face(table)]
+                pub struct Holder {{
+                    path: String,
+                    #[face(flatten, {option})]
+                    body: Inner,
+                }}
+                "#,
+            ));
+        }
+        reject(
+            r#"
+            #[face(table)]
+            pub struct Holder {
+                #[face(flatten)]
+                first: First,
+                #[face(flatten)]
+                second: Second,
+            }
+            "#,
+        );
+        reject(
+            r#"
+            #[face(table)]
+            pub struct Holder {
+                path: String,
+                #[face(flatten)]
+                body: Option<Inner>,
+            }
+            "#,
+        );
+    }
 }

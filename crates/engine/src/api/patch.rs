@@ -1,30 +1,66 @@
 //! Patches
 //! Patch declarations over routes with callbacks.
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Lua, Table, Value};
 
 use confit_binding::callback::Callback;
 use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
 use serde::{Deserialize, Serialize};
 
-use confit_model::document::StructuredFormat;
+use confit_model::document::{RcData, StructuredDocument, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Face for patch apply callbacks.
+/// Live structured document under patching.
+///
+/// - Path stays fixed through patch callbacks.
+/// - Body holds one structured format with data.
+#[derive(Debug, Clone, PartialEq, Eq, Face)]
+#[face(table, rename = "Document_Structured")]
+pub struct StructuredLiveDocument {
+    /// The destination route. Patches never change it.
+    pub path: Route,
+    /// The structured body under patching.
+    #[face(flatten)]
+    pub body: StructuredDocument,
+}
+
+/// Live rc document under patching.
+///
+/// - Path stays fixed through patch callbacks.
+/// - Body holds profile with config and final sections.
+#[derive(Debug, Clone, PartialEq, Eq, Face)]
+#[face(table, rename = "Document_Rc")]
+pub struct RcLiveDocument {
+    /// The destination route. Patches never change it.
+    pub path: Route,
+    /// The rc body under patching.
+    #[face(flatten)]
+    pub body: RcData,
+}
+
+/// Patch structured data in place.
 #[allow(dead_code)]
 #[derive(Face)]
 #[face(callback_shape)]
-pub struct ApplyArgs {
-    /// Target route of the patched document.
-    route: Table,
-    /// Current document under patching.
+pub struct StructuredApplyArgs {
+    /// Live structured document under patching.
     #[face(live)]
-    document: Table,
+    document: StructuredLiveDocument,
 }
 
-/// Face for hook patch callbacks.
+/// Patch rc sections in place.
+#[allow(dead_code)]
+#[derive(Face)]
+#[face(callback_shape)]
+pub struct RcApplyArgs {
+    /// Live rc document under patching.
+    #[face(live)]
+    document: RcLiveDocument,
+}
+
+/// Run one hook patch.
 #[allow(dead_code)]
 #[derive(Face)]
 #[face(callback_shape)]
@@ -37,10 +73,10 @@ pub struct HookArgs {
 /// Face for patch filter callbacks.
 #[allow(dead_code)]
 #[derive(Face)]
-#[face(callback_shape)]
+#[face(callback_shape, returns = bool)]
 pub struct FilterArgs {
     /// Target route of the candidate document.
-    route: Table,
+    route: Route,
 }
 
 /// Patch merge level.
@@ -116,11 +152,11 @@ pub struct StructuredPatch {
     /// The patch target route.
     pub target: Option<Route>,
     /// The patch filter callback.
-    pub filter: Option<Function>,
+    pub filter: Option<Callback<FilterArgs>>,
     /// The structured format under patching.
     pub format: StructuredFormat,
-    /// The patch callback over current data.
-    pub apply: Function,
+    /// The patch callback over the live document.
+    pub apply: Callback<StructuredApplyArgs>,
     /// The patch merge level. Higher levels apply first.
     #[face(default)]
     pub priority: Level,
@@ -133,9 +169,9 @@ pub struct RcPatch {
     /// The patch target route.
     pub target: Option<Route>,
     /// The patch filter callback.
-    pub filter: Option<Function>,
-    /// The patch callback over current sections.
-    pub apply: Function,
+    pub filter: Option<Callback<FilterArgs>>,
+    /// The patch callback over the live document.
+    pub apply: Callback<RcApplyArgs>,
     /// The patch merge level. Higher levels apply first.
     #[face(default)]
     pub priority: Level,
@@ -203,11 +239,11 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, Mismatch>
 /// - [`Mismatch`] for missing and doubled destinations.
 pub fn join_destination(
     target: Option<Route>,
-    filter: Option<Function>,
+    filter: Option<Callback<FilterArgs>>,
 ) -> std::result::Result<PatchTarget, Mismatch> {
     match (target, filter) {
         (Some(route), None) => Ok(PatchTarget::Target(route)),
-        (None, Some(filter)) => Ok(PatchTarget::Filter(Callback::new(filter))),
+        (None, Some(filter)) => Ok(PatchTarget::Filter(filter)),
         (Some(_), Some(_)) => Err(Mismatch {
             path: "patch target".to_owned(),
             want: "either 'target' or 'filter'".to_owned(),
@@ -246,6 +282,52 @@ fn reject_rc_destination(patch: &RcPatch) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_binding::face::Face;
+    use confit_binding::registry::Registry;
+
+    #[test]
+    fn filter_stubs_show_boolean_returns_while_apply_stays_bare() {
+        let mut collector = Registry::new();
+        StructuredPatch::collect(&mut collector).unwrap();
+        RcPatch::collect(&mut collector).unwrap();
+        HookPatch::collect(&mut collector).unwrap();
+        let text = collector.stub_text();
+        assert!(
+            text.contains("fun(route: Route): boolean"),
+            "filter shows bool: {text}"
+        );
+        for holder in ["StructuredPatch", "RcPatch"] {
+            assert!(
+                text.contains("@field filter (fun(route: Route): boolean)?"),
+                "filter field shows bool: {text}"
+            );
+            let method = format!("function {holder}.filter(route) end");
+            assert!(text.contains(&method), "filter method stays: {text}");
+        }
+        for block in text.split("\n\n") {
+            if block.contains(".filter(route)") {
+                assert!(
+                    block.contains("@return boolean"),
+                    "filter returns bool: {block}"
+                );
+            }
+            if block.contains(".apply(") {
+                assert!(!block.contains("@return"), "apply stays bare: {block}");
+            }
+        }
+        assert!(
+            text.contains("@field apply fun(document: Document_Structured)"),
+            "structured apply stays bare: {text}"
+        );
+        assert!(
+            text.contains("@field apply fun(document: Document_Rc)"),
+            "rc apply stays bare: {text}"
+        );
+        assert!(
+            text.contains("@field apply fun(hook: Hook)"),
+            "hook apply stays bare: {text}"
+        );
+    }
 
     #[test]
     fn levels_parse_all_names_in_any_case() {

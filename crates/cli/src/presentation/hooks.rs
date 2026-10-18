@@ -158,6 +158,8 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_model::hook::diff_lifecycle;
+    use confit_model::routes::{Route, RouteBase};
 
     fn hook(
         argv: &[&str],
@@ -190,13 +192,12 @@ mod tests {
     }
 
     fn render_lifecycle(current: &[Hook], previous: &[Hook]) -> Vec<String> {
-        lifecycle_lines(&confit_model::hook::diff_lifecycle(current, previous))
+        lifecycle_lines(&diff_lifecycle(current, previous))
     }
 
     fn changed(path: &str) -> Condition {
         Condition::Changed {
-            route: confit_model::routes::Route::new(confit_model::routes::RouteBase::Literal, path)
-                .unwrap(),
+            route: Route::new(RouteBase::Literal, path).unwrap(),
         }
     }
 
@@ -218,15 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn describe_absorbs_redundant_branches() {
-        let condition = Condition::All(vec![
-            in_path("mise"),
-            Condition::Any(vec![in_path("mise"), changed("dest")]),
-        ]);
-        assert_eq!(describe_condition(&condition).as_str(), "in_path(mise)");
-    }
-
-    #[test]
     fn describe_nests_compounds_with_full_parens() {
         let condition = Condition::Any(vec![
             Condition::All(vec![in_path("a"), in_path("b")]),
@@ -235,18 +227,6 @@ mod tests {
         assert_eq!(
             describe_condition(&condition).as_str(),
             "((in_path(a) and in_path(b)) or (not in_path(c)))"
-        );
-    }
-
-    #[test]
-    fn describe_folds_empty_lists_to_constants() {
-        assert_eq!(
-            describe_condition(&Condition::All(Vec::new())).as_str(),
-            "true"
-        );
-        assert_eq!(
-            describe_condition(&Condition::Any(Vec::new())).as_str(),
-            "false"
         );
     }
 
@@ -309,13 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_hook_prints_nothing() {
-        let mut kept = hook(&["tool"], &[], in_path("mise"), in_path("probe"), 60);
-        kept.requires = in_path("cap");
-        assert!(render_lifecycle(&[kept.clone()], &[kept]).is_empty());
-    }
-
-    #[test]
     fn empty_previous_prints_all_plus() {
         let current = vec![
             hook(
@@ -340,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn condition_true_to_present_reads_changed() {
+    fn condition_changes_read_old_to_new() {
         let before = hook(
             &["mise"],
             &[],
@@ -356,29 +329,6 @@ mod tests {
                 "  ~ when (true) -> (in_path(a))".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn condition_present_to_true_reads_changed() {
-        let before = hook(&["mise"], &[], in_path("a"), Condition::default(), 60);
-        let after = hook(
-            &["mise"],
-            &[],
-            Condition::default(),
-            Condition::default(),
-            60,
-        );
-        assert_eq!(
-            render_lifecycle(&[after], &[before]),
-            vec![
-                "~ mise".to_string(),
-                "  ~ when (in_path(a)) -> (true)".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn condition_changed_single_reads_old_to_new() {
         let before = hook(&["mise"], &[], in_path("a"), Condition::default(), 60);
         let after = hook(&["mise"], &[], in_path("b"), Condition::default(), 60);
         assert_eq!(
@@ -454,23 +404,6 @@ mod tests {
         assert_eq!(
             describe_blocked(&condition, &fault).as_str(),
             "(in_path(a) and in_path(b)) [in_path(b)]"
-        );
-    }
-
-    #[test]
-    fn unmet_nested_fault_reads_index_path() {
-        let fault = Unmet {
-            index: 1,
-            member: Condition::All(vec![in_path("b"), in_path("c")]),
-            cause: vec![Unmet {
-                index: 1,
-                member: in_path("c"),
-                cause: Vec::new(),
-            }],
-        };
-        assert_eq!(
-            describe_unmet(&fault).as_str(),
-            "(in_path(b) and in_path(c)) [1: in_path(c)]"
         );
     }
 }

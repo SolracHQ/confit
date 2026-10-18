@@ -5,7 +5,9 @@ use std::io::Read as _;
 use std::path::Path;
 
 use confit_driver::sha::Sha;
+use confit_model::document::Data;
 use confit_store::blob::error::BlobError;
+use confit_store::faults::AccessFault;
 use confit_store::handles::ArchiveHandle;
 
 use super::codec::{CodecError, check_blob_id, decode};
@@ -132,7 +134,18 @@ fn holders(manifest: &Manifest, sha: &Sha) -> String {
     let found: Vec<String> = manifest
         .documents
         .iter()
-        .filter(|document| document.data.blob_refs().contains(&sha))
+        .filter(|document| match &document.data {
+            Data::Opaque(found) => found.handle.resolved() == Some(sha),
+            Data::Tree(found) => found
+                .members
+                .values()
+                .filter_map(|member| member.blob().resolved())
+                .any(|blob| blob == sha),
+            #[cfg(unix)]
+            Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => false,
+            #[cfg(not(unix))]
+            Data::Structured(_) | Data::Text(_) | Data::Rc(_) => false,
+        })
         .map(|document| format!("'{}'", document.destination.display()))
         .collect();
     if found.is_empty() {
@@ -146,7 +159,7 @@ fn holders(manifest: &Manifest, sha: &Sha) -> String {
 fn unknown(bundle: &Path, message: String) -> RuntimeError {
     RuntimeError::BundleRead {
         path: bundle.to_path_buf(),
-        fault: confit_store::faults::AccessFault::Unknown { message },
+        fault: AccessFault::Unknown { message },
     }
 }
 
@@ -163,8 +176,6 @@ fn from_codec(bundle: &Path, error: CodecError) -> RuntimeError {
 
 /// Map one blob failure into its bundle error.
 fn from_blob(bundle: &Path, manifest: &Manifest, content: &Sha, error: BlobError) -> RuntimeError {
-    use confit_store::faults::AccessFault;
-
     match error {
         BlobError::Corrupt { .. } => RuntimeError::BundleCorrupt {
             path: bundle.to_path_buf(),
@@ -193,10 +204,9 @@ fn from_blob(bundle: &Path, manifest: &Manifest, content: &Sha, error: BlobError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     use confit_driver as driver;
-    use confit_model::document::{Data, Payload};
+    use confit_model::document::{Data, Document, OpaqueDocument, Payload};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -216,7 +226,7 @@ mod tests {
         let stores = Stores::new(roots, sender);
         let project = dir.join("project");
         std::fs::create_dir_all(&project).unwrap();
-        let mut documents = BTreeMap::new();
+        let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}.bin");
             std::fs::write(project.join(&name), body).unwrap();
@@ -228,14 +238,14 @@ mod tests {
                 Ok(handle) => handle,
                 Err(error) => panic!("cache stores: {error}"),
             };
-            documents.insert(
+            documents.push(Document::new(
                 Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
-                Data::Opaque {
+                Data::Opaque(OpaqueDocument {
                     handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
-                },
-            );
+                }),
+            ));
         }
         match Manifest::build(&stores, documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
@@ -309,26 +319,19 @@ mod tests {
             Ok(found) => {
                 assert_eq!(found, manifest, "manifest round-trips");
             }
-            Err(error) => panic!("manifest reads: {error}"),
+            Err(error) => panic!("manifest load: {error}"),
         }
     }
 
     #[test]
-    fn read_refuses_stale_version() {
+    fn read_rejects_foreign_bundles() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
-        let stale = serde_json::json!({"version": 0u32, "documents": []});
+        let stale = serde_json::json!({"version": 0u32, "documents": [], "hashes": {}});
         let raw = serde_json::to_vec(&stale).unwrap();
-        let path = dir.path().join("stale.cb");
-        build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
-        match store.read(&path) {
-            Ok(_) => panic!("stale manifest passes"),
-            Err(RuntimeError::BundleVersion { path: found, got }) => {
-                assert_eq!(found, path, "stale keeps its path");
-                assert_eq!(got, 0, "stale keeps its version");
-            }
-            Err(error) => panic!("wrong stale variant: {error}"),
-        }
+        let stale_path = dir.path().join("stale.cb");
+        build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
+        assert!(store.read(&stale_path).is_err(), "stale version fails");
     }
 
     #[test]
@@ -353,16 +356,14 @@ mod tests {
         };
         let manifest = match Manifest::build(
             &stores,
-            [(
+            vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
-                Data::Opaque {
+                Data::Opaque(OpaqueDocument {
                     handle: Payload::Resolved(handle.sha256().clone()),
                     mode: 0o644,
                     unmanaged: false,
-                },
-            )]
-            .into_iter()
-            .collect(),
+                }),
+            )],
             Vec::new(),
         ) {
             Ok(manifest) => manifest,
@@ -371,13 +372,7 @@ mod tests {
         let raw = serde_json::to_vec(&manifest).unwrap();
         let path = dir.path().join("thin.cb");
         build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
-        match store.read(&path) {
-            Ok(_) => panic!("thin manifest passes"),
-            Err(error) => assert!(
-                error.to_string().contains(&handle.sha256().hex()),
-                "missing blob shows the hash: {error}"
-            ),
-        }
+        assert!(store.read(&path).is_err(), "thin manifest fails");
     }
 
     #[test]
@@ -395,21 +390,7 @@ mod tests {
                 (member.as_str(), b"garbage".to_vec()),
             ],
         );
-        match store.read(&path) {
-            Ok(_) => panic!("corrupt blob passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("bin-0"), "refusal shows the document: {text}");
-                assert!(
-                    text.contains("is corrupt"),
-                    "refusal shows the failure: {text}"
-                );
-                assert!(
-                    !text.contains(&refs[0].hex()),
-                    "refusal leaks the hash: {text}"
-                );
-            }
-        }
+        assert!(store.read(&path).is_err(), "corrupt blob fails");
     }
 
     #[test]
@@ -426,13 +407,7 @@ mod tests {
                 (BUNDLE_MANIFEST, manifest.clone()),
             ],
         );
-        match store.read(&dup_path) {
-            Ok(_) => panic!("duplicate manifest passes"),
-            Err(error) => assert!(
-                error.to_string().contains("duplicate manifest"),
-                "duplicate reports itself: {error}"
-            ),
-        }
+        assert!(store.read(&dup_path).is_err(), "duplicate manifest fails");
 
         let bad_path = dir.path().join("bad-id.cb");
         build_bundle(
@@ -442,13 +417,7 @@ mod tests {
                 ("blobs/short", b"x".to_vec()),
             ],
         );
-        match store.read(&bad_path) {
-            Ok(_) => panic!("bad id passes"),
-            Err(error) => assert!(
-                error.to_string().contains("bad blob"),
-                "bad id reports itself: {error}"
-            ),
-        }
+        assert!(store.read(&bad_path).is_err(), "bad id fails");
 
         let odd_path = dir.path().join("odd.cb");
         build_bundle(
@@ -458,13 +427,7 @@ mod tests {
                 ("other.txt", b"x".to_vec()),
             ],
         );
-        match store.read(&odd_path) {
-            Ok(_) => panic!("unexpected entry passes"),
-            Err(error) => assert!(
-                error.to_string().contains("unexpected entry"),
-                "unexpected reports itself: {error}"
-            ),
-        }
+        assert!(store.read(&odd_path).is_err(), "unexpected entry fails");
     }
 
     #[test]

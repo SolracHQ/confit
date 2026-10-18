@@ -3,15 +3,11 @@
 
 use std::collections::HashMap;
 
-use mlua::{Lua, Value};
-
-use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
 
 use super::patch::Patch;
-use confit_model::document::Data;
+use confit_model::document::Document;
 use confit_model::hook::Hook;
-use confit_model::routes::Route;
 
 /// One decoded config.
 #[derive(Debug, Clone, Default, Face)]
@@ -19,9 +15,9 @@ use confit_model::routes::Route;
 pub struct Config {
     /// The config name.
     pub name: String,
-    /// Documents keyed by destination route.
-    #[face(default, key_convert = decode_document_key)]
-    pub documents: HashMap<Route, Data>,
+    /// Documents in declaration order with destination paths.
+    #[face(default)]
+    pub documents: Vec<Document>,
     /// Patches in profile return order.
     #[face(default)]
     pub patches: Vec<Patch>,
@@ -37,7 +33,7 @@ impl Config {
     /// Build one config from its name with documents, patches, hooks, and requirements.
     pub fn new(
         name: String,
-        documents: HashMap<Route, Data>,
+        documents: Vec<Document>,
         patches: Vec<Patch>,
         hooks: Vec<Hook>,
         requirements: HashMap<String, String>,
@@ -50,24 +46,4 @@ impl Config {
             requirements,
         }
     }
-}
-
-/// Decode one documents key.
-///
-/// # Returns
-///
-/// - Return the destination route.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for values outside route tables and relative paths.
-pub(crate) fn decode_document_key(
-    lua: &Lua,
-    value: &Value,
-) -> std::result::Result<Route, Mismatch> {
-    Route::decode(value, lua).map_err(|error| Mismatch {
-        path: "document destination".to_owned(),
-        want: error.want,
-        found: error.found,
-    })
 }

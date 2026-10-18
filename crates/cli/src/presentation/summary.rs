@@ -2,16 +2,15 @@
 //! Stderr summary over built bundles.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, DocumentKind, RcEntry};
-use confit_model::hook::HookLifecycle;
-use confit_model::render::inline_bytes;
+use confit_model::document::{Data, RcEntry, tree_changed};
+use confit_model::hook::{HookLifecycle, diff_lifecycle};
 use confit_model::routes::Route;
-use confit_runtime::Difference;
 use confit_runtime::manifest::{Document, DocumentStatus, Manifest, summary};
+use confit_runtime::{Difference, Prepared, render_document};
 
 use crate::presentation::difference::{difference_lines, flatten_table, leaf_changes, leaf_text};
 use crate::presentation::hooks::lifecycle_lines;
@@ -182,7 +181,11 @@ impl Summary<'_> {
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
-            let status = document.status(&self.previous.documents);
+            let status = document.status(
+                &self.previous.documents,
+                &self.built.hashes,
+                &self.previous.hashes,
+            );
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
             }
@@ -211,7 +214,12 @@ impl Summary<'_> {
                 "Documents: {adds} to add, {changes} to change, 0 to destroy."
             ));
         } else {
-            let counts = summary(&self.built.documents, &self.previous.documents);
+            let counts = summary(
+                &self.built.documents,
+                &self.built.hashes,
+                &self.previous.documents,
+                &self.previous.hashes,
+            );
             out.push(format!(
                 "Documents: {} to add, {} to change, {} to destroy.",
                 counts.create, counts.update, counts.delete
@@ -284,7 +292,11 @@ impl Summary<'_> {
 
     /// Render entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
-        match document.status(&self.previous.documents) {
+        match document.status(
+            &self.previous.documents,
+            &self.built.hashes,
+            &self.previous.hashes,
+        ) {
             DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  {} {body}", Sigil::Add.mark())))
@@ -351,10 +363,10 @@ impl Summary<'_> {
                 let key = recorded.key();
                 let (kind, path) = split_key(&key);
                 match &recorded.data {
-                    Data::Tree { members } => format!(
+                    Data::Tree(found) => format!(
                         "{} {path}: {kind} ({} files)",
                         Sigil::Remove.mark(),
-                        members.len()
+                        found.members.len()
                     ),
                     _ => format!("{} {path}: {kind}", Sigil::Remove.mark()),
                 }
@@ -381,9 +393,8 @@ impl Summary<'_> {
 }
 
 /// Render one prepared bundle as its stderr summary.
-pub fn render_prepared(prepared: &confit_runtime::Prepared) -> String {
-    let lifecycle =
-        confit_model::hook::diff_lifecycle(&prepared.desired.hooks, &prepared.previous.hooks);
+pub fn render_prepared(prepared: &Prepared) -> String {
+    let lifecycle = diff_lifecycle(&prepared.desired.hooks, &prepared.previous.hooks);
     Summary {
         built: &prepared.desired,
         previous: &prepared.previous,
@@ -399,8 +410,21 @@ pub fn render_prepared(prepared: &confit_runtime::Prepared) -> String {
 /// Return the display label for one document.
 fn doc_label(document: &Document) -> Cow<'_, str> {
     match &document.data {
-        Data::Structured { format, .. } => Cow::Borrowed(format.name()),
-        _ => Cow::Borrowed(document.data.kind().name()),
+        Data::Structured(found) => Cow::Borrowed(found.format.name()),
+        _ => Cow::Borrowed(kind_name(&document.data)),
+    }
+}
+
+/// Return the kind name for one payload.
+fn kind_name(data: &Data) -> &'static str {
+    match data {
+        Data::Structured(_) => "structured",
+        Data::Text(_) => "text",
+        #[cfg(unix)]
+        Data::Link(_) => "link",
+        Data::Rc(_) => "rc",
+        Data::Opaque(_) => "opaque",
+        Data::Tree(_) => "tree",
     }
 }
 
@@ -459,7 +483,7 @@ fn first_run_entries<'a>(
     differences: &'a [Difference],
     document: &Document,
 ) -> Vec<&'a Difference> {
-    let is_tree = document.data.tree_members().is_some();
+    let is_tree = matches!(document.data, Data::Tree(_));
     differences
         .iter()
         .filter(|entry| {
@@ -493,7 +517,7 @@ fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     {
         return true;
     }
-    if document.data.tree_members().is_some() {
+    if matches!(document.data, Data::Tree(_)) {
         return entries
             .iter()
             .all(|entry| matches!(entry, Difference::Missing { .. }));
@@ -510,7 +534,8 @@ fn first_run_updates(
     document: &Document,
     entries: &[&Difference],
 ) -> Vec<String> {
-    if let Some(members) = document.data.tree_members() {
+    if let Data::Tree(found) = &document.data {
+        let members = &found.members;
         let mut rels = BTreeSet::new();
         for entry in entries {
             rels.insert(member_rel(document, entry));
@@ -625,23 +650,26 @@ fn named_text(entry: &RcEntry) -> String {
 /// Collect plain entry bodies for one document.
 fn entry_bodies(document: &Document) -> Vec<String> {
     match &document.data {
-        Data::Structured { data, .. } => flatten_table(data)
+        Data::Structured(found) => flatten_table(&found.data)
             .into_iter()
             .map(|(key, value)| format!("{key} = {}", leaf_text(&value)))
             .collect(),
-        Data::Text { content, .. } => {
-            if content.is_empty() {
+        Data::Text(found) => {
+            if found.content.is_empty() {
                 Vec::new()
             } else {
-                content.split('\n').map(str::to_string).collect()
+                found.content.split('\n').map(str::to_string).collect()
             }
         }
         #[cfg(unix)]
-        Data::Link { target } => vec![target.display()],
-        Data::Opaque { handle: blob, .. } => {
-            vec![format!("opaque {}", opaque_ref_label(blob.sha256()))]
+        Data::Link(found) => vec![found.target.display()],
+        Data::Opaque(found) => {
+            vec![format!(
+                "opaque {}",
+                opaque_ref_label(found.handle.sha256())
+            )]
         }
-        Data::Tree { members } => vec![format!("tree ({} files)", members.len())],
+        Data::Tree(found) => vec![format!("tree ({} files)", found.members.len())],
         Data::Rc(rc) => {
             let mut out = Vec::new();
             for entry in rc.profile.iter().chain(rc.config.iter()) {
@@ -652,7 +680,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
                     _ => out.push(init_text(entry)),
                 }
             }
-            for (index, entry) in rc.final_entries.iter().enumerate() {
+            for (index, entry) in rc.r#final.iter().enumerate() {
                 match entry {
                     RcEntry::Env { .. } | RcEntry::Path { .. } | RcEntry::Alias { .. } => {
                         out.push(named_text(entry));
@@ -667,8 +695,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
 
 /// Report whether the opaque kind is on either side.
 fn touches_opaque(first: &Document, second: &Document) -> bool {
-    matches!(first.data.kind(), DocumentKind::Opaque)
-        || matches!(second.data.kind(), DocumentKind::Opaque)
+    matches!(first.data, Data::Opaque(_)) || matches!(second.data, Data::Opaque(_))
 }
 
 /// Render the hash label for one opaque ref.
@@ -679,12 +706,12 @@ fn opaque_ref_label(sha: &Sha) -> String {
 /// Collect update lines with old to new values.
 fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     match (&document.data, &recorded.data) {
-        (Data::Structured { data: new, .. }, Data::Structured { data: old, .. }) => {
-            structured_update_lines(painter, new, old)
+        (Data::Structured(new), Data::Structured(old)) => {
+            structured_update_lines(painter, &new.data, &old.data)
         }
         #[cfg(unix)]
-        (Data::Link { target: new }, Data::Link { target: old }) => {
-            if old == new {
+        (Data::Link(new), Data::Link(old)) => {
+            if old.target == new.target {
                 Vec::new()
             } else {
                 vec![painter.paint(
@@ -692,21 +719,14 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     &format!(
                         "  {} target = {} -> {}",
                         Sigil::Update.mark(),
-                        old.display(),
-                        new.display()
+                        old.target.display(),
+                        new.target.display()
                     ),
                 )]
             }
         }
-        (
-            Data::Opaque {
-                handle: new_blob, ..
-            },
-            Data::Opaque {
-                handle: old_blob, ..
-            },
-        ) => {
-            if old_blob == new_blob {
+        (Data::Opaque(new), Data::Opaque(old)) => {
+            if old.handle == new.handle {
                 Vec::new()
             } else {
                 vec![painter.paint(
@@ -714,20 +734,20 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     &format!(
                         "  {} content = {} -> {}",
                         Sigil::Update.mark(),
-                        opaque_ref_label(old_blob.sha256()),
-                        opaque_ref_label(new_blob.sha256())
+                        opaque_ref_label(old.handle.sha256()),
+                        opaque_ref_label(new.handle.sha256())
                     ),
                 )]
             }
         }
-        (Data::Tree { members: new }, Data::Tree { members: old }) => {
-            let changed = confit_model::document::tree_changed(old, new);
+        (Data::Tree(new), Data::Tree(old)) => {
+            let changed = tree_changed(&old.members, &new.members);
             vec![painter.paint(
                 Sigil::Update,
                 &format!(
                     "  {} tree ({changed} of {} files changed)",
                     Sigil::Update.mark(),
-                    new.len()
+                    new.members.len()
                 ),
             )]
         }
@@ -738,8 +758,8 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                 &format!(
                     "  {} kind = {} -> {}",
                     Sigil::Update.mark(),
-                    recorded.data.kind().name(),
-                    document.data.kind().name()
+                    kind_name(&recorded.data),
+                    kind_name(&document.data)
                 ),
             )];
             out.extend(update_fallback(painter, document));
@@ -772,11 +792,11 @@ fn recorded_diff(old: &str, new: &str) -> String {
 /// Render one rc update as a recorded to desired text diff with desired-body
 /// fallback.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
-    let old_bytes = match inline_bytes(&recorded.data) {
+    let old_bytes = match render_document(recorded) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
-    let new_bytes = match inline_bytes(&document.data) {
+    let new_bytes = match render_document(document) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
@@ -797,11 +817,11 @@ fn split_key(key: &str) -> (&str, &str) {
     }
 }
 
-/// Collect structured leaf changes with old to new values.
+/// Collect structured leaf changes with old to new maps.
 fn structured_update_lines(
     painter: &Painter,
-    new: &serde_json::Value,
-    old: &serde_json::Value,
+    new: &BTreeMap<String, serde_json::Value>,
+    old: &BTreeMap<String, serde_json::Value>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for change in leaf_changes(old, new) {
@@ -855,8 +875,10 @@ mod tests {
 
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
+    use confit_model::document::{TreeDocument, TreeMember};
     use confit_model::hook::Hook;
     use confit_runtime::manifest::Manifest;
+    use confit_store::{StoreRoots, Stores};
 
     fn probe_hook() -> Hook {
         Hook {
@@ -881,18 +903,17 @@ mod tests {
         let mut members = BTreeMap::new();
         members.insert(
             "a.ttf".to_owned(),
-            confit_model::document::TreeMember::Full {
+            TreeMember::Full {
                 handle: Payload::Resolved(blob),
                 mode: 0o644,
             },
         );
         let document = Document {
             destination: dest.clone(),
-            data: Data::Tree { members },
-            data_hash: String::new(),
+            data: Data::Tree(TreeDocument { members }),
         };
         let member_path = dest.join("a.ttf");
-        let differences = vec![confit_runtime::Difference::Missing { path: member_path }];
+        let differences = vec![Difference::Missing { path: member_path }];
         let entries = first_run_entries(&differences, &document);
         assert_eq!(entries.len(), 1, "tree members group under destinations");
         assert_eq!(
@@ -905,9 +926,9 @@ mod tests {
     #[test]
     fn preview_renders_missing_binaries_without_resolving() {
         let (sender, _) = crossbeam_channel::unbounded();
-        let stores = confit_store::Stores::new(confit_store::StoreRoots::default(), sender);
-        let desired = Manifest::build(&stores, BTreeMap::new(), vec![probe_hook()]).unwrap();
-        let prepared = confit_runtime::Prepared {
+        let stores = Stores::new(StoreRoots::default(), sender);
+        let desired = Manifest::build(&stores, Vec::new(), vec![probe_hook()]).unwrap();
+        let prepared = Prepared {
             desired,
             previous: Manifest::empty(),
             differences: Vec::new(),

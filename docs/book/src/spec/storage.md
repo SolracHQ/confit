@@ -84,11 +84,11 @@ first, then retry as bundles, so renamed bundles still load.
 
 ### Versioning
 
-`BUNDLE_VERSION` reads 7. A slot load probes the version first
+`BUNDLE_VERSION` reads 8. A slot load probes the version first
 through the raw value. Mismatches fail before parsing:
 
 ```
-state version {v} reads unsupported, want 7
+state version {v} reads unsupported, want 8
 ```
 
 Missing versions fail showing the file:
@@ -100,7 +100,7 @@ read state '{file}': missing manifest version
 Bundle reads apply the same check:
 
 ```
-bundle version {v} reads unsupported, want 7
+bundle version {v} reads unsupported, want 8
 ```
 
 The manifest shape refuses unknown fields. Document, member,

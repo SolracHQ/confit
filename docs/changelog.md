@@ -62,7 +62,7 @@
   calls return handles with `text`, `load`, `archive` and
   `sha` verbs. Bytes load on call. Text files open through
   `text` alone, structured files open through `load`
-  alone. Absent reads return nil with reason.
+  alone. Absent Load returns nil with reason.
 - Changed opaque documents to blob refs with hashes.
   Bytes stream on write. Plan labels show hashes alone.
 - Changed blob payloads to seal at build. Decoded handles
@@ -151,7 +151,7 @@ Design spec: `docs/design/v0.8.md`.
 
 ### Added
 
-- `confit.runtime.changed(path)` reads true while the preview for
+- `confit.runtime.changed(path)` shows true while the preview for
   `path` is anything but already-in-place, true on first runs. Hooks
   carrying it skip quiet applies and run touching ones. Unknown paths
   fail the plan naming the path, rc guards refuse the shape. The mise
@@ -208,7 +208,7 @@ Design spec: `docs/design/v0.7.md`.
   version, so a rust toolchain declares its components
   beside its version. Omitted `options` keeps the bare
   version string.
-- Bundle nouns land. `Plan` reads `Bundle`, manifests,
+- Bundle nouns land. `Plan` shows `Bundle`, manifests,
   members and history entries carry their names, summaries
   report `Bundle:`, tree members hold `relative`. One runtime
   language. `Manifest` serves runtime, disk, `Bundle`
@@ -239,7 +239,7 @@ Design spec: `docs/design/v0.7.md`.
   printing the manifest. `delete @name` drops named
   slots and prunes orphaned pool bytes. Missing apply
   profiles fail naming the path.
-- `apply` reads its positional by shape now: `.lua` and
+- `apply` runs Load over its positional by shape now: `.lua` and
   extensionless paths evaluate a profile, `.cb` runs a bundle,
   `@name` runs a named slot, `%N` runs history newest-first
   from one. The `--plan` flag retires, `recover` retires with
@@ -292,7 +292,7 @@ Design spec: `docs/design/v0.7.md`.
 ### Changed
 
 - Doc examples are real doctests. Every `text` fence holding
-  Rust now reads `rust` and runs under `cargo test`. The pass
+  Rust now shows `rust` and runs under `cargo test`. The pass
   fixed drifted snippets, mostly the `mode` field on document
   data.
 
@@ -380,7 +380,7 @@ Design spec: `docs/design/v0.6.md`.
 
 ### Removed
 
-- The `--state` flag. Every run reads and writes the fixed
+- The `--state` flag. Load and writes serve every run through the fixed
   slot. Experiments point `--plan` at a rendered file,
   backups copy a plan file, sharing sends a plan file.
 
@@ -449,13 +449,13 @@ built, then superseded without sealing.
   `NORMAL`). The engine sorts and never interprets beyond order.
 - Plugin namespaces (`confit.plugin.{user}.{name}`), embedded
   `solrachq` defaults (mise, merge, template) in external shape,
-  lazy loading, note-and-skip collisions, reads jailed to the
+  lazy loading, note-and-skip collisions, Load jailed to the
   project root.
 - Rc sections as position and guard: any entry in any section,
   profile always runs, guard splits the rest, declaration order
   inside sections. One `RcOp`/`RcEntry` model replaces the four
   entry structs.
-- Plan format version 2. Version 1 covered artifacts and reads
+- Plan format version 2. Version 1 covered artifacts and shows
   incompatible.
 - `Filesystem` trait and `MemoryFs` fake in the cli crate. Tests
   run on memory and never touch home folders.
@@ -488,10 +488,10 @@ built, then superseded without sealing.
 - `render` module: pure data-to-bytes rendering for every artifact kind.
   Rc files render env, aliases, and init blocks in per-tool
   `# >>> confit:<tool>` sections; tables serialize fixed-order;
-  templates render via minijinja with root-relative `src` reads;
+  templates render via minijinja with root-relative `src` Load;
   rendered bytes hash with SHA-256.
 - `confit.resources` (`load_toml`/`load_json`/`load_yaml` root-relative
-  reads, `merge` with `shallow`/`list_append` opts) and
+  Load, `merge` with `shallow`/`list_append` opts) and
   `confit.artifact` constructors and `tool:append_artifact`, folded
   into the plan by `(kind, path)`; proven by
   `examples/1-structured_resource` (structured loads, merge) and

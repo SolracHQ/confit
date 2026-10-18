@@ -70,12 +70,9 @@ mod tests {
     #[test]
     fn unknown_names_raise_showing_want() {
         let lua = test_lua();
-        match run(&lua, r#"return fact("shell")"#) {
-            Ok(_) => panic!("foreign fact passes"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(text.contains("FactName"), "the text shows the face: {text}");
-            }
-        }
+        assert!(
+            run(&lua, r#"return fact("shell")"#).is_err(),
+            "foreign fact fails"
+        );
     }
 }

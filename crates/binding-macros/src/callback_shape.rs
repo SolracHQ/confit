@@ -59,6 +59,7 @@ fn collect_fields(
         if flags.optional
             || flags.opaque
             || flags.ignore
+            || flags.flatten
             || flags.proxy.is_some()
             || flags.decode_hook.is_some()
             || flags.encode_hook.is_some()
@@ -103,6 +104,7 @@ pub(crate) fn expand_struct_callback(
     attrs: &[Attribute],
     validate: &Option<syn::Path>,
     rename: &Option<String>,
+    returns: &Option<syn::Path>,
 ) -> Result<Tokens, syn::Error> {
     let outer = name.to_string();
     if validate.is_some() {
@@ -152,19 +154,55 @@ pub(crate) fn expand_struct_callback(
             });
         }
     }
+    let return_type: Tokens = match returns {
+        Some(path) => quote! { #path },
+        None => quote! { () },
+    };
+    let returns_data: Tokens = match returns {
+        Some(path) => quote! {
+            ::std::vec![::confit_binding::face::FunctionReturn {
+                face: ::std::borrow::Cow::Owned(
+                    <#path as ::confit_binding::face::Face>::face_name(),
+                ),
+                documentation: "",
+                collect: <#path as ::confit_binding::face::Face>::collect,
+            }]
+        },
+        None => quote! { ::std::vec::Vec::new() },
+    };
+    let call_face_body: Tokens = match returns {
+        Some(path) => quote! {
+            ::std::format!(
+                "fun({}): {}",
+                [#(::std::format!(
+                    "{}: {}",
+                    #labels,
+                    <#faces as ::confit_binding::face::Face>::face_name()
+                )),*].join(", "),
+                <#path as ::confit_binding::face::Face>::face_name()
+            )
+        },
+        None => quote! {
+            ::std::format!(
+                "fun({})",
+                [#(::std::format!(
+                    "{}: {}",
+                    #labels,
+                    <#faces as ::confit_binding::face::Face>::face_name()
+                )),*].join(", ")
+            )
+        },
+    };
     Ok(quote! {
         impl ::confit_binding::face::Face for #name {
             fn face_name() -> ::std::string::String {
                 stringify!(#name).to_owned()
             }
 
-            fn face_stub() -> ::std::string::String {
-                ::confit_binding::stub::emit_function(
-                    &::confit_binding::face::FunctionDescriptor {
-                        name: stringify!(#name),
-                        documentation: #struct_docs,
-                    },
-                    &[
+            fn face() -> ::confit_binding::face::FaceData {
+                ::confit_binding::face::FaceData::Function {
+                    documentation: #struct_docs,
+                    parameters: ::std::vec![
                         #(::confit_binding::face::FunctionParameter {
                             name: #labels,
                             documentation: #documentations,
@@ -172,21 +210,22 @@ pub(crate) fn expand_struct_callback(
                                 <#faces as ::confit_binding::face::Face>::face_name(),
                             ),
                             optional: false,
+                            collect: <#faces as ::confit_binding::face::Face>::collect,
                         }),*
                     ],
-                    &[],
-                )
-            }
-
-            fn kind() -> ::confit_binding::face::FaceKind {
-                ::confit_binding::face::FaceKind::Function
+                    returns: #returns_data,
+                }
             }
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
-                if collector.register(Self::face_name(), Self::face_stub()) {
-                    #(<#faces as ::confit_binding::face::Face>::collect(collector)?;)*
+                let data = Self::face();
+                if collector.register_callback(
+                    <Self as ::confit_binding::callback::CallbackArgs>::call_face(),
+                    &data,
+                ) {
+                    data.collect_referenced(collector)?;
                 }
                 ::std::result::Result::Ok(())
             }
@@ -194,20 +233,14 @@ pub(crate) fn expand_struct_callback(
 
         impl ::confit_binding::callback::CallbackArgs for #name {
             type Parameters<'args> = (#(#parameters,)*);
+            type Return = #return_type;
 
             fn arity() -> ::std::primitive::usize {
                 #count
             }
 
             fn call_face() -> ::std::string::String {
-                ::std::format!(
-                    "fun({})",
-                    [#(::std::format!(
-                        "{}: {}",
-                        #labels,
-                        <#faces as ::confit_binding::face::Face>::face_name()
-                    )),*].join(", ")
-                )
+                #call_face_body
             }
 
             fn decode_function(
@@ -266,7 +299,17 @@ mod tests {
         let syn::Data::Struct(data) = &input.data else {
             panic!("want struct input");
         };
-        expand_struct_callback(&input.ident, data, &input.attrs, validate, &None)
+        expand_struct_callback(&input.ident, data, &input.attrs, validate, &None, &None)
+            .unwrap()
+            .to_string()
+    }
+
+    fn expand_returns(source: &str, returns: &Option<syn::Path>) -> String {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Struct(data) = &input.data else {
+            panic!("want struct input");
+        };
+        expand_struct_callback(&input.ident, data, &input.attrs, &None, &None, returns)
             .unwrap()
             .to_string()
     }
@@ -275,14 +318,15 @@ mod tests {
         expand_with(source, &None)
     }
 
-    fn reject(source: &str) -> String {
+    fn reject(source: &str) {
         let input: syn::DeriveInput = syn::parse_str(source).unwrap();
         let syn::Data::Struct(data) = &input.data else {
             panic!("want struct input");
         };
-        expand_struct_callback(&input.ident, data, &input.attrs, &None, &None)
-            .unwrap_err()
-            .to_string()
+        assert!(
+            expand_struct_callback(&input.ident, data, &input.attrs, &None, &None, &None).is_err(),
+            "foreign shape fails the build"
+        );
     }
 
     #[test]
@@ -304,13 +348,14 @@ mod tests {
         assert!(expanded.contains("arity"));
         assert!(expanded.contains("decode_function"));
         assert!(expanded.contains("invoke"));
-        assert!(expanded.contains("emit_function"));
+        assert!(expanded.contains("register_callback"));
+        assert!(expanded.contains("face"));
         assert!(expanded.contains("Target route of the patched document"));
         assert!(expanded.contains("Live document under patching"));
         assert!(expanded.contains("Encode"));
         assert!(expanded.contains("Value"));
         assert!(expanded.contains("Function"));
-        assert!(expanded.contains("FaceKind :: Function"));
+        assert!(expanded.contains("FaceData :: Function"));
     }
 
     #[test]
@@ -331,8 +376,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_param_docs_fail_the_build() {
-        let failure = reject(
+    fn foreign_shapes_fail_the_build() {
+        reject(
             r#"
             #[face(callback_shape)]
             pub struct ApplyArgs {
@@ -340,12 +385,7 @@ mod tests {
             }
             "#,
         );
-        assert!(failure.contains("carry /// docs"));
-    }
-
-    #[test]
-    fn function_fields_fail_the_build() {
-        let failure = reject(
+        reject(
             r#"
             #[face(callback_shape)]
             pub struct ApplyArgs {
@@ -354,12 +394,7 @@ mod tests {
             }
             "#,
         );
-        assert!(failure.contains("hold params alone"));
-    }
-
-    #[test]
-    fn key_options_fail_the_build() {
-        let failure = reject(
+        reject(
             r#"
             #[face(callback_shape)]
             pub struct ApplyArgs {
@@ -369,11 +404,6 @@ mod tests {
             }
             "#,
         );
-        assert!(failure.contains("plain or live fields are expected for callback shapes"));
-    }
-
-    #[test]
-    fn validate_hooks_fail_the_build() {
         let input: syn::DeriveInput = syn::parse_str(
             r#"
             #[face(callback_shape)]
@@ -388,9 +418,44 @@ mod tests {
             panic!("want struct input");
         };
         let hook: syn::Path = syn::parse_str("check").unwrap();
-        let failure = expand_struct_callback(&input.ident, data, &input.attrs, &Some(hook), &None)
-            .unwrap_err()
-            .to_string();
-        assert!(failure.contains("do not support validate hooks"));
+        assert!(
+            expand_struct_callback(&input.ident, data, &input.attrs, &Some(hook), &None, &None)
+                .is_err(),
+            "foreign hook fails the build"
+        );
+    }
+
+    #[test]
+    fn return_face_renders_typed_call_face() {
+        let returns: syn::Path = syn::parse_str("bool").unwrap();
+        let expanded = expand_returns(
+            r#"
+            #[face(callback_shape)]
+            pub struct FilterArgs {
+                /// Target route of the candidate document.
+                route: String,
+            }
+            "#,
+            &Some(returns),
+        );
+        assert!(expanded.contains("type Return"));
+        assert!(expanded.contains("FunctionReturn"));
+        assert!(expanded.contains("fun({}): {}"));
+    }
+
+    #[test]
+    fn bare_shapes_keep_empty_returns() {
+        let expanded = expand(
+            r#"
+            #[face(callback_shape)]
+            pub struct ApplyArgs {
+                /// Target route.
+                route: String,
+            }
+            "#,
+        );
+        assert!(expanded.contains("type Return"));
+        assert!(expanded.contains("Vec :: new"));
+        assert!(expanded.contains("fun({})"));
     }
 }

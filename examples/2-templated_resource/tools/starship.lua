@@ -23,6 +23,6 @@ return function(opts)
 			},
 		},
 	})
-	config.documents = { [STARSHIP_TOML] = { text = rendered } }
+	config.documents = { { path = STARSHIP_TOML, text = rendered } }
 	return config
 end

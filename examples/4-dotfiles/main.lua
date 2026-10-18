@@ -13,7 +13,7 @@ local fonts = require("tools.fonts")
 return {
 	configs = { installer, bat, eza, ripgrep, zoxide, starship, shell, fonts },
 	documents = {
-		[sugar.home(".bashrc")] = sugar.rc(),
-		[sugar.home(".zshrc")] = sugar.rc(),
+		sugar.rc(sugar.home(".bashrc")),
+		sugar.rc(sugar.home(".zshrc")),
 	},
 }

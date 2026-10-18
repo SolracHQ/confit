@@ -12,10 +12,10 @@ return {
 	patches = {
 		{
 			filter = is_shell,
-			---@param data RcData Live shell sections under patching.
-			apply = function(_, data)
-				table.insert(data.config, sugar.alias("ll", "ls -l"))
-				table.insert(data.config, sugar.alias("la", "ll -a"))
+			---@param document Document_Rc Live shell document under patching.
+			apply = function(document)
+				table.insert(document.config, sugar.alias("ll", "ls -l"))
+				table.insert(document.config, sugar.alias("la", "ll -a"))
 			end,
 		},
 	},

@@ -60,17 +60,16 @@ function mise.init(version)
 		installer = {
 			name = INSTALLER_NAME,
 			documents = {
-				[MISE_TOML] = { format = "toml", data = { tools = {} } },
-				[MISE_BIN] = { handle = release.binary(resolved), mode = "755" },
+				{ path = MISE_TOML, format = "toml", data = { tools = {} } },
+				{ path = MISE_BIN, handle = release.binary(resolved), mode = "755" },
 			},
 			patches = {
 				{
 					filter = rc_lib.is_shell,
-					---@param route Route Shell route under reading.
-					---@param data RcData Live shell sections under patching.
-					apply = function(route, data)
-						table.insert(data.profile, { path = { name = "PATH", dir = MISE_BINDIR } })
-						table.insert(data.profile, { eval = { argv = { "mise", "activate", rc_lib.shell_of(route) } } })
+					---@param document Document_Rc Live shell document under patching.
+					apply = function(document)
+						table.insert(document.profile, { path = { name = "PATH", dir = MISE_BINDIR } })
+						table.insert(document.profile, { eval = { argv = { "mise", "activate", rc_lib.shell_of(document.path) } } })
 					end,
 				},
 			},
@@ -90,14 +89,14 @@ local function fold_patch(name, version, options)
 	return {
 		target = MISE_TOML,
 		format = "toml",
-		---@param data Document_Structured Live TOML document under patching.
-		apply = function(_, data)
+		---@param document Document_Structured Live TOML document under patching.
+		apply = function(document)
 			if not options then
-				data.data.tools[name] = version
+				document.data.tools[name] = version
 			else
 				local entry = tab.clone(options)
 				entry.version = version
-				data.data.tools[name] = entry
+				document.data.tools[name] = entry
 			end
 		end,
 	}

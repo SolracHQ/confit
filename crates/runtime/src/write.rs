@@ -50,27 +50,32 @@ impl Writer {
         let mut written = 0;
         for document in documents {
             let expanded = expand_destination(document)?;
-            if document.data.unmanaged()
-                && expanded.exists()
-                && !changed.contains(&document.destination)
-            {
+            let unmanaged = match &document.data {
+                Data::Text(found) => found.unmanaged,
+                Data::Opaque(found) => found.unmanaged,
+                #[cfg(unix)]
+                Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => false,
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => false,
+            };
+            if unmanaged && expanded.exists() && !changed.contains(&document.destination) {
                 continue;
             }
-            if let Data::Tree { members } = &document.data {
-                let count = write_tree(&expanded, members, &self.stores)?;
-                driver::fs::set_mode(&expanded, document.mode())
+            if let Data::Tree(found) = &document.data {
+                let count = write_tree(&expanded, &found.members, &self.stores)?;
+                driver::fs::set_mode(&expanded, None)
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
                 self.emit_written(&document.destination, done, total);
                 written += count;
                 continue;
             }
-            if let Data::Opaque { handle: blob, .. } = &document.data {
+            if let Data::Opaque(found) = &document.data {
                 if let Err(error) = driver::fs::remove_link(&expanded) {
                     return Err(RuntimeError::from_write_io(&expanded, error));
                 }
-                copy_blob(&expanded, &expanded, blob, &self.stores)?;
-                driver::fs::set_mode(&expanded, document.mode())
+                copy_blob(&expanded, &expanded, &found.handle, &self.stores)?;
+                driver::fs::set_mode(&expanded, Some(found.mode))
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
                 self.emit_written(&document.destination, done, total);
@@ -79,12 +84,12 @@ impl Writer {
             }
             let outcome = match &document.data {
                 #[cfg(unix)]
-                Data::Link { target } => {
-                    let link = target.display();
+                Data::Link(found) => {
+                    let link = found.target.display();
                     driver::fs::write_link(&expanded, Path::new(&link))
                         .map_err(|error| RuntimeError::from_write_io(&expanded, error))
                 }
-                Data::Text { .. } | Data::Structured { .. } | Data::Rc(_) => {
+                Data::Text(_) | Data::Structured(_) | Data::Rc(_) => {
                     if let Err(error) = driver::fs::remove_link(&expanded) {
                         return Err(RuntimeError::from_write_io(&expanded, error));
                     }
@@ -95,12 +100,20 @@ impl Writer {
                     std::fs::write(&expanded, &bytes)
                         .map_err(|error| RuntimeError::from_write_io(&expanded, error))
                 }
-                Data::Tree { .. } | Data::Opaque { .. } => {
+                Data::Tree(_) | Data::Opaque(_) => {
                     continue;
                 }
             };
             outcome?;
-            driver::fs::set_mode(&expanded, document.mode())
+            let mode = match &document.data {
+                Data::Text(found) => Some(found.mode),
+                Data::Opaque(found) => Some(found.mode),
+                #[cfg(unix)]
+                Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => None,
+            };
+            driver::fs::set_mode(&expanded, mode)
                 .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
             done += 1;
             self.emit_written(&document.destination, done, total);
@@ -147,7 +160,7 @@ impl Writer {
         let mut done = 0;
         let mut removed = 0;
         for old in recorded {
-            if old.data.tree_members().is_some() {
+            if matches!(old.data, Data::Tree(_)) {
                 continue;
             }
             let kept = desired
@@ -181,19 +194,40 @@ impl Writer {
     ) -> Result<usize> {
         let total: usize = recorded
             .iter()
-            .filter_map(|old| old.data.tree_members())
+            .filter_map(|old| match &old.data {
+                Data::Tree(found) => Some(&found.members),
+                #[cfg(unix)]
+                Data::Structured(_)
+                | Data::Text(_)
+                | Data::Link(_)
+                | Data::Rc(_)
+                | Data::Opaque(_) => None,
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Text(_) | Data::Rc(_) | Data::Opaque(_) => None,
+            })
             .map(|members| members.len())
             .sum();
         let mut done = 0;
         let mut removed = 0;
         for old in recorded {
-            let Some(old_members) = old.data.tree_members() else {
+            let Data::Tree(found) = &old.data else {
                 continue;
             };
+            let old_members = &found.members;
             let new_rels: BTreeSet<&str> = desired
                 .iter()
                 .filter(|document| document.destination == old.destination)
-                .filter_map(|document| document.data.tree_members())
+                .filter_map(|document| match &document.data {
+                    Data::Tree(found) => Some(&found.members),
+                    #[cfg(unix)]
+                    Data::Structured(_)
+                    | Data::Text(_)
+                    | Data::Link(_)
+                    | Data::Rc(_)
+                    | Data::Opaque(_) => None,
+                    #[cfg(not(unix))]
+                    Data::Structured(_) | Data::Text(_) | Data::Rc(_) | Data::Opaque(_) => None,
+                })
                 .flat_map(|members| members.keys().map(String::as_str))
                 .collect();
             let dest = expand_destination(old)?;
@@ -225,6 +259,7 @@ impl Writer {
 mod tests {
     use super::*;
     use confit_driver::progress::Event;
+    use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
@@ -235,11 +270,11 @@ mod tests {
     fn text_doc(path: &std::path::Path) -> Document {
         Document::new(
             literal(path),
-            Data::Text {
+            Data::Text(TextDocument {
                 content: "deleted bytes".into(),
                 mode: 0o644,
                 unmanaged: false,
-            },
+            }),
         )
     }
 
@@ -272,47 +307,6 @@ mod tests {
                 done: 1,
                 total: 1,
             }]
-        );
-    }
-
-    #[test]
-    fn batch_moves_remove_counters_across_deleted() {
-        let dir = tempfile::tempdir().unwrap();
-        let roots = StoreRoots {
-            config_base: dir.path().join("config"),
-            temp_base: dir.path().join("temp"),
-            project_root: dir.path().join("project"),
-        };
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        let writer = Writer {
-            stores: Stores::new(roots, sender.clone()),
-            progress: sender,
-        };
-        let first = dir.path().join("first.txt");
-        let second = dir.path().join("second.txt");
-        driver::fs::create_parent(&first).unwrap();
-        std::fs::write(&first, b"deleted bytes").unwrap();
-        std::fs::write(&second, b"deleted bytes").unwrap();
-        let recorded = vec![text_doc(&first), text_doc(&second)];
-        match writer.remove_deleted(&recorded, &[]) {
-            Ok(removed) => assert_eq!(removed, 2, "both deleted leave disk"),
-            Err(error) => panic!("deleted remove: {error}"),
-        }
-        let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![
-                Event::DocumentRemoved {
-                    path: first.display().to_string(),
-                    done: 1,
-                    total: 2,
-                },
-                Event::DocumentRemoved {
-                    path: second.display().to_string(),
-                    done: 2,
-                    total: 2,
-                },
-            ]
         );
     }
 

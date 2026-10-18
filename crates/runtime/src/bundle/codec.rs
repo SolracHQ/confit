@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn decode_refuses_stale_version_with_got() {
-        let raw = serde_json::json!({"version": 0u32, "documents": []});
+        let raw = serde_json::json!({"version": 0u32, "documents": [], "hashes": {}});
         let bytes = serde_json::to_vec(&raw).unwrap();
         match decode(&bytes) {
             Ok(_) => panic!("stale manifest passes"),

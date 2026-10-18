@@ -3,6 +3,12 @@
 
 use thiserror::Error;
 
+use confit_binding::error::BindingError;
+use confit_binding::value::Mismatch;
+use confit_model::error::Error as ModelError;
+use confit_store::blob::error::BlobError;
+use confit_store::fetch::error::FetchError;
+
 /// Optional hint suffix rendering on its own line.
 struct Hint<'a>(Option<&'a str>);
 
@@ -52,16 +58,16 @@ pub enum EngineError {
     },
     /// Blob failure.
     #[error(transparent)]
-    Blob(#[from] confit_store::blob::error::BlobError),
+    Blob(#[from] BlobError),
     /// Fetch failure.
     #[error(transparent)]
-    Fetch(#[from] confit_store::fetch::error::FetchError),
+    Fetch(#[from] FetchError),
     /// Binding failure.
     #[error(transparent)]
-    Binding(#[from] confit_binding::error::BindingError),
+    Binding(#[from] BindingError),
     /// Model failure.
     #[error(transparent)]
-    Model(#[from] confit_model::error::Error),
+    Model(#[from] ModelError),
     /// Repeated declaration.
     #[error("profile: document '{display}' is declared more than once")]
     Duplicate {
@@ -177,8 +183,8 @@ impl From<mlua::Error> for EngineError {
     }
 }
 
-impl From<confit_binding::value::Mismatch> for EngineError {
-    fn from(error: confit_binding::value::Mismatch) -> Self {
+impl From<Mismatch> for EngineError {
+    fn from(error: Mismatch) -> Self {
         Self::mismatch(error.path, error.want, error.found)
     }
 }

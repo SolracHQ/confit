@@ -27,6 +27,7 @@ pub(crate) fn descriptor_of(method: &MethodFace) -> Tokens {
                             <#elem as ::confit_binding::face::Face>::face_name(),
                         ),
                         documentation: #documentation,
+                        collect: <#elem as ::confit_binding::face::Face>::collect,
                     }
                 }
             })
@@ -39,6 +40,7 @@ pub(crate) fn descriptor_of(method: &MethodFace) -> Tokens {
                         <#returns as ::confit_binding::face::Face>::face_name(),
                     ),
                     documentation: #documentation,
+                    collect: <#returns as ::confit_binding::face::Face>::collect,
                 }
             }]
         }
@@ -55,6 +57,7 @@ pub(crate) fn descriptor_of(method: &MethodFace) -> Tokens {
                         <#types as ::confit_binding::face::Face>::face_name(),
                     ),
                     documentation: #param_docs,
+                    collect: <#types as ::confit_binding::face::Face>::collect,
                 }),*
             ],
             returns: vec![#(#returns),*],
@@ -109,9 +112,9 @@ pub(crate) fn method_of(method: &MethodFace) -> Tokens {
             let indices = tuple_indices(returns);
             quote! {
                 let outcome: #returns = this.#ident(#(#call_inputs,)*)?;
-                let mut __face_returns = ::mlua::MultiValue::new();
-                #(__face_returns.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
-                ::std::result::Result::Ok(__face_returns)
+                let mut __call_values = ::mlua::MultiValue::new();
+                #(__call_values.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
+                ::std::result::Result::Ok(__call_values)
             }
         }
         (Some(returns), true) => quote! {
@@ -122,9 +125,9 @@ pub(crate) fn method_of(method: &MethodFace) -> Tokens {
             let indices = tuple_indices(returns);
             quote! {
                 let outcome: #returns = this.#ident(#(#call_inputs,)*);
-                let mut __face_returns = ::mlua::MultiValue::new();
-                #(__face_returns.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
-                ::std::result::Result::Ok(__face_returns)
+                let mut __call_values = ::mlua::MultiValue::new();
+                #(__call_values.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
+                ::std::result::Result::Ok(__call_values)
             }
         }
         (Some(returns), false) => quote! {
@@ -201,9 +204,9 @@ pub(crate) fn static_function_of(method: &StaticFace) -> Tokens {
             let indices = tuple_indices(returns);
             quote! {
                 let outcome: #returns = Self::#ident(#(#call_inputs,)*)?;
-                let mut __face_returns = ::mlua::MultiValue::new();
-                #(__face_returns.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
-                ::std::result::Result::Ok(__face_returns)
+                let mut __call_values = ::mlua::MultiValue::new();
+                #(__call_values.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
+                ::std::result::Result::Ok(__call_values)
             }
         }
         (Some(returns), true) => quote! {
@@ -214,9 +217,9 @@ pub(crate) fn static_function_of(method: &StaticFace) -> Tokens {
             let indices = tuple_indices(returns);
             quote! {
                 let outcome: #returns = Self::#ident(#(#call_inputs,)*);
-                let mut __face_returns = ::mlua::MultiValue::new();
-                #(__face_returns.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
-                ::std::result::Result::Ok(__face_returns)
+                let mut __call_values = ::mlua::MultiValue::new();
+                #(__call_values.push_back(::confit_binding::value::Encode::encode(&outcome.#indices, lua)?);)*
+                ::std::result::Result::Ok(__call_values)
             }
         }
         (Some(returns), false) => quote! {
@@ -262,6 +265,7 @@ pub(crate) fn static_stub_block(method: &StaticFace) -> Tokens {
                             <#elem as ::confit_binding::face::Face>::face_name(),
                         ),
                         documentation: #documentation,
+                        collect: <#elem as ::confit_binding::face::Face>::collect,
                     }
                 }
             })
@@ -274,20 +278,17 @@ pub(crate) fn static_stub_block(method: &StaticFace) -> Tokens {
                         <#returns as ::confit_binding::face::Face>::face_name(),
                     ),
                     documentation: #documentation,
+                    collect: <#returns as ::confit_binding::face::Face>::collect,
                 }
             }]
         }
         None => Vec::new(),
     };
-    let return_collects = collect_return_tokens(&method.returns);
     quote! {
         {
-            let __face_stub = ::confit_binding::stub::emit_function(
-                &::confit_binding::face::FunctionDescriptor {
-                    name: #name,
-                    documentation: #docs,
-                },
-                &[
+            let data = ::confit_binding::face::FaceData::Function {
+                documentation: #docs,
+                parameters: ::std::vec![
                     #(::confit_binding::face::FunctionParameter {
                         name: #labels,
                         face: ::std::borrow::Cow::Owned(
@@ -295,35 +296,16 @@ pub(crate) fn static_stub_block(method: &StaticFace) -> Tokens {
                         ),
                         documentation: #param_docs,
                         optional: #optionals,
+                        collect: <#types as ::confit_binding::face::Face>::collect,
                     }),*
                 ],
-                &[
+                returns: ::std::vec![
                     #(#return_faces),*
                 ],
-            );
-            if collector.register(#name.to_owned(), __face_stub) {
-                #(<#types as ::confit_binding::face::Face>::collect(collector)?;)*
-                #(#return_collects)*
+            };
+            if collector.register_function(#name, &data) {
+                data.collect_referenced(collector)?;
             }
         }
-    }
-}
-
-/// Build the face collection for one return shape.
-fn collect_return_tokens(returns: &Option<Type>) -> Vec<Tokens> {
-    match returns {
-        None => Vec::new(),
-        Some(Type::Tuple(tuple)) => tuple
-            .elems
-            .iter()
-            .map(|elem| {
-                quote! {
-                    <#elem as ::confit_binding::face::Face>::collect(collector)?;
-                }
-            })
-            .collect(),
-        Some(single) => vec![quote! {
-            <#single as ::confit_binding::face::Face>::collect(collector)?;
-        }],
     }
 }

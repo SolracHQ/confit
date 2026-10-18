@@ -1,10 +1,9 @@
-//! Collect profile documents keyed by destination route.
+//! Collect profile documents in destination order.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::api::profile::Profile;
-use confit_model::document::Data;
-use confit_model::routes::Route;
+use confit_model::document::Document;
 
 use crate::error::{EngineError, Result};
 
@@ -54,27 +53,29 @@ pub(super) fn check_requirements(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-/// Collect one profile's documents keyed by destination route.
+/// Collect one profile's documents in destination order.
 ///
 /// - Profile documents join first, config documents follow in order.
 ///
 /// # Errors
 ///
 /// - [`EngineError::Duplicate`] for repeated destinations.
-pub(super) fn dedupe(profile: &Profile) -> Result<BTreeMap<Route, Data>> {
-    let mut placed = BTreeMap::new();
-    for (destination, body) in &profile.documents {
-        placed.insert(destination.clone(), body.clone());
-    }
-    for config in &profile.configs {
-        for (destination, body) in &config.documents {
-            if placed.contains_key(destination) {
-                return Err(EngineError::Duplicate {
-                    display: destination.display(),
-                });
-            }
-            placed.insert(destination.clone(), body.clone());
+pub(super) fn dedupe(profile: &Profile) -> Result<Vec<Document>> {
+    let mut seen = BTreeSet::new();
+    let mut placed = Vec::new();
+    for document in profile.documents.iter().chain(
+        profile
+            .configs
+            .iter()
+            .flat_map(|config| config.documents.iter()),
+    ) {
+        if !seen.insert(document.path.clone()) {
+            return Err(EngineError::Duplicate {
+                display: document.path.display(),
+            });
         }
+        placed.push(document.clone());
     }
+    placed.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(placed)
 }

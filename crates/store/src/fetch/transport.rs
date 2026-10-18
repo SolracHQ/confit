@@ -3,6 +3,7 @@
 use std::io::Read;
 
 use confit_driver::http::HttpError;
+use confit_driver::http::download as http_download;
 
 use super::error::{FetchError, Result};
 
@@ -18,7 +19,7 @@ pub(crate) const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 /// - [`FetchError::Read`] for other transport read failures.
 /// - [`FetchError::Unscripted`] for unscripted test urls.
 pub fn download(url: &str, limit: u64) -> Result<(Box<dyn Read>, Option<u64>)> {
-    confit_driver::http::download(url, limit).map_err(|error| from_http(url, error))
+    http_download(url, limit).map_err(|error| from_http(url, error))
 }
 
 /// Map one driver failure into its fetch error.

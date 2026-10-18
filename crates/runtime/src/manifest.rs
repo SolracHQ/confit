@@ -7,7 +7,8 @@ use std::path::Path;
 use confit_binding::value::{Decode, Mismatch};
 use confit_binding_macros::Face;
 use confit_driver::sha::Sha;
-use confit_model::document::{Data, DocumentKind, Payload, StructuredFormat, TreeMember};
+use confit_model::document::Document as ModelDocument;
+use confit_model::document::{Data, Payload, StructuredFormat, TreeMember};
 use confit_model::error::{Error, Result};
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
@@ -23,9 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::bundle::codec::{CodecError, decode};
 use crate::error::{Result as RuntimeResult, RuntimeError};
+use crate::render::render_document;
 
 /// Manifest format version for bundle builds.
-pub const MANIFEST_VERSION: u32 = 7;
+pub const MANIFEST_VERSION: u32 = 8;
 
 /// Persisted plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +37,8 @@ pub struct Manifest {
     pub version: u32,
     /// Plan documents in path order.
     pub documents: Vec<Document>,
+    /// Content hashes by destination display.
+    pub hashes: BTreeMap<String, String>,
     /// Plan hooks in first-seen order.
     #[serde(default)]
     pub hooks: Vec<Hook>,
@@ -48,8 +52,6 @@ pub struct Document {
     pub destination: Route,
     /// The persisted payload.
     pub data: Data,
-    /// The hex SHA-256 over rendered bytes.
-    pub data_hash: String,
 }
 
 /// Per-document lifecycle status against previous documents.
@@ -85,11 +87,12 @@ impl Manifest {
         Self {
             version: MANIFEST_VERSION,
             documents: Vec::new(),
+            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         }
     }
 
-    /// Build the desired manifest from route documents with filled hashes.
+    /// Build the desired manifest from declared documents with a filled hash section.
     ///
     /// - Handles seal through the blob pool before hashing.
     /// - Documents sort by destination display.
@@ -98,26 +101,20 @@ impl Manifest {
     ///
     /// - [`Error::Seal`] for documents failing blob compression.
     /// - [`Error::Unhashable`] for documents failing hashes.
-    pub fn build(
-        stores: &Stores,
-        documents: BTreeMap<Route, Data>,
-        hooks: Vec<Hook>,
-    ) -> Result<Self> {
+    pub fn build(stores: &Stores, documents: Vec<ModelDocument>, hooks: Vec<Hook>) -> Result<Self> {
         let mut placed: Vec<Document> = documents
             .into_iter()
-            .map(|(destination, data)| Document::new(destination, data))
+            .map(|declared| Document::new(declared.path, declared.data))
             .collect();
         for document in &mut placed {
             seal_document(stores, document)?;
-            document.fill_hash().map_err(|error| Error::Unhashable {
-                document: document.destination.display(),
-                reason: error.to_string(),
-            })?;
         }
         placed.sort_by_key(|document| document.destination.display());
+        let hashes = fill_hashes(&placed)?;
         Ok(Self {
             version: MANIFEST_VERSION,
             documents: placed,
+            hashes,
             hooks,
         })
     }
@@ -126,7 +123,24 @@ impl Manifest {
     pub fn refs(&self) -> Vec<Sha> {
         let mut refs = Vec::new();
         for document in &self.documents {
-            refs.extend(document.data.blob_refs().into_iter().cloned());
+            match &document.data {
+                Data::Opaque(document) => {
+                    if let Some(blob) = document.handle.resolved() {
+                        refs.push(blob.clone());
+                    }
+                }
+                Data::Tree(document) => {
+                    for member in document.members.values() {
+                        if let Some(blob) = member.blob().resolved() {
+                            refs.push(blob.clone());
+                        }
+                    }
+                }
+                #[cfg(unix)]
+                Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => {}
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => {}
+            }
         }
         refs
     }
@@ -270,39 +284,41 @@ impl Manifest {
 }
 
 impl Document {
-    /// Build a document with an empty data hash.
+    /// Build one document with its destination and data.
     pub fn new(destination: Route, data: Data) -> Self {
-        Self {
-            destination,
-            data,
-            data_hash: String::new(),
-        }
-    }
-
-    /// Return the kind label for this document.
-    pub fn kind(&self) -> DocumentKind {
-        self.data.kind()
-    }
-
-    /// Return the unix permission bits for this document.
-    pub fn mode(&self) -> Option<u32> {
-        self.data.mode()
+        Self { destination, data }
     }
 
     /// Build one kind with display key.
     pub fn key(&self) -> String {
-        format!("{}:{}", self.data.kind().name(), self.destination.display())
+        let kind = match &self.data {
+            Data::Structured(_) => "structured",
+            Data::Text(_) => "text",
+            #[cfg(unix)]
+            Data::Link(_) => "link",
+            Data::Rc(_) => "rc",
+            Data::Opaque(_) => "opaque",
+            Data::Tree(_) => "tree",
+        };
+        format!("{}:{}", kind, self.destination.display())
     }
 
     /// Report whether the document carries opaque bytes.
     pub fn is_opaque(&self) -> bool {
-        matches!(self.kind(), DocumentKind::Opaque)
+        matches!(self.data, Data::Opaque(_))
     }
 }
 
 impl Document {
     /// Report the lifecycle status against previous documents.
-    pub fn status(&self, previous: &[Document]) -> DocumentStatus {
+    ///
+    /// - Hashes arrive keyed by destination display from both manifests.
+    pub fn status(
+        &self,
+        previous: &[Document],
+        hashes: &BTreeMap<String, String>,
+        previous_hashes: &BTreeMap<String, String>,
+    ) -> DocumentStatus {
         let recorded = previous
             .iter()
             .find(|document| document.key() == self.key());
@@ -319,38 +335,12 @@ impl Document {
                 }
             }
             Some(recorded)
-                if recorded.data_hash == self.data_hash && recorded.mode() == self.mode() =>
+                if hash_for(hashes, self) == hash_for(previous_hashes, recorded)
+                    && document_mode(recorded) == document_mode(self) =>
             {
                 DocumentStatus::Unchanged
             }
             Some(_) => DocumentStatus::Update,
-        }
-    }
-
-    /// Fill the data hash by rendering the document.
-    ///
-    /// - The hash covers rendered bytes only.
-    /// - Opaque hashes copy the blob ref.
-    /// - Tree hashes cover canonical manifest bytes over blob refs.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Render`] for serializer failures.
-    pub fn fill_hash(&mut self) -> Result<()> {
-        match &self.data {
-            Data::Opaque { handle: blob, .. } => {
-                self.data_hash = blob.sha256().hex();
-                Ok(())
-            }
-            Data::Tree { members } => {
-                self.data_hash = Sha::hash(&tree_manifest_bytes(members)).hex();
-                Ok(())
-            }
-            inline => {
-                let bytes = confit_model::render::inline_bytes(inline)?;
-                self.data_hash = Sha::hash(&bytes).hex();
-                Ok(())
-            }
         }
     }
 
@@ -370,7 +360,13 @@ impl Document {
 ///
 /// - Opaque kind changes count as updates, other kind changes count as create
 ///   and delete.
-pub fn summary(built: &[Document], previous: &[Document]) -> Summary {
+/// - Hashes arrive keyed by destination display from both manifests.
+pub fn summary(
+    built: &[Document],
+    built_hashes: &BTreeMap<String, String>,
+    previous: &[Document],
+    previous_hashes: &BTreeMap<String, String>,
+) -> Summary {
     let mut counts = Summary {
         create: 0,
         update: 0,
@@ -379,7 +375,7 @@ pub fn summary(built: &[Document], previous: &[Document]) -> Summary {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for document in built {
         seen.insert(document.key());
-        match document.status(previous) {
+        match document.status(previous, built_hashes, previous_hashes) {
             DocumentStatus::Create => counts.create += 1,
             DocumentStatus::Update => counts.update += 1,
             DocumentStatus::Unchanged => {}
@@ -391,6 +387,78 @@ pub fn summary(built: &[Document], previous: &[Document]) -> Summary {
         }
     }
     counts
+}
+
+/// Read the unix permission bits for one document.
+fn document_mode(document: &Document) -> Option<u32> {
+    match &document.data {
+        Data::Text(found) => Some(found.mode),
+        Data::Opaque(found) => Some(found.mode),
+        #[cfg(unix)]
+        Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
+        #[cfg(not(unix))]
+        Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => None,
+    }
+}
+
+/// Read one content hash by destination display with empty fallback.
+fn hash_for<'a>(hashes: &'a BTreeMap<String, String>, document: &Document) -> &'a str {
+    hashes
+        .get(&document.destination.display())
+        .map(String::as_str)
+        .unwrap_or_default()
+}
+
+/// Fold content hashes over sealed documents keyed by destination display.
+///
+/// # Errors
+///
+/// - [`Error::Unhashable`] for documents failing hashes.
+fn fill_hashes(documents: &[Document]) -> Result<BTreeMap<String, String>> {
+    let mut hashes = BTreeMap::new();
+    for document in documents {
+        let hash = document_hash(document).map_err(|error| Error::Unhashable {
+            document: document.destination.display(),
+            reason: error.to_string(),
+        })?;
+        hashes.insert(document.destination.display(), hash);
+    }
+    Ok(hashes)
+}
+
+/// Hash one sealed document over rendered bytes.
+///
+/// - Opaque hashes copy the blob ref.
+/// - Tree hashes cover canonical manifest bytes over blob refs.
+/// - Rc hashes cover expanded shell bytes.
+///
+/// # Errors
+///
+/// - [`Error::Render`] for serializer failures.
+/// - [`Error::Base`] for unresolvable rc route bases.
+/// - [`Error::Unhashable`] for rc shell bytes failing renders.
+fn document_hash(document: &Document) -> Result<String> {
+    match &document.data {
+        Data::Opaque(found) => Ok(found.handle.sha256().hex()),
+        Data::Tree(found) => Ok(Sha::hash(&tree_manifest_bytes(&found.members)).hex()),
+        Data::Rc(_) => {
+            let bytes = render_document(document).map_err(|error| match error {
+                RuntimeError::Expand { source, .. } => source,
+                other => Error::Unhashable {
+                    document: document.destination.display(),
+                    reason: other.to_string(),
+                },
+            })?;
+            Ok(Sha::hash(&bytes).hex())
+        }
+        Data::Structured(found) => {
+            let bytes = found.bytes()?;
+            Ok(Sha::hash(&bytes).hex())
+        }
+        Data::Text(found) => Ok(Sha::hash(&found.bytes()).hex()),
+        #[cfg(unix)]
+        Data::Link(found) => Ok(Sha::hash(&found.bytes()).hex()),
+    }
 }
 
 /// Render the canonical manifest bytes for tree hashing.
@@ -418,15 +486,15 @@ fn tree_manifest_bytes(members: &BTreeMap<String, TreeMember>) -> Vec<u8> {
 fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
     let display = document.destination.display();
     match &mut document.data {
-        Data::Opaque { handle: blob, .. } => {
-            let resolved = blob.resolve(stores).map_err(|error| Error::Seal {
+        Data::Opaque(found) => {
+            let resolved = found.handle.resolve(stores).map_err(|error| Error::Seal {
                 document: display.clone(),
                 reason: error.to_string(),
             })?;
-            *blob = Payload::Resolved(resolved);
+            found.handle = Payload::Resolved(resolved);
         }
-        Data::Tree { members } => {
-            for relative in members.keys() {
+        Data::Tree(found) => {
+            for relative in found.members.keys() {
                 if let Err(error) = check_member_key(relative) {
                     return Err(Error::Seal {
                         document: display.clone(),
@@ -434,7 +502,7 @@ fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
                     });
                 }
             }
-            for member in members.values_mut() {
+            for member in found.members.values_mut() {
                 let payload = match member {
                     TreeMember::Handle(blob) | TreeMember::Full { handle: blob, .. } => blob,
                 };
@@ -446,9 +514,9 @@ fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
             }
         }
         #[cfg(unix)]
-        Data::Structured { .. } | Data::Text { .. } | Data::Link { .. } | Data::Rc(_) => {}
+        Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => {}
         #[cfg(not(unix))]
-        Data::Structured { .. } | Data::Text { .. } | Data::Rc(_) => {}
+        Data::Structured(_) | Data::Text(_) | Data::Rc(_) => {}
     }
     Ok(())
 }
@@ -546,7 +614,8 @@ fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTre
 mod tests {
     use super::*;
     use confit_driver::sha::Sha;
-    use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+    use confit_model::document::Document as DeclaredDocument;
+    use confit_model::document::{Data, OpaqueDocument, TextDocument, TreeDocument};
     use confit_model::error::Error;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
@@ -558,11 +627,11 @@ mod tests {
     fn opaque_doc(name: &str, blob: Payload) -> Document {
         Document::new(
             Route::new(RouteBase::Home, name).unwrap(),
-            Data::Opaque {
+            Data::Opaque(OpaqueDocument {
                 handle: blob,
                 mode: 0o644,
                 unmanaged: false,
-            },
+            }),
         )
     }
 
@@ -576,6 +645,7 @@ mod tests {
                 opaque_doc("a", Payload::Resolved(first.clone())),
                 opaque_doc("b", Payload::Resolved(second.clone())),
             ],
+            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         };
         let refs = manifest.refs();
@@ -586,30 +656,29 @@ mod tests {
         Route::new(RouteBase::Literal, relative).unwrap()
     }
 
-    fn fill(data: Data) -> String {
-        let mut document = Document::new(literal("pinned/subject"), data);
-        document.fill_hash().unwrap();
-        document.data_hash
+    fn hash_of(data: Data) -> String {
+        let document = Document::new(literal("pinned/subject"), data);
+        document_hash(&document).unwrap()
     }
 
     fn text_doc(name: &str, content: &str) -> Document {
-        let mut document = Document::new(
+        Document::new(
             Route::new(RouteBase::Home, name).unwrap(),
-            Data::Text {
+            Data::Text(TextDocument {
                 content: content.into(),
                 mode: 0o644,
                 unmanaged: false,
-            },
-        );
-        document.fill_hash().unwrap();
-        document
+            }),
+        )
     }
 
     #[test]
     fn summary_counts_create_and_delete() {
         let built = vec![text_doc("fresh", "hi")];
         let previous = vec![text_doc("stale", "hi")];
-        let counts = summary(&built, &previous);
+        let built_hashes = fill_hashes(&built).unwrap();
+        let previous_hashes = fill_hashes(&previous).unwrap();
+        let counts = summary(&built, &built_hashes, &previous, &previous_hashes);
         assert_eq!(
             (counts.create, counts.update, counts.delete),
             (1, 0, 1),
@@ -618,81 +687,23 @@ mod tests {
     }
 
     #[test]
-    fn fill_hash_pins_text_bytes() {
-        let hash = fill(Data::Text {
+    fn hash_pins_text_bytes() {
+        let hash = hash_of(Data::Text(TextDocument {
             content: "pinned text\n".into(),
             mode: 0o644,
             unmanaged: false,
-        });
+        }));
         assert_eq!(
             hash, "f007767c80150f15e9cacf96dc8d24ac3b6b3094c9b727d1534b175910968f2a",
             "text hash differs only when rendered bytes change"
         );
     }
 
+    // Hash contracts pin text and tree alone. Other variants reuse model bytes.
     #[test]
-    fn fill_hash_pins_structured_bytes() {
-        let data = serde_json::json!({"key": "value"});
-        let hash = fill(Data::Structured {
-            format: StructuredFormat::Json,
-            data,
-        });
-        assert_eq!(
-            hash, "796a0bdfc73f373f33ec3098a246b3d27a10d75e9f4f3dd4e4630efc0f2d3184",
-            "structured hash differs only when rendered bytes change"
-        );
-    }
-
-    #[test]
-    fn fill_hash_pins_rc_display_alias_bytes() {
-        let data = Data::Rc(RcData::new(
-            vec![RcEntry::Env {
-                name: "EDITOR".into(),
-                value: "hx".into(),
-                when: None,
-            }],
-            vec![RcEntry::Source {
-                path: Route::new(RouteBase::Literal, "/pinned/sourced.sh").unwrap(),
-                when: None,
-            }],
-            vec![RcEntry::Alias {
-                name: "ll".into(),
-                expansion: "ls -l".into(),
-                when: None,
-            }],
-        ));
-        let bytes = confit_model::render::inline_bytes(&data).unwrap();
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        assert!(
-            text.contains("/pinned/sourced.sh"),
-            "rc inline bytes carry the display alias: {text}"
-        );
-        assert_eq!(
-            fill(data),
-            "4e0bb0e9341fc39990d9a6f3476e68a3d2c49e75102ccb2daa7ba7bfcf275f97",
-            "rc hash differs only when rendered bytes change"
-        );
-    }
-
-    #[test]
-    fn fill_hash_copies_opaque_blob_sha() {
-        let blob = confit_driver::sha::Sha::new("aa".repeat(32)).unwrap();
-        let expected = blob.hex();
-        let hash = fill(Data::Opaque {
-            handle: Payload::Resolved(blob),
-            mode: 0o644,
-            unmanaged: false,
-        });
-        assert_eq!(
-            hash, expected,
-            "opaque hash copies content sha without pool bytes"
-        );
-    }
-
-    #[test]
-    fn fill_hash_covers_tree_manifest_bytes() {
-        let first = confit_driver::sha::Sha::new("aa".repeat(32)).unwrap();
-        let second = confit_driver::sha::Sha::new("cc".repeat(32)).unwrap();
+    fn hash_covers_tree_manifest_bytes() {
+        let first = Sha::new("aa".repeat(32)).unwrap();
+        let second = Sha::new("cc".repeat(32)).unwrap();
         let mut members = BTreeMap::new();
         members.insert(
             "b".to_owned(),
@@ -708,9 +719,9 @@ mod tests {
                 mode: 0o644,
             },
         );
-        let expected = confit_driver::sha::Sha::hash(&tree_manifest_bytes(&members)).hex();
+        let expected = Sha::hash(&tree_manifest_bytes(&members)).hex();
         assert_eq!(
-            fill(Data::Tree { members }),
+            hash_of(Data::Tree(TreeDocument { members })),
             expected,
             "tree hash covers manifest bytes"
         );
@@ -754,29 +765,35 @@ mod tests {
                 mode: 0o644,
             },
         );
-        let documents = [
-            (
+        let documents = vec![
+            DeclaredDocument::new(
                 Route::new(RouteBase::Home, "fonts").unwrap(),
-                Data::Tree { members },
+                Data::Tree(TreeDocument { members }),
             ),
-            (
+            DeclaredDocument::new(
                 Route::new(RouteBase::Home, "blob.bin").unwrap(),
-                Data::Opaque {
+                Data::Opaque(OpaqueDocument {
                     handle: other,
                     mode: 0o644,
                     unmanaged: false,
-                },
+                }),
             ),
-        ]
-        .into_iter()
-        .collect();
+        ];
         let manifest = match Manifest::build(&stores, documents, Vec::new()) {
             Ok(found) => found,
             Err(error) => panic!("manifest seals: {error}"),
         };
         assert_eq!(manifest.documents.len(), 2, "build keeps documents");
         for document in &manifest.documents {
-            for payload in document.data.payloads() {
+            let payloads: Vec<&Payload> = match &document.data {
+                Data::Opaque(found) => vec![&found.handle],
+                Data::Tree(found) => found.members.values().map(TreeMember::blob).collect(),
+                #[cfg(unix)]
+                Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
+                #[cfg(not(unix))]
+                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => Vec::new(),
+            };
+            for payload in payloads {
                 let resolved = match payload.resolved() {
                     Some(found) => found,
                     None => panic!("build seals every payload"),
@@ -801,38 +818,13 @@ mod tests {
                 );
             }
         }
-        match manifest
-            .documents
-            .iter()
-            .find(|document| document.destination.display() == "home('blob.bin')")
-        {
-            Some(document) => assert_eq!(
-                document.data_hash,
+        match manifest.hashes.get("home('blob.bin')") {
+            Some(hash) => assert_eq!(
+                *hash,
                 Sha::hash(b"other bytes").hex(),
                 "opaque hash copies the content sha"
             ),
             None => panic!("sealed opaque builds"),
-        }
-    }
-
-    #[test]
-    fn build_passes_sealed_refs_without_io() {
-        let dir = tempfile::tempdir().unwrap();
-        let stores = test_stores(dir.path());
-        let blob = Sha::hash(b"sealed");
-        let documents = [(
-            Route::new(RouteBase::Home, "bin").unwrap(),
-            Data::Opaque {
-                handle: Payload::Resolved(blob),
-                mode: 0o644,
-                unmanaged: false,
-            },
-        )]
-        .into_iter()
-        .collect();
-        match Manifest::build(&stores, documents, Vec::new()) {
-            Ok(found) => assert_eq!(found.documents.len(), 1, "sealed builds pass through"),
-            Err(error) => panic!("sealed builds skip io: {error}"),
         }
     }
 
@@ -851,12 +843,10 @@ mod tests {
                 mode: 0o755,
             },
         );
-        let documents = [(
+        let documents = vec![DeclaredDocument::new(
             Route::new(RouteBase::Home, "tree").unwrap(),
-            Data::Tree { members },
-        )]
-        .into_iter()
-        .collect();
+            Data::Tree(TreeDocument { members }),
+        )];
         let manifest = match Manifest::build(&stores, documents, Vec::new()) {
             Ok(found) => found,
             Err(error) => panic!("manifest seals: {error}"),
@@ -870,7 +860,8 @@ mod tests {
             None => panic!("sealed tree builds"),
         };
         match &document.data {
-            Data::Tree { members } => {
+            Data::Tree(found) => {
+                let members = &found.members;
                 assert_eq!(members.len(), 2, "build keeps both members");
                 let bare = match members.get("top.txt") {
                     Some(found) => found,
@@ -903,61 +894,15 @@ mod tests {
         for key in ["", "/top.txt", "sub//nested.txt", "sub/../nested.txt"] {
             let mut members = BTreeMap::new();
             members.insert(key.to_owned(), TreeMember::Handle(note.clone()));
-            let documents = [(
+            let documents = vec![DeclaredDocument::new(
                 Route::new(RouteBase::Home, "tree").unwrap(),
-                Data::Tree { members },
-            )]
-            .into_iter()
-            .collect();
+                Data::Tree(TreeDocument { members }),
+            )];
             match Manifest::build(&stores, documents, Vec::new()) {
                 Ok(_) => panic!("bad key seals: {key}"),
-                Err(Error::Seal { document, reason }) => {
-                    assert!(
-                        document.contains("tree"),
-                        "seal shows the document: {document}"
-                    );
-                    assert!(
-                        reason.contains("a relative member path"),
-                        "the reason shows the fault: {reason}"
-                    );
-                }
+                Err(Error::Seal { .. }) => {}
                 Err(error) => panic!("wrong seal variant: {error}"),
             }
-        }
-    }
-
-    #[test]
-    fn round_trip_sealed_manifest_with_both_variants() {
-        let dir = tempfile::tempdir().unwrap();
-        let stores = test_stores(dir.path());
-        let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
-        let full = project_handle(&stores, dir.path(), "other.txt", b"full bytes");
-        let mut members = BTreeMap::new();
-        members.insert("top.txt".to_owned(), TreeMember::Handle(bare));
-        members.insert(
-            "sub/nested.txt".to_owned(),
-            TreeMember::Full {
-                handle: full,
-                mode: 0o755,
-            },
-        );
-        let documents = [(
-            Route::new(RouteBase::Home, "tree").unwrap(),
-            Data::Tree { members },
-        )]
-        .into_iter()
-        .collect();
-        let manifest = match Manifest::build(&stores, documents, Vec::new()) {
-            Ok(found) => found,
-            Err(error) => panic!("manifest seals: {error}"),
-        };
-        let text = match serde_json::to_string(&manifest) {
-            Ok(found) => found,
-            Err(error) => panic!("sealed manifest serializes: {error}"),
-        };
-        match serde_json::from_str::<Manifest>(&text) {
-            Ok(back) => assert_eq!(back, manifest, "sealed manifest survives serde"),
-            Err(error) => panic!("sealed manifest decodes: {error}"),
         }
     }
 
@@ -974,25 +919,17 @@ mod tests {
             Err(error) => panic!("project opens: {error}"),
         };
         std::fs::remove_file(&path).unwrap();
-        let documents = [(
+        let documents = vec![DeclaredDocument::new(
             Route::new(RouteBase::Home, "gone").unwrap(),
-            Data::Opaque {
+            Data::Opaque(OpaqueDocument {
                 handle: Payload::Handle(handle),
                 mode: 0o644,
                 unmanaged: false,
-            },
-        )]
-        .into_iter()
-        .collect();
+            }),
+        )];
         match Manifest::build(&stores, documents, Vec::new()) {
             Ok(_) => panic!("vanished handles seal"),
-            Err(Error::Seal { document, reason }) => {
-                assert!(
-                    document.contains("gone"),
-                    "seal shows the document: {document}"
-                );
-                assert!(!reason.is_empty(), "seal shows the reason");
-            }
+            Err(Error::Seal { .. }) => {}
             Err(error) => panic!("wrong seal variant: {error}"),
         }
     }

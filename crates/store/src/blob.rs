@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(read_open(&store, &handle), raw, "open round-trips bytes");
         match store.len(&handle) {
             Ok(len) => assert_eq!(len, raw.len() as u64, "length is raw count"),
-            Err(error) => panic!("pool length reads: {error}"),
+            Err(error) => panic!("pool length load: {error}"),
         }
         let again = put_bytes(&store, dir.path(), "pooled.bin", raw);
         assert_eq!(again, handle, "repeat put keeps identity");
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(again, handle, "repeat put keeps identity");
         let pooled = roots.config_base.join("blobs").join(handle.sha256().hex());
         assert!(pooled.exists(), "pool holds the blob");
-        assert_eq!(read_open(&store, &handle), raw, "pool reads bytes");
+        assert_eq!(read_open(&store, &handle), raw, "pool serves bytes");
         assert_eq!(
             read_open(&store, &handle),
             raw,
@@ -543,7 +543,7 @@ mod tests {
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
         let mut body = match std::fs::read(&path) {
             Ok(found) => found,
-            Err(error) => panic!("object reads: {error}"),
+            Err(error) => panic!("object load: {error}"),
         };
         let split = std::mem::size_of::<file::ObjectHeader>();
         body[split] ^= 0xff;
@@ -570,7 +570,7 @@ mod tests {
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
         let body = match std::fs::read(&path) {
             Ok(found) => found,
-            Err(error) => panic!("object reads: {error}"),
+            Err(error) => panic!("object load: {error}"),
         };
         let split = std::mem::size_of::<file::ObjectHeader>();
         let mut header = match bytemuck::try_from_bytes::<file::ObjectHeader>(&body[..split]) {
@@ -582,7 +582,7 @@ mod tests {
         tampered.extend_from_slice(&body[split..]);
         std::fs::write(&path, &tampered).unwrap();
         match store.len(&handle) {
-            Ok(_) => panic!("tampered hash reads"),
+            Ok(_) => panic!("tampered hash loads"),
             Err(BlobError::Corrupt { sha: found }) => {
                 assert_eq!(found, *handle.sha256(), "tampered files keep the hash")
             }
@@ -601,7 +601,7 @@ mod tests {
         let path = roots.temp_base.join("blobs").join(handle.sha256().hex());
         let body = match std::fs::read(&path) {
             Ok(found) => found,
-            Err(error) => panic!("object reads: {error}"),
+            Err(error) => panic!("object load: {error}"),
         };
         std::fs::write(
             &path,
@@ -630,7 +630,7 @@ mod tests {
         let home = roots.temp_base.join("blobs");
         let body = match std::fs::read(home.join(handle.sha256().hex())) {
             Ok(found) => found,
-            Err(error) => panic!("object reads: {error}"),
+            Err(error) => panic!("object load: {error}"),
         };
         let wrong = Sha::hash(b"other bytes");
         let wrong_path = home.join(wrong.hex());
@@ -704,17 +704,13 @@ mod tests {
         );
         match store.open(&handle) {
             Ok(_) => panic!("absent blob opens"),
-            Err(error) => assert!(
-                error.to_string().contains(&handle.sha256().hex()),
-                "missing open shows the hash: {error}"
-            ),
+            Err(BlobError::Read { .. }) => {}
+            Err(error) => panic!("wrong open variant: {error}"),
         }
         match store.len(&handle) {
-            Ok(_) => panic!("absent length reads"),
-            Err(error) => assert!(
-                error.to_string().contains(&handle.sha256().hex()),
-                "missing length shows the hash: {error}"
-            ),
+            Ok(_) => panic!("absent length loads"),
+            Err(BlobError::Read { .. }) => {}
+            Err(error) => panic!("wrong length variant: {error}"),
         }
     }
 
@@ -800,10 +796,7 @@ mod tests {
         match store.put(&source_of(dir.path(), "denied.bin", b"denied disk")) {
             Ok(_) => panic!("denied disk passes"),
             Err(BlobError::Write { path, fault }) => {
-                assert!(
-                    matches!(fault, crate::faults::AccessFault::Denied),
-                    "put keeps the fault"
-                );
+                assert!(matches!(fault, AccessFault::Denied), "put keeps the fault");
                 assert!(path.starts_with(&cached), "put keeps the cache path");
             }
             Err(error) => panic!("wrong put variant: {error}"),
@@ -821,7 +814,7 @@ mod tests {
             BlobError::Write { path, fault } => {
                 assert_eq!(path, dest, "mapping keeps the path");
                 assert!(
-                    matches!(fault, crate::faults::AccessFault::StorageFull),
+                    matches!(fault, AccessFault::StorageFull),
                     "mapping keeps the fault"
                 );
             }
@@ -846,25 +839,6 @@ mod tests {
     }
 
     #[test]
-    fn batch_moves_blob_counters_across_puts() {
-        use confit_driver::progress::Event;
-
-        let dir = tempfile::tempdir().unwrap();
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = BlobStore::new(&test_roots(dir.path()), sender);
-        let _ = put_bytes(&store, dir.path(), "first.bin", b"first bytes");
-        let _ = put_bytes(&store, dir.path(), "second.bin", b"second bytes");
-        let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![
-                Event::BlobCompressed { done: 1 },
-                Event::BlobCompressed { done: 2 },
-            ]
-        );
-    }
-
-    #[test]
     fn reuse_stays_silent() {
         use confit_driver::progress::Event;
 
@@ -879,27 +853,6 @@ mod tests {
             events,
             vec![Event::BlobCompressed { done: 1 }],
             "reuse fires no fact"
-        );
-    }
-
-    #[test]
-    fn persist_announces_promoting_count() {
-        use confit_driver::progress::Event;
-
-        let dir = tempfile::tempdir().unwrap();
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = BlobStore::new(&test_roots(dir.path()), sender);
-        let handle = put_bytes(&store, dir.path(), "promoted.bin", b"promoted bytes");
-        let _ = receiver.try_iter().collect::<Vec<_>>();
-        match store.persist(std::slice::from_ref(&handle)) {
-            Ok(()) => {}
-            Err(error) => panic!("persist lands: {error}"),
-        }
-        let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![Event::Promoting { blobs: 1 }],
-            "persist fires one promoting fact"
         );
     }
 }

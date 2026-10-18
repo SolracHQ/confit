@@ -1,9 +1,6 @@
-//! Freeze assembled payloads with rc guard checks.
+//! Freeze assembled documents with rc guard checks.
 
-use std::collections::BTreeMap;
-
-use confit_model::document::Data;
-use confit_model::routes::Route;
+use confit_model::document::{Data, Document};
 
 use crate::error::{EngineError, Result};
 
@@ -12,16 +9,16 @@ use crate::error::{EngineError, Result};
 /// # Errors
 ///
 /// - [`EngineError::ChangedInRc`] for guards with changed leaves.
-pub(super) fn check_rc_guards(finished: &BTreeMap<Route, Data>) -> Result<()> {
-    for (destination, body) in finished {
-        let Data::Rc(found) = body else {
+pub(super) fn check_rc_guards(finished: &[Document]) -> Result<()> {
+    for document in finished {
+        let Data::Rc(found) = &document.data else {
             continue;
         };
-        let display = destination.display();
+        let display = document.path.display();
         for (section, entries) in [
             ("profile", &found.profile),
             ("config", &found.config),
-            ("final", &found.final_entries),
+            ("final", &found.r#final),
         ] {
             for entry in entries {
                 if entry

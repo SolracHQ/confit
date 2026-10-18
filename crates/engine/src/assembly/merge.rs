@@ -4,10 +4,11 @@ use std::collections::BTreeMap;
 
 use mlua::{Lua, Table, Value};
 
-use crate::api::patch::{ApplyArgs, StructuredPatch};
-use confit_binding::callback::Callback;
+use crate::api::patch::{RcLiveDocument, StructuredLiveDocument, StructuredPatch};
 use confit_binding::value::{Decode, Encode};
-use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+use confit_model::document::{
+    Data, Document, RcData, RcEntry, StructuredDocument, StructuredFormat,
+};
 use confit_model::routes::Route;
 
 use super::Assembler;
@@ -19,7 +20,8 @@ impl Assembler<'_> {
     /// Apply structured patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
-    /// - Callbacks run with the target route beside live data.
+    /// - Groups follow first-seen declaration order.
+    /// - Callbacks run over live documents.
     ///
     /// # Errors
     ///
@@ -28,9 +30,9 @@ impl Assembler<'_> {
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_structured(
         &self,
-        placed: &BTreeMap<Route, Data>,
-        grouped: &BTreeMap<Route, Vec<&OwnedPatch>>,
-        finished: &mut BTreeMap<Route, Data>,
+        placed: &[Document],
+        grouped: &[(Route, Vec<&OwnedPatch>)],
+        finished: &mut Vec<Document>,
     ) -> Result<()> {
         for (target, patches) in grouped {
             let inners: Vec<&StructuredPatch> = patches
@@ -43,13 +45,10 @@ impl Assembler<'_> {
             let display = target.display();
             let (format, data) = structured_base_of(placed, target, first, &inners)?;
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
-            finished.insert(
+            finished.push(Document::new(
                 target.clone(),
-                Data::Structured {
-                    format,
-                    data: serde_json::Value::Object(data.into_iter().collect()),
-                },
-            );
+                Data::Structured(StructuredDocument { format, data }),
+            ));
         }
         Ok(())
     }
@@ -57,7 +56,8 @@ impl Assembler<'_> {
     /// Apply rc patch groups over declared bases into documents.
     ///
     /// - First writes win in rank-descending level order with collision logs.
-    /// - Callbacks run with the target route beside live sections.
+    /// - Groups follow first-seen declaration order.
+    /// - Callbacks run over live documents.
     ///
     /// # Errors
     ///
@@ -66,16 +66,16 @@ impl Assembler<'_> {
     /// - [`EngineError::Lua`] for bridge and callback failures.
     pub(super) fn apply_rc(
         &self,
-        placed: &BTreeMap<Route, Data>,
-        grouped: &BTreeMap<Route, Vec<&OwnedPatch>>,
-        finished: &mut BTreeMap<Route, Data>,
+        placed: &[Document],
+        grouped: &[(Route, Vec<&OwnedPatch>)],
+        finished: &mut Vec<Document>,
     ) -> Result<()> {
         for (target, patches) in grouped {
             let document = rc_base_of(placed, target)?;
             let display = target.display();
             let patched = self.run_rc_callbacks(target, &display, document, patches)?;
-            let data = RcData::new(patched.profile, patched.config, patched.final_entries);
-            finished.insert(target.clone(), Data::Rc(data));
+            let data = RcData::new(patched.profile, patched.config, patched.r#final);
+            finished.push(Document::new(target.clone(), Data::Rc(data)));
         }
         Ok(())
     }
@@ -83,12 +83,14 @@ impl Assembler<'_> {
     /// Run patch callbacks over base data through live documents keeping
     /// first writes.
     ///
-    /// - Callbacks run with the target route beside live data.
+    /// - Callbacks run over live documents.
+    /// - Callbacks keep the path fixed.
     ///
     /// # Errors
     ///
     /// - [`EngineError::Structured`] for format gaps.
-    /// - [`EngineError::Lua`] for bridge and callback failures.
+    /// - [`EngineError::Mismatch`] for tables outside the live shape.
+    /// - [`EngineError::Lua`] for bridge, callback, and path drift failures.
     pub(super) fn run_callbacks(
         &self,
         destination: &Route,
@@ -103,62 +105,40 @@ impl Assembler<'_> {
             let Some(found) = patch.structured() else {
                 continue;
             };
-            let Value::Table(route) = destination.encode(self.lua())? else {
-                return Err(EngineError::Lua(mlua::Error::runtime(
-                    "route views hold tables",
-                )));
+            let live = StructuredLiveDocument {
+                path: destination.clone(),
+                body: StructuredDocument {
+                    format: *format,
+                    data: data.clone(),
+                },
             };
-            let body = Data::Structured {
-                format: *format,
-                data: serde_json::Value::Object(data.clone().into_iter().collect()),
-            };
-            let table = live_view(self.lua(), &body)?;
-            Callback::<ApplyArgs>::new(found.apply.clone())
-                .call::<()>(self.lua(), (&route, table.clone()))?;
-            let back = Data::decode(&Value::Table(table), self.lua()).map_err(EngineError::from)?;
-            match back {
-                Data::Structured {
-                    format: found_format,
-                    data: serde_json::Value::Object(found_map),
-                } if found_format == *format => {
-                    data = merge(
-                        display,
-                        data,
-                        &mut owners,
-                        found_map.into_iter().collect(),
-                        &patch.owner,
-                    );
-                }
-                Data::Structured {
-                    format: found_format,
-                    ..
-                } => {
-                    return Err(EngineError::Structured {
-                        display: display.to_owned(),
-                        base: format.name().to_owned(),
-                        patch: found_format.name().to_owned(),
-                    });
-                }
-                other => {
-                    return Err(EngineError::Structured {
-                        display: display.to_owned(),
-                        base: format.name().to_owned(),
-                        patch: other.kind().name().to_owned(),
-                    });
-                }
+            let table = live_view(self.lua(), &live)?;
+            found.apply.call::<()>(self.lua(), (table.clone(),))?;
+            let back = StructuredLiveDocument::decode(&Value::Table(table), self.lua())
+                .map_err(EngineError::from)?;
+            check_live_path(destination, &back.path)?;
+            if back.body.format != *format {
+                return Err(EngineError::Structured {
+                    display: display.to_owned(),
+                    base: format.name().to_owned(),
+                    patch: back.body.format.name().to_owned(),
+                });
             }
+            data = merge(display, data, &mut owners, back.body.data, &patch.owner);
         }
         Ok(data)
     }
 
-    /// Run patch callbacks over rc sections through live tables keeping
+    /// Run patch callbacks over rc sections through live documents keeping
     /// first entries.
     ///
-    /// - Callbacks run with the target route beside live sections.
+    /// - Callbacks run over live documents.
+    /// - Callbacks keep the path fixed.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Lua`] for bridge and callback failures.
+    /// - [`EngineError::Mismatch`] for tables outside the live shape.
+    /// - [`EngineError::Lua`] for bridge, callback, and path drift failures.
     pub(super) fn run_rc_callbacks(
         &self,
         destination: &Route,
@@ -172,17 +152,16 @@ impl Assembler<'_> {
             let Some(found) = patch.rc() else {
                 continue;
             };
-            let Value::Table(route) = destination.encode(self.lua())? else {
-                return Err(EngineError::Lua(mlua::Error::runtime(
-                    "route views hold tables",
-                )));
+            let live = RcLiveDocument {
+                path: destination.clone(),
+                body: document.clone(),
             };
-            let table = live_view(self.lua(), &document)?;
-            Callback::<ApplyArgs>::new(found.apply.clone())
-                .call::<()>(self.lua(), (&route, table.clone()))?;
-            let next =
-                RcData::decode(&Value::Table(table), self.lua()).map_err(EngineError::from)?;
-            document = merge_rc(display, &document, next, &mut owned, &patch.owner);
+            let table = live_view(self.lua(), &live)?;
+            found.apply.call::<()>(self.lua(), (table.clone(),))?;
+            let back = RcLiveDocument::decode(&Value::Table(table), self.lua())
+                .map_err(EngineError::from)?;
+            check_live_path(destination, &back.path)?;
+            document = merge_rc(display, &document, back.body, &mut owned, &patch.owner);
         }
         Ok(document)
     }
@@ -193,13 +172,29 @@ impl Assembler<'_> {
 /// # Errors
 ///
 /// - [`EngineError::Lua`] for faces outside the table shape.
-fn live_view(lua: &Lua, body: &impl Encode) -> Result<Table> {
-    match body.encode(lua)? {
+fn live_view(lua: &Lua, document: &impl Encode) -> Result<Table> {
+    match document.encode(lua)? {
         Value::Table(table) => Ok(table),
         _ => Err(EngineError::Lua(mlua::Error::runtime(
             "patch live views hold tables",
         ))),
     }
+}
+
+/// Fail when one patch callback moves its live document off its target.
+///
+/// # Errors
+///
+/// - [`EngineError::Lua`] for paths apart from the target.
+fn check_live_path(destination: &Route, back: &Route) -> Result<()> {
+    if back != destination {
+        return Err(EngineError::Lua(mlua::Error::runtime(format!(
+            "patch target '{}' changed path to '{}'; patches keep the path fixed",
+            destination.display(),
+            back.display()
+        ))));
+    }
+    Ok(())
 }
 
 /// Seed key owners from base data under the base name.
@@ -398,7 +393,7 @@ fn seed_collision_owners(document: &RcData) -> CollisionOwners {
     let mut owned = CollisionOwners::default();
     seed_section(&document.profile, &mut owned.profile);
     seed_section(&document.config, &mut owned.config);
-    seed_section(&document.final_entries, &mut owned.final_entries);
+    seed_section(&document.r#final, &mut owned.final_entries);
     owned
 }
 
@@ -437,11 +432,11 @@ fn merge_rc(
             &mut owned.config,
             loser,
         ),
-        final_entries: merge_section(
+        r#final: merge_section(
             display,
             "final",
-            &live.final_entries,
-            next.final_entries,
+            &live.r#final,
+            next.r#final,
             &mut owned.final_entries,
             loser,
         ),

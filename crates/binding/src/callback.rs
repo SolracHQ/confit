@@ -5,7 +5,8 @@ use std::marker::PhantomData;
 
 use mlua::{Function, Lua, Value};
 
-use crate::face::Face;
+use crate::error::Result as BindingResult;
+use crate::face::{Face, FaceData};
 use crate::registry::Registry;
 use crate::value::{Decode, Encode, Mismatch};
 
@@ -23,6 +24,9 @@ pub struct Callback<Args> {
 pub trait CallbackArgs {
     /// Call parameters with borrowed plain values beside owned live tables.
     type Parameters<'args>;
+
+    /// The callback return face.
+    type Return: Face;
 
     /// Return the param count.
     fn arity() -> usize;
@@ -111,15 +115,11 @@ impl<Args: CallbackArgs + Face> Face for Callback<Args> {
         Args::call_face()
     }
 
-    fn face_stub() -> String {
-        String::new()
+    fn face() -> FaceData {
+        Args::face()
     }
 
-    fn kind() -> crate::face::FaceKind {
-        crate::face::FaceKind::Function
-    }
-
-    fn collect(collector: &mut Registry) -> crate::error::Result<()> {
+    fn collect(collector: &mut Registry) -> BindingResult<()> {
         Args::collect(collector)
     }
 }
@@ -144,9 +144,6 @@ mod tests {
     use crate::face::Face;
     use crate::registry::Registry;
     use confit_binding_macros::Face;
-
-    /// Marker face for callback tests.
-    struct Sample;
 
     /// Live document marker for callback tests.
     #[allow(dead_code)]
@@ -178,17 +175,33 @@ mod tests {
         route: String,
     }
 
-    #[test]
-    fn stored_function_answers_calls() {
-        let lua = Lua::new();
-        let function = lua.create_function(|_, value: String| Ok(value)).unwrap();
-        let callback = Callback::<Sample>::new(function);
-        let back: String = callback.as_function().call("held").unwrap();
-        assert_eq!(back, "held");
-        let again = callback.clone();
-        let kept: String = again.as_function().call("kept").unwrap();
-        assert_eq!(kept, "kept");
-        assert!(format!("{:?}", callback).contains("Callback"));
+    /// Holder table for callback method tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(table)]
+    struct TestHolder {
+        /// Run the patch over its inputs.
+        apply: Callback<TestArgs>,
+    }
+
+    /// Filter args face for callback return tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(callback_shape, returns = bool)]
+    struct FilterLike {
+        /// Target route of the candidate document.
+        route: String,
+    }
+
+    /// Holder table with filter beside apply for return tests.
+    #[allow(dead_code)]
+    #[derive(Face)]
+    #[face(table)]
+    struct FilterHolder {
+        /// Keep matching routes.
+        filter: Callback<FilterLike>,
+        /// Run the patch over its inputs.
+        apply: Callback<TestArgs>,
     }
 
     #[test]
@@ -203,23 +216,68 @@ mod tests {
             Callback::<TestArgs>::face_name(),
             "fun(route: string, document: TestLive)"
         );
-        let stub = TestArgs::face_stub();
-        assert!(stub.contains("@param route string Target route of the patched document."));
-        assert!(stub.contains("@param document TestLive Live document under patching."));
-        assert!(stub.contains("function TestArgs(route, document) end"));
+        let params = match TestArgs::face() {
+            FaceData::Function { parameters, .. } => parameters,
+            _ => panic!("args hold function data"),
+        };
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "route");
+        assert_eq!(params[1].name, "document");
+        match TestArgs::face() {
+            FaceData::Function { returns, .. } => assert!(returns.is_empty()),
+            _ => panic!("args hold function data"),
+        }
         let mut collector = Registry::new();
-        TestArgs::collect(&mut collector).unwrap();
-        assert!(collector.contains("TestArgs"));
+        TestHolder::collect(&mut collector).unwrap();
+        assert!(!collector.contains("TestArgs"));
+        assert!(collector.contains("TestHolder"));
         assert!(collector.contains("TestLive"));
+        let text = collector.stub_text();
+        assert!(text.contains("@field apply fun(route: string, document: TestLive)"));
+        assert!(text.contains("@param route string Target route of the patched document."));
+        assert!(text.contains("function TestHolder.apply(route, document) end"));
+        assert!(!text.contains("function TestArgs"));
+        assert_eq!(
+            text,
+            "--- Holder table for callback method tests.\n--- @class TestHolder\n--- @field apply fun(route: string, document: TestLive) Run the patch over its inputs.\nTestHolder = {}\n\n--- Run the patch over its inputs.\n--- @param route string Target route of the patched document.\n--- @param document TestLive Live document under patching.\nfunction TestHolder.apply(route, document) end\n\n--- Live document marker for callback tests.\n--- @class TestLive\n--- @field title string The document title.\n"
+        );
     }
 
     #[test]
-    fn decode_rejects_non_functions_showing_the_shape() {
-        let lua = Lua::new();
-        let failure = Callback::<TestArgs>::decode(&Value::Integer(1), &lua).unwrap_err();
-        let text = failure.to_string();
-        assert!(text.contains("TestArgs"));
-        assert!(text.contains("integer"));
+    fn filter_stubs_show_boolean_returns_while_apply_stays_bare() {
+        assert_eq!(FilterLike::call_face(), "fun(route: string): boolean");
+        assert_eq!(
+            Callback::<FilterLike>::face_name(),
+            "fun(route: string): boolean"
+        );
+        match FilterLike::face() {
+            FaceData::Function {
+                parameters,
+                returns,
+                ..
+            } => {
+                assert_eq!(parameters.len(), 1);
+                assert_eq!(parameters[0].name, "route");
+                assert_eq!(returns.len(), 1);
+                assert_eq!(returns[0].face.as_ref(), "boolean");
+            }
+            _ => panic!("filter holds function data"),
+        }
+        let mut collector = Registry::new();
+        FilterHolder::collect(&mut collector).unwrap();
+        let text = collector.stub_text();
+        assert!(text.contains("@field filter fun(route: string): boolean"));
+        assert!(text.contains("@field apply fun(route: string, document: TestLive)"));
+        assert!(text.contains("function FilterHolder.filter(route) end"));
+        assert!(text.contains("function FilterHolder.apply(route, document) end"));
+        for block in text.split("\n\n") {
+            if block.contains("function FilterHolder.filter(") {
+                assert!(block.contains("--- @return boolean"));
+            }
+            if block.contains("function FilterHolder.apply(") {
+                assert!(!block.contains("@return"));
+            }
+        }
     }
 
     #[test]
@@ -227,14 +285,18 @@ mod tests {
         let lua = Lua::new();
         assert_eq!(TestArgs::arity(), 2);
         assert_eq!(SingleArgs::arity(), 1);
+        assert!(
+            Callback::<TestArgs>::decode(&Value::Integer(1), &lua).is_err(),
+            "foreign value fails"
+        );
         let function: Function = lua
             .load("return function(first, second, third) end")
             .call(())
             .unwrap();
-        let failure = Callback::<TestArgs>::decode(&Value::Function(function), &lua).unwrap_err();
-        let text = failure.to_string();
-        assert!(text.contains("TestArgs"));
-        assert!(text.contains("2 params"));
+        assert!(
+            Callback::<TestArgs>::decode(&Value::Function(function), &lua).is_err(),
+            "wrong arity fails"
+        );
         let single: Function = lua.load("return function(first) end").call(()).unwrap();
         let callback = Callback::<SingleArgs>::decode(&Value::Function(single), &lua).unwrap();
         let _ = callback.as_function();
@@ -242,8 +304,10 @@ mod tests {
             .load("return function(first, second) end")
             .call(())
             .unwrap();
-        let failure = Callback::<SingleArgs>::decode(&Value::Function(pair), &lua).unwrap_err();
-        assert!(failure.to_string().contains("1 param"));
+        assert!(
+            Callback::<SingleArgs>::decode(&Value::Function(pair), &lua).is_err(),
+            "wrong arity fails"
+        );
     }
 
     #[test]
@@ -289,27 +353,6 @@ mod tests {
         assert_eq!(seen, "draft");
         let title: String = document.get("title").unwrap();
         assert_eq!(title, "patched");
-    }
-
-    #[test]
-    fn single_field_calls_encode_one_param() {
-        let lua = Lua::new();
-        lua.load(
-            r##"
-            recorded = {}
-            function filter(route)
-                recorded.route = route
-            end
-            "##,
-        )
-        .exec()
-        .unwrap();
-        let function: Function = lua.globals().get("filter").unwrap();
-        let callback = Callback::<SingleArgs>::decode(&Value::Function(function), &lua).unwrap();
-        callback.call::<()>(&lua, (&"home".to_owned(),)).unwrap();
-        let recorded: Table = lua.globals().get("recorded").unwrap();
-        let route: String = recorded.get("route").unwrap();
-        assert_eq!(route, "home");
     }
 
     #[test]

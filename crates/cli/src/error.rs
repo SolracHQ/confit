@@ -175,7 +175,7 @@ pub enum CliError {
         input: String,
     },
     /// Refused export flags.
-    #[error("export: '-o' plus '--manifest' refuse together, pick one")]
+    #[error("export: '-o' and '--manifest' refuse together, pick one")]
     FlagRefuse,
 }
 

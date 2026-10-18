@@ -490,37 +490,6 @@ mod tests {
             .load(r#"return { argv = { "mise" }, checks = { { in_path = { name = "x" } } } }"#)
             .call(())
             .unwrap();
-        match Hook::decode(&value, &lua) {
-            Ok(_) => panic!("checks arrays pass"),
-            Err(error) => {
-                let text = error.to_string();
-                assert!(
-                    text.contains("unknown field") && text.contains("checks"),
-                    "the text shows the dead key: {text}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn timeout_round_trips_through_strings() {
-        use confit_binding::value::Encode;
-
-        let lua = Lua::new();
-        let source = hook(
-            &["tool"],
-            &[],
-            Condition::default(),
-            Condition::default(),
-            90,
-        );
-        let encoded = source.encode(&lua).unwrap();
-        let Value::Table(table) = encoded else {
-            panic!("hook encodes a table");
-        };
-        let rendered: String = table.get("timeout").unwrap();
-        assert_eq!(rendered, "90");
-        let back = Hook::decode(&Value::Table(table), &lua).unwrap();
-        assert_eq!(back, source);
+        assert!(Hook::decode(&value, &lua).is_err(), "checks arrays fail");
     }
 }

@@ -1,5 +1,5 @@
 -- Welcome to confit. This profile builds your shell setup.
--- Profiles return configs plus documents. Documents describe
+-- Profiles return configs and documents. Documents describe
 -- file contents, configs group your changes.
 local sugar = require("plugins._.sugar")
 
@@ -12,15 +12,15 @@ local bashrc = sugar.home(".bashrc")
 local shell = {
 	name = "shell",
 	patches = {
-		sugar.patch(bashrc, function(_, data)
-			sugar.alias(data, "config", "ll", "ls -l")
+		sugar.patch(bashrc, function(document)
+			table.insert(document.config, sugar.alias("ll", "ls -l"))
 		end),
 	},
 }
 
 return {
 	documents = {
-		[bashrc] = sugar.rc(),
+		sugar.rc(bashrc),
 	},
 	configs = { shell },
 }

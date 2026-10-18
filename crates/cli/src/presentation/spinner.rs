@@ -48,8 +48,8 @@ impl SuspendControl {
             drop(stderr);
             log::debug!("prompt waiting for answer");
             let mut line = String::new();
-            let reads = std::io::stdin().lock().read_line(&mut line)?;
-            log::debug!("prompt read {reads} bytes");
+            let got = std::io::stdin().lock().read_line(&mut line)?;
+            log::debug!("prompt read {got} bytes");
             // Truth table lives in caller tests.
             Ok(line.trim() == "yes")
         })
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_acks_after_queued_prints() {
+    fn flush_acks_queued_and_empty_prints() {
         let (control, print_tx, shutdown_tx, handle) = test_control();
         for line in ["first", "second", "third"] {
             print_tx.send(line.to_owned()).unwrap();
@@ -346,10 +346,6 @@ mod tests {
             Ok(()) => {}
             Err(_) => panic!("renderer joins after flush"),
         }
-    }
-
-    #[test]
-    fn flush_passes_without_queued_prints() {
         let (control, _, shutdown_tx, handle) = test_control();
         control.flush();
         let _ = shutdown_tx.send(());

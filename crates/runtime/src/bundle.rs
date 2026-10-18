@@ -60,29 +60,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_output_gains_cb_suffix() {
-        let out = ensure_bundle_extension(Path::new("plan"));
-        match out.to_str() {
-            Some(text) => assert_eq!(text, "plan.cb"),
-            None => panic!("bare output gains suffix"),
-        }
-    }
-
-    #[test]
-    fn cb_suffix_stays_unchanged() {
-        let out = ensure_bundle_extension(Path::new("plan.cb"));
-        match out.to_str() {
-            Some(text) => assert_eq!(text, "plan.cb"),
-            None => panic!("cb output stays unchanged"),
-        }
-    }
-
-    #[test]
-    fn cb_suffix_match_reads_case_insensitive() {
-        let out = ensure_bundle_extension(Path::new("plan.CB"));
-        match out.to_str() {
-            Some(text) => assert_eq!(text, "plan.CB"),
-            None => panic!("uppercase cb stays untouched"),
+    fn bundle_extension_pins_suffix_contract() {
+        for (input, want) in [
+            ("plan", "plan.cb"),
+            ("plan.cb", "plan.cb"),
+            ("plan.CB", "plan.CB"),
+        ] {
+            let out = ensure_bundle_extension(Path::new(input));
+            assert_eq!(out.to_str(), Some(want));
         }
     }
 }

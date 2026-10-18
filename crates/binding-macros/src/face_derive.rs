@@ -32,6 +32,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     &declaration.attrs,
                     &header.validate,
                     &header.rename,
+                    &header.returns,
                 ),
                 Some(ContainerKind::Userdata) => expand_struct_userdata(
                     &identifier,
@@ -49,36 +50,32 @@ pub fn expand(input: TokenStream) -> TokenStream {
         },
         Data::Enum(data) => match parse_header(&identifier, &declaration.attrs, true) {
             Ok(header) => match (header.kind, header.union) {
-                (Some(kind), Some(UnionKind::String)) => expand_string_enum(
+                (Some(_), Some(UnionKind::String)) => expand_string_enum(
                     &identifier,
                     data,
                     &declaration.attrs,
-                    kind,
                     &header.validate,
                     &header.rename,
                 ),
-                (Some(kind), Some(UnionKind::Untagged)) => expand_untagged_enum(
+                (Some(_), Some(UnionKind::Untagged)) => expand_untagged_enum(
                     &identifier,
                     data,
                     &declaration.attrs,
-                    kind,
                     &header.probe,
                     &header.validate,
                     &header.rename,
                 ),
-                (Some(kind), Some(UnionKind::Tagged)) => expand_tagged_enum(
+                (Some(_), Some(UnionKind::Tagged)) => expand_tagged_enum(
                     &identifier,
                     data,
                     &declaration.attrs,
-                    kind,
                     &header.validate,
                     &header.rename,
                 ),
-                (Some(kind), Some(UnionKind::Probe)) => expand_probe_enum(
+                (Some(_), Some(UnionKind::Probe)) => expand_probe_enum(
                     &identifier,
                     data,
                     &declaration.attrs,
-                    kind,
                     &header.validate,
                     &header.rename,
                 ),
