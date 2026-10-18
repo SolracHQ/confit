@@ -4,10 +4,7 @@
 pub mod error;
 mod extract;
 mod hashes;
-mod tar;
-mod zip;
 
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,38 +18,13 @@ use crate::resources::Resources;
 use crate::resources::error::ResourceError;
 use confit_driver as driver;
 use error::{ArchiveError, Result};
-use extract::{ExtractedMember, check_backend_names, check_member_path};
-use tar::TarBackend;
-use zip::ZipBackend;
+use extract::{ExtractedMember, check_names};
 
 /// Unpack folder name under the temp base.
 const EXTRACT_DIR: &str = "extract";
 
 /// Head window for every probe, wide enough for tar magic.
 const HEAD_LEN: u64 = 512;
-
-/// Archive backend.
-trait ArchiveBackend {
-    /// List member names.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::Read`] for unreadable sources.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-    /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
-    fn names(&self, source: &Path) -> Result<Vec<String>>;
-
-    /// Extract decoded members under pending with hashes.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::Read`] for unreadable sources.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-    /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
-    fn unpack(&self, source: &Path, pending: &Path) -> Result<Vec<ExtractedMember>>;
-}
 
 /// File-backed archive member listing and extraction.
 ///
@@ -102,19 +74,10 @@ impl ArchiveStore {
     /// # Errors
     ///
     /// - [`ArchiveError::Read`] for unreadable archives.
+    /// - [`ArchiveError::NotArchive`] for non-archives.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-    /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
-        let source = archive.canonical();
-        match sniff(source)? {
-            Shape::Zip => ZipBackend.names(source),
-            Shape::Plain => TarBackend.names(source),
-            Shape::Tar => match TarBackend.names(source) {
-                Err(_) if wants_tar(source) => Err(not_archive(source)),
-                outcome => outcome,
-            },
-        }
+        names(archive.canonical())
     }
 
     /// Unpack one archive once into the extract folder.
@@ -127,10 +90,9 @@ impl ArchiveStore {
     ///
     /// - [`ArchiveError::Read`] for unreadable archives.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-    /// - [`ArchiveError::UnsupportedCompression`] for verified compression.
     /// - [`ArchiveError::Write`] for extract write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other extract write failures.
+    /// - [`ArchiveError::WriteUnknown`] for other extract write
+    ///   failures.
     /// - [`ArchiveError::NotArchive`] for non-archives.
     pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
         let source = archive.canonical();
@@ -141,51 +103,30 @@ impl ArchiveStore {
         if dest.is_dir() {
             return extracted_handles(&dest, source, &self.resources);
         }
-        match sniff(source)? {
-            Shape::Zip => {
-                check_backend_names(source, &ZipBackend)?;
-                self.run_backend(source, &dest, &ZipBackend)
-            }
-            Shape::Plain => {
-                check_backend_names(source, &TarBackend)?;
-                self.run_backend(source, &dest, &TarBackend)
-            }
-            Shape::Tar => {
-                match TarBackend.names(source) {
-                    Ok(names) => {
-                        for name in &names {
-                            check_member_path(name, source)?;
-                        }
-                    }
-                    Err(_) if wants_tar(source) => {
-                        return Err(not_archive(source));
-                    }
-                    Err(_) => {}
-                }
-                match self.run_backend(source, &dest, &TarBackend) {
-                    Err(_) if wants_tar(source) => Err(not_archive(source)),
-                    outcome => outcome,
-                }
-            }
+        let head = read_head(source)?;
+        if !driver::archive::supported(&head) {
+            return Err(not_archive(source));
         }
+        let listed = names(source)?;
+        check_names(source, &listed)?;
+        self.run_unpack(source, &dest)
     }
 
-    /// Unpack one backend through pending into place.
+    /// Unpack one archive through pending into place.
     ///
     /// # Errors
     ///
     /// - [`ArchiveError::Read`] for unreadable archives.
     /// - [`ArchiveError::Write`] for extract write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other extract write failures.
-    fn run_backend(
-        &self,
-        source: &Path,
-        dest: &Path,
-        backend: &dyn ArchiveBackend,
-    ) -> Result<Vec<ResourceHandle>> {
+    /// - [`ArchiveError::WriteUnknown`] for other extract write
+    ///   failures.
+    fn run_unpack(&self, source: &Path, dest: &Path) -> Result<Vec<ResourceHandle>> {
         let staged = driver::StagedDir::stage(dest)
             .map_err(|error| ArchiveError::from_write_io(source, error))?;
-        let members = extract_members(source, staged.path(), backend)?;
+        let pending = staged.path().to_path_buf();
+        std::fs::create_dir_all(&pending)
+            .map_err(|error| ArchiveError::from_write_io(source, error))?;
+        let members = unpack_into(source, &pending)?;
         staged
             .persist(dest)
             .map_err(|error| ArchiveError::from_write_io(source, error))?;
@@ -241,23 +182,43 @@ impl ArchiveStore {
     }
 }
 
-/// Extract one backend's members under a fresh pending folder.
+/// Unpack members under pending with hashes.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Read`] for unreadable archives.
-/// - [`ArchiveError::Write`] for extract write faults.
-/// - [`ArchiveError::WriteUnknown`] for other extract write failures.
 /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-/// - [`ArchiveError::UnsupportedCompression`] for verified compression.
-fn extract_members(
-    source: &Path,
-    pending: &Path,
-    backend: &dyn ArchiveBackend,
-) -> Result<Vec<ExtractedMember>> {
-    std::fs::create_dir_all(pending).map_err(|error| ArchiveError::from_write_io(source, error))?;
-    backend.unpack(source, pending)
+/// - [`ArchiveError::Escape`] for escaping members.
+/// - [`ArchiveError::Write`] for extract write faults.
+/// - [`ArchiveError::WriteUnknown`] for other extract write
+///   failures.
+fn unpack_into(source: &Path, pending: &Path) -> Result<Vec<ExtractedMember>> {
+    use extract::extract_entry;
+
+    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
+    let mut collected = Vec::new();
+    let mut failure: Option<ArchiveError> = None;
+    let outcome =
+        driver::archive::uncompress(file, |entry| match extract_entry(source, pending, entry) {
+            Ok(member) => {
+                collected.push(member);
+                Ok(())
+            }
+            Err(error) => {
+                failure = Some(error);
+                Err(std::io::Error::other("archive extract failed"))
+            }
+        });
+    match outcome {
+        Ok(()) => Ok(collected),
+        Err(error) => {
+            if let Some(error) = failure {
+                Err(error)
+            } else {
+                Err(from_driver(source, error))
+            }
+        }
+    }
 }
 
 /// Hash one source file.
@@ -271,24 +232,57 @@ fn file_sha(source: &Path) -> Result<Sha> {
     Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
 }
 
-/// Prove one source is a compressed archive.
+/// List member names for one source.
+///
+/// # Errors
+///
+/// - [`ArchiveError::Read`] for unreadable sources.
+/// - [`ArchiveError::NotArchive`] for non-archives.
+/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+fn names(source: &Path) -> Result<Vec<String>> {
+    let head = read_head(source)?;
+    if !driver::archive::supported(&head) {
+        return Err(not_archive(source));
+    }
+    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
+    driver::archive::names(file).map_err(|error| from_driver(source, error))
+}
+
+/// Map one driver archive failure into domain language.
+fn from_driver(source: &Path, error: driver::archive::Error) -> ArchiveError {
+    match error {
+        driver::archive::Error::Foreign => not_archive(source),
+        driver::archive::Error::Bare
+        | driver::archive::Error::Corrupt(_)
+        | driver::archive::Error::Truncated(_) => ArchiveError::CorruptedArchive {
+            path: source.to_path_buf(),
+        },
+        driver::archive::Error::Locked => ArchiveError::PasswordProtectedArchive {
+            path: source.to_path_buf(),
+        },
+        driver::archive::Error::Unknown { .. } => ArchiveError::UnsupportedCompression {
+            path: source.to_path_buf(),
+        },
+        driver::archive::Error::Denied(inner)
+        | driver::archive::Error::Missing(inner)
+        | driver::archive::Error::Invalid(inner)
+        | driver::archive::Error::Io(inner)
+        | driver::archive::Error::Visit(inner) => extract::from_stream(source, inner),
+    }
+}
+
+/// Prove one source holds a compressed archive.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::NotArchive`] for plain sources.
 /// - [`ArchiveError::Read`] for unreadable sources.
 fn check_compressed_source(source: &Path) -> Result<()> {
-    match sniff(source)? {
-        Shape::Zip => ZipBackend
-            .names(source)
-            .map(|_| ())
-            .map_err(|_| not_archive(source)),
-        Shape::Plain => Err(not_archive(source)),
-        Shape::Tar => TarBackend
-            .names(source)
-            .map(|_| ())
-            .map_err(|_| not_archive(source)),
+    let head = read_head(source)?;
+    if !driver::archive::supported(&head) {
+        return Err(not_archive(source));
     }
+    names(source).map(|_| ()).map_err(|_| not_archive(source))
 }
 
 /// Build one non-archive error with the source path.
@@ -328,41 +322,14 @@ fn member_shas(members: &[ExtractedMember]) -> std::collections::BTreeMap<String
         .collect()
 }
 
-/// Sniffed archive shape.
-enum Shape {
-    /// Zip bytes under central-directory framing.
-    Zip,
-    /// Tar or gzip bytes under tar framing.
-    Tar,
-    /// Plain bytes for one tar attempt.
-    Plain,
-}
-
-/// Sniff one source into its backend shape.
-///
-/// Zip magic routes zip, tar and gzip magic route tar, and plain bytes route
-/// a plain tar attempt.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable sources.
-fn sniff(source: &Path) -> Result<Shape> {
-    let head = read_head(source)?;
-    if driver::zip::valid(&head) {
-        Ok(Shape::Zip)
-    } else if driver::tar::handles(&head) {
-        Ok(Shape::Tar)
-    } else {
-        Ok(Shape::Plain)
-    }
-}
-
 /// Read the head window for every probe.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Read`] for unreadable sources.
 fn read_head(source: &Path) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+
     let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
     let mut head = Vec::new();
     std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
@@ -495,19 +462,12 @@ fn from_resource(error: ResourceError) -> ArchiveError {
     }
 }
 
-/// Report whether a name wants tar members.
-fn wants_tar(archive: &Path) -> bool {
-    let lower = archive.as_os_str().to_string_lossy().to_lowercase();
-    lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_driver::archive::{Algorithm, Builder, Level};
+    use std::io::Read as _;
     use std::io::Write as _;
-
-    /// Deflate level feeding container fixtures.
-    const LEVEL: u32 = 6;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -527,22 +487,19 @@ mod tests {
         Resources::new(&test_roots(dir))
     }
 
-    fn tar_gz_bytes(dir: &Path, members: &[(&str, &[u8])]) -> Vec<u8> {
-        let dest = dir.join("scratch.tar.gz");
-        let build = |path: &Path| {
-            let sink = std::fs::File::create(path)?;
-            let mut builder = driver::tar::TarBuilder::create_gzipped(sink, LEVEL);
-            for (name, bytes) in members {
-                let mut reader = std::io::Cursor::new(*bytes);
-                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+    fn tar_gz_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::TarGz, Level::High);
+        for (name, bytes) in members {
+            let mut reader = std::io::Cursor::new(*bytes);
+            if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
+                panic!("fixture builds: {error}");
             }
-            builder.finish_gzipped()?;
-            Ok(())
-        };
-        if let Err(error) = driver::atomic_write(&dest, build) {
-            panic!("fixture builds: {error}");
         }
-        std::fs::read(&dest).unwrap()
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     fn evil_tar_gz_bytes() -> Vec<u8> {
@@ -617,7 +574,7 @@ mod tests {
     fn create_registers_compressed_source() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
+        let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
         let source = ResourceHandle::new(dir.path(), path.clone(), Sha::hash(&raw)).unwrap();
         match store.archive(&source) {
@@ -659,7 +616,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
@@ -675,14 +632,11 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(
-                dir.path(),
-                &[
-                    ("a.txt", b"same"),
-                    ("b.txt", b"same"),
-                    ("sub/c.txt", b"other"),
-                ],
-            ),
+            &tar_gz_bytes(&[
+                ("a.txt", b"same"),
+                ("b.txt", b"same"),
+                ("sub/c.txt", b"other"),
+            ]),
         );
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
         let expected_extract = extract_base.join(archive.sha256().hex());
@@ -727,7 +681,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
@@ -772,7 +726,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
@@ -800,7 +754,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
@@ -833,7 +787,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         match store.extract(&archive) {
             Ok(_) => {}
@@ -870,7 +824,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
         match store.extract(&archive) {
             Ok(_) => {}
@@ -895,7 +849,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha")]),
         );
         match store.extract_member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
@@ -930,7 +884,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha")]),
         );
         match store.extract(&archive) {
             Ok(_) => {}
@@ -966,27 +920,23 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let resources = test_resources(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
         encoder.write_all(b"plain").unwrap();
-        let archive = fixture_archive(&store, dir.path(), "note.gz", &encoder.finish().unwrap());
-        match store.members(&archive) {
-            Ok(names) => assert_eq!(names, vec!["note"]),
-            Err(error) => panic!("gzip lists: {error}"),
-        }
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("gzip extracts: {error}"),
+        let raw = encoder.finish().unwrap();
+        let path = write_archive(dir.path(), "note.gz", &raw);
+        let archive = match ArchiveHandle::new(path, Sha::hash(&raw)) {
+            Ok(handle) => handle,
+            Err(error) => panic!("handle builds: {error}"),
         };
-        assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].sha256(), &Sha::hash(b"plain"));
-        match resources.open(&handles[0]) {
-            Ok(mut reader) => {
-                let mut found = Vec::new();
-                reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, b"plain");
-            }
-            Err(error) => panic!("gzip opens: {error}"),
+        match store.members(&archive) {
+            Ok(_) => panic!("bare gzip passes"),
+            Err(ArchiveError::CorruptedArchive { .. }) => {}
+            Err(error) => panic!("wrong bare variant: {error}"),
+        }
+        match store.extract(&archive) {
+            Ok(_) => panic!("bare gzip passes"),
+            Err(ArchiveError::CorruptedArchive { .. }) => {}
+            Err(error) => panic!("wrong bare variant: {error}"),
         }
     }
 
@@ -1007,7 +957,7 @@ mod tests {
     fn extract_keeps_one_extract_per_handle_sha() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let raw = tar_gz_bytes(dir.path(), &[("a.txt", b"alpha")]);
+        let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
         let sha_a = Sha::hash(b"archive-a");
         let sha_b = Sha::hash(b"archive-b");
         assert_ne!(sha_a, sha_b);
@@ -1062,7 +1012,7 @@ mod tests {
             &store,
             dir.path(),
             "big.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("big.bin", &raw)]),
+            &tar_gz_bytes(&[("big.bin", &raw)]),
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["big.bin"]),
@@ -1084,72 +1034,66 @@ mod tests {
     }
 
     fn zip_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
-        use ::zip::write::SimpleFileOptions;
-
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = ::zip::ZipWriter::new(cursor);
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
         for (name, bytes) in members {
-            writer
-                .start_file(
-                    *name,
-                    SimpleFileOptions::default()
-                        .compression_method(::zip::CompressionMethod::Stored),
-                )
-                .unwrap();
-            writer.write_all(bytes).unwrap();
+            let mut reader = std::io::Cursor::new(*bytes);
+            if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
+                panic!("fixture builds: {error}");
+            }
         }
-        writer.finish().unwrap().into_inner()
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     fn zip_bytes_with_dir() -> Vec<u8> {
-        use ::zip::write::SimpleFileOptions;
-
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = ::zip::ZipWriter::new(cursor);
-        writer
-            .add_directory("sub/", SimpleFileOptions::default())
-            .unwrap();
-        writer
-            .start_file(
-                "a.txt",
-                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
-            )
-            .unwrap();
-        writer.write_all(b"alpha").unwrap();
-        writer
-            .start_file(
-                "sub/b.txt",
-                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
-            )
-            .unwrap();
-        writer.write_all(b"beta").unwrap();
-        writer.finish().unwrap().into_inner()
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
+        let mut empty = std::io::Cursor::new(b"" as &[u8]);
+        if let Err(error) = builder.member("sub/", 0o755, 0, &mut empty) {
+            panic!("fixture builds: {error}");
+        }
+        for (name, bytes) in [
+            ("a.txt", b"alpha" as &[u8]),
+            ("sub/b.txt", b"beta" as &[u8]),
+        ] {
+            let mut reader = std::io::Cursor::new(bytes);
+            if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
+                panic!("fixture builds: {error}");
+            }
+        }
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     fn evil_zip_bytes() -> Vec<u8> {
-        use ::zip::write::SimpleFileOptions;
-
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = ::zip::ZipWriter::new(cursor);
-        writer
-            .start_file(
-                "../evil.txt",
-                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored),
-            )
-            .unwrap();
-        writer.write_all(b"x").unwrap();
-        writer.finish().unwrap().into_inner()
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
+        let mut reader = std::io::Cursor::new(b"x" as &[u8]);
+        if let Err(error) = builder.member("../evil.txt", 0o644, 1, &mut reader) {
+            panic!("fixture builds: {error}");
+        }
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     fn symlink_zip_bytes() -> Vec<u8> {
-        use ::zip::write::SimpleFileOptions;
-
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = ::zip::ZipWriter::new(cursor);
-        writer
-            .add_symlink("link.txt", "a.txt", SimpleFileOptions::default())
-            .unwrap();
-        writer.finish().unwrap().into_inner()
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
+        let mut reader = std::io::Cursor::new(b"a.txt" as &[u8]);
+        if let Err(error) = builder.member("link.txt", 0o120777, 5, &mut reader) {
+            panic!("fixture builds: {error}");
+        }
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     #[test]
@@ -1227,25 +1171,20 @@ mod tests {
     }
 
     #[test]
-    fn zip_symlink_skips_without_extract() {
+    fn zip_high_mode_extracts_as_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(&store, dir.path(), "link.zip", &symlink_zip_bytes());
         match store.members(&archive) {
-            Ok(names) => assert!(names.is_empty(), "symlink skips: {names:?}"),
+            Ok(names) => assert_eq!(names, vec!["link.txt"]),
             Err(error) => panic!("symlink members list: {error}"),
         }
         let handles = match store.extract(&archive) {
             Ok(handles) => handles,
             Err(error) => panic!("symlink archive extracts: {error}"),
         };
-        assert!(handles.is_empty());
+        assert_eq!(handles.len(), 1);
         let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        let extract_dir = extract_base.join(archive.sha256().hex());
-        if extract_dir.exists() {
-            let left = driver::fs::read_dir(&extract_dir).unwrap().len();
-            assert_eq!(left, 0);
-        }
         assert_no_pending(&extract_base);
     }
 
@@ -1253,10 +1192,8 @@ mod tests {
     fn extract_maps_write_quota() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
-        encoder.write_all(b"plain").unwrap();
-        let raw = encoder.finish().unwrap();
-        let archive = fixture_archive(&store, dir.path(), "note.gz", &raw);
+        let raw = tar_gz_bytes(&[("a.txt", b"plain")]);
+        let archive = fixture_archive(&store, dir.path(), "note.tar.gz", &raw);
         let source = archive.canonical().to_path_buf();
         let error = std::io::Error::new(std::io::ErrorKind::QuotaExceeded, "capped disk");
         match ArchiveError::from_write_io(&source, error) {
@@ -1284,7 +1221,7 @@ mod tests {
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(dir.path(), &[("a.txt", b"alpha"), ("b.txt", b"beta")]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("b.txt", b"beta")]),
         );
         match store.extract(&archive) {
             Ok(handles) => {

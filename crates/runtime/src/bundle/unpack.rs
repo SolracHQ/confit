@@ -251,12 +251,14 @@ mod tests {
     }
 
     fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
+        use confit_driver::archive::{Algorithm, Builder, Level};
+
         let build = |path: &Path| {
             let sink = std::fs::File::create(path)?;
-            let mut builder = driver::tar::TarBuilder::create(sink);
+            let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
             for (name, bytes) in entries {
                 let mut reader = std::io::Cursor::new(bytes.as_slice());
-                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+                builder.member(name, 0o644, bytes.len() as u64, &mut reader)?;
             }
             builder.finish()?;
             Ok(())
@@ -268,13 +270,7 @@ mod tests {
 
     fn entry_names(path: &Path) -> Vec<String> {
         let file = std::fs::File::open(path).unwrap();
-        let mut archive = tar::Archive::new(file);
-        let mut names = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let entry = entry.unwrap();
-            names.push(entry.path().unwrap().to_string_lossy().into_owned());
-        }
-        names
+        driver::archive::names(file).unwrap()
     }
 
     #[test]
@@ -428,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn write_builds_plain_tar_envelope() {
+    fn write_builds_gzipped_envelope() {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);
         let plan = dir.path().join("plan");
@@ -437,7 +433,11 @@ mod tests {
             Err(error) => panic!("manifest writes: {error}"),
         };
         let raw = std::fs::read(written.canonical()).unwrap();
-        assert!(raw.len() >= 512, "plain holds one block");
-        assert_eq!(&raw[257..262], b"ustar", "plain envelope carries tar magic");
+        assert!(!raw.is_empty(), "gzipped holds bytes");
+        assert_eq!(
+            &raw[0..2],
+            &[0x1f, 0x8b],
+            "gzipped envelope carries gzip magic"
+        );
     }
 }

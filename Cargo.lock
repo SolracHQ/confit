@@ -282,6 +282,7 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
+ "thiserror",
  "ureq",
  "zip",
 ]
@@ -340,7 +341,6 @@ dependencies = [
  "noyalib",
  "serde",
  "serde_json",
- "tar",
  "tempfile",
  "thiserror",
  "toml",
@@ -363,11 +363,9 @@ dependencies = [
  "serde_json",
  "serini",
  "sha2",
- "tar",
  "tempfile",
  "thiserror",
  "toml",
- "zip",
 ]
 
 [[package]]

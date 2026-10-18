@@ -97,22 +97,24 @@ impl Bundler {
     /// - [`RuntimeError::BundleWriteUnknown`] for other build and hash
     ///   failures.
     fn write_staged(&self, dest: &Path, text: &str, blobs: &[Sha]) -> Result<ArchiveHandle> {
+        use confit_driver::archive::{Algorithm, Builder, Level};
+
         let mut staged = Vec::with_capacity(blobs.len());
         for blob in blobs {
             staged.push(self.object_member(blob, dest)?);
         }
         driver::atomic_write(dest, |path| {
             let sink = std::fs::File::create(path)?;
-            let mut builder = driver::tar::TarBuilder::create(sink);
+            let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
             let mut manifest_reader = std::io::Cursor::new(text.as_bytes());
             builder.member(
                 BUNDLE_MANIFEST,
-                text.len() as u64,
                 BUNDLE_ENTRY_MODE,
+                text.len() as u64,
                 &mut manifest_reader,
             )?;
             for (name, len, mut reader) in staged {
-                builder.member(&name, len, BUNDLE_ENTRY_MODE, &mut reader)?;
+                builder.member(&name, BUNDLE_ENTRY_MODE, len, &mut reader)?;
             }
             builder.finish()?;
             Ok(())
@@ -191,29 +193,27 @@ mod tests {
 
     fn entry_names(path: &Path) -> Vec<String> {
         let file = std::fs::File::open(path).unwrap();
-        let mut archive = tar::Archive::new(file);
-        let mut names = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let entry = entry.unwrap();
-            names.push(entry.path().unwrap().to_string_lossy().into_owned());
-        }
-        names
+        driver::archive::names(file).unwrap()
     }
 
     fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {
+        use std::io::Read as _;
+
         let file = std::fs::File::open(path).unwrap();
-        let mut archive = tar::Archive::new(file);
         let mut bodies = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let name = entry.path().unwrap().to_string_lossy().into_owned();
+        driver::archive::uncompress(file, |entry| {
+            let name = entry.name;
+            let mut body = entry.reader;
             if name == BUNDLE_MANIFEST {
-                continue;
+                std::io::copy(&mut body, &mut std::io::sink()).unwrap();
+                return Ok(());
             }
-            let mut body = Vec::new();
-            entry.read_to_end(&mut body).unwrap();
-            bodies.push(body);
-        }
+            let mut found = Vec::new();
+            body.read_to_end(&mut found).unwrap();
+            bodies.push(found);
+            Ok(())
+        })
+        .unwrap();
         bodies
     }
 

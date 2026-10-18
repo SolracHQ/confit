@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use confit_driver::sha::{Sha, ShaWriter};
 
-use super::ArchiveBackend;
 use super::error::{ArchiveError, Result};
 use confit_driver as driver;
 
@@ -42,11 +41,11 @@ pub(crate) fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError 
 pub(crate) fn extract_entry(
     source: &Path,
     pending: &Path,
-    name: &str,
-    reader: impl std::io::Read,
+    entry: driver::archive::Entry<'_>,
 ) -> Result<ExtractedMember> {
-    check_member_path(name, source)?;
-    let path = pending.join(name);
+    let driver::archive::Entry { name, mode, reader } = entry;
+    check_member_path(&name, source)?;
+    let path = pending.join(&name);
     if let Err(error) = driver::fs::create_parent(&path) {
         let _ = std::fs::remove_dir_all(pending);
         return Err(ArchiveError::from_write_io(source, error));
@@ -63,24 +62,23 @@ pub(crate) fn extract_entry(
         let _ = std::fs::remove_dir_all(pending);
         return Err(from_stream(source, error));
     }
+    if let Err(error) = driver::fs::set_mode(&path, Some(mode)) {
+        let _ = std::fs::remove_dir_all(pending);
+        return Err(ArchiveError::from_write_io(source, error));
+    }
     Ok(ExtractedMember {
-        name: name.to_owned(),
+        name,
         sha: writer.digest(),
     })
 }
 
-/// Reject escaping member names before one unpack.
-///
-/// - Decoder failures pass through untouched.
+/// Check member names for containment.
 ///
 /// # Errors
 ///
 /// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-/// - [`ArchiveError::PasswordProtectedArchive`] for locked archives.
-/// - [`ArchiveError::UnsupportedCompression`] for verified compression.
-pub(crate) fn check_backend_names(source: &Path, backend: &dyn ArchiveBackend) -> Result<()> {
-    for name in &backend.names(source)? {
+pub(crate) fn check_names(source: &Path, names: &[String]) -> Result<()> {
+    for name in names {
         check_member_path(name, source)?;
     }
     Ok(())

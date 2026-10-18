@@ -6,11 +6,11 @@
 #[cfg(target_os = "windows")]
 compile_error!("confit supports unix targets only");
 
+/// Archive framing.
+pub mod archive;
 mod atomic;
 /// Filesystem helpers.
 pub mod fs;
-/// Gzip single streams.
-pub mod gzip;
 /// HTTP downloads.
 pub mod http;
 /// Base folders.
@@ -21,9 +21,5 @@ pub mod process;
 pub mod progress;
 /// Verified content hashes.
 pub mod sha;
-/// Tar framing.
-pub mod tar;
-/// Zip framing.
-pub mod zip;
 
 pub use atomic::{StagedDir, StagedFile, atomic_write, copy_stream};

@@ -9,7 +9,6 @@ use bytemuck::{Pod, Zeroable};
 use confit_driver::sha::Sha;
 
 use super::error::{BlobError, Result};
-use confit_driver as driver;
 
 /// Object identity prefix.
 #[repr(C)]
@@ -44,7 +43,7 @@ pub(crate) struct BlobFile {
 /// Object body writer with its header written.
 pub(crate) struct BodyWriter {
     /// Gzip encoder over the object sink.
-    encoder: driver::gzip::Encoder<std::fs::File>,
+    encoder: flate2::write::GzEncoder<std::fs::File>,
 }
 
 impl ObjectHeader {
@@ -103,7 +102,7 @@ impl BlobFile {
     ) -> std::io::Result<BodyWriter> {
         sink.write_all(bytemuck::bytes_of(&encode_header(sha, size)))?;
         Ok(BodyWriter {
-            encoder: driver::gzip::Encoder::open(sink, BLOB_GZIP_LEVEL),
+            encoder: flate2::write::GzEncoder::new(sink, flate2::Compression::new(BLOB_GZIP_LEVEL)),
         })
     }
 
@@ -117,14 +116,14 @@ impl BlobFile {
     /// # Errors
     ///
     /// - [`BlobError::Read`] for failed blob opens.
-    pub(crate) fn body(&self) -> Result<driver::gzip::Decoder<std::fs::File>> {
+    pub(crate) fn body(&self) -> Result<flate2::read::GzDecoder<std::fs::File>> {
         let mut file = std::fs::File::open(&self.path)
             .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
         file.seek(std::io::SeekFrom::Start(
             std::mem::size_of::<ObjectHeader>() as u64,
         ))
         .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
-        Ok(driver::gzip::Decoder::open(file))
+        Ok(flate2::read::GzDecoder::new(file))
     }
 
     /// Load raw object bytes with their encoded length.

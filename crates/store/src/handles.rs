@@ -236,9 +236,8 @@ fn stores_of(lua: &Lua) -> mlua::Result<Stores> {
 mod tests {
     use super::*;
     use crate::StoreRoots;
-    use confit_driver::atomic_write;
+    use confit_driver::archive::{Algorithm, Builder, Level};
     use confit_driver::progress::Event;
-    use confit_driver::tar::TarBuilder;
     use mlua::Value;
 
     fn fixture_sha() -> Sha {
@@ -325,40 +324,34 @@ mod tests {
         lua.load(source).call(())
     }
 
-    fn tarball(dir: &Path, members: &[(&str, &[u8])]) -> Vec<u8> {
-        let dest = dir.join("scratch.tar.gz");
-        let build = |path: &Path| {
-            let sink = std::fs::File::create(path)?;
-            let mut builder = TarBuilder::create_gzipped(sink, 6);
-            for (name, bytes) in members {
-                let mut reader = std::io::Cursor::new(*bytes);
-                builder.member(name, bytes.len() as u64, 0o644, &mut reader)?;
+    fn tarball(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
+        for (name, bytes) in members {
+            let mut reader = std::io::Cursor::new(*bytes);
+            if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
+                panic!("fixture builds: {error}");
             }
-            builder.finish_gzipped()?;
-            Ok(())
-        };
-        if let Err(error) = atomic_write(&dest, build) {
-            panic!("fixture builds: {error}");
         }
-        std::fs::read(&dest).unwrap()
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     fn zipball(members: &[(&str, &[u8])]) -> Vec<u8> {
-        use std::io::Write as _;
-
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut writer = zip::ZipWriter::new(cursor);
+        let sink = std::io::Cursor::new(Vec::new());
+        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
         for (name, bytes) in members {
-            writer
-                .start_file(
-                    *name,
-                    zip::write::SimpleFileOptions::default()
-                        .compression_method(zip::CompressionMethod::Stored),
-                )
-                .unwrap();
-            writer.write_all(bytes).unwrap();
+            let mut reader = std::io::Cursor::new(*bytes);
+            if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
+                panic!("fixture builds: {error}");
+            }
         }
-        writer.finish().unwrap().into_inner()
+        match builder.finish() {
+            Ok(sink) => sink.into_inner(),
+            Err(error) => panic!("fixture finishes: {error}"),
+        }
     }
 
     #[test]
@@ -417,7 +410,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        let raw = tarball(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
+        let raw = tarball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
@@ -479,7 +472,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
-        let raw = tarball(dir.path(), &[("a.txt", b"alpha")]);
+        let raw = tarball(&[("a.txt", b"alpha")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()
@@ -527,7 +520,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (stores, receiver) = test_stores_with_events(dir.path());
         let project = project_root(dir.path());
-        let raw = tarball(dir.path(), &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
+        let raw = tarball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
         let lua = test_lua(&stores);
         lua.globals()

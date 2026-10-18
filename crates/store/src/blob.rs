@@ -63,7 +63,7 @@ impl BlobStore {
     ///
     /// - [`BlobError::Read`] for unreadable blobs.
     /// - [`BlobError::Corrupt`] for bad headers.
-    pub fn open(&self, handle: &BlobHandle) -> Result<driver::gzip::Decoder<std::fs::File>> {
+    pub fn open(&self, handle: &BlobHandle) -> Result<flate2::read::GzDecoder<std::fs::File>> {
         let path = self.current_path(handle);
         BlobFile::open(path, handle.sha256())?.body()
     }
