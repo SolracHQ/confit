@@ -315,7 +315,6 @@ mod tests {
         assert_eq!(names.len(), 2, "the pool blob is included");
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_reports_write_denied() {
         let dir = tempfile::tempdir().unwrap();

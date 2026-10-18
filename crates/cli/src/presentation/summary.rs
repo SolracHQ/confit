@@ -420,7 +420,6 @@ fn kind_name(data: &Data) -> &'static str {
     match data {
         Data::Structured(_) => "structured",
         Data::Text(_) => "text",
-        #[cfg(unix)]
         Data::Link(_) => "link",
         Data::Rc(_) => "rc",
         Data::Opaque(_) => "opaque",
@@ -661,7 +660,6 @@ fn entry_bodies(document: &Document) -> Vec<String> {
                 found.content.split('\n').map(str::to_string).collect()
             }
         }
-        #[cfg(unix)]
         Data::Link(found) => vec![found.target.display()],
         Data::Opaque(found) => {
             vec![format!(
@@ -709,7 +707,6 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
         (Data::Structured(new), Data::Structured(old)) => {
             structured_update_lines(painter, &new.data, &old.data)
         }
-        #[cfg(unix)]
         (Data::Link(new), Data::Link(old)) => {
             if old.target == new.target {
                 Vec::new()

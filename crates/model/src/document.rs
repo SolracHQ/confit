@@ -117,7 +117,6 @@ impl Payload {
 }
 
 /// Symbolic link content with its target.
-#[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct LinkDocument {
@@ -125,7 +124,6 @@ pub struct LinkDocument {
     pub target: Route,
 }
 
-#[cfg(unix)]
 impl LinkDocument {
     /// Render target display bytes for hashing.
     pub fn bytes(&self) -> Vec<u8> {
@@ -255,7 +253,6 @@ pub enum Data {
     /// Plain text file.
     Text(TextDocument),
     /// Symbolic link.
-    #[cfg(unix)]
     Link(LinkDocument),
     /// Per-shell rc data object.
     Rc(RcData),

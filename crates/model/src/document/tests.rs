@@ -117,17 +117,10 @@ fn document_flat_round_trips_path_beside_text() {
 #[test]
 fn mixed_markers_fail() {
     let lua = test_lua();
-    #[cfg(unix)]
-    {
-        body_refuses(
-            &lua,
-            r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
-        );
-    }
-    #[cfg(not(unix))]
-    {
-        body_refuses(&lua, r#"{ text = "hi", nope = 1 }"#);
-    }
+    body_refuses(
+        &lua,
+        r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
+    );
     body_refuses(&lua, r#"{ nope = 1 }"#);
     let value: Value = lua.load("return { text = \"hi\" }").call(()).unwrap();
     assert!(

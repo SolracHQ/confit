@@ -212,7 +212,6 @@ mod tests {
     }
 
     /// Driver oracle for the discovery decision.
-    #[cfg(unix)]
     fn oracle(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
@@ -229,7 +228,6 @@ mod tests {
         None
     }
 
-    #[cfg(unix)]
     #[test]
     fn executable_bit_controls_discovery() {
         let dir = tempfile::tempdir().unwrap();
@@ -288,7 +286,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinks_follow_with_dangling_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -313,7 +310,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn helper_matches_oracle_row_by_row() {
         let dir = tempfile::tempdir().unwrap();

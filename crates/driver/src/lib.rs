@@ -3,6 +3,9 @@
 
 #![deny(missing_docs)]
 
+#[cfg(target_os = "windows")]
+compile_error!("confit supports unix targets only");
+
 mod atomic;
 /// Filesystem helpers.
 pub mod fs;

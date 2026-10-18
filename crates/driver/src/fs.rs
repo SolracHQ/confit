@@ -66,37 +66,12 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
 /// - [NotFound] for missing parents.
 /// - [PermissionDenied] when folders refuse writes.
 /// - [InvalidInput] when link paths hold bad bytes.
-#[cfg(unix)]
 pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     create_parent(link)?;
     if std::fs::symlink_metadata(link).is_ok() {
         std::fs::remove_file(link)?;
     }
     std::os::unix::fs::symlink(target, link)
-}
-
-/// Create one symlink and replace any present entry.
-///
-/// # Errors
-///
-/// - [NotFound] for missing parents.
-/// - [PermissionDenied] when folders refuse writes.
-/// - [InvalidInput] when link paths hold bad bytes.
-#[cfg(windows)]
-pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
-    create_parent(link)?;
-    if let Ok(facts) = std::fs::symlink_metadata(link) {
-        if facts.file_type().is_dir() {
-            std::fs::remove_dir(link)?;
-        } else {
-            std::fs::remove_file(link)?;
-        }
-    }
-    if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    }
 }
 
 /// Remove one symlink without touching other entries.
@@ -128,12 +103,7 @@ pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 /// Default permission bits for one path.
-#[cfg(unix)]
 const DEFAULT_MODE: u32 = 0o644;
-
-/// Default permission bits for one path.
-#[cfg(not(unix))]
-const DEFAULT_MODE: u32 = 0o755;
 
 /// Set unix permission bits on one path.
 ///
@@ -143,7 +113,6 @@ const DEFAULT_MODE: u32 = 0o755;
 ///
 /// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses writes.
-#[cfg(unix)]
 pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -154,30 +123,17 @@ pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits))
 }
 
-/// Hold the mode slot on other platforms.
-#[cfg(not(unix))]
-pub fn set_mode(_path: &Path, _mode: Option<u32>) -> io::Result<()> {
-    Ok(())
-}
-
 /// Read unix permission bits for one path.
 ///
 /// # Errors
 ///
 /// - [NotFound] for missing paths.
 /// - [PermissionDenied] when the path refuses read access.
-#[cfg(unix)]
 pub fn mode(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 
     let facts = std::fs::symlink_metadata(path)?;
     Ok(facts.permissions().mode() & 0o777)
-}
-
-/// Return the default mode on other platforms.
-#[cfg(not(unix))]
-pub fn mode(_path: &Path) -> io::Result<u32> {
-    Ok(DEFAULT_MODE)
 }
 
 /// Read mtime nanos since the epoch, zero when missing or pre-epoch.
@@ -203,7 +159,6 @@ mod tests {
         assert!(target.is_file(), "plain files stay past link removal");
     }
 
-    #[cfg(unix)]
     #[test]
     fn host_links_remove_without_touching_targets() {
         let dir = tempfile::tempdir().unwrap();

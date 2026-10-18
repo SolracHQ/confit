@@ -139,7 +139,6 @@ fn log_processed(built: &Manifest, previous: &Manifest) {
             match &document.data {
                 Data::Structured(_) => "structured",
                 Data::Text(_) => "text",
-                #[cfg(unix)]
                 Data::Link(_) => "link",
                 Data::Rc(_) => "rc",
                 Data::Opaque(_) => "opaque",

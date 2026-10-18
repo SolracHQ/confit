@@ -312,7 +312,6 @@ fn disk_difference(
                 Vec::new()
             }
         }
-        #[cfg(unix)]
         Data::Link(found) => {
             let disk_target = String::from_utf8_lossy(disk);
             if disk_target.as_ref() != found.target.display() {
@@ -363,10 +362,7 @@ fn disk_difference(
     let wanted = match &document.data {
         Data::Text(found) => Some(found.mode),
         Data::Opaque(found) => Some(found.mode),
-        #[cfg(unix)]
         Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
-        #[cfg(not(unix))]
-        Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => None,
     };
     if let Some(wanted) = wanted
         && let Some(seen) = disk_mode

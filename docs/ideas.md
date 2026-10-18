@@ -13,19 +13,17 @@ Pain: Being able to have plan time facts could be good for dynamic behaviors as 
 
 Idea: Host facts (plan time conditions)
 Importance: Mid
-Pain: All my personal machines are linux, but sometimes I install windows in my gaming pc and I need to think in others that could want to use the tool, so the profiles should know the host facts to be able to use scoop or chocolatey instead of mise or even brew with simple lua ifs, is something simple to implement but that i did not do until now because was not yet necessary for my pcs, since all are x64 linux pcs, but the world is a jungle
+Pain: All my personal machines are linux x64, so profiles should know host facts to pick between distro tools with simple lua ifs, something simple to implement but I did not do until now because it was not yet necessary for my pcs.
 
 What I have in my head
 
 ```lua
-if confit.facts.os == "windows" then
+if confit.facts.distro == "arch" then
   return confit.config(INSTALLER_NAME):require(SCOPE_INSTALLER_NAME)
 end
 ```
 
-On windows mise installs through scoop, so the installer top takes that road first and the rest stays as today.
-
-Facts make the tool multiplatform, and that brings preoccupations worth solving early. Paths resolve at plan time and hardcode into the bundle today. If the path library returns a struct pointing at home instead of a bare string, and apply resolves it late, one bundle serves several users on one machine or several machines with several users, as long as they stay similar enough.
+Facts make profiles adapt to hosts, and that brings preoccupations worth solving early. Paths resolve at plan time and hardcode into the bundle today. If the path library returns a struct pointing at home instead of a bare string, and apply resolves it late, one bundle serves several users on one machine or several machines with several users, as long as they stay similar enough.
 
 Hardness can emerge from use instead of declarations. Hook `__index` on the facts table, so touching a fact records it. If the profile ifs over that fact, it turns hard. Home counts too. A bundle that ifs over os applies only where os matches exactly.
 
@@ -50,13 +48,13 @@ Stop holding everything in memory. Stream when possible, make things lazy as pos
 
 Idea: Let hooks wait for other hooks
 Importance: Mid
-Pain: On windows scoop installs mise and mise install needs mise present, but scoop has no declarative file like mise.toml to hang a require on. Today every hook depends on configs alone and runs in declaration order. I need a hook that waits for another hook, or the windows installer story cannot sequence.
+Pain: One tool installs another and the second install needs the first present, but the first has no declarative file like mise.toml to hang a require on. Today every hook depends on configs alone and runs in declaration order. I need a hook that waits for another hook, or the installer story cannot sequence.
 
 What I have in my head
 ```lua
-config:add_hook(confit.hook.run({ "scoop", "install", "mise" }, { id = "scoop" }))
+config:add_hook(confit.hook.run({ "apt", "install", "mise" }, { id = "bootstrap" }))
 config:add_hook(confit.hook.run({ "mise", "install" }, {
-  after = { "scoop" },
+  after = { "bootstrap" },
 }))
 ```
 Hooks carry ids already for patches, so dependencies refer to ids too. Unknown ids fail the plan like unknown targets do. Cycles fail the plan. I left declaration order for the rest.

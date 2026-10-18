@@ -34,7 +34,6 @@ pub fn render_document(document: &Document) -> Result<Vec<u8>> {
             }
         },
         Data::Text(found) => Ok(found.content.as_bytes().to_vec()),
-        #[cfg(unix)]
         Data::Link(found) => Ok(found.target.display().as_bytes().to_vec()),
         Data::Rc(data) => Ok(render_rc(&document.destination, data)?.into_bytes()),
         Data::Opaque(found) => {

@@ -1,7 +1,6 @@
 //! Destination writes with deleted removal.
 
 use std::collections::BTreeSet;
-#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -53,10 +52,7 @@ impl Writer {
             let unmanaged = match &document.data {
                 Data::Text(found) => found.unmanaged,
                 Data::Opaque(found) => found.unmanaged,
-                #[cfg(unix)]
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => false,
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => false,
             };
             if unmanaged && expanded.exists() && !changed.contains(&document.destination) {
                 continue;
@@ -83,7 +79,6 @@ impl Writer {
                 continue;
             }
             let outcome = match &document.data {
-                #[cfg(unix)]
                 Data::Link(found) => {
                     let link = found.target.display();
                     driver::fs::write_link(&expanded, Path::new(&link))
@@ -108,10 +103,7 @@ impl Writer {
             let mode = match &document.data {
                 Data::Text(found) => Some(found.mode),
                 Data::Opaque(found) => Some(found.mode),
-                #[cfg(unix)]
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => None,
             };
             driver::fs::set_mode(&expanded, mode)
                 .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
@@ -196,14 +188,11 @@ impl Writer {
             .iter()
             .filter_map(|old| match &old.data {
                 Data::Tree(found) => Some(&found.members),
-                #[cfg(unix)]
                 Data::Structured(_)
                 | Data::Text(_)
                 | Data::Link(_)
                 | Data::Rc(_)
                 | Data::Opaque(_) => None,
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Text(_) | Data::Rc(_) | Data::Opaque(_) => None,
             })
             .map(|members| members.len())
             .sum();
@@ -219,14 +208,11 @@ impl Writer {
                 .filter(|document| document.destination == old.destination)
                 .filter_map(|document| match &document.data {
                     Data::Tree(found) => Some(&found.members),
-                    #[cfg(unix)]
                     Data::Structured(_)
                     | Data::Text(_)
                     | Data::Link(_)
                     | Data::Rc(_)
                     | Data::Opaque(_) => None,
-                    #[cfg(not(unix))]
-                    Data::Structured(_) | Data::Text(_) | Data::Rc(_) | Data::Opaque(_) => None,
                 })
                 .flat_map(|members| members.keys().map(String::as_str))
                 .collect();

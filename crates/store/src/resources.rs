@@ -399,7 +399,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn resource_refuses_outside_symlink() {
         let dir = tempfile::tempdir().unwrap();
@@ -416,7 +415,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn resource_follows_inside_symlink() {
         let dir = tempfile::tempdir().unwrap();
@@ -537,7 +535,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn open_reports_read_denied() {
         let dir = tempfile::tempdir().unwrap();

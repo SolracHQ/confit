@@ -178,10 +178,7 @@ impl<'a> ApplyRunner<'a> {
             let payloads: Vec<&Payload> = match &document.data {
                 Data::Opaque(found) => vec![&found.handle],
                 Data::Tree(found) => found.members.values().map(|member| member.blob()).collect(),
-                #[cfg(unix)]
                 Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => Vec::new(),
             };
             for payload in payloads {
                 let resolved = payload.resolve(&self.stores)?;

@@ -150,7 +150,6 @@ fn placed_documents_convert_every_kind() {
     let documents = vec![
         placed_text("note.txt", "hi"),
         placed_structured("config.json"),
-        #[cfg(unix)]
         Document::new(
             Route::new(RouteBase::Home, "linked").unwrap(),
             Data::Link(LinkDocument {
@@ -167,10 +166,7 @@ fn placed_documents_convert_every_kind() {
     let profile = profile_of(documents, vec![]);
     match assemble(&lua, &profile) {
         Ok(found) => {
-            #[cfg(unix)]
             assert_eq!(found.len(), 6);
-            #[cfg(not(unix))]
-            assert_eq!(found.len(), 5);
             let by_display = |display: &str| {
                 found
                     .iter()
@@ -197,7 +193,6 @@ fn placed_documents_convert_every_kind() {
                 }
                 _ => panic!("structured stays structured"),
             }
-            #[cfg(unix)]
             match by_display("home('linked')") {
                 Data::Link(LinkDocument { target }) => {
                     assert_eq!(target.display(), "home('origin')")

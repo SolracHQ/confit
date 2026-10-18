@@ -141,10 +141,7 @@ fn holders(manifest: &Manifest, sha: &Sha) -> String {
                 .values()
                 .filter_map(|member| member.blob().resolved())
                 .any(|blob| blob == sha),
-            #[cfg(unix)]
             Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => false,
-            #[cfg(not(unix))]
-            Data::Structured(_) | Data::Text(_) | Data::Rc(_) => false,
         })
         .map(|document| format!("'{}'", document.destination.display()))
         .collect();

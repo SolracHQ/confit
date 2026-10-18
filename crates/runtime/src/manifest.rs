@@ -136,10 +136,7 @@ impl Manifest {
                         }
                     }
                 }
-                #[cfg(unix)]
                 Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => {}
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => {}
             }
         }
         refs
@@ -294,7 +291,6 @@ impl Document {
         let kind = match &self.data {
             Data::Structured(_) => "structured",
             Data::Text(_) => "text",
-            #[cfg(unix)]
             Data::Link(_) => "link",
             Data::Rc(_) => "rc",
             Data::Opaque(_) => "opaque",
@@ -394,10 +390,7 @@ fn document_mode(document: &Document) -> Option<u32> {
     match &document.data {
         Data::Text(found) => Some(found.mode),
         Data::Opaque(found) => Some(found.mode),
-        #[cfg(unix)]
         Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
-        #[cfg(not(unix))]
-        Data::Structured(_) | Data::Rc(_) | Data::Tree(_) => None,
     }
 }
 
@@ -456,7 +449,6 @@ fn document_hash(document: &Document) -> Result<String> {
             Ok(Sha::hash(&bytes).hex())
         }
         Data::Text(found) => Ok(Sha::hash(&found.bytes()).hex()),
-        #[cfg(unix)]
         Data::Link(found) => Ok(Sha::hash(&found.bytes()).hex()),
     }
 }
@@ -513,10 +505,7 @@ fn seal_document(stores: &Stores, document: &mut Document) -> Result<()> {
                 *payload = Payload::Resolved(resolved);
             }
         }
-        #[cfg(unix)]
         Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => {}
-        #[cfg(not(unix))]
-        Data::Structured(_) | Data::Text(_) | Data::Rc(_) => {}
     }
     Ok(())
 }
@@ -788,10 +777,7 @@ mod tests {
             let payloads: Vec<&Payload> = match &document.data {
                 Data::Opaque(found) => vec![&found.handle],
                 Data::Tree(found) => found.members.values().map(TreeMember::blob).collect(),
-                #[cfg(unix)]
                 Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
-                #[cfg(not(unix))]
-                Data::Structured(_) | Data::Text(_) | Data::Rc(_) => Vec::new(),
             };
             for payload in payloads {
                 let resolved = match payload.resolved() {

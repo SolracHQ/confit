@@ -216,7 +216,6 @@ fn structured_declared_base(
         }
         Data::Rc(_) => Err(gap(display, "rc", first.format.name())),
         Data::Text(_) => Err(gap(display, "text", first.format.name())),
-        #[cfg(unix)]
         Data::Link(_) => Err(gap(display, "link", first.format.name())),
         Data::Opaque(_) => Err(gap(display, "opaque", first.format.name())),
         Data::Tree(_) => Err(gap(display, "tree", first.format.name())),
@@ -235,7 +234,6 @@ pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> Result<RcData> 
             Data::Rc(found) => Ok(found.clone()),
             Data::Structured(found) => Err(gap(&target.display(), found.format.name(), "rc")),
             Data::Text(_) => Err(gap(&target.display(), "text", "rc")),
-            #[cfg(unix)]
             Data::Link(_) => Err(gap(&target.display(), "link", "rc")),
             Data::Opaque(_) => Err(gap(&target.display(), "opaque", "rc")),
             Data::Tree(_) => Err(gap(&target.display(), "tree", "rc")),

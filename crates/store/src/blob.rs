@@ -782,7 +782,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn put_reports_write_denied() {
         let dir = tempfile::tempdir().unwrap();

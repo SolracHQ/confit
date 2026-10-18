@@ -61,10 +61,7 @@ pub fn disk_doc(document: &Document) -> Disk {
             };
         }
     };
-    #[cfg(unix)]
     let link_doc = matches!(document.data, Data::Link(_));
-    #[cfg(not(unix))]
-    let link_doc = false;
     let target = match std::fs::read_link(&expanded) {
         Ok(link) => join_link_target(&expanded, &link),
         Err(_) => expanded.clone(),
