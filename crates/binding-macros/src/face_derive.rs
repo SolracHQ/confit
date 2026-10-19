@@ -5,6 +5,7 @@ use proc_macro::TokenStream;
 use syn::{Data, DeriveInput, parse_macro_input};
 
 use super::callback_shape::expand_struct_callback;
+use super::enum_userdata::expand_enum_userdata;
 use super::literal::expand_string_enum;
 use super::parse::{ContainerKind, UnionKind, parse_header};
 use super::probe::expand_probe_enum;
@@ -50,6 +51,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
         },
         Data::Enum(data) => match parse_header(&identifier, &declaration.attrs, true) {
             Ok(header) => match (header.kind, header.union) {
+                (Some(ContainerKind::Userdata), None) => expand_enum_userdata(
+                    &identifier,
+                    data,
+                    &declaration.attrs,
+                    &header.validate,
+                    &header.rename,
+                ),
                 (Some(_), Some(UnionKind::String)) => expand_string_enum(
                     &identifier,
                     data,

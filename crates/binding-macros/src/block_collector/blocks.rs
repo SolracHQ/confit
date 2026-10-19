@@ -125,9 +125,10 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
                 collector: &mut ::confit_binding::registry::Registry,
             ) -> ::confit_binding::error::Result<()> {
                 let methods = Self::methods();
+                let face = <Self as ::confit_binding::face::Face>::face();
                 if collector.register_userdata(
                     Self::class_name(),
-                    <Self as ::confit_binding::face::Face>::face().documentation(),
+                    face.documentation(),
                     methods.clone(),
                 ) {
                     for method in &methods {

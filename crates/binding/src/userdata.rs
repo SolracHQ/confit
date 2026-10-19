@@ -207,4 +207,64 @@ mod tests {
             "missing param fails"
         );
     }
+
+    /// Cache fixture.
+    #[derive(Clone, Debug, PartialEq, Face)]
+    #[face(userdata)]
+    enum CacheHandle {
+        Cached(String),
+        Missing,
+    }
+
+    #[face_impl]
+    impl CacheHandle {
+        /// Answer a constant.
+        ///
+        /// # Returns
+        ///
+        /// - Constant value.
+        pub fn tag(&self) -> u64 {
+            7
+        }
+    }
+
+    #[test]
+    fn enum_value_round_trips_through_userdata() {
+        use crate::value::{Decode, Encode};
+
+        let lua = Lua::new();
+        for handle in [
+            CacheHandle::Cached("route".to_owned()),
+            CacheHandle::Missing,
+        ] {
+            let encoded = handle.encode(&lua).unwrap();
+            assert!(matches!(encoded, mlua::Value::UserData(_)));
+            let back = CacheHandle::decode(&encoded, &lua).unwrap();
+            assert_eq!(back, handle);
+        }
+    }
+
+    #[test]
+    fn enum_decode_refuses_foreign_shapes() {
+        use crate::value::Decode;
+
+        let lua = Lua::new();
+        assert!(
+            CacheHandle::decode(&mlua::Value::Nil, &lua).is_err(),
+            "nil fails"
+        );
+        let table = lua.create_table().unwrap();
+        assert!(
+            CacheHandle::decode(&mlua::Value::Table(table), &lua).is_err(),
+            "table fails"
+        );
+        let foreign = Roster {
+            seed: "base".to_owned(),
+        };
+        let held = lua.create_userdata(foreign).unwrap();
+        assert!(
+            CacheHandle::decode(&mlua::Value::UserData(held), &lua).is_err(),
+            "foreign userdata fails"
+        );
+    }
 }

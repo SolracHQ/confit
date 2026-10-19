@@ -277,7 +277,7 @@ pub(crate) fn parse_header(
             format!("{type_name}: callback shapes alone support returns"),
         ));
     }
-    if is_enum && header.union.is_none() {
+    if is_enum && header.union.is_none() && header.kind != Some(ContainerKind::Userdata) {
         return Err(syn::Error::new_spanned(
             identifier,
             format!(
@@ -294,6 +294,12 @@ pub(crate) fn parse_header(
         ));
     }
     if !is_enum && header.probe.is_some() {
+        return Err(syn::Error::new_spanned(
+            identifier,
+            format!("{type_name}: untagged enums are expected for probe hooks"),
+        ));
+    }
+    if header.kind == Some(ContainerKind::Userdata) && header.probe.is_some() {
         return Err(syn::Error::new_spanned(
             identifier,
             format!("{type_name}: untagged enums are expected for probe hooks"),

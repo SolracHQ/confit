@@ -6,6 +6,7 @@ use proc_macro::TokenStream;
 
 mod block_collector;
 mod callback_shape;
+mod enum_userdata;
 mod face_derive;
 mod literal;
 mod parse;
@@ -55,6 +56,34 @@ mod untagged;
 /// enum Arg {
 ///     Text(String),
 ///     Count(u64),
+/// }
+/// ```
+///
+/// Userdata enums hold their value behind methods.
+///
+/// ```rust,no_run
+/// use confit_binding_macros::{Face, face_impl};
+///
+/// #[derive(Clone, Face)]
+/// #[face(userdata)]
+/// enum Handle {
+///     Cached(String),
+///     Missing,
+/// }
+///
+/// #[face_impl]
+/// impl Handle {
+///     /// Answer the label.
+///     ///
+///     /// # Returns
+///     ///
+///     /// - The variant label.
+///     fn label(&self) -> String {
+///         match self {
+///             Self::Cached(digest) => digest.clone(),
+///             Self::Missing => "missing".to_owned(),
+///         }
+///     }
 /// }
 /// ```
 ///
