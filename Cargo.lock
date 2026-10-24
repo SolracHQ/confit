@@ -272,6 +272,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "confit-core"
+version = "0.9.0"
+dependencies = [
+ "crossbeam-channel",
+ "serde",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "confit-driver"
 version = "0.9.0"
 dependencies = [
