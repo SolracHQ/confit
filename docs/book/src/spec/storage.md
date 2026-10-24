@@ -1,6 +1,6 @@
 # Storage
 
-Confit keeps slots, history, and the blob pool under one
+Confit keeps slots, history, and the pool under one
 base folder. Bundles travel as files. Every path below shows the
 exact file the framework reads and writes.
 
@@ -15,7 +15,7 @@ entry below lives under that base:
 | Fixed slot | `state.json` | last applied manifest |
 | Named slots | `plans/{name}.json` | stored manifests |
 | History | `previous/{stamp}.json` | rotated manifests |
-| Blob pool | `blobs/{sha}` | gzipped blob bytes |
+| Pool | `blobs/{sha}` | gzipped pool bytes |
 
 Slot names hold one file stem. Empty names fail, separator
 carriers fail, and dot segments fail, each as a plan error:
@@ -46,31 +46,31 @@ with newest-first order, so `%1` shows the just-previous entry.
 Every apply records a fresh entry, so history keeps moving
 forward.
 
-### Blob pool
+### Pool
 
-Manifest writes store missing pool blobs first, so stored files
+Manifest writes store missing pool entries first, so stored files
 stay resolvable. Present hashes skip the write, so slots share
-stored bytes. Blob bytes land gzipped with level 6 under content
-hashes. Compression runs in parallel with per-blob progress.
+stored bytes. Pool bytes land gzipped with level 6 under content
+hashes. Compression runs in parallel with per-entry progress.
 Loads hydrate lazily. Disk bytes matching a hash win before any
 pool read, so repeat plans skip pool bytes. Pool hits verify
 and cache per run. Missing pool entries fail showing the hash:
 
 ```
-read state '{file}': missing blob '{sha}' for '{path}'
+read state '{file}': missing content '{sha}' for '{path}'
 ```
 
-`plan -o @name` fills the pool through the manifest write path,
-so the pool fills on plan and apply.
+Plans land raw cache bytes in one live pass with no pool writes,
+so pools fill on apply alone.
 
 ### Prune refs
 
-Three slot groups keep their blobs. The applied slot, every
+Three slot groups keep their entries. The applied slot, every
 history entry and every named slot contributes hashes. Collection
-reads blob hashes straight from raw manifests, so stale and
+reads content hashes straight from raw manifests, so stale and
 unreadable manifests count for nothing. Apply prunes once the
 archive lands, so a rotated-out entry frees its bytes at once.
-Delete prunes once the named file leaves, so shared blobs stay
+Delete prunes once the named file leaves, so shared entries stay
 kept.
 
 ### Bundle files

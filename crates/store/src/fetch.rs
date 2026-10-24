@@ -3,222 +3,44 @@
 pub mod error;
 pub mod transport;
 
-use std::io::{Read as _, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use confit_driver::progress::{Event, ProgressSender};
 use confit_driver::sha::Sha;
-use sha2::Digest as _;
 
 use self::transport::BODY_LIMIT_BYTES;
-use crate::StoreRoots;
-use crate::faults::AccessFault;
 use crate::handles::ResourceHandle;
+use crate::resources::Resources;
 use confit_driver as driver;
 use error::{FetchError, Result};
-
-/// Chunk size for streamed cache writes.
-const STREAM_BUF_BYTES: usize = 8 * 1024;
 
 /// Progress step for in-flight download events.
 const PROGRESS_STEP_BYTES: u64 = 64 * 1024;
 
-/// The url-hash to content-hash index folder.
-const INDEX_DIR: &str = "urls";
+/// Index extension for url entries under the cache folder.
+const INDEX_EXT: &str = "url";
 
 /// File-backed fetch cache for remote bytes.
 #[derive(Clone, Debug)]
 pub struct FetchCache {
-    cache: PathBuf,
+    resources: Arc<Resources>,
     progress: ProgressSender,
 }
 
 impl FetchCache {
-    /// Build one file-backed fetch cache under the temp base.
-    pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
+    /// Build one file-backed fetch cache over shared resources.
+    pub fn new(resources: Arc<Resources>, progress: ProgressSender) -> Self {
         Self {
-            cache: roots.temp_base.clone(),
+            resources,
             progress,
         }
     }
 
-    /// Derive the content path for one content digest.
-    fn content_path(&self, sha_hex: &str) -> PathBuf {
-        self.cache.join(sha_hex)
-    }
-
     /// Derive the index entry path for one URL.
     fn index_path(&self, url: &str) -> PathBuf {
-        self.cache
-            .join(INDEX_DIR)
-            .join(Sha::hash(url.as_bytes()).hex())
-    }
-
-    /// Find a cached handle with a valid index digest.
-    ///
-    /// - Tampered entries are misses.
-    fn lookup(&self, url: &str) -> Option<ResourceHandle> {
-        let stored = std::fs::read_to_string(self.index_path(url)).ok()?;
-        let wanted = Sha::new(stored.trim().to_lowercase()).ok()?;
-        let content = self.content_path(&wanted.hex());
-        let mut file = std::fs::File::open(&content).ok()?;
-        let actual = Sha::read(&mut file).ok()?;
-        if actual != wanted {
-            return None;
-        }
-        ResourceHandle::new(&self.cache, content, actual).ok()
-    }
-
-    /// Serve one cached hit with the cached progress event.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::DigestMismatch`] for cached hits failing the user sha.
-    fn fetch_hit(&self, url: &str, expected_sha: Option<&Sha>) -> Option<Result<ResourceHandle>> {
-        let hit = self.lookup(url)?;
-        let _ = self.progress.send(Event::FetchCached {
-            url: url.to_string(),
-            bytes: file_len(hit.canonical()),
-        });
-        match check_sha(url, hit.sha256(), expected_sha) {
-            Ok(()) => Some(Ok(hit)),
-            Err(error) => Some(Err(error)),
-        }
-    }
-
-    /// Download one URL body with the downloaded progress event.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Status`] for refused statuses.
-    /// - [`FetchError::Timeout`] for timeouts.
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    /// - [`FetchError::DigestMismatch`] for sha mismatches.
-    fn fetch_download(&self, url: &str, expected_sha: Option<&Sha>) -> Result<ResourceHandle> {
-        let (path, sha, bytes) = self.download(url)?;
-        let _ = self.progress.send(Event::FetchDownloaded {
-            url: url.to_string(),
-            bytes,
-        });
-        check_sha(url, &sha, expected_sha)?;
-        ResourceHandle::new(&self.cache, path, sha).map_err(|error| FetchError::Read {
-            url: url.to_owned(),
-            fault: AccessFault::Unknown {
-                message: error.to_string(),
-            },
-        })
-    }
-
-    /// Download one URL body into the cache through pending.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Status`] for refused statuses.
-    /// - [`FetchError::Timeout`] for timeouts.
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    /// - [`FetchError::Unscripted`] for unscripted test urls.
-    fn download(&self, url: &str) -> Result<(PathBuf, Sha, usize)> {
-        let (reader, total) = transport::download(url, BODY_LIMIT_BYTES)?;
-        self.store_stream(url, reader, total)
-    }
-
-    /// Write a streamed body with the index entry for one URL.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    fn store_stream(
-        &self,
-        url: &str,
-        reader: impl std::io::Read,
-        total: Option<u64>,
-    ) -> Result<(PathBuf, Sha, usize)> {
-        let staged = driver::StagedFile::stage(&self.cache.join("pending"))
-            .map_err(|error| FetchError::from_write_io(url, error))?;
-        let pending = staged.path().to_path_buf();
-        let outcome = self.stream_to_pending(url, reader, &pending, total);
-        let (digest, bytes) = match outcome {
-            Ok(done) => done,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        let content = self.content_path(&digest.hex());
-        driver::atomic_write(&content, |final_pending| {
-            std::fs::rename(&pending, final_pending)
-        })
-        .map_err(|error| FetchError::from_write_io(url, error))?;
-        self.write_index(url, &digest)?;
-        Ok((content, digest, bytes))
-    }
-
-    /// Write the url index entry for one content digest.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    fn write_index(&self, url: &str, digest: &Sha) -> Result<()> {
-        let index = self.index_path(url);
-        driver::fs::create_parent(&index).map_err(|error| FetchError::from_write_io(url, error))?;
-        std::fs::write(&index, digest.hex().as_bytes())
-            .map_err(|error| FetchError::from_write_io(url, error))
-    }
-
-    /// Stream one body into pending with a hash.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Read`] for unreadable pending files.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    fn stream_to_pending(
-        &self,
-        url: &str,
-        reader: impl std::io::Read,
-        pending: &Path,
-        total: Option<u64>,
-    ) -> Result<(Sha, usize)> {
-        let file = std::fs::File::create(pending)
-            .map_err(|error| FetchError::from_write_io(url, error))?;
-        let mut writer = std::io::BufWriter::new(file);
-        let mut limited = reader.take(BODY_LIMIT_BYTES);
-        let mut hasher = sha2::Sha256::new();
-        let mut buf = [0u8; STREAM_BUF_BYTES];
-        let mut bytes: u64 = 0;
-        let mut reported: u64 = 0;
-        loop {
-            let read = limited
-                .read(&mut buf)
-                .map_err(|error| FetchError::from_io(url, error))?;
-            if read == 0 {
-                break;
-            }
-            bytes += read as u64;
-            hasher.update(&buf[..read]);
-            writer
-                .write_all(&buf[..read])
-                .map_err(|error| FetchError::from_write_io(url, error))?;
-            if bytes - reported >= PROGRESS_STEP_BYTES {
-                reported = bytes;
-                let _ = self.progress.send(Event::FetchProgress {
-                    url: url.to_string(),
-                    bytes_so_far: bytes,
-                    total,
-                });
-            }
-        }
-        writer
-            .flush()
-            .map_err(|error| FetchError::from_write_io(url, error))?;
-        let digest = Sha::finish(hasher);
-        Ok((digest, usize::try_from(bytes).unwrap_or(0)))
+        let name = format!("{}.{INDEX_EXT}", Sha::hash(url.as_bytes()).hex());
+        self.resources.cache_dir().join(name)
     }
 }
 
@@ -227,7 +49,7 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Status`] for refused statuses.
+    /// - [`FetchError::Status`] for failing statuses.
     /// - [`FetchError::Timeout`] for timeouts.
     /// - [`FetchError::Read`] for unreadable cache entries.
     /// - [`FetchError::Write`] for cache write faults.
@@ -240,68 +62,210 @@ impl FetchCache {
         expected_sha: Option<Sha>,
         re_fetch: bool,
     ) -> Result<ResourceHandle> {
-        let _ = self.progress.send(Event::FetchStarted {
-            url: url.to_string(),
+        Fetch::new(self, url, expected_sha.as_ref()).run(re_fetch)
+    }
+}
+
+/// Metered reader reporting downloaded chunk sizes.
+struct Meter<R, F> {
+    /// The wrapped download stream.
+    inner: R,
+    /// The progress hook by chunk size.
+    on_read: F,
+}
+
+impl<R: std::io::Read, F: FnMut(u64)> std::io::Read for Meter<R, F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        (self.on_read)(read as u64);
+        Ok(read)
+    }
+}
+
+/// One fetch walk with its progress state.
+struct Fetch<'a> {
+    /// The cache under fetching.
+    cache: &'a FetchCache,
+    /// The url under fetching.
+    url: &'a str,
+    /// The user sha under checking.
+    expected: Option<&'a Sha>,
+    /// The download total under reporting.
+    total: Option<u64>,
+    /// The bytes seen so far.
+    bytes: u64,
+    /// The bytes reported so far.
+    reported: u64,
+}
+
+impl<'a> Fetch<'a> {
+    /// Build one fetch walk.
+    fn new(cache: &'a FetchCache, url: &'a str, expected: Option<&'a Sha>) -> Self {
+        Self {
+            cache,
+            url,
+            expected,
+            total: None,
+            bytes: 0,
+            reported: 0,
+        }
+    }
+
+    /// Run one walk into a resource handle.
+    ///
+    /// # Errors
+    ///
+    /// - [`FetchError::Status`] for failing statuses.
+    /// - [`FetchError::Timeout`] for timeouts.
+    /// - [`FetchError::Read`] for unreadable cache entries.
+    /// - [`FetchError::Write`] for cache write faults.
+    /// - [`FetchError::WriteUnknown`] for other cache write failures.
+    /// - [`FetchError::Unscripted`] for unscripted test urls.
+    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    fn run(&mut self, re_fetch: bool) -> Result<ResourceHandle> {
+        let _ = self.cache.progress.send(Event::FetchStarted {
+            url: self.url.to_owned(),
         });
-        if !re_fetch && let Some(hit) = self.fetch_hit(url, expected_sha.as_ref()) {
+        if !re_fetch && let Some(hit) = self.hit() {
             return hit;
         }
-        self.fetch_download(url, expected_sha.as_ref())
+        self.download()
     }
 
-    /// Read cached bytes for one resource handle.
+    /// Serve one cached hit with the cached progress event.
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    pub fn read(&self, handle: &ResourceHandle, url: &str) -> Result<Vec<u8>> {
-        std::fs::read(handle.canonical()).map_err(|error| FetchError::from_io(url, error))
-    }
-
-    /// Open cached bytes for one resource handle.
-    ///
-    /// # Errors
-    ///
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    pub fn open(&self, handle: &ResourceHandle, url: &str) -> Result<Box<dyn std::io::Read>> {
-        std::fs::File::open(handle.canonical())
-            .map(|file| Box::new(file) as Box<dyn std::io::Read>)
-            .map_err(|error| FetchError::from_io(url, error))
-    }
-}
-
-/// Read one file length.
-///
-/// - Missing files are zero.
-fn file_len(path: &Path) -> usize {
-    match std::fs::metadata(path) {
-        Ok(facts) => usize::try_from(facts.len()).unwrap_or(0),
-        Err(_) => 0,
-    }
-}
-
-/// Check a fetched digest against the user sha.
-///
-/// # Errors
-///
-/// - [`FetchError::DigestMismatch`] for mismatches.
-fn check_sha(url: &str, actual: &Sha, expected: Option<&Sha>) -> Result<()> {
-    let Some(wanted) = expected else {
-        return Ok(());
-    };
-    if actual != wanted {
-        return Err(FetchError::DigestMismatch {
-            url: url.to_owned(),
-            want: wanted.clone(),
-            got: actual.clone(),
+    /// - [`FetchError::DigestMismatch`] for cached hits failing the user sha.
+    fn hit(&self) -> Option<Result<ResourceHandle>> {
+        let hit = self.lookup()?;
+        let ResourceHandle::Cache(sha) = &hit else {
+            return None;
+        };
+        let path = self.cache.resources.cache_path(sha);
+        let bytes = std::fs::metadata(&path)
+            .map(|facts| usize::try_from(facts.len()).unwrap_or(0))
+            .unwrap_or(0);
+        let _ = self.cache.progress.send(Event::FetchCached {
+            url: self.url.to_owned(),
+            bytes,
         });
+        match self.check(sha) {
+            Ok(()) => Some(Ok(hit)),
+            Err(error) => Some(Err(error)),
+        }
     }
-    Ok(())
+
+    /// Find one cached handle with a present content file.
+    ///
+    /// - Unparseable index text is a miss.
+    /// - Absent content is a miss.
+    fn lookup(&self) -> Option<ResourceHandle> {
+        let stored = std::fs::read_to_string(self.cache.index_path(self.url)).ok()?;
+        let wanted = Sha::new(stored.trim()).ok()?;
+        if !self.cache.resources.cache_path(&wanted).exists() {
+            return None;
+        }
+        Some(ResourceHandle::Cache(wanted))
+    }
+
+    /// Download one URL body with the downloaded progress event.
+    ///
+    /// # Errors
+    ///
+    /// - [`FetchError::Status`] for failing statuses.
+    /// - [`FetchError::Timeout`] for timeouts.
+    /// - [`FetchError::Read`] for unreadable cache entries.
+    /// - [`FetchError::Write`] for cache write faults.
+    /// - [`FetchError::WriteUnknown`] for other cache write failures.
+    /// - [`FetchError::Unscripted`] for unscripted test urls.
+    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    fn download(&mut self) -> Result<ResourceHandle> {
+        let (reader, total) = transport::download(self.url, BODY_LIMIT_BYTES)?;
+        self.total = total;
+        let resources = self.cache.resources.clone();
+        let metered = Meter {
+            inner: reader,
+            on_read: |bytes: u64| {
+                self.bytes += bytes;
+                self.report();
+            },
+        };
+        let handle = resources
+            .store(metered)
+            .map_err(|error| FetchError::from_resource(self.url, error))?;
+        let sha = match handle {
+            ResourceHandle::Cache(sha) => sha,
+            ResourceHandle::Project(..) => {
+                return Err(FetchError::WriteUnknown {
+                    url: self.url.to_owned(),
+                    message: "cache lands project handles".to_owned(),
+                });
+            }
+        };
+        self.check(&sha)?;
+        self.write_index(&sha)?;
+        let _ = self.cache.progress.send(Event::FetchDownloaded {
+            url: self.url.to_owned(),
+            bytes: usize::try_from(self.bytes).unwrap_or(0),
+        });
+        Ok(ResourceHandle::Cache(sha))
+    }
+
+    /// Report one progress step.
+    fn report(&mut self) {
+        if self.bytes - self.reported >= PROGRESS_STEP_BYTES {
+            self.reported = self.bytes;
+            let _ = self.cache.progress.send(Event::FetchProgress {
+                url: self.url.to_owned(),
+                bytes_so_far: self.bytes,
+                total: self.total,
+            });
+        }
+    }
+
+    /// Write the url index entry for one content digest.
+    ///
+    /// # Errors
+    ///
+    /// - [`FetchError::Write`] for cache write faults.
+    /// - [`FetchError::WriteUnknown`] for other cache write failures.
+    fn write_index(&self, digest: &Sha) -> Result<()> {
+        let index = self.cache.index_path(self.url);
+        driver::fs::create_parent(&index)
+            .map_err(|error| FetchError::from_write_io(self.url, error))?;
+        std::fs::write(&index, digest.hex().as_bytes())
+            .map_err(|error| FetchError::from_write_io(self.url, error))
+    }
+
+    /// Check one digest against the user sha.
+    ///
+    /// # Errors
+    ///
+    /// - [`FetchError::DigestMismatch`] for mismatches.
+    fn check(&self, actual: &Sha) -> Result<()> {
+        let Some(wanted) = self.expected else {
+            return Ok(());
+        };
+        if actual != wanted {
+            return Err(FetchError::DigestMismatch {
+                url: self.url.to_owned(),
+                want: wanted.clone(),
+                got: actual.clone(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    use crate::StoreRoots;
+    use crate::faults::AccessFault;
+    use crate::pool::PoolStore;
     use confit_driver as driver;
 
     const URL: &str = "https://example.com/tool.bin";
@@ -309,24 +273,37 @@ mod tests {
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
+            config_base: dir.join("config"),
             temp_base: dir.join("temp"),
             ..Default::default()
         }
     }
 
     fn file_cache(dir: &Path) -> FetchCache {
+        let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
-        FetchCache::new(&test_roots(dir), sender)
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        FetchCache::new(resources, sender)
     }
 
     fn index_file(dir: &Path, url: &str) -> PathBuf {
-        dir.join("temp")
-            .join(INDEX_DIR)
-            .join(Sha::hash(url.as_bytes()).hex())
+        dir.join("temp").join("cache").join(format!(
+            "{}.{}",
+            Sha::hash(url.as_bytes()).hex(),
+            INDEX_EXT
+        ))
     }
 
     fn content_file(dir: &Path, sha_hex: &str) -> PathBuf {
-        dir.join("temp").join(sha_hex)
+        dir.join("temp").join("cache").join(sha_hex)
+    }
+
+    fn cached_sha(handle: &ResourceHandle) -> Sha {
+        match handle {
+            ResourceHandle::Cache(sha) => sha.clone(),
+            ResourceHandle::Project(..) => panic!("fetched bytes land cached"),
+        }
     }
 
     fn seed(cache: &FetchCache, url: &str, body: &[u8]) -> ResourceHandle {
@@ -346,8 +323,11 @@ mod tests {
         assert_eq!(driver::http::calls(URL), 1, "seeding downloads once");
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
-                let found = std::fs::read(handle.canonical()).unwrap();
-                assert_eq!(found, b"1.2.3".to_vec());
+                let sha = cached_sha(&handle);
+                match std::fs::read(content_file(dir.path(), &sha.hex())) {
+                    Ok(found) => assert_eq!(found, b"1.2.3".to_vec()),
+                    Err(error) => panic!("seeded body load: {error}"),
+                }
                 assert_eq!(driver::http::calls(URL), 1, "hit makes no download");
             }
             Err(error) => panic!("seeded bytes serve: {error}"),
@@ -355,17 +335,18 @@ mod tests {
     }
 
     #[test]
-    fn file_hit_returns_path_under_cache() {
+    fn file_hit_gave_path_under_cache() {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, FILE_URL, b"binary");
         match cache.fetch(FILE_URL, None, false) {
             Ok(handle) => {
-                let path = handle.canonical().to_path_buf();
+                let sha = cached_sha(&handle);
+                let path = content_file(dir.path(), &sha.hex());
                 assert!(
-                    path.starts_with(dir.path().join("temp")),
-                    "cache path stays under temp: {}",
+                    path.starts_with(dir.path().join("temp").join("cache")),
+                    "cache path stays under cache: {}",
                     path.display()
                 );
                 match std::fs::read(&path) {
@@ -378,36 +359,38 @@ mod tests {
     }
 
     #[test]
-    fn tamper_reads_as_miss_without_serving() {
+    fn missing_content_heals_as_miss() {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
-        let handle = seed(&cache, URL, b"genuine");
-        assert!(cache.lookup(URL).is_some());
-        std::fs::write(handle.canonical(), b"tampered").unwrap();
-        assert!(cache.lookup(URL).is_none());
+        seed(&cache, URL, b"genuine");
+        let wanted = Sha::hash(b"genuine");
+        std::fs::remove_file(content_file(dir.path(), &wanted.hex())).unwrap();
         match cache.fetch(URL, None, false) {
             Ok(refetched) => {
-                let found = std::fs::read(refetched.canonical()).unwrap();
-                assert_eq!(found, b"genuine".to_vec(), "tamper redownloads");
-                assert_ne!(found, b"tampered".to_vec(), "tampered bytes never serve");
-                assert_eq!(driver::http::calls(URL), 2, "tamper redownloads once");
+                let sha = cached_sha(&refetched);
+                assert_eq!(sha, wanted, "content loss keeps the digest");
+                match std::fs::read(content_file(dir.path(), &sha.hex())) {
+                    Ok(found) => assert_eq!(found, b"genuine".to_vec(), "content loss redownloads"),
+                    Err(error) => panic!("healed entry load: {error}"),
+                }
+                assert_eq!(driver::http::calls(URL), 2, "content loss redownloads once");
             }
-            Err(error) => panic!("tampered entry redownloads: {error}"),
+            Err(error) => panic!("healed entry redownloads: {error}"),
         }
     }
 
     #[test]
-    fn missing_index_reads_as_miss() {
+    fn missing_index_parsed_as_miss() {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
         std::fs::remove_file(index_file(dir.path(), URL)).unwrap();
-        assert!(cache.lookup(URL).is_none());
         match cache.fetch(URL, None, false) {
             Ok(refetched) => {
-                let found = std::fs::read(refetched.canonical()).unwrap();
+                let sha = cached_sha(&refetched);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, b"genuine".to_vec(), "index loss redownloads");
                 assert_eq!(driver::http::calls(URL), 2, "index loss redownloads once");
             }
@@ -416,17 +399,16 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_index_reads_as_miss() {
+    fn corrupt_index_parsed_as_miss() {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
-        assert!(cache.lookup(URL).is_some());
         std::fs::write(index_file(dir.path(), URL), b"not-a-hex-digest").unwrap();
-        assert!(cache.lookup(URL).is_none());
         match cache.fetch(URL, None, false) {
             Ok(refetched) => {
-                let found = std::fs::read(refetched.canonical()).unwrap();
+                let sha = cached_sha(&refetched);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, b"genuine".to_vec(), "corrupt index redownloads");
             }
             Err(error) => panic!("corrupt index redownloads: {error}"),
@@ -442,16 +424,17 @@ mod tests {
         let wanted = Sha::hash(b"1.2.3");
         assert_eq!(
             content_file(dir.path(), &wanted.hex()),
-            dir.path().join("temp").join(wanted.hex())
+            dir.path().join("temp").join("cache").join(wanted.hex())
         );
         assert!(content_file(dir.path(), &wanted.hex()).exists());
         let index = index_file(dir.path(), URL);
         assert_eq!(
             index,
-            dir.path()
-                .join("temp")
-                .join(INDEX_DIR)
-                .join(Sha::hash(URL.as_bytes()).hex())
+            dir.path().join("temp").join("cache").join(format!(
+                "{}.{}",
+                Sha::hash(URL.as_bytes()).hex(),
+                INDEX_EXT
+            ))
         );
         assert_eq!(std::fs::read_to_string(&index).unwrap(), wanted.hex());
         assert_no_sha_suffix_files(&dir.path().join("temp"));
@@ -463,8 +446,11 @@ mod tests {
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"1.2.3");
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(_) => {
                 let events: Vec<Event> = receiver.try_iter().collect();
@@ -492,8 +478,11 @@ mod tests {
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"1.2.3");
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, true) {
             Ok(_) => {
                 let events: Vec<Event> = receiver.try_iter().collect();
@@ -521,8 +510,11 @@ mod tests {
         driver::http::clear();
         driver::http::serve(URL, b"1.2.3");
         driver::http::serve(FILE_URL, b"binary");
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(_) => {}
             Err(error) => panic!("first miss downloads: {error}"),
@@ -615,7 +607,9 @@ mod tests {
         let wanted = Sha::hash(b"1.2.3");
         match cache.fetch(URL, Some(wanted.clone()), false) {
             Ok(handle) => {
-                let found = std::fs::read(handle.canonical()).unwrap();
+                let sha = cached_sha(&handle);
+                assert_eq!(sha, wanted);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
             }
             Err(error) => panic!("good user sha serves: {error}"),
@@ -630,7 +624,8 @@ mod tests {
         seed(&cache, URL, b"1.2.3");
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
-                let found = std::fs::read(handle.canonical()).unwrap();
+                let sha = cached_sha(&handle);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec());
                 assert_eq!(driver::http::calls(URL), 1, "hit makes no download");
             }
@@ -638,7 +633,8 @@ mod tests {
         }
         match cache.fetch(URL, None, true) {
             Ok(refetched) => {
-                let found = std::fs::read(refetched.canonical()).unwrap();
+                let sha = cached_sha(&refetched);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, b"1.2.3".to_vec(), "forced fetch redownloads");
                 assert_eq!(driver::http::calls(URL), 2, "forced fetch downloads once");
             }
@@ -652,13 +648,16 @@ mod tests {
         driver::http::clear();
         let cache = file_cache(dir.path());
         let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
-        assert!(raw.len() > STREAM_BUF_BYTES);
+        assert!(raw.len() > 8192, "entry spans several store chunks");
         seed(&cache, URL, &raw);
-        assert!(cache.lookup(URL).is_some());
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
-                assert_eq!(handle.sha256(), &Sha::hash(&raw));
-                let found = std::fs::read(handle.canonical()).unwrap();
+                match &handle {
+                    ResourceHandle::Cache(sha) => assert_eq!(sha, &Sha::hash(&raw)),
+                    ResourceHandle::Project(..) => panic!("fetched bytes land cached"),
+                }
+                let sha = cached_sha(&handle);
+                let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, raw);
             }
             Err(error) => panic!("large hit serves: {error}"),
@@ -666,87 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn open_streams_seeded_body() {
-        let dir = tempfile::tempdir().unwrap();
-        driver::http::clear();
-        let cache = file_cache(dir.path());
-        seed(&cache, URL, b"1.2.3");
-        match cache.fetch(URL, None, false) {
-            Ok(handle) => match cache.open(&handle, URL) {
-                Ok(mut reader) => {
-                    let mut found = Vec::new();
-                    reader.read_to_end(&mut found).unwrap();
-                    assert_eq!(found, b"1.2.3".to_vec());
-                }
-                Err(error) => panic!("seeded body opens: {error}"),
-            },
-            Err(error) => panic!("seeded body serves: {error}"),
-        }
-    }
-
-    #[test]
-    fn open_streams_large_body() {
-        let dir = tempfile::tempdir().unwrap();
-        driver::http::clear();
-        let cache = file_cache(dir.path());
-        let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
-        assert!(raw.len() > STREAM_BUF_BYTES);
-        seed(&cache, URL, &raw);
-        match cache.fetch(URL, None, false) {
-            Ok(handle) => match cache.open(&handle, URL) {
-                Ok(mut reader) => {
-                    let mut found = Vec::new();
-                    reader.read_to_end(&mut found).unwrap();
-                    assert_eq!(found, raw);
-                }
-                Err(error) => panic!("large body opens: {error}"),
-            },
-            Err(error) => panic!("large body serves: {error}"),
-        }
-    }
-
-    #[test]
-    fn open_missing_names_cache_path() {
-        let dir = tempfile::tempdir().unwrap();
-        driver::http::clear();
-        let cache = file_cache(dir.path());
-        let missing = dir.path().join("cache").join("missing-body");
-        let handle = ResourceHandle::new(
-            &dir.path().join("cache"),
-            missing.clone(),
-            Sha::hash(b"absent"),
-        )
-        .unwrap();
-        match cache.open(&handle, URL) {
-            Ok(_) => panic!("missing body opens"),
-            Err(FetchError::Read { url, fault }) => {
-                assert_eq!(url, URL, "missing open keeps the origin url");
-                assert!(
-                    matches!(fault, AccessFault::Missing),
-                    "missing open keeps the fault: {fault}"
-                );
-            }
-            Err(error) => panic!("wrong missing variant: {error}"),
-        }
-    }
-
-    #[test]
-    fn read_serves_whole_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        driver::http::clear();
-        let cache = file_cache(dir.path());
-        seed(&cache, URL, b"whole view bytes");
-        match cache.fetch(URL, None, false) {
-            Ok(handle) => match cache.read(&handle, URL) {
-                Ok(found) => assert_eq!(found, b"whole view bytes".to_vec()),
-                Err(error) => panic!("seeded body load: {error}"),
-            },
-            Err(error) => panic!("seeded body serves: {error}"),
-        }
-    }
-
-    #[test]
-    fn scripted_failure_reads_as_download_error_showing_url() {
+    fn scripted_failure_parsed_as_download_error_showing_url() {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
@@ -768,12 +687,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         driver::http::serve(URL, b"1.2.3");
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
+                let sha = cached_sha(&handle);
                 assert_eq!(
-                    std::fs::read(handle.canonical()).unwrap(),
+                    std::fs::read(content_file(dir.path(), &sha.hex())).unwrap(),
                     b"1.2.3".to_vec()
                 );
             }
@@ -793,12 +716,16 @@ mod tests {
             ]
         );
         assert_eq!(driver::http::calls(URL), 1, "one download per miss");
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(handle) => {
+                let sha = cached_sha(&handle);
                 assert_eq!(
-                    std::fs::read(handle.canonical()).unwrap(),
+                    std::fs::read(content_file(dir.path(), &sha.hex())).unwrap(),
                     b"1.2.3".to_vec()
                 );
             }
@@ -841,8 +768,11 @@ mod tests {
         driver::http::clear();
         let raw: Vec<u8> = (0..256 * 1024).map(|index| (index % 251) as u8).collect();
         driver::http::serve(URL, &raw);
+        let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let cache = FetchCache::new(&test_roots(dir.path()), sender);
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools));
+        let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(_) => {}
             Err(error) => panic!("large miss downloads: {error}"),
@@ -862,61 +792,6 @@ mod tests {
         assert!(seen.len() >= 2, "chunks report twice: {}", seen.len());
         for pair in seen.windows(2) {
             assert!(pair[0] < pair[1], "bytes climb: {}", seen.len());
-        }
-    }
-
-    #[test]
-    fn pooled_paths_agree_for_identical_files() {
-        use crate::blob::BlobStore;
-
-        let dir = tempfile::tempdir().unwrap();
-        let roots = StoreRoots {
-            config_base: dir.path().join("config"),
-            temp_base: dir.path().join("temp"),
-            project_root: dir.path().join("project"),
-        };
-        let store = {
-            let (sender, _) = crossbeam_channel::unbounded();
-            BlobStore::new(&roots, sender)
-        };
-        let small = b"shared pool bytes".to_vec();
-        std::fs::create_dir_all(dir.path()).unwrap();
-        let source_path = dir.path().join("source.bin");
-        std::fs::write(&source_path, &small).unwrap();
-        let source = ResourceHandle::new(dir.path(), source_path, Sha::hash(&small)).unwrap();
-        let via_source = store.put(&source).unwrap();
-        let repeat_path = dir.path().join("repeat.bin");
-        std::fs::write(&repeat_path, &small).unwrap();
-        let repeat = ResourceHandle::new(dir.path(), repeat_path, Sha::hash(&small)).unwrap();
-        let via_repeat = store.put(&repeat).unwrap();
-        assert_eq!(
-            via_repeat, via_source,
-            "trusted source keeps verified identity"
-        );
-        let large: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
-        assert!(large.len() > STREAM_BUF_BYTES);
-        let large_path = dir.path().join("large.bin");
-        std::fs::write(&large_path, &large).unwrap();
-        let large_source = ResourceHandle::new(dir.path(), large_path, Sha::hash(&large)).unwrap();
-        let large_put = store.put(&large_source).unwrap();
-        let large_again_path = dir.path().join("large-again.bin");
-        std::fs::write(&large_again_path, &large).unwrap();
-        let large_again =
-            ResourceHandle::new(dir.path(), large_again_path, Sha::hash(&large)).unwrap();
-        let large_sourced = store.put(&large_again).unwrap();
-        assert_eq!(
-            large_sourced.sha256(),
-            large_put.sha256(),
-            "sourced bytes keep content hash"
-        );
-        assert_eq!(
-            large_put, large_sourced,
-            "both files keep one verified identity"
-        );
-        for handle in [&large_put, &large_sourced] {
-            let mut found = Vec::new();
-            store.open(handle).unwrap().read_to_end(&mut found).unwrap();
-            assert_eq!(found, large, "pooled bytes round-trip");
         }
     }
 

@@ -1,22 +1,18 @@
 //! Differ
 //! Recorded manifests against disk readers.
 
+mod compare;
+mod disk;
+mod ordered;
+
 use std::collections::BTreeMap;
 
-use confit_driver::sha::Sha;
-use confit_model::document::{Data, StructuredFormat, TreeMember};
+use compare::Comparator;
+
+use crate::error::Result;
+use crate::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_store::Stores;
-use confit_store::faults::AccessFault;
-
-use crate::disk::{Disk, DiskMember, disk_doc, disk_tree, open_member};
-use crate::manifest::{Document, Manifest};
-use crate::render::render_document;
-
-/// Render mode bits as octal digits for diff lines.
-fn mode_text(mode: u32) -> String {
-    format!("{mode:o}")
-}
 
 /// Manual edit at one recorded destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +56,11 @@ pub enum Difference {
         /// The fault cause for the failed read.
         reason: String,
     },
+    /// Directory blocks the recorded destination on disk.
+    Blocked {
+        /// The recorded destination route.
+        path: Route,
+    },
 }
 
 /// One difference side order.
@@ -83,408 +84,135 @@ impl Differ {
     /// Link documents compare target text.
     ///
     /// - Entries follow recorded destination order.
-    pub fn differences(&self, manifest: &Manifest, order: DifferenceOrder) -> Vec<Difference> {
-        let mut out = Vec::new();
-        for document in &manifest.documents {
-            if let Data::Tree(found) = &document.data {
-                out.extend(self.tree_difference(
-                    &document.destination,
-                    &found.members,
-                    &disk_tree(document),
-                    order,
-                ));
-                continue;
-            }
-            match disk_doc(document) {
-                Disk::Absent => out.push(Difference::Missing {
-                    path: document.destination.clone(),
-                }),
-                Disk::Unreadable { fault } => out.push(Difference::Unreadable {
-                    path: document.destination.clone(),
-                    reason: unreadable_reason(&fault),
-                }),
-                Disk::Present { mut reader, mode } => {
-                    if !matches!(&document.data, Data::Opaque(_)) {
-                        let Some(recorded_bytes) = render_document(document).ok() else {
-                            continue;
-                        };
-                        let mut disk_bytes = Vec::new();
-                        if reader.read_to_end(&mut disk_bytes).is_err() {
-                            continue;
-                        }
-                        out.extend(disk_difference(
-                            document,
-                            &recorded_bytes,
-                            &disk_bytes,
-                            mode,
-                            order,
-                        ));
-                        continue;
-                    }
-                    if let Data::Opaque(found) = &document.data {
-                        let store = self.stores.blobs();
-                        let Ok(resolved) = found.handle.resolve(&self.stores) else {
-                            continue;
-                        };
-                        let Ok(handle) = store.resolve(&resolved) else {
-                            continue;
-                        };
-                        let recorded_label = match store.len(&handle) {
-                            Ok(len) => resolved.label(len),
-                            Err(_) => continue,
-                        };
-                        let disk_label = match Self::disk_label(document) {
-                            Some(label) => label,
-                            None => continue,
-                        };
-                        if recorded_label == disk_label {
-                            let wanted = match &document.data {
-                                Data::Opaque(found) => Some(found.mode),
-                                _ => None,
-                            };
-                            if let Some(wanted) = wanted
-                                && let Some(seen) = mode
-                                && wanted != seen
-                            {
-                                let (old, new) = match order {
-                                    DifferenceOrder::RecordedFirst => (
-                                        serde_json::Value::String(mode_text(wanted)),
-                                        serde_json::Value::String(mode_text(seen)),
-                                    ),
-                                    DifferenceOrder::DiskFirst => (
-                                        serde_json::Value::String(mode_text(seen)),
-                                        serde_json::Value::String(mode_text(wanted)),
-                                    ),
-                                };
-                                out.push(Difference::Key {
-                                    path: document.destination.clone(),
-                                    key: "mode".to_string(),
-                                    old: Some(old),
-                                    new: Some(new),
-                                });
-                            }
-                            continue;
-                        }
-                        out.push(opaque_content_difference(
-                            &document.destination,
-                            "content",
-                            &recorded_label,
-                            &disk_label,
-                            order,
-                        ));
-                        continue;
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Collect difference entries for one tree destination walk.
     ///
-    /// - Only manifest members produce entries.
-    fn tree_difference(
+    /// # Errors
+    ///
+    /// - [`crate::error::RuntimeError::Expand`] for unresolvable base folders.
+    pub fn differences(
         &self,
-        destination: &Route,
-        members: &BTreeMap<String, TreeMember>,
-        disk: &BTreeMap<String, DiskMember>,
+        manifest: &Manifest,
         order: DifferenceOrder,
-    ) -> Vec<Difference> {
-        let mut out = Vec::new();
-        for (relative, member) in members {
-            let member_path = destination.join(relative);
-            match disk.get(relative) {
-                None => out.push(Difference::Missing { path: member_path }),
-                Some(DiskMember::Unreadable { fault }) => out.push(Difference::Unreadable {
-                    path: member_path,
-                    reason: unreadable_reason(fault),
-                }),
-                Some(DiskMember::Present { mode, .. }) => {
-                    let seen_mode = *mode;
-                    let store = self.stores.blobs();
-                    let Ok(resolved) = member.blob().resolve(&self.stores) else {
-                        continue;
-                    };
-                    let Ok(handle) = store.resolve(&resolved) else {
-                        continue;
-                    };
-                    let recorded_label = match store.len(&handle) {
-                        Ok(len) => resolved.label(len),
-                        Err(_) => continue,
-                    };
-                    let Some(disk_label) = Self::tree_member_label(destination, relative) else {
-                        continue;
-                    };
-                    if recorded_label != disk_label {
-                        out.push(opaque_content_difference(
-                            destination,
-                            relative,
-                            &recorded_label,
-                            &disk_label,
-                            order,
-                        ));
-                    }
-                    if let Some(seen) = seen_mode
-                        && seen != member.mode()
-                    {
-                        let (old, new) = match order {
-                            DifferenceOrder::RecordedFirst => (
-                                serde_json::Value::String(mode_text(member.mode())),
-                                serde_json::Value::String(mode_text(seen)),
-                            ),
-                            DifferenceOrder::DiskFirst => (
-                                serde_json::Value::String(mode_text(seen)),
-                                serde_json::Value::String(mode_text(member.mode())),
-                            ),
-                        };
-                        out.push(Difference::Key {
-                            path: destination.clone(),
-                            key: format!("{relative}:mode"),
-                            old: Some(old),
-                            new: Some(new),
-                        });
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Label one disk document with its content hash and byte count.
-    fn disk_label(document: &Document) -> Option<String> {
-        match disk_doc(document) {
-            Disk::Present { mut reader, .. } => {
-                let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
-                Some(sha.label(len))
-            }
-            Disk::Absent | Disk::Unreadable { .. } => None,
-        }
-    }
-
-    /// Label one tree member path with its content hash and byte count.
-    fn tree_member_label(destination: &Route, relative: &str) -> Option<String> {
-        let mut reader = open_member(destination, relative)?;
-        let (sha, len) = Sha::read_with_size(&mut reader).ok()?;
-        Some(sha.label(len))
-    }
-}
-
-/// Collect difference entries for one present disk path.
-///
-/// - Unmanaged documents stay quiet.
-fn disk_difference(
-    document: &Document,
-    recorded: &[u8],
-    disk: &[u8],
-    disk_mode: Option<u32>,
-    order: DifferenceOrder,
-) -> Vec<Difference> {
-    let (first, second) = match order {
-        DifferenceOrder::RecordedFirst => (recorded, disk),
-        DifferenceOrder::DiskFirst => (disk, recorded),
-    };
-    let mut out = match &document.data {
-        Data::Structured(found) => {
-            if let Some(disk_table) = parse_disk_table(found.format, disk) {
-                match order {
-                    DifferenceOrder::RecordedFirst => {
-                        structured_difference(&document.destination, &found.data, &disk_table)
-                    }
-                    DifferenceOrder::DiskFirst => {
-                        structured_difference(&document.destination, &disk_table, &found.data)
-                    }
-                }
-            } else {
-                push_diff(&document.destination, first, second)
-            }
-        }
-        Data::Text(found) => {
-            if found.unmanaged || recorded == disk {
-                Vec::new()
-            } else {
-                push_diff(&document.destination, first, second)
-            }
-        }
-        Data::Rc(_) => {
-            if recorded != disk {
-                push_diff(&document.destination, first, second)
-            } else {
-                Vec::new()
-            }
-        }
-        Data::Link(found) => {
-            let disk_target = String::from_utf8_lossy(disk);
-            if disk_target.as_ref() != found.target.display() {
-                let (old, new) = match order {
-                    DifferenceOrder::RecordedFirst => (
-                        serde_json::Value::String(found.target.display()),
-                        serde_json::Value::String(disk_target.into_owned()),
-                    ),
-                    DifferenceOrder::DiskFirst => (
-                        serde_json::Value::String(disk_target.into_owned()),
-                        serde_json::Value::String(found.target.display()),
-                    ),
-                };
-                vec![Difference::Key {
-                    path: document.destination.clone(),
-                    key: "target".to_string(),
-                    old: Some(old),
-                    new: Some(new),
-                }]
-            } else {
-                Vec::new()
-            }
-        }
-        Data::Opaque(found) => {
-            if found.unmanaged || recorded == disk {
-                Vec::new()
-            } else {
-                let (old, new) = match order {
-                    DifferenceOrder::RecordedFirst => (
-                        serde_json::Value::String(Sha::hash(recorded).label(recorded.len() as u64)),
-                        serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
-                    ),
-                    DifferenceOrder::DiskFirst => (
-                        serde_json::Value::String(Sha::hash(disk).label(disk.len() as u64)),
-                        serde_json::Value::String(Sha::hash(recorded).label(recorded.len() as u64)),
-                    ),
-                };
-                vec![Difference::Key {
-                    path: document.destination.clone(),
-                    key: "content".to_string(),
-                    old: Some(old),
-                    new: Some(new),
-                }]
-            }
-        }
-        Data::Tree(_) => Vec::new(),
-    };
-    let wanted = match &document.data {
-        Data::Text(found) => Some(found.mode),
-        Data::Opaque(found) => Some(found.mode),
-        Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
-    };
-    if let Some(wanted) = wanted
-        && let Some(seen) = disk_mode
-        && wanted != seen
-    {
-        let (old, new) = match order {
-            DifferenceOrder::RecordedFirst => (
-                serde_json::Value::String(mode_text(wanted)),
-                serde_json::Value::String(mode_text(seen)),
-            ),
-            DifferenceOrder::DiskFirst => (
-                serde_json::Value::String(mode_text(seen)),
-                serde_json::Value::String(mode_text(wanted)),
-            ),
-        };
-        out.push(Difference::Key {
-            path: document.destination.clone(),
-            key: "mode".to_string(),
-            old: Some(old),
-            new: Some(new),
-        });
-    }
-    out
-}
-
-/// Build render-ready diff content from first text to second text.
-fn content_diff(first: &str, second: &str) -> String {
-    diffy::create_patch(first, second)
-        .to_string()
-        .lines()
-        .filter(|line| {
-            !(line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Build one diff from first bytes to second bytes.
-fn push_diff(path: &Route, first: &[u8], second: &[u8]) -> Vec<Difference> {
-    let old = String::from_utf8_lossy(first);
-    let new = String::from_utf8_lossy(second);
-    let diff = content_diff(&old, &new);
-    vec![Difference::Diff {
-        path: path.clone(),
-        diff,
-    }]
-}
-
-/// Parse disk bytes to a map by format.
-fn parse_disk_table(
-    format: StructuredFormat,
-    disk: &[u8],
-) -> Option<BTreeMap<String, serde_json::Value>> {
-    let text = std::str::from_utf8(disk).ok()?;
-    let value: serde_json::Value = match format {
-        StructuredFormat::Json => serde_json::from_str(text).ok()?,
-        StructuredFormat::Toml => toml::from_str(text).ok()?,
-        StructuredFormat::Yaml => noyalib::from_str(text).ok()?,
-    };
-    if let serde_json::Value::Object(map) = value {
-        Some(map.into_iter().collect())
-    } else {
-        None
-    }
-}
-
-/// Report one path-level entry for differing structured maps.
-fn structured_difference(
-    path: &Route,
-    old: &BTreeMap<String, serde_json::Value>,
-    new: &BTreeMap<String, serde_json::Value>,
-) -> Vec<Difference> {
-    if old == new {
-        Vec::new()
-    } else {
-        vec![Difference::Structured {
-            path: path.clone(),
-            old: old.clone(),
-            new: new.clone(),
-        }]
-    }
-}
-
-/// Build one opaque content key from two labels.
-fn opaque_content_difference(
-    path: &Route,
-    key: &str,
-    recorded: &str,
-    disk: &str,
-    order: DifferenceOrder,
-) -> Difference {
-    let (old, new) = match order {
-        DifferenceOrder::RecordedFirst => (recorded, disk),
-        DifferenceOrder::DiskFirst => (disk, recorded),
-    };
-    Difference::Key {
-        path: path.clone(),
-        key: key.to_string(),
-        old: Some(serde_json::Value::String(old.to_string())),
-        new: Some(serde_json::Value::String(new.to_string())),
-    }
-}
-
-/// Show one unreadable fault for difference lines.
-fn unreadable_reason(fault: &AccessFault) -> String {
-    match fault {
-        AccessFault::Unknown { .. } => "unknown failure, see log".to_owned(),
-        known => known.cause().to_owned(),
+    ) -> Result<Vec<Difference>> {
+        Comparator::new(&self.stores, order).run(manifest)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::{Data, RcData, RcEntry};
+
+    use confit_driver::sha::Sha;
+    use confit_model::document::{
+        Data, Document, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
+    };
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
+    use confit_store::handles::ResourceHandle;
 
     use crate::manifest::MANIFEST_VERSION;
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
+    }
+
+    fn test_differ(dir: &std::path::Path) -> Differ {
+        let (sender, _) = crossbeam_channel::unbounded();
+        Differ {
+            stores: Stores::new(StoreRoots::under(dir, dir), sender),
+        }
+    }
+
+    fn manifest_of(documents: Vec<Document>) -> Manifest {
+        Manifest {
+            version: MANIFEST_VERSION,
+            documents,
+            hashes: BTreeMap::new(),
+            hooks: Vec::new(),
+        }
+    }
+
+    fn text_doc(path: &std::path::Path, content: &str) -> Document {
+        Document {
+            path: literal(path),
+            data: Data::Text(TextDocument {
+                content: content.to_string(),
+                mode: 0o644,
+                unmanaged: false,
+            }),
+        }
+    }
+
+    fn tree_doc(dir: &std::path::Path, relative: &str) -> Document {
+        let mut members = BTreeMap::new();
+        members.insert(
+            relative.to_string(),
+            TreeMember::Handle(ResourceHandle::Cache(Sha::hash(b"member bytes"))),
+        );
+        Document::new(literal(dir), Data::Tree(TreeDocument { members }))
+    }
+
+    fn differences_of(dir: &std::path::Path, documents: Vec<Document>) -> Vec<Difference> {
+        test_differ(dir)
+            .differences(&manifest_of(documents), DifferenceOrder::RecordedFirst)
+            .unwrap()
+    }
+
+    #[test]
+    fn absent_doc_reports_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("absent.txt");
+        let found = differences_of(dir.path(), vec![text_doc(&dest, "recorded")]);
+        assert_eq!(
+            found,
+            vec![Difference::Missing {
+                path: literal(&dest)
+            }]
+        );
+    }
+
+    #[test]
+    fn blocked_doc_reports_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blocked.txt");
+        std::fs::create_dir_all(&dest).unwrap();
+        let found = differences_of(dir.path(), vec![text_doc(&dest, "recorded")]);
+        assert_eq!(
+            found,
+            vec![Difference::Blocked {
+                path: literal(&dest)
+            }]
+        );
+    }
+
+    #[test]
+    fn changed_doc_reports_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("note.txt");
+        std::fs::write(&dest, b"disk bytes").unwrap();
+        let found = differences_of(dir.path(), vec![text_doc(&dest, "recorded")]);
+        assert!(
+            matches!(found.as_slice(), [Difference::Diff { .. }]),
+            "changed bytes render one diff"
+        );
+    }
+
+    #[test]
+    fn tree_member_missing_reports_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("tree");
+        let member = literal(&dest).join("file.txt");
+        let found = differences_of(dir.path(), vec![tree_doc(&dest, "file.txt")]);
+        assert_eq!(found, vec![Difference::Missing { path: member }]);
+    }
+
+    #[test]
+    fn tree_member_blocked_reports_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("tree");
+        std::fs::create_dir_all(dest.join("file.txt")).unwrap();
+        let member = literal(&dest).join("file.txt");
+        let found = differences_of(dir.path(), vec![tree_doc(&dest, "file.txt")]);
+        assert_eq!(found, vec![Difference::Blocked { path: member }]);
     }
 
     #[test]
@@ -503,7 +231,7 @@ mod tests {
                 Vec::new(),
             )),
         );
-        let recorded = render_document(&document).unwrap();
+        let recorded = crate::render::render_document(&document).unwrap();
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),
@@ -524,13 +252,15 @@ mod tests {
         let differ = Differ {
             stores: Stores::new(StoreRoots::under(dir.path(), dir.path()), sender),
         };
-        let found = differ.differences(&manifest, DifferenceOrder::RecordedFirst);
+        let found = differ
+            .differences(&manifest, DifferenceOrder::RecordedFirst)
+            .unwrap();
         assert!(
             found.is_empty(),
             "matching expanded bytes are zero difference"
         );
         assert_eq!(
-            document.destination.display(),
+            document.path.display(),
             dest.to_str().unwrap(),
             "literal display renders the bare host path"
         );

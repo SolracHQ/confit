@@ -14,9 +14,10 @@ use super::Result;
 /// # Errors
 ///
 /// - [`Error::Locked`] for locked archives.
-/// - [`Error::Unknown`] for refused features and methods.
+/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
+/// - [`Error::Unknown`] for unexpected failures.
 /// - [`Error::Corrupt`] for corrupt archives.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
@@ -47,16 +48,17 @@ pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
 /// # Errors
 ///
 /// - [`Error::Locked`] for locked archives.
-/// - [`Error::Unknown`] for refused features and methods.
+/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
+/// - [`Error::Unknown`] for unexpected failures.
 /// - [`Error::Corrupt`] for corrupt archives and missing entries.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 /// - [`Error::Visit`] for failing visitors.
-pub(super) fn walk<R: io::Read + io::Seek>(
+pub(super) fn walk<R: io::Read + io::Seek, E>(
     reader: R,
-    mut visit: impl FnMut(super::Entry<'_>) -> io::Result<()>,
-) -> Result<()> {
+    mut visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
+) -> Result<(), E> {
     let mut archive = zip::ZipArchive::new(reader)?;
     let total = archive.len();
     let mut index = 0;

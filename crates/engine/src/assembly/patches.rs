@@ -30,8 +30,6 @@ pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
 /// - Filter patches fan out over structured matches.
 /// - Groups follow first-seen declaration order.
 /// - Fan-out follows destination order.
-/// - Vec order feeds the groups, and the stable sort
-///   keeps it for equal levels.
 ///
 /// # Errors
 ///
@@ -65,8 +63,6 @@ pub(super) fn grouped_structured<'a>(
 /// - Filter patches fan out over rc matches.
 /// - Groups follow first-seen declaration order.
 /// - Fan-out follows destination order.
-/// - Vec order feeds the groups, and the stable sort
-///   keeps it for equal levels.
 ///
 /// # Errors
 ///

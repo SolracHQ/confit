@@ -69,14 +69,14 @@ pub enum Event {
         /// Hook argv text under running.
         argv: String,
     },
-    /// One blob finished compressing.
-    BlobCompressed {
-        /// Finished blob count including this blob.
+    /// One pool entry finished compressing.
+    PoolStored {
+        /// Finished pool entry count including this entry.
         done: usize,
     },
-    /// Promotion started with a known blob count.
+    /// Promotion started with a known pool entry count.
     Promoting {
-        /// Blob count under promoting.
+        /// Pool entry count under promoting.
         blobs: usize,
     },
 }

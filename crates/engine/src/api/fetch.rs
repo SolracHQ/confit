@@ -133,13 +133,10 @@ mod tests {
         let lua = test_lua(&stores);
         let source = r#"
             local handle = assert(fetch("https://example.com/tool.bin"))
-            return assert(handle:text()) .. "|" .. handle:sha()
+            return assert(handle:text())
         "#;
         match run(&lua, source) {
-            Ok(Value::String(found)) => assert_eq!(
-                found.to_string_lossy(),
-                format!("1.2.3|{}", Sha::hash(b"1.2.3").hex())
-            ),
+            Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "1.2.3"),
             Ok(_) => panic!("fetch text returns a string"),
             Err(error) => panic!("fetch opens its url: {error}"),
         }

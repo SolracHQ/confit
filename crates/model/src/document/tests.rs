@@ -1,9 +1,7 @@
-use super::{
-    Data, Document, OpaqueDocument, Payload, RcEntry, TextDocument, TreeDocument, TreeMember,
-};
+use super::{Data, Document, OpaqueDocument, RcEntry, TextDocument, TreeDocument, TreeMember};
 use confit_binding::value::{Decode, Encode};
-use confit_driver as driver;
 use confit_driver::sha::Sha;
+use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
 use mlua::{Lua, Value};
 
@@ -32,7 +30,7 @@ return body"#
 }
 
 /// Refuse one flat document with the subject path.
-fn body_refuses(lua: &Lua, body: &str) {
+fn reject_bad_body(lua: &Lua, body: &str) {
     let source = format!(
         r#"local body = {body}
 body.path = {{ base = "home", relative = "subject" }}
@@ -77,11 +75,11 @@ fn handle_of(lua: &Lua, stores: &Stores, name: &str) -> String {
     global
 }
 
-/// Report whether decode wrote zero blob files.
+/// Report whether resolve wrote zero pool files.
 fn no_blob_files(directory: &tempfile::TempDir) -> bool {
-    let cache = directory.path().join("temp").join("blobs");
-    !cache.exists()
-        || confit_driver::fs::read_dir(&cache)
+    let pool = directory.path().join("config").join("blobs");
+    !pool.exists()
+        || confit_driver::fs::read_dir(&pool)
             .unwrap_or_default()
             .is_empty()
 }
@@ -117,11 +115,11 @@ fn document_flat_round_trips_path_beside_text() {
 #[test]
 fn mixed_markers_fail() {
     let lua = test_lua();
-    body_refuses(
+    reject_bad_body(
         &lua,
         r#"{ text = "hi", target = { base = "home", relative = "linked" } }"#,
     );
-    body_refuses(&lua, r#"{ nope = 1 }"#);
+    reject_bad_body(&lua, r#"{ nope = 1 }"#);
     let value: Value = lua.load("return { text = \"hi\" }").call(()).unwrap();
     assert!(
         Document::decode(&value, &lua).is_err(),
@@ -133,16 +131,16 @@ fn mixed_markers_fail() {
 fn refusal_cases_fail() {
     let (_directory, lua, stores) = opened_lua();
     let note = handle_of(&lua, &stores, "note.txt");
-    body_refuses(&lua, r#"{ text = "hi", bogus = 1 }"#);
-    body_refuses(&lua, r#"{ text = "hi", mode = 644 }"#);
-    body_refuses(&lua, r#"{ text = "hi", unmanaged = 1 }"#);
-    body_refuses(&lua, r#"{ handle = "note.txt" }"#);
-    body_refuses(&lua, r#"{ members = { ["top.txt"] = "hi" } }"#);
-    body_refuses(
+    reject_bad_body(&lua, r#"{ text = "hi", bogus = 1 }"#);
+    reject_bad_body(&lua, r#"{ text = "hi", mode = 644 }"#);
+    reject_bad_body(&lua, r#"{ text = "hi", unmanaged = 1 }"#);
+    reject_bad_body(&lua, r#"{ handle = "note.txt" }"#);
+    reject_bad_body(&lua, r#"{ members = { ["top.txt"] = "hi" } }"#);
+    reject_bad_body(
         &lua,
         &format!(r#"{{ members = {{ ["top.txt"] = {{ handle = {note} }} }} }}"#),
     );
-    body_refuses(&lua, r#"{ profile = { { frobnicate = { name = "x" } } } }"#);
+    reject_bad_body(&lua, r#"{ profile = { { frobnicate = { name = "x" } } } }"#);
 }
 
 #[test]
@@ -168,7 +166,7 @@ fn mode_strings_decode_and_encode() {
         }
         _ => panic!("symbolic mode decodes"),
     }
-    body_refuses(&lua, r#"{ text = "hi", mode = "zzz" }"#);
+    reject_bad_body(&lua, r#"{ text = "hi", mode = "zzz" }"#);
     let source = Data::Text(TextDocument {
         content: "hi".to_owned(),
         mode: 0o755,
@@ -185,36 +183,15 @@ fn mode_strings_decode_and_encode() {
 }
 
 #[test]
-fn resolve_compresses_handles_into_the_pool() {
-    let (directory, _lua, stores) = opened_lua();
-    let handle = match stores.resources().resource("note.txt") {
-        Ok(found) => found,
-        Err(error) => panic!("project opens: {error}"),
-    };
-    let payload = Payload::Handle(handle);
-    let first = match payload.resolve(&stores) {
-        Ok(found) => found,
-        Err(error) => panic!("handle resolves: {error}"),
-    };
-    assert_eq!(first, Sha::hash(b"hello"), "resolve keeps the content hash");
-    let cached = directory.path().join("temp").join("blobs");
-    driver::fs::set_mode(&cached, Some(0o555)).unwrap();
-    match payload.resolve(&stores) {
-        Ok(again) => assert_eq!(again, first, "repeat resolve reuses the file"),
-        Err(error) => panic!("present resolve skips writes: {error}"),
-    }
-    driver::fs::set_mode(&cached, Some(0o755)).unwrap();
-}
-
-#[test]
-fn sealed_arms_refuse_encode_and_serialize() {
+fn handles_serialize_as_bare_sha() {
     let (_directory, lua, stores) = opened_lua();
     let handle = match stores.resources().resource("note.txt") {
         Ok(found) => found,
         Err(error) => panic!("project opens: {error}"),
     };
+    let carried = handle.sha().clone();
     let live = Data::Opaque(OpaqueDocument {
-        handle: Payload::Handle(handle),
+        handle,
         mode: 0o644,
         unmanaged: false,
     });
@@ -225,24 +202,31 @@ fn sealed_arms_refuse_encode_and_serialize() {
         Ok(_) => panic!("handles encode a table"),
         Err(error) => panic!("handles encode: {error}"),
     }
-    assert!(
-        serde_json::to_string(&live).is_err(),
-        "unsealed documents refuse serialize"
-    );
+    let text = match serde_json::to_string(&live) {
+        Ok(found) => found,
+        Err(error) => panic!("live serializes: {error}"),
+    };
+    assert!(text.contains(&carried.hex()), "live writes the carried sha");
+    match serde_json::from_str::<Data>(&text) {
+        Ok(Data::Opaque(back)) => assert_eq!(
+            back.handle,
+            ResourceHandle::Cache(carried),
+            "live round-trips through cache alone"
+        ),
+        Ok(_) => panic!("live keeps its opaque shape"),
+        Err(error) => panic!("live decodes: {error}"),
+    };
     let blob = Sha::hash(b"sealed");
     let sealed = Data::Opaque(OpaqueDocument {
-        handle: Payload::Resolved(blob),
+        handle: ResourceHandle::Cache(blob.clone()),
         mode: 0o644,
         unmanaged: false,
     });
-    assert!(
-        sealed.encode(&lua).is_err(),
-        "sealed payloads refuse encode"
-    );
     let text = match serde_json::to_string(&sealed) {
         Ok(found) => found,
         Err(error) => panic!("sealed serializes: {error}"),
     };
+    assert!(text.contains(&blob.hex()), "sealed writes the bare sha");
     match serde_json::from_str::<Data>(&text) {
         Ok(back) => assert_eq!(back, sealed, "sealed survives serde"),
         Err(error) => panic!("sealed decodes: {error}"),
@@ -274,7 +258,7 @@ fn tree_mixed_members_keep_modes_without_writes() {
                 matches!(bare, TreeMember::Handle(_)),
                 "bare entry decodes to Handle"
             );
-            assert_eq!(bare.mode(), 0o644, "bare entry takes the default mode");
+            assert_eq!(bare.mode(), 0o644, "bare entry uses the default mode");
             let full = match members.get("sub/nested.txt") {
                 Some(found) => found,
                 None => panic!("full member keeps its key"),
@@ -287,8 +271,8 @@ fn tree_mixed_members_keep_modes_without_writes() {
             assert!(
                 members
                     .values()
-                    .all(|member| matches!(member.blob(), Payload::Handle(_))),
-                "every member holds a handle"
+                    .all(|member| matches!(member.handle(), ResourceHandle::Project(..))),
+                "every member has a handle"
             );
         }
         _ => panic!("tree body decodes"),
@@ -327,7 +311,7 @@ fn rc_decodes_every_op() {
                     assert_eq!(name, "EDITOR");
                     assert_eq!(value, "hx");
                 }
-                _ => panic!("profile holds the env entry"),
+                _ => panic!("expected env entry in profile"),
             }
             assert!(profile[0].when().is_some(), "guards stay on the entry");
             match &profile[1] {
@@ -335,7 +319,7 @@ fn rc_decodes_every_op() {
                     assert_eq!(name, "PATH");
                     assert_eq!(dir.display(), "home('bin')");
                 }
-                _ => panic!("profile holds the path entry"),
+                _ => panic!("expected path entry in profile"),
             }
             match &config[0] {
                 RcEntry::Alias {
@@ -344,21 +328,21 @@ fn rc_decodes_every_op() {
                     assert_eq!(name, "ll");
                     assert_eq!(expansion, "ls -l");
                 }
-                _ => panic!("config holds the alias entry"),
+                _ => panic!("expected alias entry in config"),
             }
             match &config[1] {
                 RcEntry::Eval { argv, .. } => assert_eq!(argv.len(), 2),
-                _ => panic!("config holds the eval entry"),
+                _ => panic!("expected eval entry in config"),
             }
             match &final_entries[0] {
                 RcEntry::Cmd { argv, .. } => assert_eq!(argv.len(), 2),
-                _ => panic!("final holds the cmd entry"),
+                _ => panic!("expected cmd entry in final"),
             }
             match &final_entries[1] {
                 RcEntry::Source { path, .. } => {
                     assert_eq!(path.display(), "home('extra.sh')");
                 }
-                _ => panic!("final holds the source entry"),
+                _ => panic!("expected source entry in final"),
             }
         }
         _ => panic!("rc body decodes"),
@@ -373,6 +357,6 @@ fn rc_unknown_ops_fail() {
         r#"{ profile = { { env = { name = "A", value = "B", bogus = 1 } } } }"#,
         r#"{ profile = { { env = { name = "A" } } } }"#,
     ] {
-        body_refuses(&lua, body);
+        reject_bad_body(&lua, body);
     }
 }

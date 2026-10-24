@@ -1,7 +1,6 @@
 //! Bundle
 //! Portable bundle archives.
 
-pub mod codec;
 mod pack;
 mod unpack;
 
@@ -9,8 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use confit_store::Stores;
-use confit_store::archive::ArchiveStore;
-use confit_store::blob::BlobStore;
 use confit_store::resources::Resources;
 
 /// Bundle file extension imposed on explicit outputs.
@@ -19,14 +16,9 @@ const BUNDLE_EXTENSION: &str = "cb";
 /// Bundle manifest file name inside the archive.
 pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 
-/// Bundle blob folder prefix inside the archive.
-pub(crate) const BUNDLE_BLOBS_PREFIX: &str = "blobs/";
-
 /// Portable bundle archives.
 #[derive(Debug, Clone)]
 pub struct Bundler {
-    pub(crate) archives: Arc<ArchiveStore>,
-    pub(crate) blobs: Arc<BlobStore>,
     pub(crate) resources: Arc<Resources>,
 }
 
@@ -34,8 +26,6 @@ impl Bundler {
     /// Build a bundler over shared stores.
     pub fn new(stores: &Stores) -> Self {
         Self {
-            archives: stores.archives(),
-            blobs: stores.blobs(),
             resources: stores.resources(),
         }
     }

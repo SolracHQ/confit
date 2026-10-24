@@ -1062,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_tuple_arm_refuses_encode_but_keeps_its_descriptor() {
+    fn skipped_tuple_arm_rejected_encode_but_kept_its_descriptor() {
         let expanded = expand(
             r#"
             #[face(table, untagged)]
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_inline_arm_refuses_encode_but_keeps_its_descriptor() {
+    fn skipped_inline_arm_rejected_encode_but_kept_its_descriptor() {
         let expanded = expand(
             r#"
             #[face(table, untagged)]

@@ -24,7 +24,7 @@ pub fn create_parent(path: &Path) -> io::Result<()> {
 /// # Errors
 ///
 /// - [NotFound] for missing folders.
-/// - [PermissionDenied] when the folder refuses read access.
+/// - [PermissionDenied] for unreadable folders.
 /// - [NotADirectory] when the path is a file.
 pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     let mut entries = Vec::new();
@@ -40,7 +40,7 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
 /// # Errors
 ///
 /// - [NotFound] for missing paths.
-/// - [PermissionDenied] when the path refuses read access.
+/// - [PermissionDenied] for unreadable paths.
 /// - [UnexpectedEof] when the file runs short of the tail.
 pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
     use std::io::{Read as _, Seek as _};
@@ -64,8 +64,8 @@ pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
 /// # Errors
 ///
 /// - [NotFound] for missing parents.
-/// - [PermissionDenied] when folders refuse writes.
-/// - [InvalidInput] when link paths hold bad bytes.
+/// - [PermissionDenied] for unwritable folders.
+/// - [InvalidInput] when link paths carry bad bytes.
 pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     create_parent(link)?;
     if std::fs::symlink_metadata(link).is_ok() {
@@ -93,7 +93,7 @@ pub fn remove_link(path: &Path) -> io::Result<()> {
 /// # Errors
 ///
 /// - [NotFound] for missing paths.
-/// - [PermissionDenied] when the path refuses read access.
+/// - [PermissionDenied] for unreadable paths.
 /// - [InvalidInput] for non-link paths.
 pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
     Ok(std::fs::read_link(path)?
@@ -112,7 +112,7 @@ const DEFAULT_MODE: u32 = 0o644;
 /// # Errors
 ///
 /// - [NotFound] for missing paths.
-/// - [PermissionDenied] when the path refuses writes.
+/// - [PermissionDenied] for unwritable paths.
 pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -128,7 +128,7 @@ pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
 /// # Errors
 ///
 /// - [NotFound] for missing paths.
-/// - [PermissionDenied] when the path refuses read access.
+/// - [PermissionDenied] for unreadable paths.
 pub fn mode(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 

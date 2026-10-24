@@ -91,7 +91,7 @@ pub enum RuntimeError {
     },
     /// Render refusal.
     #[error(
-        "'{route}' holds {shape}, pick a matching destination",
+        "routes '{route}' hold {shape}, pick a matching destination",
         route = route.display()
     )]
     Refusal {
@@ -108,14 +108,14 @@ pub enum RuntimeError {
         /// The model resolve cause.
         source: ModelError,
     },
-    /// Missing blob.
+    /// Missing content.
     #[error(
-        "cannot write '{dest}': member '{member}' needs blob '{short}'",
+        "cannot write '{dest}': member '{member}' needs content '{short}'",
         dest = dest.display(),
         member = member.display(),
         short = sha.short()
     )]
-    MissingBlob {
+    MissingContent {
         /// The tree destination under writing.
         dest: PathBuf,
         /// The missing content hash.
@@ -181,19 +181,11 @@ pub enum RuntimeError {
         /// The seen version.
         got: u64,
     },
-    /// Missing bundle blob.
-    #[error("missing blob '{sha}'")]
-    BundleMissing {
-        /// The content hash under reading.
-        sha: Sha,
-    },
-    /// Corrupt bundle blob.
-    #[error("bundle '{path}': blob for {holders} is corrupt", path = path.display())]
+    /// Corrupt bundle content, details in the log.
+    #[error("bundle '{path}': corrupt bundle, details in the log", path = path.display())]
     BundleCorrupt {
         /// The bundle path under reading.
         path: PathBuf,
-        /// The holding documents under reading.
-        holders: String,
     },
     /// Failed bundle write.
     #[error("bundle '{path}': {fault}", path = path.display())]
@@ -375,6 +367,12 @@ impl RuntimeError {
             ResourceError::Read { fault, .. } => Self::BundleRead {
                 path: bundle.to_path_buf(),
                 fault,
+            },
+            ResourceError::Mismatch {
+                expected, found, ..
+            } => Self::BundleRead {
+                path: bundle.to_path_buf(),
+                fault: AccessFault::Corrupt { expected, found },
             },
             other => Self::BundleRead {
                 path: bundle.to_path_buf(),

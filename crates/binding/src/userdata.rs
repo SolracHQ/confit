@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn enum_decode_refuses_foreign_shapes() {
+    fn enum_decode_rejected_foreign_shapes() {
         use crate::value::Decode;
 
         let lua = Lua::new();

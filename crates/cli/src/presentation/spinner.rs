@@ -275,11 +275,11 @@ fn render(spinner: &indicatif::ProgressBar, event: Event) {
         } => {
             spinner.set_message(format!("hook {position} of {total}: {argv}"));
         }
-        Event::BlobCompressed { done } => {
-            spinner.set_message(format!("compressing blobs ({done})"));
+        Event::PoolStored { done } => {
+            spinner.set_message(format!("compressing pool entries ({done})"));
         }
         Event::Promoting { blobs } => {
-            spinner.set_message(format!("promoting {blobs} blobs"));
+            spinner.set_message(format!("promoting {blobs} pool entries"));
         }
     }
     spinner.tick();

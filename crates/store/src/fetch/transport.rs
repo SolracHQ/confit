@@ -14,7 +14,7 @@ pub(crate) const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 ///
 /// # Errors
 ///
-/// - [`FetchError::Status`] for refused statuses.
+/// - [`FetchError::Status`] for failing statuses.
 /// - [`FetchError::Timeout`] for timeouts.
 /// - [`FetchError::Read`] for other transport read failures.
 /// - [`FetchError::Unscripted`] for unscripted test urls.

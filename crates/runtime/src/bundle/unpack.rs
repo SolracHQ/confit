@@ -1,19 +1,16 @@
 //! Bundle input.
 
 use std::collections::BTreeSet;
-use std::io::Read as _;
 use std::path::Path;
 
+use confit_driver as driver;
 use confit_driver::sha::Sha;
-use confit_model::document::Data;
-use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
-use confit_store::handles::ArchiveHandle;
+use confit_store::resources::error::ResourceError;
 
-use super::codec::{CodecError, check_blob_id, decode};
-use super::{BUNDLE_BLOBS_PREFIX, BUNDLE_MANIFEST, Bundler};
+use super::{BUNDLE_MANIFEST, Bundler};
 use crate::error::{Result, RuntimeError};
-use crate::manifest::Manifest;
+use crate::manifest::{CodecError, Manifest};
 
 impl Bundler {
     /// Read one portable bundle into a sealed manifest.
@@ -22,179 +19,259 @@ impl Bundler {
     ///
     /// - [`RuntimeError::BundleRead`] for unreadable bundles.
     /// - [`RuntimeError::BundleVersion`] for unsupported versions.
-    /// - [`RuntimeError::BundleMissing`] for missing blobs.
+    /// - [`RuntimeError::BundleCorrupt`] for corrupt bundles.
     pub fn read(&self, path: &Path) -> Result<Manifest> {
-        let handle = self
-            .archives
-            .register_archive(path)
-            .map_err(|error| RuntimeError::from_archive(path, error))?;
-        let names = self
-            .archives
-            .members(&handle)
-            .map_err(|error| RuntimeError::from_archive(path, error))?;
-        let (has_manifest, wanted) = check_names(&names, path)?;
-        if !has_manifest {
-            return Err(unknown(path, "missing manifest".to_owned()));
+        Unpack::new(self, path).run()
+    }
+}
+
+/// One bundle walk with its fail state.
+struct Unpack<'a> {
+    /// The bundler under reading.
+    bundler: &'a Bundler,
+    /// The bundle path under reading.
+    bundle: &'a Path,
+    /// The buffered manifest bytes.
+    raw: Option<Vec<u8>>,
+    /// Whether any fault logged.
+    failed: bool,
+    /// Shas that failed mid-walk, skipped at presence check.
+    bad: BTreeSet<Sha>,
+}
+
+impl<'a> Unpack<'a> {
+    /// Build one bundle walk.
+    fn new(bundler: &'a Bundler, bundle: &'a Path) -> Self {
+        Self {
+            bundler,
+            bundle,
+            raw: None,
+            failed: false,
+            bad: BTreeSet::new(),
         }
-        let manifest = self.read_manifest(&handle, path)?;
-        let refs = manifest.refs();
-        for blob in &refs {
-            if !wanted.iter().any(|name| name == blob.hex().as_str()) {
-                return Err(RuntimeError::BundleMissing { sha: blob.clone() });
-            }
-        }
-        for content in &wanted {
-            self.receive_blob(&handle, content, path, &manifest)?;
-        }
-        Ok(manifest)
     }
 
-    /// Read and parse the bundle manifest member.
+    /// Run one walk into the sealed manifest.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for unreadable members.
-    /// - [`RuntimeError::BundleVersion`] for stale versions.
-    fn read_manifest(&self, handle: &ArchiveHandle, bundle: &Path) -> Result<Manifest> {
-        let member = self
-            .archives
-            .extract_member(handle, BUNDLE_MANIFEST)
-            .map_err(|error| RuntimeError::from_archive(bundle, error))?;
-        let mut reader = self
-            .resources
-            .open(&member)
-            .map_err(|error| RuntimeError::from_resource(bundle, error))?;
-        let mut raw = Vec::new();
-        reader
-            .read_to_end(&mut raw)
-            .map_err(|error| RuntimeError::from_bundle_io(bundle, error))?;
-        decode(&raw).map_err(|error| from_codec(bundle, error))
+    /// - [`RuntimeError::BundleRead`] for unreadable bundles.
+    /// - [`RuntimeError::BundleVersion`] for unsupported versions.
+    /// - [`RuntimeError::BundleCorrupt`] for corrupt bundles.
+    fn run(mut self) -> Result<Manifest> {
+        let file = std::fs::File::open(self.bundle)
+            .map_err(|error| RuntimeError::from_bundle_io(self.bundle, error))?;
+        let bundle = self.bundle;
+        driver::archive::uncompress(file, |entry| self.entry(entry))
+            .map_err(|error| from_driver(bundle, error))?;
+        self.finish()
     }
 
-    /// Receive one blob member into the cache.
+    /// Receive one walk entry into the manifest buffer or the cache.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleCorrupt`] for corrupt members.
-    /// - [`RuntimeError::BundleRead`] for unreadable members.
-    /// - [`RuntimeError::BundleWrite`] for receive write faults.
-    /// - [`RuntimeError::BundleWriteUnknown`] for other receive write
-    ///   failures.
-    fn receive_blob(
-        &self,
-        handle: &ArchiveHandle,
-        content: &str,
-        bundle: &Path,
-        manifest: &Manifest,
-    ) -> Result<()> {
-        let name = [BUNDLE_BLOBS_PREFIX, content].concat();
-        let member = self
-            .archives
-            .extract_member(handle, &name)
-            .map_err(|error| RuntimeError::from_archive(bundle, error))?;
-        let content_sha = Sha::new(content).map_err(|error| unknown(bundle, error.to_string()))?;
-        self.blobs
-            .receive(&content_sha, &member)
-            .map_err(|error| from_blob(bundle, manifest, &content_sha, error))?;
+    /// - [`RuntimeError::BundleCorrupt`] for cut envelopes.
+    /// - [`RuntimeError::BundleRead`] for failed contents.
+    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
+        if entry.name == BUNDLE_MANIFEST {
+            return self.receive_manifest(entry.reader);
+        }
+        self.receive_content(entry.name, entry.reader)
+    }
+
+    /// Buffer one manifest entry body.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::BundleCorrupt`] for cut envelopes.
+    fn receive_manifest(&mut self, mut reader: impl std::io::Read) -> Result<()> {
+        if self.raw.is_some() {
+            log::error!(
+                "bundle '{}' corrupt: duplicate manifest entry",
+                self.bundle.display()
+            );
+            self.failed = true;
+            return self.drain(reader);
+        }
+        let mut bytes = Vec::new();
+        if reader.read_to_end(&mut bytes).is_err() {
+            return Err(abort_envelope(self.bundle));
+        }
+        self.raw = Some(bytes);
         Ok(())
     }
-}
 
-/// Validate bundle member names.
-///
-/// # Errors
-///
-/// - [`RuntimeError::BundleRead`] for unreadable bundles.
-/// - [`RuntimeError::BundleVersion`] for stale codec versions.
-fn check_names(names: &[String], bundle: &Path) -> Result<(bool, Vec<String>)> {
-    let mut has_manifest = false;
-    let mut wanted: Vec<String> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    for name in names {
-        if name == BUNDLE_MANIFEST {
-            if has_manifest {
-                return Err(unknown(bundle, "duplicate manifest".to_owned()));
+    /// Land one content entry body in the cache under its name hash.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::BundleCorrupt`] for cut envelopes.
+    /// - [`RuntimeError::BundleRead`] for failed contents.
+    fn receive_content(&mut self, name: String, reader: impl std::io::Read) -> Result<()> {
+        let sha = match Sha::new(name.as_str()) {
+            Ok(sha) => sha,
+            Err(_) => {
+                log::error!(
+                    "bundle '{}' corrupt: entry '{name}' is not a content hash",
+                    self.bundle.display()
+                );
+                self.failed = true;
+                return self.drain(reader);
             }
-            has_manifest = true;
-        } else if let Some(content) = name.strip_prefix(BUNDLE_BLOBS_PREFIX) {
-            check_blob_id(content).map_err(|error| from_codec(bundle, error))?;
-            if !seen.insert(content.to_string()) {
-                return Err(unknown(bundle, "duplicate blob".to_owned()));
+        };
+        match self.bundler.resources.store_checked(&sha, reader) {
+            Ok(_) => Ok(()),
+            Err(ResourceError::Mismatch { .. }) => {
+                log::error!(
+                    "bundle '{}' corrupt: content '{sha}' fails its name hash",
+                    self.bundle.display()
+                );
+                self.bad.insert(sha);
+                self.failed = true;
+                Ok(())
             }
-            wanted.push(content.to_string());
-        } else {
-            return Err(unknown(bundle, "unexpected entry".to_owned()));
+            Err(ResourceError::Read {
+                fault: AccessFault::Unknown { .. },
+                ..
+            }) => {
+                // entry body cut short mid-stream: stage faults carry mapped
+                // kinds, so an unknown read here means a broken envelope
+                Err(abort_envelope(self.bundle))
+            }
+            Err(error) => Err(from_resource(self.bundle, error)),
         }
     }
-    Ok((has_manifest, wanted))
-}
 
-/// List manifest documents holding one content hash.
-fn holders(manifest: &Manifest, sha: &Sha) -> String {
-    let found: Vec<String> = manifest
-        .documents
-        .iter()
-        .filter(|document| match &document.data {
-            Data::Opaque(found) => found.handle.resolved() == Some(sha),
-            Data::Tree(found) => found
-                .members
-                .values()
-                .filter_map(|member| member.blob().resolved())
-                .any(|blob| blob == sha),
-            Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => false,
-        })
-        .map(|document| format!("'{}'", document.destination.display()))
-        .collect();
-    if found.is_empty() {
-        "an unlisted bundle member".to_owned()
-    } else {
-        found.join(", ")
+    /// Drain one unusable body to advance the walk.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::BundleCorrupt`] for cut envelopes.
+    fn drain(&mut self, mut reader: impl std::io::Read) -> Result<()> {
+        if std::io::copy(&mut reader, &mut std::io::sink()).is_err() {
+            return Err(abort_envelope(self.bundle));
+        }
+        Ok(())
+    }
+
+    /// Decode the buffered manifest with presence checks.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::BundleVersion`] for unsupported versions.
+    /// - [`RuntimeError::BundleCorrupt`] for corrupt bundles.
+    fn finish(mut self) -> Result<Manifest> {
+        let manifest = match self.raw {
+            None => {
+                log::error!(
+                    "bundle '{}' corrupt: manifest entry is missing",
+                    self.bundle.display()
+                );
+                None
+            }
+            Some(bytes) => match Manifest::decode(&bytes) {
+                Ok(manifest) => Some(manifest),
+                Err(error) => return Err(from_codec(self.bundle, error)),
+            },
+        };
+        if let Some(found) = manifest.as_ref() {
+            let mut shas: BTreeSet<Sha> = BTreeSet::new();
+            for handle in found.handles() {
+                shas.insert(handle.sha().clone());
+            }
+            for sha in &shas {
+                if self.bad.contains(sha) {
+                    continue;
+                }
+                if !self.bundler.resources.cache_path(sha).exists() {
+                    log::error!(
+                        "bundle '{}' corrupt: content '{sha}' is missing from the cache",
+                        self.bundle.display()
+                    );
+                    self.failed = true;
+                }
+            }
+        }
+        match manifest {
+            Some(manifest) if !self.failed => Ok(manifest),
+            _ => Err(RuntimeError::BundleCorrupt {
+                path: self.bundle.to_path_buf(),
+            }),
+        }
     }
 }
 
-/// Build one bundle read failure for the bundle.
-fn unknown(bundle: &Path, message: String) -> RuntimeError {
-    RuntimeError::BundleRead {
+/// Abort one cut-short walk as corrupt.
+fn abort_envelope(bundle: &Path) -> RuntimeError {
+    log::error!("bundle '{}' corrupt: envelope is invalid", bundle.display());
+    RuntimeError::BundleCorrupt {
         path: bundle.to_path_buf(),
-        fault: AccessFault::Unknown { message },
     }
 }
 
-/// Map one codec failure into its bundle error.
+/// Map one driver archive failure at the bundle path into domain language.
+fn from_driver(bundle: &Path, error: driver::archive::Error<RuntimeError>) -> RuntimeError {
+    use driver::archive::Error as Driver;
+
+    match error {
+        Driver::Visit(error) => error,
+        Driver::Foreign
+        | Driver::Bare
+        | Driver::Corrupt(_)
+        | Driver::Truncated(_)
+        | Driver::Invalid(_)
+        | Driver::Locked => abort_envelope(bundle),
+        Driver::Missing(inner) | Driver::Denied(inner) | Driver::Io(inner) => {
+            RuntimeError::from_bundle_io(bundle, inner)
+        }
+        Driver::Unknown { detail } | Driver::UnknownAlgorithm { detail } => {
+            RuntimeError::from_bundle_io(
+                bundle,
+                std::io::Error::new(std::io::ErrorKind::Unsupported, detail),
+            )
+        }
+    }
+}
+
+/// Map one manifest codec failure at the bundle path into domain language.
 fn from_codec(bundle: &Path, error: CodecError) -> RuntimeError {
     match error {
         CodecError::Version { got } => RuntimeError::BundleVersion {
             path: bundle.to_path_buf(),
             got,
         },
-        CodecError::Corrupt { message } => unknown(bundle, message),
+        CodecError::Corrupt { .. } => {
+            log::error!(
+                "bundle '{}' corrupt: manifest entry is invalid",
+                bundle.display()
+            );
+            RuntimeError::BundleCorrupt {
+                path: bundle.to_path_buf(),
+            }
+        }
     }
 }
 
-/// Map one blob failure into its bundle error.
-fn from_blob(bundle: &Path, manifest: &Manifest, content: &Sha, error: BlobError) -> RuntimeError {
+/// Map one resource failure at the bundle path into domain language.
+fn from_resource(bundle: &Path, error: ResourceError) -> RuntimeError {
     match error {
-        BlobError::Corrupt { .. } => RuntimeError::BundleCorrupt {
-            path: bundle.to_path_buf(),
-            holders: holders(manifest, content),
-        },
-        BlobError::Read {
-            sha,
-            fault: AccessFault::Missing,
-        } => RuntimeError::BundleMissing { sha },
-        BlobError::Read { fault, .. } => RuntimeError::BundleRead {
+        ResourceError::Read { fault, .. } => RuntimeError::BundleRead {
             path: bundle.to_path_buf(),
             fault,
         },
-        BlobError::Write { fault, .. } => RuntimeError::BundleWrite {
+        ResourceError::Mismatch {
+            expected, found, ..
+        } => RuntimeError::BundleRead {
             path: bundle.to_path_buf(),
-            fault,
+            fault: AccessFault::Corrupt { expected, found },
         },
-        BlobError::WriteUnknown { message, .. } => RuntimeError::BundleWriteUnknown {
+        other => RuntimeError::BundleRead {
             path: bundle.to_path_buf(),
-            message,
+            fault: AccessFault::Unknown {
+                message: other.to_string(),
+            },
         },
-        other => unknown(bundle, other.to_string()),
     }
 }
 
@@ -202,10 +279,14 @@ fn from_blob(bundle: &Path, manifest: &Manifest, content: &Sha, error: BlobError
 mod tests {
     use super::*;
 
-    use confit_driver as driver;
-    use confit_model::document::{Data, Document, OpaqueDocument, Payload};
+    use std::collections::BTreeMap;
+
+    use crate::manifest::MANIFEST_VERSION;
+    use crate::prepare::build;
+    use confit_model::document::{Data, Document, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
+    use confit_store::handles::ResourceHandle;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -215,36 +296,34 @@ mod tests {
         }
     }
 
+    fn project_file(dir: &Path, name: &str, body: &[u8]) -> std::path::PathBuf {
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
     fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
         use confit_store::Stores;
 
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots, sender);
-        let project = dir.join("project");
-        std::fs::create_dir_all(&project).unwrap();
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
-            let name = format!("bin-{index}.bin");
-            std::fs::write(project.join(&name), body).unwrap();
-            let source = match stores.resources().resource(&name) {
-                Ok(handle) => handle,
-                Err(error) => panic!("project opens: {error}"),
-            };
-            let handle = match stores.blobs().put(&source) {
-                Ok(handle) => handle,
-                Err(error) => panic!("cache stores: {error}"),
-            };
-            documents.push(Document::new(
-                Route::new(RouteBase::Home, format!("bin-{index}").as_str()).unwrap(),
-                Data::Opaque(OpaqueDocument {
-                    handle: Payload::Resolved(handle.sha256().clone()),
+            let name = format!("bin-{index}");
+            let path = project_file(dir, &name, body);
+            documents.push(Document {
+                path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
+                data: Data::Opaque(OpaqueDocument {
+                    handle: ResourceHandle::Project(path, confit_driver::sha::Sha::hash(body)),
                     mode: 0o644,
                     unmanaged: false,
                 }),
-            ));
+            });
         }
-        match Manifest::build(&stores, documents, Vec::new()) {
+        match build(documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
             Err(error) => panic!("manifest builds: {error}"),
         }
@@ -253,9 +332,8 @@ mod tests {
     fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
         use confit_driver::archive::{Algorithm, Builder, Level};
 
-        let build = |path: &Path| {
-            let sink = std::fs::File::create(path)?;
-            let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
+        let build = |file: &mut std::fs::File| {
+            let mut builder = Builder::create(file, Algorithm::TarGz, Level::default());
             for (name, bytes) in entries {
                 let mut reader = std::io::Cursor::new(bytes.as_slice());
                 builder.member(name, 0o644, bytes.len() as u64, &mut reader)?;
@@ -263,7 +341,7 @@ mod tests {
             builder.finish()?;
             Ok(())
         };
-        if let Err(error) = driver::atomic_write(dest, build) {
+        if let Err(error) = driver::StagedFile::write(dest, build) {
             panic!("fixture bundle builds: {error}");
         }
     }
@@ -274,116 +352,99 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_writes_manifest_first_with_sorted_blobs() {
+    fn round_trip_writes_manifest_first_with_sorted_contents() {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan) {
-            Ok(written) => written,
+        let dest = match store.write(&manifest, &plan) {
+            Ok(dest) => dest,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        assert_eq!(
-            written.canonical(),
-            dir.path().join("plan.cb"),
-            "bare output gains suffix"
-        );
-        let names = entry_names(written.canonical());
+        assert_eq!(dest, dir.path().join("plan.cb"), "bare output gains suffix");
+        let names = entry_names(&dest);
         assert_eq!(names[0], BUNDLE_MANIFEST, "the manifest comes first");
-        let blobs: Vec<String> = names[1..].to_vec();
-        assert_eq!(blobs.len(), 2, "every blob is included");
-        let mut sorted = blobs.clone();
+        let contents: Vec<String> = names[1..].to_vec();
+        assert_eq!(contents.len(), 2, "every content ships once");
+        let mut sorted = contents.clone();
         sorted.sort();
-        assert_eq!(blobs, sorted, "the blob entries stay sorted");
-        let mut expected: Vec<String> = manifest
-            .refs()
-            .iter()
-            .map(|blob| [BUNDLE_BLOBS_PREFIX, &blob.hex()].concat())
-            .collect();
-        expected.sort();
-        expected.dedup();
-        assert_eq!(blobs, expected, "blob entries carry content names");
-        for name in &blobs {
+        assert_eq!(sorted, contents, "content entries sort by hash");
+        for name in &contents {
+            assert_eq!(name.len(), 64, "content names carry hashes: {name}");
             assert!(
-                name.starts_with(BUNDLE_BLOBS_PREFIX),
-                "the blob entry stays under the prefix: {name}"
+                name.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "content names stay hex: {name}"
             );
         }
-        match store.read(written.canonical()) {
+        match store.read(&dest) {
             Ok(found) => {
-                assert_eq!(found, manifest, "manifest round-trips");
+                assert_eq!(found.hashes, manifest.hashes, "hashes round-trip");
+                let carried = |manifest: &Manifest| {
+                    manifest
+                        .handles()
+                        .iter()
+                        .map(|handle| handle.sha().clone())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(carried(&found), carried(&manifest), "contents round-trip");
             }
             Err(error) => panic!("manifest load: {error}"),
         }
     }
 
     #[test]
-    fn read_rejects_foreign_bundles() {
+    fn read_rejects_stale_version() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
         let stale = serde_json::json!({"version": 0u32, "documents": [], "hashes": {}});
         let raw = serde_json::to_vec(&stale).unwrap();
         let stale_path = dir.path().join("stale.cb");
         build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
-        assert!(store.read(&stale_path).is_err(), "stale version fails");
+        match store.read(&stale_path) {
+            Ok(_) => panic!("stale manifest passes"),
+            Err(RuntimeError::BundleVersion { got, .. }) => {
+                assert_eq!(got, 0, "stale keeps version")
+            }
+            Err(error) => panic!("wrong stale variant: {error}"),
+        }
     }
 
     #[test]
-    fn read_refuses_missing_blob() {
+    fn read_rejects_missing_content() {
         use confit_store::Stores;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
-        let stores = Stores::new(roots, sender);
-        let store = Bundler::new(&stores);
-        let project = dir.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("wanted.bin"), b"wanted bytes").unwrap();
-        let source = match stores.resources().resource("wanted.bin") {
-            Ok(handle) => handle,
-            Err(error) => panic!("project opens: {error}"),
-        };
-        let handle = match stores.blobs().put(&source) {
-            Ok(handle) => handle,
-            Err(error) => panic!("cache stores: {error}"),
-        };
-        let manifest = match Manifest::build(
-            &stores,
-            vec![Document::new(
-                Route::new(RouteBase::Home, "bin").unwrap(),
-                Data::Opaque(OpaqueDocument {
-                    handle: Payload::Resolved(handle.sha256().clone()),
+        let stores = Stores::new(roots.clone(), sender);
+        let path = project_file(dir.path(), "wanted.bin", b"wanted bytes");
+        let manifest = match build(
+            vec![Document {
+                path: Route::new(RouteBase::Home, "bin").unwrap(),
+                data: Data::Opaque(OpaqueDocument {
+                    handle: ResourceHandle::Project(
+                        path,
+                        confit_driver::sha::Sha::hash(b"wanted bytes"),
+                    ),
                     mode: 0o644,
                     unmanaged: false,
                 }),
-            )],
+            }],
             Vec::new(),
         ) {
             Ok(manifest) => manifest,
             Err(error) => panic!("manifest builds: {error}"),
         };
         let raw = serde_json::to_vec(&manifest).unwrap();
-        let path = dir.path().join("thin.cb");
-        build_bundle(&path, &[(BUNDLE_MANIFEST, raw)]);
-        assert!(store.read(&path).is_err(), "thin manifest fails");
-    }
-
-    #[test]
-    fn read_names_holding_document_for_corrupt_blob() {
-        let dir = tempfile::tempdir().unwrap();
-        let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha"]);
-        let refs = manifest.refs();
-        let raw = serde_json::to_vec(&manifest).unwrap();
-        let member = [BUNDLE_BLOBS_PREFIX, &refs[0].hex()].concat();
-        let path = dir.path().join("corrupt.cb");
-        build_bundle(
-            &path,
-            &[
-                (BUNDLE_MANIFEST, raw),
-                (member.as_str(), b"garbage".to_vec()),
-            ],
-        );
-        assert!(store.read(&path).is_err(), "corrupt blob fails");
+        let thin = dir.path().join("thin.cb");
+        build_bundle(&thin, &[(BUNDLE_MANIFEST, raw)]);
+        let store = Bundler::new(&stores);
+        match store.read(&thin) {
+            Ok(_) => panic!("thin manifest passes"),
+            Err(RuntimeError::BundleCorrupt { path }) => {
+                assert_eq!(path, thin, "corrupt keeps the bundle");
+            }
+            Err(error) => panic!("wrong missing variant: {error}"),
+        }
     }
 
     #[test]
@@ -391,7 +452,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
-        let manifest = serde_json::to_vec(&Manifest::empty()).unwrap();
+        let manifest = serde_json::to_vec(&Manifest {
+            version: MANIFEST_VERSION,
+            documents: Vec::new(),
+            hashes: BTreeMap::new(),
+            hooks: Vec::new(),
+        })
+        .unwrap();
         let dup_path = dir.path().join("dup-manifest.cb");
         build_bundle(
             &dup_path,
@@ -400,17 +467,27 @@ mod tests {
                 (BUNDLE_MANIFEST, manifest.clone()),
             ],
         );
-        assert!(store.read(&dup_path).is_err(), "duplicate manifest fails");
+        match store.read(&dup_path) {
+            Ok(_) => panic!("duplicate manifest passes"),
+            Err(RuntimeError::BundleCorrupt { path }) => {
+                assert_eq!(path, dup_path, "corrupt keeps the bundle");
+            }
+            Err(error) => panic!("wrong duplicate variant: {error}"),
+        }
 
         let bad_path = dir.path().join("bad-id.cb");
         build_bundle(
             &bad_path,
             &[
                 (BUNDLE_MANIFEST, manifest.clone()),
-                ("blobs/short", b"x".to_vec()),
+                ("short", b"x".to_vec()),
             ],
         );
-        assert!(store.read(&bad_path).is_err(), "bad id fails");
+        match store.read(&bad_path) {
+            Ok(_) => panic!("bad id passes"),
+            Err(RuntimeError::BundleCorrupt { .. }) => {}
+            Err(error) => panic!("wrong bad id variant: {error}"),
+        }
 
         let odd_path = dir.path().join("odd.cb");
         build_bundle(
@@ -420,7 +497,102 @@ mod tests {
                 ("other.txt", b"x".to_vec()),
             ],
         );
-        assert!(store.read(&odd_path).is_err(), "unexpected entry fails");
+        match store.read(&odd_path) {
+            Ok(_) => panic!("unexpected entry passes"),
+            Err(RuntimeError::BundleCorrupt { .. }) => {}
+            Err(error) => panic!("wrong unexpected variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn read_faults_report_once_as_corrupt() {
+        use confit_driver::sha::Sha;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = opaque_manifest(dir.path(), &[]);
+
+        let empty = serde_json::to_vec(&Manifest {
+            version: MANIFEST_VERSION,
+            documents: Vec::new(),
+            hashes: BTreeMap::new(),
+            hooks: Vec::new(),
+        })
+        .unwrap();
+        let mixed_path = dir.path().join("mixed.cb");
+        build_bundle(
+            &mixed_path,
+            &[
+                ("nope", b"x".to_vec()),
+                (BUNDLE_MANIFEST, empty.clone()),
+                (BUNDLE_MANIFEST, empty),
+            ],
+        );
+        match store.read(&mixed_path) {
+            Ok(_) => panic!("mixed bundle passes"),
+            Err(RuntimeError::BundleCorrupt { .. }) => {}
+            Err(error) => panic!("wrong mixed variant: {error}"),
+        }
+
+        let sha = Sha::hash(b"alpha");
+        let drift = serde_json::to_vec(&Manifest {
+            version: MANIFEST_VERSION,
+            documents: vec![Document::new(
+                Route::new(RouteBase::Home, "bin").unwrap(),
+                Data::Opaque(OpaqueDocument {
+                    handle: ResourceHandle::Cache(sha.clone()),
+                    mode: 0o644,
+                    unmanaged: false,
+                }),
+            )],
+            hashes: BTreeMap::new(),
+            hooks: Vec::new(),
+        })
+        .unwrap();
+        let drift_path = dir.path().join("drift.cb");
+        build_bundle(
+            &drift_path,
+            &[
+                (BUNDLE_MANIFEST, drift),
+                (sha.hex().as_str(), b"beta".to_vec()),
+            ],
+        );
+        match store.read(&drift_path) {
+            Ok(_) => panic!("drifted bytes pass"),
+            Err(RuntimeError::BundleCorrupt { .. }) => {}
+            Err(error) => panic!("wrong drift variant: {error}"),
+        }
+    }
+
+    #[test]
+    fn read_rejects_broken_envelope_as_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha"]);
+        let plan = dir.path().join("plan");
+        let dest = match store.write(&manifest, &plan) {
+            Ok(dest) => dest,
+            Err(error) => panic!("manifest writes: {error}"),
+        };
+
+        let foreign_path = dir.path().join("foreign.cb");
+        std::fs::write(&foreign_path, b"not an archive").unwrap();
+        match store.read(&foreign_path) {
+            Ok(_) => panic!("foreign bytes pass"),
+            Err(RuntimeError::BundleCorrupt { path }) => {
+                assert_eq!(path, foreign_path, "corrupt keeps the bundle");
+            }
+            Err(error) => panic!("wrong foreign variant: {error}"),
+        }
+
+        let raw = std::fs::read(&dest).unwrap();
+        let cut_path = dir.path().join("cut.cb");
+        std::fs::write(&cut_path, &raw[..raw.len() / 2]).unwrap();
+        match store.read(&cut_path) {
+            Ok(_) => panic!("cut envelope passes"),
+            Err(RuntimeError::BundleCorrupt { path }) => {
+                assert_eq!(path, cut_path, "corrupt keeps the bundle");
+            }
+            Err(error) => panic!("wrong cut variant: {error}"),
+        }
     }
 
     #[test]
@@ -428,11 +600,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"legacy bytes"]);
         let plan = dir.path().join("plan");
-        let written = match store.write(&manifest, &plan) {
-            Ok(written) => written,
+        let dest = match store.write(&manifest, &plan) {
+            Ok(dest) => dest,
             Err(error) => panic!("manifest writes: {error}"),
         };
-        let raw = std::fs::read(written.canonical()).unwrap();
+        let raw = std::fs::read(&dest).unwrap();
         assert!(!raw.is_empty(), "gzipped holds bytes");
         assert_eq!(
             &raw[0..2],

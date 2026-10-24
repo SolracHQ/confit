@@ -37,7 +37,7 @@ validation before documents assemble.
 
 Configs contribute documents in declaration order. Structured
 documents assemble first. Text and link documents follow. Rc
-documents close the assembly. Blob refs collect beside the
+documents close the assembly. Content refs collect beside the
 manifest under content hashes through the run.
 
 ### Patch handles
@@ -77,9 +77,9 @@ through with bare shape kept.
 
 The build fills one hash per document into the hashes section
 from rendered bytes.
-Opaque hashes copy the blob reference. Tree hashes cover
-canonical manifest bytes over blob references. Documents sort
-by path after hashing. Blob refs attach beside the manifest
+Opaque hashes copy the content reference. Tree hashes cover
+canonical manifest bytes over content references. Documents sort
+by path after hashing. Content refs attach beside the manifest
 after the build.
 
 ## Load Previous
@@ -130,16 +130,18 @@ each carrying path, kind, and lifecycle status.
 
 An explicit output path resolves first. A missing suffix gains
 `.cb`, with present suffixes kept in any letter case. The run
-writes a plain tar archive there. The archive holds
-`manifest.json` first, then one `blobs/<sha>` entry per
-referenced blob in sorted order with duplicates excluded.
-Referenced blobs alone ship inside.
+writes a gzipped tar archive there. The archive holds
+`manifest.json` first, then one raw file per referenced
+content sha in sorted order named by the bare hex digest with
+duplicates excluded. Referenced contents alone ship inside.
+Reads verify each entry hash against its name and land the
+bytes in the cache.
 
 ### Named slot output
 
 `@name` strips the sigil and resolves under
 `{config}/confit/plans/{name}.json`. The run writes the
-manifest form there with pool blobs stored first, so the slot
+manifest form there with pool entries stored first, so the slot
 stays resolvable after the write. Slot outputs keep their own
 name with zero suffix imposed. Empty names, separator
 carriers, and dot segments fail as plan errors.
@@ -148,7 +150,7 @@ carriers, and dot segments fail as plan errors.
 
 The two destinations compare as follows:
 
-- File output writes `{output}.cb` as a portable tar archive.
+- File output writes `{output}.cb` as a portable gzipped tar archive.
 - Named slot output writes `{config}/confit/plans/{name}.json`
   as manifest JSON.
 

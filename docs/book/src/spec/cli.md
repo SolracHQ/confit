@@ -65,7 +65,7 @@ literal path, adding `.cb` to names missing it, in any letter
 case. Without `-o`, the name follows the slot: `applied.cb`,
 `{name}.cb`, or `prev-{N}.cb`. `-m` renders the manifest as
 pretty JSON on stdout instead and writes no bundle file. The
-JSON carries blob hashes only; document bytes stay in the
+JSON carries content hashes only; document bytes stay in the
 pool.
 
 A file export answers with `export: {path}` on stdout.
@@ -87,13 +87,13 @@ confit delete @name
 
 The positional names one slot with a leading `@`. Delete
 removes the named manifest first. A pool prune follows and
-drops blobs unreferenced by the removal. The prune keeps blobs
+drops entries unreferenced by the removal. The prune keeps entries
 still referenced by remaining slots.
 
 Stdout prints the slot name and the pruned count:
 
 ```sh
-delete: @{name} ({m} blobs pruned)
+delete: @{name} ({m} entries pruned)
 ```
 
 Shapes outside `@name` fail with the want named:

@@ -5,11 +5,10 @@ use std::collections::BTreeMap;
 
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
-use confit_model::document::{Data, RcData, RcEntry, StructuredFormat};
+use confit_model::document::{Data, Document, RcData, RcEntry, StructuredFormat};
 use confit_model::routes::Route;
 
 use crate::error::{RefusalShape, Result, RuntimeError};
-use crate::manifest::Document;
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -23,32 +22,32 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 pub fn render_document(document: &Document) -> Result<Vec<u8>> {
     match &document.data {
         Data::Structured(found) => match found.format {
-            StructuredFormat::Toml => {
-                Ok(render_toml(&document.destination, &found.data)?.into_bytes())
-            }
-            StructuredFormat::Json => {
-                Ok(render_json(&document.destination, &found.data)?.into_bytes())
-            }
-            StructuredFormat::Yaml => {
-                Ok(render_yaml(&document.destination, &found.data)?.into_bytes())
-            }
+            StructuredFormat::Toml => Ok(render_toml(&document.path, &found.data)?.into_bytes()),
+            StructuredFormat::Json => Ok(render_json(&document.path, &found.data)?.into_bytes()),
+            StructuredFormat::Yaml => Ok(render_yaml(&document.path, &found.data)?.into_bytes()),
         },
         Data::Text(found) => Ok(found.content.as_bytes().to_vec()),
         Data::Link(found) => Ok(found.target.display().as_bytes().to_vec()),
-        Data::Rc(data) => Ok(render_rc(&document.destination, data)?.into_bytes()),
+        Data::Rc(data) => Ok(render_rc(&document.path, data)?.into_bytes()),
         Data::Opaque(found) => {
+            use confit_store::handles::ResourceHandle;
+
+            let label = match &found.handle {
+                ResourceHandle::Cache(sha) => sha.hex(),
+                ResourceHandle::Project(path, _) => path.display().to_string(),
+            };
             log::error!(
-                "opaque '{}' uses blob '{}'",
-                document.destination.display(),
-                found.handle.sha256().hex()
+                "opaque '{}' uses content '{}'",
+                document.path.display(),
+                label
             );
             Err(RuntimeError::Refusal {
-                route: document.destination.clone(),
+                route: document.path.clone(),
                 shape: RefusalShape::Opaque,
             })
         }
         Data::Tree(_) => Err(RuntimeError::Refusal {
-            route: document.destination.clone(),
+            route: document.path.clone(),
             shape: RefusalShape::Tree,
         }),
     }

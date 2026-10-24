@@ -6,10 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use confit_driver::sha::Sha;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, RcEntry, tree_changed};
+use confit_model::document::{Data, Document, RcEntry, tree_changed};
 use confit_model::hook::{HookLifecycle, diff_lifecycle};
 use confit_model::routes::Route;
-use confit_runtime::manifest::{Document, DocumentStatus, Manifest, summary};
+use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::status::{
+    DocumentStatus, find_opaque_sibling, key, status, summary, superseded_by,
+};
 use confit_runtime::{Difference, Prepared, render_document};
 
 use crate::presentation::difference::{difference_lines, flatten_table, leaf_changes, leaf_text};
@@ -181,7 +184,8 @@ impl Summary<'_> {
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
-            let status = document.status(
+            let status = status(
+                document,
                 &self.previous.documents,
                 &self.built.hashes,
                 &self.previous.hashes,
@@ -292,7 +296,8 @@ impl Summary<'_> {
 
     /// Render entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
-        match document.status(
+        match status(
+            document,
             &self.previous.documents,
             &self.built.hashes,
             &self.previous.hashes,
@@ -330,13 +335,8 @@ impl Summary<'_> {
             .previous
             .documents
             .iter()
-            .find(|item| item.destination == *path)
-            .or_else(|| {
-                self.built
-                    .documents
-                    .iter()
-                    .find(|item| item.destination == *path)
-            });
+            .find(|item| item.path == *path)
+            .or_else(|| self.built.documents.iter().find(|item| item.path == *path));
         match found {
             Some(document) => {
                 format!("{} {}", Sigil::Update.mark(), header_line(document))
@@ -347,20 +347,15 @@ impl Summary<'_> {
 
     /// Render delete headers for previous keys missing from the manifest.
     fn delete_headers(&self) -> Vec<String> {
-        let seen: BTreeSet<String> = self
-            .built
-            .documents
-            .iter()
-            .map(|document| document.key())
-            .collect();
+        let seen: BTreeSet<String> = self.built.documents.iter().map(key).collect();
         self.previous
             .documents
             .iter()
             .filter(|recorded| {
-                !seen.contains(&recorded.key()) && !recorded.superseded_by(&self.built.documents)
+                !seen.contains(&key(recorded)) && !superseded_by(recorded, &self.built.documents)
             })
             .map(|recorded| {
-                let key = recorded.key();
+                let key = key(recorded);
                 let (kind, path) = split_key(&key);
                 match &recorded.data {
                     Data::Tree(found) => format!(
@@ -380,15 +375,11 @@ impl Summary<'_> {
             .previous
             .documents
             .iter()
-            .find(|item| item.key() == document.key())
+            .find(|item| key(item) == key(document))
         {
             return Some(found);
         }
-        self.previous.documents.iter().find(|recorded| {
-            recorded.destination == document.destination
-                && recorded.key() != document.key()
-                && (recorded.is_opaque() || document.is_opaque())
-        })
+        find_opaque_sibling(&self.previous.documents, document)
     }
 }
 
@@ -429,11 +420,7 @@ fn kind_name(data: &Data) -> &'static str {
 
 /// Render the header line for one document.
 fn header_line(document: &Document) -> String {
-    format!(
-        "{}: {}",
-        document.destination.display(),
-        doc_label(document)
-    )
+    format!("{}: {}", document.path.display(), doc_label(document))
 }
 
 /// Format one document header with its lifecycle sigil.
@@ -491,9 +478,10 @@ fn first_run_entries<'a>(
                 | Difference::Structured { path, .. }
                 | Difference::Diff { path, .. }
                 | Difference::Missing { path }
+                | Difference::Blocked { path }
                 | Difference::Unreadable { path, .. } => path,
             };
-            path == &document.destination || is_tree && member_of(&document.destination, path)
+            path == &document.path || is_tree && member_of(&document.path, path)
         })
         .collect()
 }
@@ -512,7 +500,7 @@ fn member_of(destination: &Route, path: &Route) -> bool {
 fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     if entries
         .iter()
-        .any(|entry| matches!(entry, Difference::Missing { path } if path == &document.destination))
+        .any(|entry| matches!(entry, Difference::Missing { path } if path == &document.path))
     {
         return true;
     }
@@ -575,6 +563,13 @@ fn first_run_updates(
                     Sigil::Update.mark()
                 ),
             )),
+            Difference::Blocked { .. } => out.push(painter.paint(
+                Sigil::Update,
+                &format!(
+                    "  {} blocked (directory blocks the path), remove the directory or apply fails",
+                    Sigil::Update.mark()
+                ),
+            )),
             Difference::Missing { .. } => {}
         }
     }
@@ -609,9 +604,10 @@ fn member_rel(document: &Document, entry: &Difference) -> String {
         Difference::Structured { path, .. }
         | Difference::Diff { path, .. }
         | Difference::Missing { path }
+        | Difference::Blocked { path }
         | Difference::Unreadable { path, .. } => path
             .relative()
-            .strip_prefix(document.destination.relative())
+            .strip_prefix(document.path.relative())
             .map_or_else(|_| path.display(), |rel| rel.display().to_string()),
     }
 }
@@ -662,10 +658,7 @@ fn entry_bodies(document: &Document) -> Vec<String> {
         }
         Data::Link(found) => vec![found.target.display()],
         Data::Opaque(found) => {
-            vec![format!(
-                "opaque {}",
-                opaque_ref_label(found.handle.sha256())
-            )]
+            vec![format!("opaque {}", opaque_handle_label(&found.handle))]
         }
         Data::Tree(found) => vec![format!("tree ({} files)", found.members.len())],
         Data::Rc(rc) => {
@@ -701,6 +694,16 @@ fn opaque_ref_label(sha: &Sha) -> String {
     format!("sha256:{sha}")
 }
 
+/// Render the label for one opaque handle.
+fn opaque_handle_label(handle: &confit_store::handles::ResourceHandle) -> String {
+    use confit_store::handles::ResourceHandle;
+
+    match handle {
+        ResourceHandle::Cache(sha) => opaque_ref_label(sha),
+        ResourceHandle::Project(path, _) => path.display().to_string(),
+    }
+}
+
 /// Collect update lines with old to new values.
 fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     match (&document.data, &recorded.data) {
@@ -731,8 +734,8 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
                     &format!(
                         "  {} content = {} -> {}",
                         Sigil::Update.mark(),
-                        opaque_ref_label(old.handle.sha256()),
-                        opaque_ref_label(new.handle.sha256())
+                        opaque_handle_label(&old.handle),
+                        opaque_handle_label(&new.handle)
                     ),
                 )]
             }
@@ -874,8 +877,8 @@ mod tests {
     use confit_model::condition::Condition;
     use confit_model::document::{TreeDocument, TreeMember};
     use confit_model::hook::Hook;
+    use confit_runtime::manifest::MANIFEST_VERSION;
     use confit_runtime::manifest::Manifest;
-    use confit_store::{StoreRoots, Stores};
 
     fn probe_hook() -> Hook {
         Hook {
@@ -893,20 +896,20 @@ mod tests {
 
     #[test]
     fn tree_first_run_groups_members_under_destination() {
-        use confit_model::document::Payload;
         use confit_model::routes::RouteBase;
+        use confit_store::handles::ResourceHandle;
         let dest = Route::new(RouteBase::Data, "fonts/JetBrainsMono").unwrap();
         let blob = Sha::hash(b"x");
         let mut members = BTreeMap::new();
         members.insert(
             "a.ttf".to_owned(),
             TreeMember::Full {
-                handle: Payload::Resolved(blob),
+                handle: ResourceHandle::Cache(blob),
                 mode: 0o644,
             },
         );
         let document = Document {
-            destination: dest.clone(),
+            path: dest.clone(),
             data: Data::Tree(TreeDocument { members }),
         };
         let member_path = dest.join("a.ttf");
@@ -922,12 +925,15 @@ mod tests {
 
     #[test]
     fn preview_renders_missing_binaries_without_resolving() {
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = Stores::new(StoreRoots::default(), sender);
-        let desired = Manifest::build(&stores, Vec::new(), vec![probe_hook()]).unwrap();
+        let desired = confit_runtime::prepare::build(Vec::new(), vec![probe_hook()]).unwrap();
         let prepared = Prepared {
             desired,
-            previous: Manifest::empty(),
+            previous: Manifest {
+                version: MANIFEST_VERSION,
+                documents: Vec::new(),
+                hashes: BTreeMap::new(),
+                hooks: Vec::new(),
+            },
             differences: Vec::new(),
             first_run: false,
             changed: BTreeSet::new(),

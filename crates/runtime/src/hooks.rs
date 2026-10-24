@@ -251,11 +251,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     use confit_model::document::Data;
+    use confit_model::document::Document;
     use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
-    use crate::manifest::Document;
     use crate::write::Writer;
 
     fn literal(path: &std::path::Path) -> Route {
@@ -263,14 +263,14 @@ mod tests {
     }
 
     fn text_doc(path: &std::path::Path, mode: u32) -> Document {
-        Document::new(
-            literal(path),
-            Data::Text(TextDocument {
+        Document {
+            path: literal(path),
+            data: Data::Text(TextDocument {
                 content: "probe bytes".into(),
                 mode,
                 unmanaged: false,
             }),
-        )
+        }
     }
 
     fn runner() -> HookRunner {
@@ -292,7 +292,7 @@ mod tests {
     }
 
     fn write_doc(writer: &Writer, document: &Document) -> BTreeSet<Route> {
-        let changed = BTreeSet::from([document.destination.clone()]);
+        let changed = BTreeSet::from([document.path.clone()]);
         match writer.write_documents(std::slice::from_ref(document), &changed) {
             Ok(_) => changed,
             Err(error) => panic!("documents write: {error}"),

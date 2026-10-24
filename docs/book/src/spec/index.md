@@ -44,7 +44,7 @@ Apply writes the bundle through the fixed slot.
 | Live state | `confit/state.json` |
 | History | `confit/previous/{stamp}.json` |
 | Named slots | `confit/plans/{name}.json` |
-| Blob pool | `confit/blobs/{hash}` |
+| Pool | `confit/blobs/{hash}` |
 
 Same profile and same cache yields the same bundle.
 
@@ -57,7 +57,7 @@ Same profile and same cache yields the same bundle.
 - difference: The difference page records state-versus-disk notes and
   first-run behavior.
 - apply: The apply page records guarded writes and hook runs.
-- storage: The storage page records bundles, slots, and the blob
+- storage: The storage page records bundles, slots, and the
   pool.
 - documents: The documents page records documents, patches, trees,
   and hashing.

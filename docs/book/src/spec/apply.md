@@ -125,7 +125,7 @@ kind:
 
 - Text, structured, and rc documents render through the core
   renderer.
-- Opaque documents write raw blob bytes. Present unmanaged
+- Opaque documents write raw content bytes. Present unmanaged
   documents skip the write while their declaration matches
   the recorded manifest.
 - Tree documents write each member to its joined path with
@@ -143,7 +143,7 @@ recorded manifest entries missing from the desired manifest at a
 kept destination. Hand-placed files stay put. Destinations stay
 put.
 
-The fixed slot writes next. Missing pool blobs land first, so
+The fixed slot writes next. Missing pool entries land first, so
 the stored manifest stays resolvable. The archive follows with
 one fresh stamp entry and rotation past five. Pool pruning
 follows the archive, so a rotated-out entry releases its bytes

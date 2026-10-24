@@ -134,18 +134,6 @@ impl StateStore {
         }
     }
 
-    /// Stream one handle for reading.
-    ///
-    /// # Errors
-    ///
-    /// - [`StateError::Read`] for unreadable states.
-    pub fn open(&self, handle: &StateHandle) -> Result<Box<dyn Read>> {
-        let path = handle.canonical();
-        std::fs::File::open(path)
-            .map(|file| Box::new(file) as Box<dyn Read>)
-            .map_err(|error| StateError::from_io(path, error))
-    }
-
     /// Read one handle into bytes.
     ///
     /// # Errors
@@ -160,7 +148,7 @@ impl StateStore {
     ///
     /// - Applied creates the fixed state file.
     /// - Named creates one `@name` file.
-    /// - History variants refuse with [`StateError::BadPick`].
+    /// - History variants fail with [`StateError::BadPick`].
     ///
     /// # Errors
     ///
@@ -368,10 +356,9 @@ fn check_state_name(name: &str) -> Result<()> {
 /// - [`StateError::Write`] for state write faults.
 /// - [`StateError::WriteUnknown`] for other write failures.
 fn store_bytes(path: &Path, source: &mut impl Read) -> Result<()> {
-    driver::atomic_write(path, |pending| {
-        let mut pended = std::fs::File::create(pending)?;
-        driver::copy_stream(&mut *source, &mut pended)?;
-        pended.sync_all()
+    driver::StagedFile::write(path, |file| {
+        std::io::copy(&mut *source, file)?;
+        file.sync_all()
     })
     .map_err(|error| StateError::from_write_io(path, error))
 }

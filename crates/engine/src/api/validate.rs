@@ -149,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn document_returns_true_with_nil_on_good_shapes() {
+    fn document_gave_true_with_nil_on_good_shapes() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.document({ path = { base = "home", relative = "subject" }, text = "hi" })
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn document_returns_false_with_reason_on_bad_shapes() {
+    fn document_gave_false_with_reason_on_bad_shapes() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.document({ nope = 1 })
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn config_returns_true_with_nil_on_good_shapes() {
+    fn config_gave_true_with_nil_on_good_shapes() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn config_returns_false_with_reason_on_bad_shapes() {
+    fn config_gave_false_with_reason_on_bad_shapes() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({ name = "tools/test", nope = 1 })
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn config_returns_false_with_reason_on_missing_names() {
+    fn config_gave_false_with_reason_on_missing_names() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_returns_true_with_nil_on_good_shapes() {
+    fn patch_gave_true_with_nil_on_good_shapes() {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.patch({
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_returns_false_with_reason_on_bad_shapes() {
+    fn patch_gave_false_with_reason_on_bad_shapes() {
         let lua = test_lua();
         let cases = [
             r#"
@@ -342,12 +342,9 @@ mod tests {
             "entry",
             "route",
         ] {
-            let source = [
-                "local found, reason = validate.",
-                verb,
-                "(42) assert(found == nil and reason ~= nil) return reason",
-            ]
-            .concat();
+            let source = format!(
+                "local found, reason = validate.{verb}(42) assert(found == nil and reason ~= nil) return reason"
+            );
             reason_of(run(&lua, &source));
         }
     }
@@ -361,14 +358,9 @@ mod tests {
             ("entry", r#"{ alias = { name = "x", expansion = "y" } }"#),
             ("route", r#"{ base = "home", relative = ".bashrc" }"#),
         ] {
-            let source = [
-                "local found, reason = validate.",
-                verb,
-                "(",
-                body,
-                ") assert(found ~= nil and reason == nil) return 'ok'",
-            ]
-            .concat();
+            let source = format!(
+                "local found, reason = validate.{verb}({body}) assert(found ~= nil and reason == nil) return 'ok'"
+            );
             match run(&lua, &source) {
                 Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
                 _ => panic!("{verb} passes good shapes"),

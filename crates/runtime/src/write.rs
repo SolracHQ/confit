@@ -1,18 +1,19 @@
 //! Destination writes with deleted removal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 
 use confit_driver as driver;
 use confit_driver::progress::{Event, ProgressSender};
-use confit_model::document::Data;
+use confit_driver::sha::Sha;
+use confit_model::document::{Data, Document, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
+use confit_store::faults::AccessFault;
+use confit_store::resources::error::ResourceError;
 
-use crate::disk::{copy_blob, remove, write_tree};
 use crate::error::{Result, RuntimeError};
-use crate::manifest::Document;
 use crate::render::render_document;
 
 /// Destination writer.
@@ -35,8 +36,8 @@ impl Writer {
     /// - [`RuntimeError::Write`] for write faults.
     /// - [`RuntimeError::WriteUnknown`] for unmapped
     ///   write failures.
-    /// - [`RuntimeError::MissingBlob`] for dangling tree
-    ///   blob hashes.
+    /// - [`RuntimeError::MissingContent`] for dangling tree
+    ///   content hashes.
     /// - [`RuntimeError::Refusal`] with [`RuntimeError::Render`]
     ///   through rendering.
     pub fn write_documents(
@@ -54,27 +55,37 @@ impl Writer {
                 Data::Opaque(found) => found.unmanaged,
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => false,
             };
-            if unmanaged && expanded.exists() && !changed.contains(&document.destination) {
+            if unmanaged && expanded.exists() && !changed.contains(&document.path) {
                 continue;
             }
             if let Data::Tree(found) = &document.data {
-                let count = write_tree(&expanded, &found.members, &self.stores)?;
-                driver::fs::set_mode(&expanded, None)
-                    .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
+                let count = self.write_tree_members(&expanded, &found.members)?;
                 done += 1;
-                self.emit_written(&document.destination, done, total);
+                self.emit_written(&document.path, done, total);
                 written += count;
                 continue;
             }
             if let Data::Opaque(found) = &document.data {
+                use std::io::Write as _;
+
                 if let Err(error) = driver::fs::remove_link(&expanded) {
                     return Err(RuntimeError::from_write_io(&expanded, error));
                 }
-                copy_blob(&expanded, &expanded, &found.handle, &self.stores)?;
+                let handle = &found.handle;
+                let mut reader = self
+                    .stores
+                    .resources()
+                    .open(handle)
+                    .map_err(|error| map_resource(error, handle.sha(), &expanded, &expanded))?;
+                driver::StagedFile::write(&expanded, |file| {
+                    std::io::copy(&mut reader, file)?;
+                    file.flush()
+                })
+                .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 driver::fs::set_mode(&expanded, Some(found.mode))
                     .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
                 done += 1;
-                self.emit_written(&document.destination, done, total);
+                self.emit_written(&document.path, done, total);
                 written += 1;
                 continue;
             }
@@ -108,7 +119,7 @@ impl Writer {
             driver::fs::set_mode(&expanded, mode)
                 .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
             done += 1;
-            self.emit_written(&document.destination, done, total);
+            self.emit_written(&document.path, done, total);
             written += 1;
         }
         Ok(written)
@@ -121,6 +132,42 @@ impl Writer {
             total,
         });
     }
+
+    /// Write one tree destination member by member.
+    ///
+    /// # Errors
+    ///
+    /// - [`RuntimeError::MissingContent`] for dangling member
+    ///   hashes with the destination and the member.
+    /// - [`RuntimeError::Write`] for unwritable members
+    ///   and mode failures.
+    /// - [`RuntimeError::WriteUnknown`] for unmapped
+    ///   member failures.
+    fn write_tree_members(
+        &self,
+        dest: &Path,
+        members: &BTreeMap<String, TreeMember>,
+    ) -> Result<usize> {
+        use std::io::Write as _;
+
+        for (relative, member) in members {
+            let path = dest.join(relative);
+            let handle = member.handle();
+            let mut reader = self
+                .stores
+                .resources()
+                .open(handle)
+                .map_err(|error| map_resource(error, handle.sha(), dest, &path))?;
+            driver::StagedFile::write(&path, |file| {
+                std::io::copy(&mut reader, file)?;
+                file.flush()
+            })
+            .map_err(|error| RuntimeError::from_write_io(&path, error))?;
+            driver::fs::set_mode(&path, Some(member.mode()))
+                .map_err(|error| RuntimeError::from_write_io(&path, error))?;
+        }
+        Ok(1)
+    }
 }
 
 /// Resolve one document destination or fail the write.
@@ -130,12 +177,63 @@ impl Writer {
 /// - [`RuntimeError::Expand`] for unresolvable base folders.
 fn expand_destination(document: &Document) -> Result<PathBuf> {
     document
-        .destination
+        .path
         .expand()
         .map_err(|source| RuntimeError::Expand {
-            route: document.destination.clone(),
+            route: document.path.clone(),
             source,
         })
+}
+
+/// Remove one backend path and report whether anything remains.
+fn remove(path: &Path) -> std::io::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(path)?;
+    Ok(true)
+}
+
+/// Map one resource open failure at the destination into runtime language.
+fn map_resource(error: ResourceError, sha: &Sha, dest: &Path, target: &Path) -> RuntimeError {
+    match error {
+        ResourceError::Read {
+            fault: AccessFault::Missing,
+            ..
+        } => {
+            log::error!("missing content '{}' for '{}'", sha.hex(), target.display());
+            RuntimeError::MissingContent {
+                dest: dest.to_path_buf(),
+                sha: sha.clone(),
+                member: target.to_path_buf(),
+            }
+        }
+        ResourceError::Mismatch {
+            expected, found, ..
+        } => RuntimeError::Write {
+            path: target.to_path_buf(),
+            fault: AccessFault::Corrupt { expected, found },
+        },
+        ResourceError::Read { fault, .. } => RuntimeError::Write {
+            path: target.to_path_buf(),
+            fault,
+        },
+        ResourceError::Write { fault, .. } => RuntimeError::Write {
+            path: target.to_path_buf(),
+            fault,
+        },
+        ResourceError::WriteUnknown { message, .. } => {
+            log::error!("resource write failed: {message}");
+            RuntimeError::WriteUnknown {
+                path: target.to_path_buf(),
+                message,
+            }
+        }
+        other => RuntimeError::WriteUnknown {
+            path: target.to_path_buf(),
+            message: other.to_string(),
+        },
+    }
 }
 
 impl Writer {
@@ -155,16 +253,14 @@ impl Writer {
             if matches!(old.data, Data::Tree(_)) {
                 continue;
             }
-            let kept = desired
-                .iter()
-                .any(|document| document.destination == old.destination);
+            let kept = desired.iter().any(|document| document.path == old.path);
             if kept {
                 continue;
             }
             let expanded = expand_destination(old)?;
             if remove(&expanded).map_err(|error| RuntimeError::from_remove_io(&expanded, error))? {
                 done += 1;
-                self.emit_removed(&old.destination, done, total);
+                self.emit_removed(&old.path, done, total);
                 removed += 1;
             }
         }
@@ -205,7 +301,7 @@ impl Writer {
             let old_members = &found.members;
             let new_rels: BTreeSet<&str> = desired
                 .iter()
-                .filter(|document| document.destination == old.destination)
+                .filter(|document| document.path == old.path)
                 .filter_map(|document| match &document.data {
                     Data::Tree(found) => Some(&found.members),
                     Data::Structured(_)
@@ -224,7 +320,7 @@ impl Writer {
                 let path = dest.join(relative);
                 if remove(&path).map_err(|error| RuntimeError::from_remove_io(&path, error))? {
                     done += 1;
-                    self.emit_removed(&old.destination.join(relative), done, total);
+                    self.emit_removed(&old.path.join(relative), done, total);
                     removed += 1;
                 }
             }
@@ -254,14 +350,14 @@ mod tests {
     }
 
     fn text_doc(path: &std::path::Path) -> Document {
-        Document::new(
-            literal(path),
-            Data::Text(TextDocument {
+        Document {
+            path: literal(path),
+            data: Data::Text(TextDocument {
                 content: "deleted bytes".into(),
                 mode: 0o644,
                 unmanaged: false,
             }),
-        )
+        }
     }
 
     #[test]

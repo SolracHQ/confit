@@ -35,7 +35,7 @@ const MODE_MASK: u32 = 0o777;
 
 /// Archive container shape.
 ///
-/// Default holds TarGz for compact output.
+/// Defaults are TarGz for compact output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Algorithm {
     /// Zip container with per-member deflation.
@@ -47,7 +47,7 @@ pub enum Algorithm {
 
 /// Compression strength for archive builders.
 ///
-/// Default holds High for balanced output.
+/// Defaults are High for balanced output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
     /// Raw storage.
@@ -77,49 +77,55 @@ pub struct Entry<'a> {
 
 /// Archive failure shapes.
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum Error<E = io::Error> {
     /// Foreign bytes.
-    #[error("foreign bytes hold no archive")]
+    #[error("cannot read members: foreign input")]
     Foreign,
     /// Bare gzip single.
-    #[error("bare gzip holds no archive members")]
+    #[error("cannot read members: bare gzip input")]
     Bare,
     /// Locked archive.
     #[error("locked archive needs a password")]
     Locked,
+    /// Unsupported algorithm.
+    #[error("cannot read members: unknown algorithm ({detail})")]
+    UnknownAlgorithm {
+        /// The refusal detail from the backend.
+        detail: String,
+    },
     /// Unknown archive shape.
-    #[error("unknown archive shape refuses members: {detail}")]
+    #[error("cannot read members: unknown shape ({detail})")]
     Unknown {
         /// The refusal detail from the backend.
         detail: String,
     },
     /// Corrupt archive.
-    #[error("corrupt archive refuses members: {0}")]
+    #[error("cannot read members: corrupt archive ({0})")]
     Corrupt(#[source] io::Error),
     /// Cut archive.
     #[error("cut archive ends mid stream: {0}")]
     Truncated(#[source] io::Error),
     /// Refused access.
-    #[error("denied access refuses members: {0}")]
+    #[error("cannot read members: denied access ({0})")]
     Denied(#[source] io::Error),
     /// Absent input.
-    #[error("missing input refuses members: {0}")]
+    #[error("cannot read members: missing input ({0})")]
     Missing(#[source] io::Error),
     /// Rejected name.
-    #[error("rejected name refuses members: {0}")]
+    #[error("cannot read members: rejected name ({0})")]
     Invalid(#[source] io::Error),
     /// Transport failure.
     #[error(transparent)]
     Io(io::Error),
     /// Failing visitor.
-    #[error("visitor refuses members: {0}")]
-    Visit(#[source] io::Error),
+    #[error("cannot read members: failing visitor ({0})")]
+    Visit(E),
 }
 
 /// Archive result alias.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = io::Error> = std::result::Result<T, Error<E>>;
 
-impl From<io::Error> for Error {
+impl<E> From<io::Error> for Error<E> {
     fn from(cause: io::Error) -> Self {
         match cause.kind() {
             io::ErrorKind::InvalidData => Self::Corrupt(cause),
@@ -132,7 +138,7 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<Error> for io::Error {
+impl From<Error<io::Error>> for io::Error {
     fn from(error: Error) -> Self {
         match error {
             Error::Io(cause)
@@ -142,23 +148,26 @@ impl From<Error> for io::Error {
             | Error::Denied(cause)
             | Error::Missing(cause)
             | Error::Invalid(cause) => cause,
-            Error::Foreign => {
-                Self::new(io::ErrorKind::InvalidData, "foreign bytes hold no archive")
-            }
+            Error::Foreign => Self::new(
+                io::ErrorKind::InvalidData,
+                "cannot read members: foreign input",
+            ),
             Error::Bare => Self::new(
                 io::ErrorKind::InvalidData,
-                "bare gzip holds no archive members",
+                "cannot read members: bare gzip input",
             ),
             Error::Locked => Self::new(
                 io::ErrorKind::InvalidInput,
                 "locked archive needs a password",
             ),
-            Error::Unknown { detail } => Self::new(io::ErrorKind::Unsupported, detail),
+            Error::Unknown { detail } | Error::UnknownAlgorithm { detail } => {
+                Self::new(io::ErrorKind::Unsupported, detail)
+            }
         }
     }
 }
 
-impl From<zip::result::ZipError> for Error {
+impl<E> From<zip::result::ZipError> for Error<E> {
     fn from(error: zip::result::ZipError) -> Self {
         let message = error.to_string();
         match error {
@@ -169,10 +178,12 @@ impl From<zip::result::ZipError> for Error {
             {
                 Self::Locked
             }
-            zip::result::ZipError::UnsupportedArchive(_) => Self::Unknown { detail: message },
-            zip::result::ZipError::CompressionMethodNotSupported(method) => Self::Unknown {
-                detail: format!("compression method {method}"),
-            },
+            zip::result::ZipError::UnsupportedArchive(_) => {
+                Self::UnknownAlgorithm { detail: message }
+            }
+            zip::result::ZipError::CompressionMethodNotSupported(_) => {
+                Self::UnknownAlgorithm { detail: message }
+            }
             zip::result::ZipError::FileNotFound | zip::result::ZipError::InvalidArchive(_) => {
                 Self::Corrupt(io::Error::new(io::ErrorKind::InvalidData, message))
             }
@@ -183,7 +194,7 @@ impl From<zip::result::ZipError> for Error {
 
 /// Streaming archive writer over one seekable sink.
 ///
-/// The writer holds one backend and its level.
+/// Writers hold one backend and its level.
 pub struct Builder<W: io::Write + io::Seek> {
     inner: Inner<W>,
 }
@@ -243,13 +254,12 @@ impl<W: io::Write + io::Seek> Builder<W> {
     /// - Names carry forward slashes.
     /// - Modes carry unix permission bits.
     /// - Len sizes tar headers.
-    /// - Zip members stream reader bytes directly.
     ///
     /// # Errors
     ///
     /// - [`Error::Corrupt`] for rejected zip framing.
     /// - [`Error::Invalid`] for rejected names.
-    /// - [`Error::Denied`] for refused access.
+    /// - [`Error::Denied`] for denied access.
     /// - [`Error::Io`] for failed readers and sinks.
     pub fn member<R: io::Read>(
         &mut self,
@@ -298,7 +308,7 @@ impl<W: io::Write + io::Seek> Builder<W> {
     /// # Errors
     ///
     /// - [`Error::Corrupt`] for broken zip tails.
-    /// - [`Error::Denied`] for refused access.
+    /// - [`Error::Denied`] for denied access.
     /// - [`Error::Io`] for failed tails.
     pub fn finish(self) -> Result<W> {
         match self.inner {
@@ -325,17 +335,18 @@ pub fn supported(head: &[u8]) -> bool {
 /// - [`Error::Foreign`] for foreign bytes.
 /// - [`Error::Bare`] for bare gzip singles.
 /// - [`Error::Locked`] for locked archives.
-/// - [`Error::Unknown`] for refused features and methods.
+/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
+/// - [`Error::Unknown`] for unexpected failures.
 /// - [`Error::Corrupt`] for corrupt archives.
 /// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 /// - [`Error::Visit`] for failing visitors.
-pub fn uncompress<R: io::Read + io::Seek>(
+pub fn uncompress<R: io::Read + io::Seek, E>(
     mut reader: R,
-    visit: impl FnMut(Entry<'_>) -> io::Result<()>,
-) -> Result<()> {
+    visit: impl FnMut(Entry<'_>) -> std::result::Result<(), E>,
+) -> Result<(), E> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
         return zip_ext::walk(reader, visit);
@@ -355,10 +366,11 @@ pub fn uncompress<R: io::Read + io::Seek>(
 /// - [`Error::Foreign`] for foreign bytes.
 /// - [`Error::Bare`] for bare gzip singles.
 /// - [`Error::Locked`] for locked archives.
-/// - [`Error::Unknown`] for refused features and methods.
+/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
+/// - [`Error::Unknown`] for unexpected failures.
 /// - [`Error::Corrupt`] for corrupt archives.
 /// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
@@ -376,10 +388,10 @@ pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams.
-fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> Result<Vec<u8>> {
+fn peek_head<R: io::Read + io::Seek, E>(reader: &mut R) -> Result<Vec<u8>, E> {
     let pos = reader.stream_position()?;
     let mut head = Vec::with_capacity(HEAD_LEN);
     reader

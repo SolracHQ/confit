@@ -5,7 +5,7 @@ use std::path::Path;
 
 use confit_engine::Engine;
 use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
@@ -54,7 +54,7 @@ impl PlanRunner<'_> {
             });
         }
         let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
-        let desired = Manifest::build(&self.stores, evaluated.documents, evaluated.hooks)?;
+        let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
         let prepared = prepare(&self.stores, desired)?;
         let text = render_prepared(&prepared);
         if let Some(output) = self.args.output.as_deref() {
@@ -68,7 +68,7 @@ impl PlanRunner<'_> {
                         input: raw.to_owned(),
                     });
                 };
-                Manifest::store_named(&self.stores.states(), &picker, &prepared.desired)
+                stored::store_named(&self.stores.states(), &picker, &prepared.desired)
                     .map_err(CliError::from)?;
             } else {
                 Bundler::new(&self.stores)

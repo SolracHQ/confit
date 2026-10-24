@@ -10,7 +10,7 @@ Apply writes each document to its expanded path.
 | `text` | exact file text | one path holds one document |
 | `rc` | three section buckets | one base fans out per shell |
 | `link` | link target | one path holds one document |
-| `opaque` | raw bytes by blob ref | one path holds one document |
+| `opaque` | raw bytes by content ref | one path holds one document |
 | `tree` | member map under one folder | one path holds one file set |
 
 ### Structured
@@ -237,13 +237,13 @@ document. A repeat fails showing both owners.
 
 #### Render rule
 
-Raw blob bytes land on disk unchanged. Present unmanaged
+Raw content bytes land on disk unchanged. Present unmanaged
 documents skip the write while their declaration matches
 the recorded manifest, rewritten ones land once.
 
 #### Hash rule
 
-The hash copies the blob reference. The blob reference
+The hash copies the content reference. The content reference
 holds the SHA-256 over raw bytes. The digest reads as
 lowercase hex.
 
@@ -255,7 +255,7 @@ mode and a differing disk mode adds a `mode` key entry.
 
 #### Apply behavior
 
-Apply writes raw blob bytes to the expanded path. Apply
+Apply writes raw content bytes to the expanded path. Apply
 sets the recorded mode after the bytes land. A kind change
 to or from opaque reads as an update. All other kind
 changes read as one create and one delete.
@@ -300,7 +300,7 @@ Parents build on demand.
 
 The hash covers the canonical manifest with SHA-256. The
 manifest sorts by relative path. Each line holds octal
-mode, relative path, and member blob hash. The digest
+mode, relative path, and member content hash. The digest
 reads as lowercase hex.
 
 ```text
@@ -456,18 +456,18 @@ Member paths feed `opaque`, `load_bytes` and
 
 Each document hashes with SHA-256 over its rendered
 bytes. Digests read as lowercase hex. Opaque hashes copy
-the blob reference. Tree hashes cover the canonical
+the content reference. Tree hashes cover the canonical
 manifest instead. Tables hold fixed key order through the
 sorted map. Ordered lists keep declaration order.
 
-Blobs gzip at level 6 for pool and bundle entries. The
+Pool and bundle entries gzip at level 6. The
 outer bundle envelope reads plain tar. Manifest files hold
-pretty JSON with blob hashes and sizes pointing into the
+pretty JSON with content hashes and sizes pointing into the
 shared pool. Raw
 bytes travel in the pool beside the manifests.
 
 Hashes persist in the file and load trusted. Loads skip
 rendering. Hydration stays lazy. Disk bytes matching a
-blob hash win before any pool read. Pool hits verify the
-hash and cache per run. Missing pool blobs fail the load
+content hash win before any pool read. Pool hits verify the
+hash and cache per run. Missing pool entries fail the load
 showing the hash.

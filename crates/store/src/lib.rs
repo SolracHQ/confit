@@ -10,16 +10,16 @@ use confit_driver::paths::BaseDirs;
 use confit_driver::progress::ProgressSender;
 
 pub mod archive;
-pub mod blob;
 pub mod faults;
 pub mod fetch;
 pub mod handles;
+pub mod pool;
 pub mod resources;
 pub mod state;
 
 use archive::ArchiveStore;
-use blob::BlobStore;
 use fetch::FetchCache;
+use pool::PoolStore;
 use resources::Resources;
 use state::StateStore;
 
@@ -44,8 +44,8 @@ pub struct Stores {
     pub roots: StoreRoots,
     /// Trusted project files.
     resources: Arc<Resources>,
-    /// Content-addressed blob pool.
-    blobs: Arc<BlobStore>,
+    /// Content-addressed pool.
+    pool: Arc<PoolStore>,
     /// Content-addressed fetch cache.
     fetch: Arc<FetchCache>,
     /// Compressed archive member listing and extraction.
@@ -92,17 +92,13 @@ fn current_dir() -> PathBuf {
 impl Stores {
     /// Build stores over file backends.
     pub fn new(roots: StoreRoots, progress: ProgressSender) -> Self {
-        let resources = Arc::new(Resources::new(&roots));
-        let blobs = Arc::new(BlobStore::new(&roots, progress.clone()));
-        let archives = Arc::new(ArchiveStore::new(
-            &roots,
-            resources.clone(),
-            progress.clone(),
-        ));
+        let pool = Arc::new(PoolStore::new(&roots, progress.clone()));
+        let resources = Arc::new(Resources::new(&roots, pool.clone()));
+        let archives = Arc::new(ArchiveStore::new(resources.clone(), progress.clone()));
         Self {
             resources: resources.clone(),
-            blobs: blobs.clone(),
-            fetch: Arc::new(FetchCache::new(&roots, progress)),
+            pool: pool.clone(),
+            fetch: Arc::new(FetchCache::new(resources.clone(), progress)),
             archives,
             states: Arc::new(StateStore::new(&roots)),
             roots,
@@ -114,9 +110,9 @@ impl Stores {
         self.resources.clone()
     }
 
-    /// Return the content-addressed blob pool.
-    pub fn blobs(&self) -> Arc<BlobStore> {
-        self.blobs.clone()
+    /// Return the content-addressed pool.
+    pub fn pool(&self) -> Arc<PoolStore> {
+        self.pool.clone()
     }
 
     /// Return the content-addressed fetch cache.

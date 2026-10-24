@@ -5,9 +5,6 @@ use thiserror::Error;
 
 use confit_binding::error::BindingError;
 use confit_binding::value::Mismatch;
-use confit_model::error::Error as ModelError;
-use confit_store::blob::error::BlobError;
-use confit_store::fetch::error::FetchError;
 
 /// Optional hint suffix rendering on its own line.
 struct Hint<'a>(Option<&'a str>);
@@ -56,18 +53,9 @@ pub enum EngineError {
         /// The escape reason.
         reason: String,
     },
-    /// Blob failure.
-    #[error(transparent)]
-    Blob(#[from] BlobError),
-    /// Fetch failure.
-    #[error(transparent)]
-    Fetch(#[from] FetchError),
     /// Binding failure.
     #[error(transparent)]
     Binding(#[from] BindingError),
-    /// Model failure.
-    #[error(transparent)]
-    Model(#[from] ModelError),
     /// Repeated declaration.
     #[error("profile: document '{display}' is declared more than once")]
     Duplicate {
@@ -109,7 +97,7 @@ pub enum EngineError {
         route: String,
     },
     /// Rc guard.
-    #[error("document '{display}' {section} holds 'changed' (hooks only)")]
+    #[error("documents '{display}' {section} hold 'changed' (hooks only)")]
     ChangedInRc {
         /// The offending document display.
         display: String,
@@ -117,7 +105,7 @@ pub enum EngineError {
         section: String,
     },
     /// Patched target.
-    #[error("patch target '{display}' holds '{base}' under '{patch}' patches")]
+    #[error("patch targets '{display}' hold '{base}' under '{patch}' patches")]
     Structured {
         /// The patch target display.
         display: String,
@@ -141,7 +129,7 @@ pub enum EngineError {
         reason: String,
     },
     /// Non-UTF8 file.
-    #[error("'{path}' holds non-UTF8 bytes")]
+    #[error("cannot read '{path}': non-UTF8 bytes")]
     Utf8 {
         /// The offending file path.
         path: String,

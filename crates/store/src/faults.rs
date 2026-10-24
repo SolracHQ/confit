@@ -4,6 +4,8 @@
 use std::fmt::{Display, Formatter};
 use std::io::ErrorKind;
 
+use confit_driver::sha::Sha;
+
 /// Shared access fault cause.
 ///
 /// One cause covers every store access path. Stores pair the cause with their
@@ -23,6 +25,13 @@ pub enum AccessFault {
     QuotaExceeded,
     /// Oversized file.
     FileTooLarge,
+    /// Corrupt content failing its hash.
+    Corrupt {
+        /// The expected content hash.
+        expected: Sha,
+        /// The found content hash.
+        found: Sha,
+    },
     /// Unmapped failure with raw text.
     Unknown {
         /// The raw failure text.
@@ -55,6 +64,7 @@ impl AccessFault {
             Self::ReadOnlyFilesystem => "read-only filesystem",
             Self::QuotaExceeded => "quota exceeded",
             Self::FileTooLarge => "file too large",
+            Self::Corrupt { .. } => "corrupt content",
             Self::Unknown { message } => message,
         }
     }
@@ -62,6 +72,14 @@ impl AccessFault {
 
 impl Display for AccessFault {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.cause())
+        match self {
+            Self::Corrupt { expected, found } => write!(
+                f,
+                "content mismatch, expected '{}', found '{}'",
+                expected.hex(),
+                found.hex()
+            ),
+            other => f.write_str(other.cause()),
+        }
     }
 }

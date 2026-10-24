@@ -139,12 +139,16 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<(
     Ok(())
 }
 
-/// Run delete and drop one named state and unreferenced blobs.
+/// Run delete and drop one named state and unreferenced entries.
 fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<()> {
     let terminal = Terminal::new();
     let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
-    anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
+    anstream::println!(
+        "delete: @{} ({} entries pruned)",
+        report.name,
+        report.pruned
+    );
     Ok(())
 }
 

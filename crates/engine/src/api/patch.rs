@@ -13,13 +13,10 @@ use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
 /// Live structured document under patching.
-///
-/// - Path stays fixed through patch callbacks.
-/// - Body holds one structured format with data.
 #[derive(Debug, Clone, PartialEq, Eq, Face)]
 #[face(table, rename = "Document_Structured")]
 pub struct StructuredLiveDocument {
-    /// The destination route. Patches never change it.
+    /// The destination route.
     pub path: Route,
     /// The structured body under patching.
     #[face(flatten)]
@@ -27,13 +24,10 @@ pub struct StructuredLiveDocument {
 }
 
 /// Live rc document under patching.
-///
-/// - Path stays fixed through patch callbacks.
-/// - Body holds profile with config and final sections.
 #[derive(Debug, Clone, PartialEq, Eq, Face)]
 #[face(table, rename = "Document_Rc")]
 pub struct RcLiveDocument {
-    /// The destination route. Patches never change it.
+    /// The destination route.
     pub path: Route,
     /// The rc body under patching.
     #[face(flatten)]
@@ -80,8 +74,6 @@ pub struct FilterArgs {
 }
 
 /// Patch merge level.
-///
-/// - Names parse case-insensitively.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Face)]
 #[serde(rename_all = "lowercase")]
 #[face(table, string)]

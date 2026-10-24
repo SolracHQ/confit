@@ -158,7 +158,7 @@ fn expand_namespace_block(
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
                         format!(
-                            "{class_name} holds &self method {} inside a namespace block; namespace blocks hold statics alone",
+                            "{class_name} types hold &self method {} inside a namespace block; namespace blocks hold statics alone",
                             method.sig.ident.unraw()
                         ),
                     ));

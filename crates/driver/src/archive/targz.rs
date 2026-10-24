@@ -51,7 +51,7 @@ enum Probed<R> {
 /// - [`Error::Bare`] for bare gzip singles.
 /// - [`Error::Corrupt`] for corrupt decodes.
 /// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
@@ -74,14 +74,14 @@ pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
 /// - [`Error::Bare`] for bare gzip singles.
 /// - [`Error::Corrupt`] for corrupt decodes.
 /// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 /// - [`Error::Visit`] for failing visitors.
-pub(super) fn walk(
+pub(super) fn walk<E>(
     reader: impl io::Read,
-    visit: impl FnMut(super::Entry<'_>) -> io::Result<()>,
-) -> Result<()> {
+    visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
+) -> Result<(), E> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_walk(stream, visit),
         Probed::Gzipped(stream) => {
@@ -95,10 +95,10 @@ pub(super) fn walk(
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams.
-fn sniff<R: io::Read>(mut reader: R) -> Result<Probed<R>> {
+fn sniff<R: io::Read, E>(mut reader: R) -> Result<Probed<R>, E> {
     let mut prefix = Vec::with_capacity(GZIP_MAGIC.len());
     let mut byte = [0u8; 1];
     while prefix.len() < GZIP_MAGIC.len() {
@@ -126,12 +126,12 @@ fn sniff<R: io::Read>(mut reader: R) -> Result<Probed<R>> {
 /// - [`Error::Bare`] for bare singles.
 /// - [`Error::Corrupt`] for corrupt decodes.
 /// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams.
-fn gunzip_window<R: io::Read>(
+fn gunzip_window<R: io::Read, E>(
     reader: R,
-) -> Result<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>> {
+) -> Result<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>, E> {
     let mut decoder = flate2::read::GzDecoder::new(reader);
     let mut window = Vec::with_capacity(TAR_BLOCK as usize);
     decoder.by_ref().take(TAR_BLOCK).read_to_end(&mut window)?;
@@ -154,7 +154,7 @@ fn is_tar_tag(head: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
@@ -179,14 +179,14 @@ fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for refused access.
+/// - [`Error::Denied`] for denied access.
 /// - [`Error::Missing`] for missing input.
 /// - [`Error::Io`] for failed streams and entries.
 /// - [`Error::Visit`] for failing visitors.
-fn plain_walk(
+fn plain_walk<E>(
     reader: impl io::Read,
-    mut visit: impl FnMut(super::Entry<'_>) -> io::Result<()>,
-) -> Result<()> {
+    mut visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
+) -> Result<(), E> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
     for entry in entries {
@@ -210,7 +210,7 @@ fn plain_walk(
 /// # Errors
 ///
 /// - [`Error::Io`] for failed paths.
-fn file_head<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> Result<Option<NamedFile>> {
+fn file_head<R: io::Read, E>(entry: &mut tar::Entry<'_, R>) -> Result<Option<NamedFile>, E> {
     let kind = entry.header().entry_type();
     if kind.is_dir() || !kind.is_file() {
         return Ok(None);

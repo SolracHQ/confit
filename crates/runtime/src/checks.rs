@@ -11,9 +11,6 @@ use confit_model::routes::Route;
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
 /// One unmet condition with its failing member.
-///
-/// - Conjunction faults hold the first failing member.
-/// - Disjunction faults hold every member fault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unmet {
     /// The failing member index in its parent conjunction.
@@ -384,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_reads_route_membership() {
+    fn changed_parsed_route_membership() {
         let route = literal(std::path::Path::new("/opt/probe/touched"));
         let other = literal(std::path::Path::new("/opt/probe/untouched"));
         let changed = BTreeSet::from([route.clone()]);

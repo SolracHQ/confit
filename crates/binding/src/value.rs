@@ -253,7 +253,6 @@ pub fn read_field(table: &Table, shape: &str, field: &str) -> Result<Value, Mism
 
 /// Decode one field through its convert function.
 ///
-/// - Convert functions access the value with Lua.
 /// - Failures carry the field path.
 ///
 /// # Errors

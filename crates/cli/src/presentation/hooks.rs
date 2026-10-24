@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_change_reads_old_to_new() {
+    fn timeout_change_parsed_old_to_new() {
         let before = hook(
             &["mise"],
             &[],
@@ -379,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_leaf_reads_member_words() {
+    fn unmet_leaf_parsed_member_words() {
         let fault = Unmet {
             index: 0,
             member: in_path("mise"),

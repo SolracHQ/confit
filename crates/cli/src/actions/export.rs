@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
 use confit_store::state::StateStore;
@@ -90,9 +91,9 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        let written = bundles.write(&manifest, &dest).map_err(CliError::from)?;
+        let dest = bundles.write(&manifest, &dest).map_err(CliError::from)?;
         Ok(ExportReport {
-            dest: Some(written.canonical().to_path_buf()),
+            dest: Some(dest),
             manifest: None,
         })
     }
@@ -104,7 +105,7 @@ impl<'a> ExportRunner<'a> {
 ///
 /// - [`CliError::Runtime`] for state resolves.
 pub fn resolve_state_bundle(picker: &Picker, states: &StateStore) -> Result<(Manifest, PathBuf)> {
-    let manifest = Manifest::resolve(states, picker)?;
+    let manifest = stored::resolve(states, picker)?;
     let stem = match picker {
         Picker::Applied => APPLIED_STEM.to_string(),
         Picker::Named(name) => name.clone(),

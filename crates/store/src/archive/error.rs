@@ -49,11 +49,27 @@ pub enum ArchiveError {
         /// The source path under unpacking.
         path: PathBuf,
     },
-    /// Verified compression.
-    #[error("cannot unpack '{path}': unsupported compression", path = path.display())]
-    UnsupportedCompression {
+    /// Unknown failure.
+    #[error(
+        "cannot unpack '{path}': unexpected failure ({detail}), please report steps to replicate",
+        path = path.display()
+    )]
+    Unknown {
         /// The source path under unpacking.
         path: PathBuf,
+        /// The backend detail under failing.
+        detail: String,
+    },
+    /// Unsupported algorithm.
+    #[error(
+        "cannot unpack '{path}': unknown algorithm ({detail})",
+        path = path.display()
+    )]
+    UnknownAlgorithm {
+        /// The source path under unpacking.
+        path: PathBuf,
+        /// The backend detail under failing.
+        detail: String,
     },
     /// Failed write.
     #[error("cannot write '{path}': {fault}", path = path.display())]

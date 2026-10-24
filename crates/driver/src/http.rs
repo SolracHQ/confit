@@ -49,7 +49,7 @@ impl From<io::Error> for HttpError {
 ///
 /// # Errors
 ///
-/// - [Status] for refused statuses.
+/// - [Status] for failing statuses.
 /// - [Timeout] for timeouts.
 /// - [Io] for transport read failures.
 /// - [Unscripted] for unscripted test urls.
@@ -68,7 +68,7 @@ pub fn download(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>
 ///
 /// # Errors
 ///
-/// - [Status] for refused statuses.
+/// - [Status] for failing statuses.
 /// - [Timeout] for timeouts.
 /// - [Io] for transport read failures.
 #[cfg(not(any(test, feature = "test-support")))]

@@ -48,6 +48,12 @@ pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
                     path.display()
                 ));
             }
+            Difference::Blocked { path } => {
+                lines.push(format!(
+                    "'{}': directory blocks the managed path. remove the directory or apply fails",
+                    path.display()
+                ));
+            }
             Difference::Unreadable { path, reason } => {
                 lines.push(format!(
                     "cannot read '{}': {reason}. changed outside config: add to config or the next apply loses them",

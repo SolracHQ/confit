@@ -6,104 +6,82 @@ use std::path::{Path, PathBuf};
 use confit_binding_macros::{Face, face_impl};
 use confit_driver::sha::Sha;
 use mlua::{Lua, Table};
+use serde::{Deserialize, Serialize};
 
 use crate::Stores;
-use crate::archive::error::ArchiveError;
-use crate::archive::error::Result as ArchiveResult;
-use crate::resources::error::ResourceError;
-use crate::resources::error::Result as ResourceResult;
 
-/// Handle to a project resource.
+/// Handle to a project or cached resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Face)]
 #[face(userdata)]
-pub struct ResourceHandle {
-    path: PathBuf,
-    sha256: Sha,
+pub enum ResourceHandle {
+    /// Content-addressed cache entry, trusted by its hash.
+    Cache(Sha),
+    /// Path plus identity sha, hashed once at construction, trusted after.
+    Project(PathBuf, Sha),
 }
 
-/// Handle to pooled content bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BlobHandle {
-    sha256: Sha,
+impl Serialize for ResourceHandle {
+    /// Serialize one handle as its content hash.
+    ///
+    /// - Project handles write the carried sha without reading the file.
+    ///
+    /// # Errors
+    ///
+    /// - Underlying serializer failures.
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.sha().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceHandle {
+    /// Deserialize one handle from its content hash.
+    ///
+    /// # Errors
+    ///
+    /// - Custom serde error for malformed hashes.
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let sha = Sha::deserialize(deserializer)?;
+        Ok(Self::Cache(sha))
+    }
+}
+
+impl ResourceHandle {
+    /// Return the trusted content hash.
+    pub fn sha(&self) -> &Sha {
+        match self {
+            Self::Cache(sha) | Self::Project(_, sha) => sha,
+        }
+    }
 }
 
 /// Handle to a verified compressed archive.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Face)]
 #[face(userdata)]
 pub struct ArchiveHandle {
-    source_path: PathBuf,
-    source_sha256: Sha,
-}
-
-impl ResourceHandle {
-    /// Return the canonical source path.
-    pub fn canonical(&self) -> &Path {
-        &self.path
-    }
-
-    /// Return the content hash.
-    pub fn sha256(&self) -> &Sha {
-        &self.sha256
-    }
-
-    /// Build a resource handle from exec-rooted identity.
-    ///
-    /// # Errors
-    ///
-    /// - [`ResourceError::Escape`] for paths outside the exec root.
-    pub(crate) fn new(
-        exec_root: &Path,
-        path: impl Into<PathBuf>,
-        sha256: Sha,
-    ) -> ResourceResult<Self> {
-        let path = path.into();
-        if !path.starts_with(exec_root) {
-            return Err(ResourceError::Escape {
-                path: path.clone(),
-                reason: format!("'{}' is outside the exec root", path.display()),
-            });
-        }
-        Ok(Self { path, sha256 })
-    }
-}
-
-impl BlobHandle {
-    /// Build a blob handle from its verified content hash.
-    pub(crate) fn new(sha256: Sha) -> Self {
-        Self { sha256 }
-    }
-
-    /// Return the content hash.
-    pub fn sha256(&self) -> &Sha {
-        &self.sha256
-    }
+    sha: Sha,
+    path: PathBuf,
 }
 
 impl ArchiveHandle {
-    /// Return the canonical source path.
-    pub fn canonical(&self) -> &Path {
-        &self.source_path
-    }
-
     /// Return the content hash.
     pub fn sha256(&self) -> &Sha {
-        &self.source_sha256
+        &self.sha
+    }
+
+    /// Return the archive path.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Build an archive handle from verified source identity.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::NotArchive`] for empty source paths.
-    pub(crate) fn new(source_path: impl Into<PathBuf>, source_sha256: Sha) -> ArchiveResult<Self> {
-        let source_path = source_path.into();
-        if source_path.as_os_str().is_empty() {
-            return Err(ArchiveError::NotArchive { path: source_path });
-        }
-        Ok(Self {
-            source_path,
-            source_sha256,
-        })
+    pub(crate) fn new(sha: Sha, path: PathBuf) -> Self {
+        Self { sha, path }
     }
 }
 
@@ -139,15 +117,6 @@ impl ResourceHandle {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
-    }
-
-    /// Render the opened content hash.
-    ///
-    /// # Returns
-    ///
-    /// - Hex digest of the file content.
-    fn sha(&self) -> mlua::Result<String> {
-        Ok(self.sha256.hex())
     }
 
     /// Read file content.
@@ -211,7 +180,7 @@ impl ArchiveHandle {
         name: String,
     ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_of(lua)?;
-        match stores.archives().extract_member(self, &name) {
+        match stores.archives().member(self, &name) {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
@@ -245,33 +214,29 @@ mod tests {
     }
 
     #[test]
-    fn resource_handle_builds_under_exec_root() {
-        let handle =
-            ResourceHandle::new(Path::new("/proj"), "/proj/starship.toml", fixture_sha()).unwrap();
-        assert_eq!(handle.canonical(), Path::new("/proj/starship.toml"));
-        assert_eq!(handle.sha256(), &fixture_sha());
+    fn cache_handle_kept_hash_alone() {
+        let handle = ResourceHandle::Cache(fixture_sha());
+        assert_eq!(handle, ResourceHandle::Cache(fixture_sha()));
     }
 
     #[test]
-    fn resource_handle_rejects_root_escape() {
-        let error = match ResourceHandle::new(Path::new("/proj"), "/etc/passwd", fixture_sha()) {
-            Ok(_) => panic!("escape passes"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, ResourceError::Escape { .. }));
+    fn project_handle_kept_path_alone() {
+        let sha = Sha::hash(b"starship");
+        let handle = ResourceHandle::Project(PathBuf::from("/proj/starship.toml"), sha.clone());
+        match &handle {
+            ResourceHandle::Project(path, found) => {
+                assert_eq!(path, Path::new("/proj/starship.toml"));
+                assert_eq!(found, &sha);
+            }
+            ResourceHandle::Cache(_) => panic!("project keeps its path"),
+        }
     }
 
     #[test]
-    fn blob_handle_builds_from_valid_sha() {
-        let handle = BlobHandle::new(fixture_sha());
+    fn archive_handle_built_verified() {
+        let handle = ArchiveHandle::new(fixture_sha(), PathBuf::from("archive.tar.gz"));
         assert_eq!(handle.sha256(), &fixture_sha());
-    }
-
-    #[test]
-    fn archive_handle_builds_verified() {
-        let handle = ArchiveHandle::new("/cache/fonts.zip", fixture_sha()).unwrap();
-        assert_eq!(handle.canonical(), Path::new("/cache/fonts.zip"));
-        assert_eq!(handle.sha256(), &fixture_sha());
+        assert_eq!(handle.path(), Path::new("archive.tar.gz"));
     }
 
     fn test_stores(dir: &Path) -> Stores {
@@ -330,7 +295,7 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture builds: {error}");
+                panic!("fixture setup failed: {error}");
             }
         }
         match builder.finish() {
@@ -345,7 +310,7 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture builds: {error}");
+                panic!("fixture setup failed: {error}");
             }
         }
         match builder.finish() {
@@ -355,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_text_with_hash_through_lua() {
+    fn parsed_text_with_hash_through_lua() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
@@ -366,15 +331,8 @@ mod tests {
             .unwrap();
         match run(&lua, "return assert(input:text())") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
-            Ok(_) => panic!("project text returns a string"),
+            Ok(_) => panic!("expected a string for project text"),
             Err(error) => panic!("project loads its text: {error}"),
-        }
-        match run(&lua, "return input:sha()") {
-            Ok(Value::String(found)) => {
-                assert_eq!(found.to_string_lossy(), Sha::hash(b"hello").hex())
-            }
-            Ok(_) => panic!("project hash returns a string"),
-            Err(error) => panic!("project hashes its file: {error}"),
         }
     }
 
@@ -400,7 +358,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::Boolean(found)) => assert!(found),
-            Ok(_) => panic!("toml load returns its table"),
+            Ok(_) => panic!("expected its table for toml load"),
             Err(error) => panic!("toml loads: {error}"),
         }
     }
@@ -431,7 +389,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "beta"),
-            Ok(_) => panic!("tarball member returns its text"),
+            Ok(_) => panic!("expected its text for tarball member"),
             Err(error) => panic!("tarball round trips: {error}"),
         }
     }
@@ -462,7 +420,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "beta"),
-            Ok(_) => panic!("zip member returns its text"),
+            Ok(_) => panic!("expected its text for zip member"),
             Err(error) => panic!("zip round trips: {error}"),
         }
     }
@@ -486,7 +444,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("missing member returns nil with reason"),
+            Ok(_) => panic!("expected nil with reason for missing member"),
             Err(error) => panic!("missing members stay soft: {error}"),
         }
     }
@@ -508,7 +466,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("non-archive returns nil with reason"),
+            Ok(_) => panic!("expected nil with reason for non-archive"),
             Err(error) => panic!("non-archives stay soft: {error}"),
         }
     }
@@ -535,7 +493,7 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "alpha"),
-            Ok(_) => panic!("repeated member returns its text"),
+            Ok(_) => panic!("expected its text for repeated member"),
             Err(error) => panic!("repeated members reuse the extract: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();

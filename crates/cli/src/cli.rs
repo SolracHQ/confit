@@ -32,7 +32,7 @@ pub enum Command {
     Init(InitArgs),
     /// pack one state into a portable bundle file or print its manifest
     Export(ExportArgs),
-    /// delete one named state with its unreferenced blobs
+    /// delete one named state with its unreferenced entries
     Delete(DeleteArgs),
 }
 

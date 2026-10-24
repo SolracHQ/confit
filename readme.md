@@ -28,7 +28,7 @@ writes a portable `.cb` bundle holding `manifest.json` and blobs.
 a slot into a portable bundle. `delete` drops a named slot.
 `init` scaffolds a project.
 
-Slots hold manifests, one shared pool holds blobs under content hashes.
+Slots hold manifests, one shared pool holds entries under content hashes.
 First runs compare desired documents against disk bytes and report
 creates and overwrites. One spinner carries progress counters through
 hash, compression and fetch phases. Serde derives serve as the schema.
@@ -112,7 +112,7 @@ Hooks: 2 to add, 0 to change, 0 to destroy.
 | `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
 | `apply SOURCE` | previews, prompts on literal `yes`, writes files |
 | `export [PICKER]` | packs one slot into a portable bundle, prints the path |
-| `delete @name` | drops one named slot and its orphaned blobs |
+| `delete @name` | drops one named slot and its orphaned entries |
 | `init [DIR]` | scaffolds a profile and stubs, default `.` |
 
 `--root` defaults to the profile file parent directory.
@@ -120,7 +120,7 @@ Hooks: 2 to add, 0 to change, 0 to destroy.
 a profile, `.cb` runs a bundle file, `@name` runs a named slot,
 `%N` runs history newest-first from 1.
 `-o @name` stores a slot manifest, `apply @name` replays it.
-Slots hold manifests, one pool holds blobs, history reads newest-first.
+Slots hold manifests, one pool holds entries, history reads newest-first.
 `export` packs `%N`, `@name` and the applied slot into `.cb`,
 `-m` prints the manifest. First runs diff desired state against disk
 and close with create and overwrite counts.

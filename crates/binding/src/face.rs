@@ -473,7 +473,7 @@ mod tests {
                 assert_eq!(fields[1].name, "value");
                 assert_eq!(documentation, "Equality check.");
             }
-            _ => panic!("payload holds class data"),
+            _ => panic!("expected class data for payload"),
         }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
@@ -493,7 +493,7 @@ mod tests {
                 assert_eq!(arms.len(), 3);
                 assert_eq!(arms[0].face.as_ref(), "Condition_EnvEq");
             }
-            _ => panic!("union holds union data"),
+            _ => panic!("expected union data for union"),
         }
         let mut collector = Registry::new();
         Condition::collect(&mut collector).unwrap();
@@ -509,7 +509,7 @@ mod tests {
                 assert_eq!(arms[1].face.as_ref(), "Condition[]");
                 assert_eq!(arms[2].face.as_ref(), "nil");
             }
-            _ => panic!("union holds union data"),
+            _ => panic!("expected union data for union"),
         }
         let lua = Lua::new();
         let inner = lua.create_table().unwrap();
@@ -529,17 +529,17 @@ mod tests {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name, "key");
             }
-            _ => panic!("payload holds class data"),
+            _ => panic!("expected class data for payload"),
         }
         match TaggedCond_EnvEq::face() {
             FaceData::Class { documentation, .. } => {
                 assert_eq!(documentation, "Equality check.");
             }
-            _ => panic!("payload holds class data"),
+            _ => panic!("expected class data for payload"),
         }
         match TaggedCond::face() {
             FaceData::Union { arms, .. } => assert_eq!(arms.len(), 2),
-            _ => panic!("tagged holds union data"),
+            _ => panic!("expected union data for tagged"),
         }
         let mut collector = Registry::new();
         TaggedCond::collect(&mut collector).unwrap();
@@ -615,7 +615,7 @@ mod tests {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name, "kept");
             }
-            _ => panic!("holder holds class data"),
+            _ => panic!("expected class data for holder"),
         }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
@@ -722,7 +722,7 @@ mod tests {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name, "content");
             }
-            _ => panic!("payload holds class data"),
+            _ => panic!("expected class data for payload"),
         }
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn struct_data_holds_fields_with_docs() {
+    fn struct_data_kept_fields_with_docs() {
         match IgnoredHolder::face() {
             FaceData::Class {
                 documentation,
@@ -771,7 +771,7 @@ mod tests {
                 assert_eq!(fields[0].name, "kept");
                 assert_eq!(fields[0].face.as_ref(), "string");
             }
-            _ => panic!("struct holds class data"),
+            _ => panic!("expected class data for struct"),
         }
     }
 
@@ -791,12 +791,12 @@ mod tests {
                 assert!(arms[2].fields.is_empty());
                 assert_eq!(arms[0].face.as_ref(), "Condition_EnvEq");
             }
-            _ => panic!("untagged union holds union data"),
+            _ => panic!("untagged expected union data for union"),
         }
     }
 
     #[test]
-    fn tagged_data_holds_arms_with_docs() {
+    fn tagged_data_kept_arms_with_docs() {
         match TaggedCond::face() {
             FaceData::Union {
                 documentation,
@@ -806,12 +806,12 @@ mod tests {
                 assert_eq!(arms.len(), 2);
                 assert_eq!(arms[0].name, "EnvEq");
             }
-            _ => panic!("tagged union holds union data"),
+            _ => panic!("tagged expected union data for union"),
         }
     }
 
     #[test]
-    fn literal_data_holds_quoted_faces() {
+    fn literal_data_showed_quoted_faces() {
         match Shade::face() {
             FaceData::Union {
                 documentation,
@@ -822,12 +822,12 @@ mod tests {
                 assert_eq!(arms[0].face.as_ref(), "\"dark\"");
                 assert_eq!(arms[1].face.as_ref(), "\"light\"");
             }
-            _ => panic!("literal holds union data"),
+            _ => panic!("expected union data for literal"),
         }
     }
 
     #[test]
-    fn callback_data_holds_params_without_returns() {
+    fn callback_data_listed_params_without_returns() {
         match CallArgs::face() {
             FaceData::Function {
                 documentation,
@@ -841,17 +841,17 @@ mod tests {
                 assert_eq!(parameters[1].face.as_ref(), "LiveDoc");
                 assert!(returns.is_empty());
             }
-            _ => panic!("callback shape holds function data"),
+            _ => panic!("expected function data for callback shape"),
         }
     }
 
     #[test]
-    fn userdata_data_holds_docs() {
+    fn userdata_data_kept_docs() {
         match Handle::face() {
             FaceData::Userdata { documentation } => {
                 assert_eq!(documentation, "Userdata handle for data tests.");
             }
-            _ => panic!("userdata holds userdata data"),
+            _ => panic!("expected userdata data for userdata"),
         }
     }
 
@@ -872,19 +872,19 @@ mod tests {
                 assert_eq!(arms[1].name, "Sealed");
                 assert_eq!(arms[0].fields.len(), 1);
             }
-            _ => panic!("skipped union holds union data"),
+            _ => panic!("skipped expected union data for union"),
         }
     }
 
     #[test]
-    fn flattened_holder_data_holds_outer_fields() {
+    fn flattened_holder_data_kept_outer_fields() {
         match FlatHolder::face() {
             FaceData::Class { fields, .. } => {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name, "path");
                 assert_eq!(fields[0].face.as_ref(), "string");
             }
-            _ => panic!("flat holder holds class data"),
+            _ => panic!("flat expected class data for holder"),
         }
     }
 
@@ -895,11 +895,11 @@ mod tests {
         assert!(matches!(Handle::face(), FaceData::Userdata { .. }));
         match CallArgs::face() {
             FaceData::Function { returns, .. } => assert!(returns.is_empty()),
-            _ => panic!("callback holds function data"),
+            _ => panic!("expected function data for callback"),
         }
         match LiveDoc::face() {
             FaceData::Class { fields, .. } => assert_eq!(fields.len(), 1),
-            _ => panic!("live doc holds class data"),
+            _ => panic!("expected class data for live doc"),
         }
     }
 }

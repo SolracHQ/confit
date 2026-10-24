@@ -276,7 +276,7 @@ fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, Mismatch
     parse_timeout(&text).ok_or_else(|| Mismatch {
         path: "timeout".to_owned(),
         want: "a duration like '10m'".to_owned(),
-        found: ["'", text.as_str(), "'"].concat(),
+        found: format!("'{text}'"),
     })
 }
 
@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_reads_simplified_conditions_unchanged() {
+    fn lifecycle_parsed_simplified_conditions_unchanged() {
         let mut before = hook(
             &["mise"],
             &[],
@@ -450,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_holds_timeout_edit() {
+    fn lifecycle_kept_timeout_edit() {
         let before = hook(
             &["mise"],
             &[],

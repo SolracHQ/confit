@@ -5,7 +5,7 @@
 --- @return string? The failure reason, else nil.
 function open(path) end
 
---- Handle to a project resource.
+--- Handle to a project or cached resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
@@ -13,10 +13,6 @@ ResourceHandle = {}
 --- @return string? File text, else nil.
 --- @return string? Failure reason, else nil.
 function ResourceHandle:text() end
-
---- Render the opened content hash.
---- @return string Hex digest of the file content.
-function ResourceHandle:sha() end
 
 --- Read file content.
 --- @return table? Decoded table, else nil.

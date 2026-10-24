@@ -9,8 +9,9 @@ use confit_driver::process::ProcessFault;
 use confit_engine::error::EngineError;
 use confit_model::error::Error as ModelError;
 use confit_runtime::error::RuntimeError;
-use confit_store::blob::error::BlobError;
 use confit_store::faults::AccessFault;
+use confit_store::pool::error::PoolError;
+use confit_store::resources::error::ResourceError;
 
 use crate::presentation::hooks::describe_blocked;
 
@@ -26,9 +27,12 @@ pub enum CliError {
     /// Runtime failure.
     #[error(transparent)]
     Runtime(RuntimeError),
-    /// Blob failure.
+    /// Pool failure.
     #[error(transparent)]
-    Blob(#[from] BlobError),
+    Pool(#[from] PoolError),
+    /// Resource failure.
+    #[error(transparent)]
+    Resource(#[from] ResourceError),
     /// Unknown failure.
     #[error("cannot use {context}: {message}")]
     Unknown {
@@ -174,8 +178,8 @@ pub enum CliError {
         /// The picker input under parsing.
         input: String,
     },
-    /// Refused export flags.
-    #[error("export: '-o' and '--manifest' refuse together, pick one")]
+    /// Conflicting export flags.
+    #[error("export: '-o' and '--manifest' conflict, pick one")]
     FlagRefuse,
 }
 
@@ -239,9 +243,11 @@ impl CliError {
     /// Render one user-visible line with detail in the log.
     pub fn terminal(&self) -> String {
         match self {
-            Self::Model(_) | Self::Engine(_) | Self::Runtime(_) | Self::Blob(_) => {
-                self.transport_line()
-            }
+            Self::Model(_)
+            | Self::Engine(_)
+            | Self::Runtime(_)
+            | Self::Pool(_)
+            | Self::Resource(_) => self.transport_line(),
             Self::Read { .. }
             | Self::Write { .. }
             | Self::WriteUnknown { .. }
@@ -265,7 +271,8 @@ impl CliError {
             Self::Model(error) => transport_model(error),
             Self::Engine(error) => transport_engine(error),
             Self::Runtime(error) => transport_runtime(error),
-            Self::Blob(error) => transport_blob(error),
+            Self::Pool(error) => transport_pool(error),
+            Self::Resource(error) => transport_resource(error),
             _ => self.to_string(),
         }
     }
@@ -336,13 +343,13 @@ fn transport_model(error: &ModelError) -> String {
             log::error!("cannot hash '{document}': {reason}");
             format!("cannot hash '{document}', see log")
         }
-        ModelError::Seal { document, reason } => {
-            log::error!("cannot seal '{document}': {reason}");
-            format!("cannot seal '{document}', see log")
-        }
         ModelError::Base { base } => {
             log::error!("cannot resolve '{}' folder", base.name());
             format!("cannot resolve '{}' folder, see log", base.name())
+        }
+        ModelError::Unknown { detail } => {
+            log::error!("unexpected failure: {detail}");
+            "unexpected failure, see log".to_owned()
         }
     }
 }
@@ -400,8 +407,8 @@ fn transport_runtime(error: &RuntimeError) -> String {
             log::error!("remove '{}' failed: {message}", path.display());
             error.to_string()
         }
-        RuntimeError::MissingBlob { sha, member, .. } => {
-            log::error!("missing blob '{}' for '{}'", sha.hex(), member.display());
+        RuntimeError::MissingContent { sha, member, .. } => {
+            log::error!("missing content '{}' for '{}'", sha.hex(), member.display());
             error.to_string()
         }
         RuntimeError::Refusal { .. } => error.to_string(),
@@ -425,14 +432,7 @@ fn transport_runtime(error: &RuntimeError) -> String {
             log::error!("bundle write '{}' failed: {message}", path.display());
             error.to_string()
         }
-        RuntimeError::BundleMissing { sha } => {
-            log::error!("missing bundle blob '{}'", sha.hex());
-            format!("missing blob '{}', see log", sha.short())
-        }
-        RuntimeError::BundleCorrupt { path, holders } => {
-            log::error!("bundle '{}' corrupt: blob for {holders}", path.display());
-            error.to_string()
-        }
+        RuntimeError::BundleCorrupt { .. } => error.to_string(),
         RuntimeError::BundleVersion { got, .. } => {
             format!("bundle version {got} is unsupported")
         }
@@ -446,31 +446,66 @@ fn transport_runtime(error: &RuntimeError) -> String {
     }
 }
 
-/// Map one blob error into its task line.
-fn transport_blob(error: &BlobError) -> String {
+/// Map one pool error into its task line.
+fn transport_pool(error: &PoolError) -> String {
     match error {
-        BlobError::Read { sha, fault } => match fault {
-            AccessFault::Unknown { message } => {
-                log::error!("read blob '{}' failed: {message}", sha.hex());
-                format!("cannot read blob '{}', see log", sha.short())
-            }
-            known => {
-                log::error!("read blob '{}' failed: {known}", sha.hex());
-                format!("cannot read blob '{}': {known}", sha.short())
-            }
-        },
-        BlobError::Write { path, fault } => file_fault("cannot write", path, fault),
-        BlobError::WriteUnknown { path, message } => {
+        PoolError::Write { path, fault } => file_fault("cannot write", path, fault),
+        PoolError::WriteUnknown { path, message } => {
             log::error!("write '{}' failed: {message}", path.display());
             format!(
                 "cannot write '{}': unexpected error, details in the log",
                 path.display()
             )
         }
-        BlobError::Compress => "cannot compress blob".to_owned(),
-        BlobError::Corrupt { sha } => {
-            log::error!("corrupt blob '{}'", sha.hex());
-            format!("corrupt blob '{}', see log", sha.short())
+        PoolError::Mismatch {
+            path,
+            expected,
+            found,
+        } => {
+            log::error!(
+                "store '{}' failed: content mismatch, expected '{}', found '{}'",
+                path.display(),
+                expected.hex(),
+                found.hex()
+            );
+            format!(
+                "cannot store '{}': content mismatch, details in the log",
+                path.display()
+            )
+        }
+    }
+}
+
+/// Map one resource error into its task line.
+fn transport_resource(error: &ResourceError) -> String {
+    match error {
+        ResourceError::Read { path, fault } => file_fault("cannot read", path, fault),
+        ResourceError::Write { path, fault } => file_fault("cannot write", path, fault),
+        ResourceError::WriteUnknown { path, message } => {
+            log::error!("write '{}' failed: {message}", path.display());
+            format!(
+                "cannot write '{}': unexpected error, details in the log",
+                path.display()
+            )
+        }
+        ResourceError::Escape { path, reason } => {
+            format!("cannot read '{}': {reason}", path.display())
+        }
+        ResourceError::Mismatch {
+            path,
+            expected,
+            found,
+        } => {
+            log::error!(
+                "store '{}' failed: content mismatch, expected '{}', found '{}'",
+                path.display(),
+                expected.hex(),
+                found.hex()
+            );
+            format!(
+                "cannot store '{}': content mismatch, details in the log",
+                path.display()
+            )
         }
     }
 }

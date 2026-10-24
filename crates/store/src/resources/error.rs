@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use confit_driver::sha::Sha;
+
 use crate::faults::AccessFault;
 
 /// Resource failure shapes.
@@ -17,6 +19,22 @@ pub enum ResourceError {
         /// The read fault cause.
         fault: AccessFault,
     },
+    /// Failed pool write.
+    #[error("cannot write '{path}': {fault}", path = path.display())]
+    Write {
+        /// The pool path under writing.
+        path: PathBuf,
+        /// The write fault cause.
+        fault: AccessFault,
+    },
+    /// Unknown pool write failure.
+    #[error("cannot write '{path}': {message}", path = path.display())]
+    WriteUnknown {
+        /// The pool path under writing.
+        path: PathBuf,
+        /// The failure message under writing.
+        message: String,
+    },
     /// Escaping path.
     #[error("resource path '{path}' escapes exec root: {reason}", path = path.display())]
     Escape {
@@ -24,6 +42,19 @@ pub enum ResourceError {
         path: PathBuf,
         /// The escape reason.
         reason: String,
+    },
+    /// Mismatched stream.
+    #[error(
+        "cannot store '{path}': content mismatch, expected '{expected}', found '{found}'",
+        path = path.display()
+    )]
+    Mismatch {
+        /// The cache path under storing.
+        path: PathBuf,
+        /// The expected content hash.
+        expected: Sha,
+        /// The streamed content hash.
+        found: Sha,
     },
 }
 

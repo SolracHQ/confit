@@ -304,9 +304,6 @@ impl Registry {
     }
 
     /// Return the signature for one function face.
-    ///
-    /// - Optional faces drop one trailing `?` with its parens before lookup.
-    /// - Faces outside the map hold none.
     fn callback_signature(&self, face: &str) -> Option<&CallbackSignature> {
         let plain = face.strip_suffix('?').unwrap_or(face);
         let plain = plain

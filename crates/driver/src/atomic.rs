@@ -4,9 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::fs::create_parent;
 
-/// Streaming chunk for exact copies.
-const COPY_CHUNK: usize = 8192;
-
 /// Staged scratch file under one destination folder.
 ///
 /// Drop removes the scratch file. Persist moves it onto the destination.
@@ -23,11 +20,33 @@ impl StagedFile {
     /// # Errors
     ///
     /// - [NotFound] for missing parents.
-    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [PermissionDenied] for unwritable destinations.
     /// - [Other] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
         create_parent(dest)?;
         tempfile::NamedTempFile::new_in(scratch_dir(dest)).map(|file| Self { file })
+    }
+
+    /// Write one file atomically through a sibling rename.
+    ///
+    /// - Parent folders build first.
+    /// - The closure writes the open scratch file; failures remove it and
+    ///   report the closure error.
+    /// - Rename failures with a present destination report success with the
+    ///   present entry kept.
+    ///
+    /// # Errors
+    ///
+    /// - [NotFound] for missing parents.
+    /// - [PermissionDenied] for unwritable destinations.
+    /// - [Other] for staging failures.
+    pub fn write(
+        dest: &Path,
+        write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let mut staged = Self::stage(dest)?;
+        write(staged.file.as_file_mut())?;
+        staged.persist(dest)
     }
 
     /// Return the scratch path for direct writes.
@@ -41,7 +60,7 @@ impl StagedFile {
     ///
     /// # Errors
     ///
-    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [PermissionDenied] for unwritable destinations.
     /// - [Other] for persist failures with an absent destination.
     pub fn persist(self, dest: &Path) -> std::io::Result<()> {
         match self.file.persist(dest) {
@@ -68,7 +87,7 @@ impl StagedDir {
     /// # Errors
     ///
     /// - [NotFound] for missing parents.
-    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [PermissionDenied] for unwritable destinations.
     /// - [Other] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
         create_parent(dest)?;
@@ -87,7 +106,7 @@ impl StagedDir {
     /// # Errors
     ///
     /// - [NotFound] for missing scratch entries.
-    /// - [PermissionDenied] when the destination refuses writes.
+    /// - [PermissionDenied] for unwritable destinations.
     /// - [Other] for rename failures with an absent destination.
     pub fn persist(self, dest: &Path) -> std::io::Result<()> {
         match std::fs::rename(self.path(), dest) {
@@ -101,49 +120,6 @@ impl StagedDir {
     }
 }
 
-/// Write one file atomically through a sibling rename.
-///
-/// - Parent folders build first.
-/// - Closure failures remove the scratch file and report the closure error.
-/// - Rename failures with a present destination report success with the
-///   present entry kept.
-///
-/// # Errors
-///
-/// - [NotFound] for missing parents.
-/// - [PermissionDenied] when the destination refuses writes.
-/// - [Other] for staging failures.
-pub fn atomic_write(
-    dest: &Path,
-    write: impl FnOnce(&Path) -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    let staged = StagedFile::stage(dest)?;
-    let pending = staged.path().to_path_buf();
-    write(&pending)?;
-    staged.persist(dest)
-}
-
-/// Stream one reader into one writer exactly.
-///
-/// # Errors
-///
-/// - Read and write failures fail as io errors.
-pub fn copy_stream(
-    mut reader: impl std::io::Read,
-    mut writer: impl std::io::Write,
-) -> std::io::Result<u64> {
-    let mut chunk = [0u8; COPY_CHUNK];
-    let mut wrote = 0u64;
-    loop {
-        let used = reader.read(&mut chunk)?;
-        if used == 0 {
-            return Ok(wrote);
-        }
-        writer.write_all(&chunk[..used])?;
-        wrote += used as u64;
-    }
-}
-
 /// Resolve the scratch parent for one destination.
 fn scratch_dir(dest: &Path) -> PathBuf {
     dest.parent()
@@ -154,23 +130,26 @@ fn scratch_dir(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     use crate::fs::read_dir;
 
     #[test]
-    fn atomic_write_round_trip() {
+    fn staged_write_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        atomic_write(&dest, |pending| std::fs::write(pending, b"atomic bytes")).unwrap();
+        StagedFile::write(&dest, |file| {
+            use std::io::Write as _;
+            file.write_all(b"atomic bytes")
+        })
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"atomic bytes");
     }
 
     #[test]
-    fn atomic_write_failure_cleans_pending() {
+    fn staged_write_failure_cleans_pending() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
-        let outcome = atomic_write(&dest, |_| {
+        let outcome = StagedFile::write(&dest, |_| {
             Err(std::io::Error::other("scripted write failure"))
         });
         assert!(outcome.is_err(), "closure failure reports loud");
@@ -181,21 +160,16 @@ mod tests {
     }
 
     #[test]
-    fn atomic_write_overwrites_present_destination() {
+    fn staged_write_overwrites_present_destination() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("atomic").join("note.bin");
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         std::fs::write(&dest, b"winner").unwrap();
-        atomic_write(&dest, |pending| std::fs::write(pending, b"newcomer")).unwrap();
+        StagedFile::write(&dest, |file| {
+            use std::io::Write as _;
+            file.write_all(b"newcomer")
+        })
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"newcomer");
-    }
-
-    #[test]
-    fn copy_stream_moves_bytes_exact() {
-        let payload: Vec<u8> = (0..20_000u32).map(|n| (n % 251) as u8).collect();
-        let mut out = Vec::new();
-        let wrote = copy_stream(Cursor::new(&payload), &mut out).unwrap();
-        assert_eq!(wrote, payload.len() as u64);
-        assert_eq!(out, payload);
     }
 }

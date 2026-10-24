@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use bytemuck::{Pod, Zeroable};
 use confit_driver::sha::Sha;
 
-use super::error::{BlobError, Result};
+use super::error::{PoolError, Result};
 
 /// Object identity prefix.
 #[repr(C)]
@@ -28,14 +28,12 @@ pub(super) struct ObjectHeader {
 const OBJECT_VERSION: u8 = 0;
 
 /// Pool gzip level.
-const BLOB_GZIP_LEVEL: u32 = 6;
+const POOL_GZIP_LEVEL: u32 = 6;
 
 /// Checked object file with its content identity.
-pub(crate) struct BlobFile {
+pub struct PoolFile {
     /// Object file location.
     path: PathBuf,
-    /// Content hash from the header.
-    sha: Sha,
     /// Content byte count from the header.
     size: u64,
 }
@@ -58,34 +56,35 @@ impl ObjectHeader {
     }
 }
 
-impl BlobFile {
+impl PoolFile {
     /// Open one object file with its header checked.
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for unreadable blobs.
-    /// - [`BlobError::Corrupt`] for truncated files, bad headers,
+    /// - [`PoolError::Write`] for missing pool files.
+    /// - [`PoolError::WriteUnknown`] for truncated files, bad headers,
     ///   and filename and header mismatches.
-    pub(crate) fn open(path: PathBuf, expected: &Sha) -> Result<Self> {
+    pub fn open(path: PathBuf, expected: &Sha) -> Result<Self> {
         let mut file =
-            std::fs::File::open(&path).map_err(|error| BlobError::from_read_io(expected, error))?;
+            std::fs::File::open(&path).map_err(|error| PoolError::from_write_io(&path, error))?;
         let mut raw = [0u8; std::mem::size_of::<ObjectHeader>()];
         if let Err(error) = file.read_exact(&mut raw) {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Err(BlobError::Corrupt {
-                    sha: expected.clone(),
+                return Err(PoolError::WriteUnknown {
+                    path,
+                    message: format!("corrupt content '{}'", expected.hex()),
                 });
             }
-            return Err(BlobError::from_read_io(expected, error));
+            return Err(PoolError::from_write_io(&path, error));
         }
         match decode_header(&raw) {
             Some(header) if header.sha() == *expected => Ok(Self {
                 path,
-                sha: header.sha(),
                 size: header.size(),
             }),
-            _ => Err(BlobError::Corrupt {
-                sha: expected.clone(),
+            _ => Err(PoolError::WriteUnknown {
+                path,
+                message: format!("corrupt content '{}'", expected.hex()),
             }),
         }
     }
@@ -102,12 +101,12 @@ impl BlobFile {
     ) -> std::io::Result<BodyWriter> {
         sink.write_all(bytemuck::bytes_of(&encode_header(sha, size)))?;
         Ok(BodyWriter {
-            encoder: flate2::write::GzEncoder::new(sink, flate2::Compression::new(BLOB_GZIP_LEVEL)),
+            encoder: flate2::write::GzEncoder::new(sink, flate2::Compression::new(POOL_GZIP_LEVEL)),
         })
     }
 
     /// Return the content byte count.
-    pub(crate) fn size(&self) -> u64 {
+    pub fn size(&self) -> u64 {
         self.size
     }
 
@@ -115,29 +114,16 @@ impl BlobFile {
     ///
     /// # Errors
     ///
-    /// - [`BlobError::Read`] for failed blob opens.
-    pub(crate) fn body(&self) -> Result<flate2::read::GzDecoder<std::fs::File>> {
+    /// - [`PoolError::Write`] for missing pool files.
+    /// - [`PoolError::WriteUnknown`] for failed pool opens.
+    pub fn body(&self) -> Result<flate2::read::GzDecoder<std::fs::File>> {
         let mut file = std::fs::File::open(&self.path)
-            .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
+            .map_err(|error| PoolError::from_write_io(&self.path, error))?;
         file.seek(std::io::SeekFrom::Start(
             std::mem::size_of::<ObjectHeader>() as u64,
         ))
-        .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
+        .map_err(|error| PoolError::from_write_io(&self.path, error))?;
         Ok(flate2::read::GzDecoder::new(file))
-    }
-
-    /// Load raw object bytes with their encoded length.
-    ///
-    /// # Errors
-    ///
-    /// - [`BlobError::Read`] for unreadable blobs.
-    pub(crate) fn raw(&self) -> Result<(u64, std::fs::File)> {
-        let total = std::fs::metadata(&self.path)
-            .map_err(|error| BlobError::from_read_io(&self.sha, error))?
-            .len();
-        let file = std::fs::File::open(&self.path)
-            .map_err(|error| BlobError::from_read_io(&self.sha, error))?;
-        Ok((total, file))
     }
 }
 
@@ -175,7 +161,7 @@ fn encode_header(sha: &Sha, size: u64) -> ObjectHeader {
 
 /// Check one header image into its content hash and byte count.
 ///
-/// - Bad magic and versions refuse.
+/// - Bad magic and versions fail.
 fn decode_header(raw: &[u8]) -> Option<ObjectHeader> {
     let header: &ObjectHeader = bytemuck::try_from_bytes(raw).ok()?;
     if header.magic != *b"blob" || header.version != OBJECT_VERSION {
@@ -205,7 +191,7 @@ mod tests {
         bad_magic.magic[0] ^= 0xff;
         assert!(
             decode_header(bytemuck::bytes_of(&bad_magic)).is_none(),
-            "bad magic refuses"
+            "bad magic rejected"
         );
     }
 }

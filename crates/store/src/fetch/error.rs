@@ -4,6 +4,7 @@ use confit_driver::sha::Sha;
 use thiserror::Error;
 
 use crate::faults::AccessFault;
+use crate::resources::error::ResourceError;
 
 /// Fetch failure shapes.
 #[derive(Debug, Clone, Error)]
@@ -106,6 +107,31 @@ impl FetchError {
             None => Self::WriteUnknown {
                 url: url.to_owned(),
                 message,
+            },
+        }
+    }
+
+    /// Map one resource store failure at the url into domain language.
+    pub fn from_resource(url: &str, error: ResourceError) -> Self {
+        match error {
+            ResourceError::Read { fault, .. } | ResourceError::Write { fault, .. } => Self::Write {
+                url: url.to_owned(),
+                fault,
+            },
+            ResourceError::WriteUnknown { message, .. } => Self::WriteUnknown {
+                url: url.to_owned(),
+                message,
+            },
+            ResourceError::Mismatch {
+                expected, found, ..
+            } => Self::DigestMismatch {
+                url: url.to_owned(),
+                want: expected,
+                got: found,
+            },
+            ResourceError::Escape { path, reason } => Self::WriteUnknown {
+                url: url.to_owned(),
+                message: format!("'{}' escapes: {reason}", path.display()),
             },
         }
     }

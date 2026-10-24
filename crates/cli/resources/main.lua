@@ -1,4 +1,4 @@
--- Welcome to confit. This profile builds your shell setup.
+-- Welcome to confit. This profile prepared your shell setup.
 -- Profiles return configs and documents. Documents describe
 -- file contents, configs group your changes.
 local sugar = require("plugins._.sugar")

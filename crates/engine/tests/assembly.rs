@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use confit_driver::sha::Sha;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{Level, Patch};
 use confit_engine::api::profile::Profile;
@@ -8,10 +9,11 @@ use confit_engine::{assemble, assembly::Assembler};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, LinkDocument, OpaqueDocument, Payload, RcEntry, StructuredDocument,
-    StructuredFormat, TextDocument, TreeDocument, TreeMember,
+    Data, Document, LinkDocument, OpaqueDocument, RcEntry, StructuredDocument, StructuredFormat,
+    TextDocument, TreeDocument, TreeMember,
 };
 use confit_model::routes::{Route, RouteBase};
+use confit_store::handles::ResourceHandle;
 use mlua::Lua;
 use std::collections::{BTreeMap, HashMap};
 
@@ -129,21 +131,19 @@ fn placed_documents_convert_every_kind() {
     let root = stores.resources().roots.project_root.clone();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("glyph.ttf"), b"ttf").unwrap();
-    let resource = stores.resources().resource("glyph.ttf").unwrap();
-    let opened = stores.blobs().put(&resource).unwrap();
-    let blob = opened.sha256().clone();
+    let blob = Sha::hash(b"ttf");
     let mut members = BTreeMap::new();
     members.insert(
         "sub/nested.txt".to_owned(),
         TreeMember::Full {
-            handle: Payload::Resolved(blob.clone()),
+            handle: ResourceHandle::Cache(blob.clone()),
             mode: 0o644,
         },
     );
     members.insert(
         "top.txt".to_owned(),
         TreeMember::Full {
-            handle: Payload::Resolved(blob.clone()),
+            handle: ResourceHandle::Cache(blob.clone()),
             mode: 0o644,
         },
     );
@@ -573,7 +573,7 @@ fn structured_mixed_formats_fail_showing_formats() {
 }
 
 #[test]
-fn patches_refuse_foreign_bases() {
+fn patches_rejected_foreign_bases() {
     let lua = Lua::new();
     let patch = structured_patch_of(
         &lua,

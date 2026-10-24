@@ -2,472 +2,383 @@
 //! Member listing and extraction for compressed archives.
 
 pub mod error;
-mod extract;
-mod hashes;
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use confit_driver::progress::{Event, ProgressSender};
 use confit_driver::sha::Sha;
 
-use crate::StoreRoots;
 use crate::faults::AccessFault;
 use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
 use crate::resources::error::ResourceError;
 use confit_driver as driver;
 use error::{ArchiveError, Result};
-use extract::{ExtractedMember, check_names};
-
-/// Unpack folder name under the temp base.
-const EXTRACT_DIR: &str = "extract";
 
 /// Head window for every probe, wide enough for tar magic.
 const HEAD_LEN: u64 = 512;
+
+/// Archive index of member names to content hashes with modes.
+type Map = BTreeMap<String, (Sha, u32)>;
 
 /// File-backed archive member listing and extraction.
 ///
 /// Members are archive-relative with forward slashes.
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
-    temp_base: PathBuf,
     resources: Arc<Resources>,
     progress: ProgressSender,
+    maps: Arc<std::sync::RwLock<HashMap<Sha, Map>>>,
 }
 
 impl ArchiveStore {
-    /// Build a file-backed archive store under the temp base.
-    pub fn new(roots: &StoreRoots, resources: Arc<Resources>, progress: ProgressSender) -> Self {
+    /// Build an archive store over the shared cache.
+    pub fn new(resources: Arc<Resources>, progress: ProgressSender) -> Self {
         Self {
-            temp_base: roots.temp_base.clone(),
             resources,
             progress,
+            maps: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
 
     /// Register one trusted source as a verified archive.
     ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::NotArchive`] for non-archives.
-    pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
-        let path = source.canonical();
-        check_compressed_source(path)?;
-        ArchiveHandle::new(path.to_path_buf(), source.sha256().clone())
-    }
-
-    /// Register one file path as a verified archive.
+    /// - Project sources keep their bytes in place
+    /// - Cache entries trust the landed bytes.
     ///
     /// # Errors
     ///
     /// - [`ArchiveError::Read`] for unreadable sources.
-    /// - [`ArchiveError::NotArchive`] for non-archive sources.
-    pub fn register_archive(&self, source: &Path) -> Result<ArchiveHandle> {
-        let sha = file_sha(source)?;
-        check_compressed_source(source)?;
-        ArchiveHandle::new(source.to_path_buf(), sha)
+    /// - [`ArchiveError::NotArchive`] for non-archives.
+    pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
+        match source {
+            ResourceHandle::Project(path, sha) => {
+                self.probe(path)?;
+                Ok(ArchiveHandle::new(sha.clone(), path.clone()))
+            }
+            ResourceHandle::Cache(sha) => {
+                let path = self.resources.cache_path(sha);
+                self.resources
+                    .open(source)
+                    .map_err(|error| from_resource(&path, error))?;
+                self.probe(&path)?;
+                Ok(ArchiveHandle::new(sha.clone(), path))
+            }
+        }
     }
 
-    /// List member names.
+    /// Reject non-archive bytes at one path.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Read`] for unreadable sources.
+    /// - [`ArchiveError::NotArchive`] for non-archives.
+    fn probe(&self, path: &Path) -> Result<()> {
+        use std::io::Read as _;
+
+        let file = std::fs::File::open(path).map_err(|error| ArchiveError::from_io(path, error))?;
+        let mut head = Vec::new();
+        std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
+            .map_err(|error| ArchiveError::from_io(path, error))?;
+        if driver::archive::supported(&head) {
+            return Ok(());
+        }
+        Err(ArchiveError::NotArchive {
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// List member names from the archive index.
+    ///
+    /// - Keys come straight from the map with no archive IO.
+    /// - A missing index unpacks from the archive bytes.
     ///
     /// # Errors
     ///
     /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::NotArchive`] for non-archives.
     /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
-        names(archive.canonical())
-    }
-
-    /// Unpack one archive once into the extract folder.
-    ///
-    /// Members return as extracted resource handles.
-    ///
-    /// - Present folders skip.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::Write`] for extract write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other extract write
-    ///   failures.
-    /// - [`ArchiveError::NotArchive`] for non-archives.
-    pub fn extract(&self, archive: &ArchiveHandle) -> Result<Vec<ResourceHandle>> {
-        let source = archive.canonical();
-        let dest = self
-            .temp_base
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex());
-        if dest.is_dir() {
-            return extracted_handles(&dest, source, &self.resources);
+        if let Some(map) = self.read_map(archive.sha256()) {
+            return Ok(map.keys().cloned().collect());
         }
-        let head = read_head(source)?;
-        if !driver::archive::supported(&head) {
-            return Err(not_archive(source));
-        }
-        let listed = names(source)?;
-        check_names(source, &listed)?;
-        self.run_unpack(source, &dest)
-    }
-
-    /// Unpack one archive through pending into place.
-    ///
-    /// # Errors
-    ///
-    /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::Write`] for extract write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other extract write
-    ///   failures.
-    fn run_unpack(&self, source: &Path, dest: &Path) -> Result<Vec<ResourceHandle>> {
-        let staged = driver::StagedDir::stage(dest)
-            .map_err(|error| ArchiveError::from_write_io(source, error))?;
-        let pending = staged.path().to_path_buf();
-        std::fs::create_dir_all(&pending)
-            .map_err(|error| ArchiveError::from_write_io(source, error))?;
-        let members = unpack_into(source, &pending)?;
-        staged
-            .persist(dest)
-            .map_err(|error| ArchiveError::from_write_io(source, error))?;
-        let handles = streamed_handles(dest, members.as_slice(), &self.resources)?;
-        hashes::record(dest, &member_shas(&members));
-        let total = handles.len();
-        let _ = self.progress.send(Event::Unpacked {
-            archive: source.display().to_string(),
-            total,
-        });
-        Ok(handles)
+        Ok(self.unpack_all(archive)?.keys().cloned().collect())
     }
 
     /// Pick one archive member by its archive-relative name.
     ///
     /// - Names are archive-relative with forward slashes.
+    /// - Present entries trust the cache with no re-hash.
+    /// - A missing index or missing member bytes unpacks from the
+    ///   archive bytes.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::UnknownMember`] for unknown members.
-    pub fn extract_member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
-        let source = archive.canonical();
-        let dest = self
-            .temp_base
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex());
-        if dest.is_dir() {
-            let wanted = dest.join(name);
-            if wanted.is_file() {
-                if let Some(sha) = hashes::fresh(&dest, name) {
-                    return self
-                        .resources
-                        .cache(&dest, name, sha)
-                        .map_err(from_resource);
+    /// - [`ArchiveError::Escape`] for escaping members.
+    /// - [`ArchiveError::UnknownMember`] for unknown members and for
+    ///   members of absent archive bytes.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    pub fn member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
+        let archive_path = archive.path().to_path_buf();
+        if let Some(map) = self.read_map(archive.sha256()) {
+            match map.get(name) {
+                Some((sha, _)) => {
+                    let handle = ResourceHandle::Cache(sha.clone());
+                    match self.resources.open(&handle) {
+                        Ok(_) => return Ok(handle),
+                        Err(ResourceError::Read {
+                            fault: AccessFault::Missing,
+                            ..
+                        }) => {}
+                        Err(error) => {
+                            return Err(from_resource(&self.resources.cache_path(sha), error));
+                        }
+                    }
                 }
-                let sha = extract_file_sha(&wanted, source, name)?;
-                hashes::note(&dest, name, &sha);
-                return self
-                    .resources
-                    .cache(&dest, name, sha)
-                    .map_err(from_resource);
+                None => {
+                    return Err(ArchiveError::UnknownMember {
+                        path: archive_path,
+                        name: name.to_owned(),
+                    });
+                }
             }
         }
-        let members = self.extract(archive)?;
-        let wanted = dest.join(name);
-        members
-            .into_iter()
-            .find(|member| member.canonical() == wanted)
-            .ok_or_else(|| ArchiveError::UnknownMember {
-                path: archive.canonical().to_path_buf(),
+        match self.unpack_all(archive) {
+            Ok(map) => match map.get(name) {
+                Some((sha, _)) => Ok(ResourceHandle::Cache(sha.clone())),
+                None => Err(ArchiveError::UnknownMember {
+                    path: archive_path,
+                    name: name.to_owned(),
+                }),
+            },
+            Err(ArchiveError::Read {
+                fault: AccessFault::Missing,
+                ..
+            }) => Err(ArchiveError::UnknownMember {
+                path: archive_path,
                 name: name.to_owned(),
-            })
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Derive the index path for one archive sha.
+    fn map_path(&self, sha: &Sha) -> PathBuf {
+        self.resources.cache_path(sha).with_extension("map")
+    }
+
+    /// Load one archive index. Corrupt payloads read absent.
+    ///
+    /// - Poisoned locks read through to disk.
+    fn read_map(&self, sha: &Sha) -> Option<Map> {
+        if let Ok(guard) = self.maps.read()
+            && let Some(map) = guard.get(sha)
+        {
+            return Some(map.clone());
+        }
+        let bytes = std::fs::read(self.map_path(sha)).ok()?;
+        let map: Map = serde_json::from_slice(&bytes).ok()?;
+        if let Ok(mut guard) = self.maps.write() {
+            guard.insert(sha.clone(), map.clone());
+        }
+        Some(map)
+    }
+
+    /// Rewrite one archive index atomically.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Write`] for index write faults.
+    /// - [`ArchiveError::WriteUnknown`] for other index write failures.
+    fn write_map(&self, archive: &ArchiveHandle, map: &Map) -> Result<()> {
+        let archive_path = archive.path().to_path_buf();
+        let bytes = serde_json::to_vec(map).map_err(|error| ArchiveError::WriteUnknown {
+            path: archive_path.clone(),
+            message: error.to_string(),
+        })?;
+        driver::StagedFile::write(&self.map_path(archive.sha256()), |file| {
+            std::io::Write::write_all(file, &bytes)
+        })
+        .map_err(|error| ArchiveError::from_write_io(&archive_path, error))?;
+        if let Ok(mut guard) = self.maps.write() {
+            guard.insert(archive.sha256().clone(), map.clone());
+        }
+        Ok(())
+    }
+
+    /// Unpack every member into the cache with a fresh index.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Read`] for unreadable archives.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::Escape`] for escaping members.
+    /// - [`ArchiveError::Write`] for cache write faults.
+    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    fn unpack_all(&self, archive: &ArchiveHandle) -> Result<Map> {
+        let archive_path = archive.path().to_path_buf();
+        let file = std::fs::File::open(&archive_path)
+            .map_err(|error| ArchiveError::from_io(&archive_path, error))?;
+        let map = Unpack::new(&self.resources, &archive_path).run(file)?;
+        self.write_map(archive, &map)?;
+        let total = map.len();
+        let _ = self.progress.send(Event::Unpacked {
+            archive: archive_path.display().to_string(),
+            total,
+        });
+        Ok(map)
     }
 }
 
-/// Unpack members under pending with hashes.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable archives.
-/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-/// - [`ArchiveError::Escape`] for escaping members.
-/// - [`ArchiveError::Write`] for extract write faults.
-/// - [`ArchiveError::WriteUnknown`] for other extract write
-///   failures.
-fn unpack_into(source: &Path, pending: &Path) -> Result<Vec<ExtractedMember>> {
-    use extract::extract_entry;
+/// One archive walk landing members in the cache.
+struct Unpack<'a> {
+    /// Resources landing member bytes.
+    resources: &'a Resources,
+    /// Archive cache path for errors.
+    archive_path: PathBuf,
+    /// Landed members by name with modes.
+    entries: Map,
+}
 
-    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    let mut collected = Vec::new();
-    let mut failure: Option<ArchiveError> = None;
-    let outcome =
-        driver::archive::uncompress(file, |entry| match extract_entry(source, pending, entry) {
-            Ok(member) => {
-                collected.push(member);
+impl<'a> Unpack<'a> {
+    /// Build one archive walk.
+    fn new(resources: &'a Resources, archive_path: &Path) -> Self {
+        Self {
+            resources,
+            archive_path: archive_path.to_path_buf(),
+            entries: Map::new(),
+        }
+    }
+
+    /// Run one walk into the landed index.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Read`] for unreadable archives.
+    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`ArchiveError::Escape`] for escaping members.
+    /// - [`ArchiveError::Write`] for cache write faults.
+    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    fn run(mut self, file: std::fs::File) -> Result<Map> {
+        let archive_path = self.archive_path.clone();
+        driver::archive::uncompress(file, |entry| self.entry(entry))
+            .map_err(|error| Self::driver_error(&archive_path, error))?;
+        Ok(self.entries)
+    }
+
+    /// Receive one walk entry into the cache.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Escape`] for escaping members.
+    /// - [`ArchiveError::CorruptedArchive`] for members failing the
+    ///   expected hash.
+    /// - [`ArchiveError::Write`] for cache write faults.
+    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
+        let driver::archive::Entry { name, mode, reader } = entry;
+        self.land(name, mode, reader)
+    }
+
+    /// Land one member body in the cache under its hash.
+    ///
+    /// # Errors
+    ///
+    /// - [`ArchiveError::Read`] for unreadable members.
+    /// - [`ArchiveError::CorruptedArchive`] for members failing the
+    ///   expected hash.
+    /// - [`ArchiveError::Write`] for cache write faults.
+    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    fn land(&mut self, name: String, mode: u32, reader: impl std::io::Read) -> Result<()> {
+        let handle = self
+            .resources
+            .store(reader)
+            .map_err(|error| from_resource(&self.archive_path, error))?;
+        match handle {
+            ResourceHandle::Cache(sha) => {
+                self.entries.insert(name, (sha, mode));
                 Ok(())
             }
-            Err(error) => {
-                failure = Some(error);
-                Err(std::io::Error::other("archive extract failed"))
-            }
-        });
-    match outcome {
-        Ok(()) => Ok(collected),
-        Err(error) => {
-            if let Some(error) = failure {
-                Err(error)
-            } else {
-                Err(from_driver(source, error))
-            }
+            ResourceHandle::Project(..) => Err(ArchiveError::CorruptedArchive {
+                path: self.archive_path.clone(),
+            }),
+        }
+    }
+
+    /// Map one driver archive failure into domain language.
+    fn driver_error(source: &Path, error: driver::archive::Error<ArchiveError>) -> ArchiveError {
+        match error {
+            driver::archive::Error::Visit(inner) => inner,
+            driver::archive::Error::Foreign => ArchiveError::NotArchive {
+                path: source.to_path_buf(),
+            },
+            driver::archive::Error::Bare
+            | driver::archive::Error::Corrupt(_)
+            | driver::archive::Error::Truncated(_) => ArchiveError::CorruptedArchive {
+                path: source.to_path_buf(),
+            },
+            driver::archive::Error::Locked => ArchiveError::PasswordProtectedArchive {
+                path: source.to_path_buf(),
+            },
+            driver::archive::Error::Unknown { detail } => ArchiveError::Unknown {
+                path: source.to_path_buf(),
+                detail,
+            },
+            driver::archive::Error::UnknownAlgorithm { detail } => ArchiveError::UnknownAlgorithm {
+                path: source.to_path_buf(),
+                detail,
+            },
+            driver::archive::Error::Denied(inner)
+            | driver::archive::Error::Missing(inner)
+            | driver::archive::Error::Invalid(inner)
+            | driver::archive::Error::Io(inner) => from_stream(source, inner),
         }
     }
 }
 
-/// Hash one source file.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable sources.
-fn file_sha(source: &Path) -> Result<Sha> {
-    let mut file =
-        std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    Sha::read(&mut file).map_err(|failure| ArchiveError::from_io(source, failure))
-}
-
-/// List member names for one source.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable sources.
-/// - [`ArchiveError::NotArchive`] for non-archives.
-/// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-fn names(source: &Path) -> Result<Vec<String>> {
-    let head = read_head(source)?;
-    if !driver::archive::supported(&head) {
-        return Err(not_archive(source));
-    }
-    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    driver::archive::names(file).map_err(|error| from_driver(source, error))
-}
-
-/// Map one driver archive failure into domain language.
-fn from_driver(source: &Path, error: driver::archive::Error) -> ArchiveError {
-    match error {
-        driver::archive::Error::Foreign => not_archive(source),
-        driver::archive::Error::Bare
-        | driver::archive::Error::Corrupt(_)
-        | driver::archive::Error::Truncated(_) => ArchiveError::CorruptedArchive {
-            path: source.to_path_buf(),
-        },
-        driver::archive::Error::Locked => ArchiveError::PasswordProtectedArchive {
-            path: source.to_path_buf(),
-        },
-        driver::archive::Error::Unknown { .. } => ArchiveError::UnsupportedCompression {
-            path: source.to_path_buf(),
-        },
-        driver::archive::Error::Denied(inner)
-        | driver::archive::Error::Missing(inner)
-        | driver::archive::Error::Invalid(inner)
-        | driver::archive::Error::Io(inner)
-        | driver::archive::Error::Visit(inner) => extract::from_stream(source, inner),
-    }
-}
-
-/// Prove one source holds a compressed archive.
-///
-/// # Errors
-///
-/// - [`ArchiveError::NotArchive`] for plain sources.
-/// - [`ArchiveError::Read`] for unreadable sources.
-fn check_compressed_source(source: &Path) -> Result<()> {
-    let head = read_head(source)?;
-    if !driver::archive::supported(&head) {
-        return Err(not_archive(source));
-    }
-    names(source).map(|_| ()).map_err(|_| not_archive(source))
-}
-
-/// Build one non-archive error with the source path.
-fn not_archive(source: &Path) -> ArchiveError {
-    ArchiveError::NotArchive {
-        path: source.to_path_buf(),
-    }
-}
-
-/// Build extracted member handles from member hashes.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Escape`] for containment failures.
-fn streamed_handles(
-    dest: &Path,
-    members: &[ExtractedMember],
-    resources: &Resources,
-) -> Result<Vec<ResourceHandle>> {
-    let mut handles = Vec::with_capacity(members.len());
-    for member in members {
-        handles.push(
-            resources
-                .cache(dest, &member.name, member.sha.clone())
-                .map_err(from_resource)?,
-        );
-    }
-    handles.sort_by(|left, right| left.canonical().cmp(right.canonical()));
-    Ok(handles)
-}
-
-/// Collect member hashes keyed by archive-relative name.
-fn member_shas(members: &[ExtractedMember]) -> std::collections::BTreeMap<String, Sha> {
-    members
-        .iter()
-        .map(|member| (member.name.clone(), member.sha.clone()))
-        .collect()
-}
-
-/// Read the head window for every probe.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable sources.
-fn read_head(source: &Path) -> Result<Vec<u8>> {
-    use std::io::Read as _;
-
-    let file = std::fs::File::open(source).map_err(|error| ArchiveError::from_io(source, error))?;
-    let mut head = Vec::new();
-    std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
-        .map_err(|error| ArchiveError::from_io(source, error))?;
-    Ok(head)
-}
-
-/// Collect extracted handles back for one present extract folder.
-///
-/// - Names sort in ascending order.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable extracted files.
-/// - [`ArchiveError::UnknownMember`] for missing members.
-fn extracted_handles(
-    dest: &Path,
-    source: &Path,
-    resources: &Resources,
-) -> Result<Vec<ResourceHandle>> {
-    let mut names = Vec::new();
-    collect_extract_names(dest, dest, &mut names, source)?;
-    names.sort();
-    if let Some(handles) = fresh_handles(dest, &names, resources)? {
-        return Ok(handles);
-    }
-    let mut pairs = std::collections::BTreeMap::new();
-    let mut handles = Vec::with_capacity(names.len());
-    for name in &names {
-        let path = dest.join(name);
-        let sha = extract_file_sha(&path, source, name)?;
-        handles.push(
-            resources
-                .cache(dest, name, sha.clone())
-                .map_err(from_resource)?,
-        );
-        pairs.insert(name.clone(), sha);
-    }
-    hashes::record(dest, &pairs);
-    Ok(handles)
-}
-
-/// Build handles from recorded hashes.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for unreadable extracted files.
-fn fresh_handles(
-    dest: &Path,
-    names: &[String],
-    resources: &Resources,
-) -> Result<Option<Vec<ResourceHandle>>> {
-    let mut handles = Vec::with_capacity(names.len());
-    for name in names {
-        match hashes::fresh(dest, name) {
-            Some(sha) => {
-                handles.push(resources.cache(dest, name, sha).map_err(from_resource)?);
-            }
-            None => return Ok(None),
-        }
-    }
-    Ok(Some(handles))
-}
-
-/// Hash one extracted member file.
-///
-/// # Errors
-///
-/// - [`ArchiveError::UnknownMember`] for missing members.
-/// - [`ArchiveError::Read`] for unreadable members.
-fn extract_file_sha(path: &Path, source: &Path, name: &str) -> Result<Sha> {
-    let mut file =
-        std::fs::File::open(path).map_err(|error| extract_read_error(error, source, name))?;
-    Sha::read(&mut file).map_err(|error| extract_read_error(error, source, name))
-}
-
-/// Collect archive-relative file names under one extract folder.
-///
-/// # Errors
-///
-/// - [`ArchiveError::Read`] for failed extract listing.
-fn collect_extract_names(
-    dir: &Path,
-    root: &Path,
-    names: &mut Vec<String>,
-    source: &Path,
-) -> Result<()> {
-    let entries =
-        driver::fs::read_dir(dir).map_err(|error| ArchiveError::from_io(source, error))?;
-    for path in entries {
-        if path.is_dir() {
-            collect_extract_names(&path, root, names, source)?;
-            continue;
-        }
-        if path.is_file() {
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|error| ArchiveError::Read {
-                    path: source.to_path_buf(),
-                    fault: AccessFault::Unknown {
-                        message: error.to_string(),
-                    },
-                })?;
-            names.push(relative.to_string_lossy().replace('\\', "/"));
-        }
-    }
-    Ok(())
-}
-
-/// Map one extracted member read failure into domain language.
-fn extract_read_error(error: std::io::Error, source: &Path, name: &str) -> ArchiveError {
+/// Map one stream failure into its archive error.
+fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
     match error.kind() {
-        std::io::ErrorKind::NotFound => ArchiveError::UnknownMember {
+        std::io::ErrorKind::StorageFull
+        | std::io::ErrorKind::ReadOnlyFilesystem
+        | std::io::ErrorKind::QuotaExceeded
+        | std::io::ErrorKind::FileTooLarge => ArchiveError::from_write_io(source, error),
+        std::io::ErrorKind::Other
+        | std::io::ErrorKind::InvalidInput
+        | std::io::ErrorKind::InvalidData
+        | std::io::ErrorKind::UnexpectedEof => ArchiveError::CorruptedArchive {
             path: source.to_path_buf(),
-            name: name.to_owned(),
-        },
-        std::io::ErrorKind::PermissionDenied => ArchiveError::Read {
-            path: source.to_path_buf(),
-            fault: AccessFault::Denied,
         },
         _ => ArchiveError::from_io(source, error),
     }
 }
 
 /// Map one resource creation failure into archive language.
-fn from_resource(error: ResourceError) -> ArchiveError {
+///
+/// - Hashed members failing the expected hash mean a corrupt archive.
+fn from_resource(source: &Path, error: ResourceError) -> ArchiveError {
     match error {
         ResourceError::Escape { path, .. } => ArchiveError::Escape { path },
         ResourceError::Read { path, fault } => ArchiveError::Read { path, fault },
+        ResourceError::Write { path, fault } => ArchiveError::Write { path, fault },
+        ResourceError::WriteUnknown { path, message } => {
+            ArchiveError::WriteUnknown { path, message }
+        }
+        ResourceError::Mismatch { .. } => ArchiveError::CorruptedArchive {
+            path: source.to_path_buf(),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StoreRoots;
+    use crate::pool::PoolStore;
     use confit_driver::archive::{Algorithm, Builder, Level};
     use std::io::Read as _;
-    use std::io::Write as _;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -478,13 +389,17 @@ mod tests {
 
     fn test_store(dir: &Path) -> ArchiveStore {
         let roots = test_roots(dir);
-        let resources = std::sync::Arc::new(Resources::new(&roots));
         let (sender, _) = crossbeam_channel::unbounded();
-        ArchiveStore::new(&roots, resources, sender)
+        let pools = std::sync::Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = std::sync::Arc::new(Resources::new(&roots, pools));
+        ArchiveStore::new(resources, sender)
     }
 
     fn test_resources(dir: &Path) -> Resources {
-        Resources::new(&test_roots(dir))
+        let roots = test_roots(dir);
+        let (sender, _) = crossbeam_channel::unbounded();
+        let pools = std::sync::Arc::new(PoolStore::new(&roots, sender));
+        Resources::new(&roots, pools)
     }
 
     fn tar_gz_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
@@ -502,32 +417,6 @@ mod tests {
         }
     }
 
-    fn evil_tar_gz_bytes() -> Vec<u8> {
-        let data = b"x";
-        let mut header = [0u8; 512];
-        let name = b"../evil.txt";
-        header[..name.len()].copy_from_slice(name);
-        header[100..108].copy_from_slice(b"0000644\0");
-        let size = format!("{:07o}\0", data.len());
-        header[124..124 + 8].copy_from_slice(size.as_bytes());
-        header[156] = b'0';
-        header[257..262].copy_from_slice(b"ustar");
-        header[262..264].copy_from_slice(b"00");
-        header[148..156].copy_from_slice(b"        ");
-        let sum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
-        let checksum = format!("{sum:06o}\0 ");
-        header[148..156].copy_from_slice(checksum.as_bytes());
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&header);
-        let mut padded = [0u8; 512];
-        padded[..data.len()].copy_from_slice(data);
-        raw.extend_from_slice(&padded);
-        raw.extend_from_slice(&[0u8; 1024]);
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
-        encoder.write_all(&raw).unwrap();
-        encoder.finish().unwrap()
-    }
-
     fn write_archive(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         let path = dir.join(name);
         if let Some(parent) = path.parent() {
@@ -537,6 +426,14 @@ mod tests {
         path
     }
 
+    fn project_source(dir: &Path, path: PathBuf) -> ResourceHandle {
+        assert!(path.starts_with(dir), "project stays under its root");
+        let sha = std::fs::read(&path)
+            .map(|bytes| Sha::hash(&bytes))
+            .unwrap_or_else(|_| Sha::hash(b"absent"));
+        ResourceHandle::Project(path, sha)
+    }
+
     fn fixture_archive(
         store: &ArchiveStore,
         dir: &Path,
@@ -544,43 +441,51 @@ mod tests {
         bytes: &[u8],
     ) -> ArchiveHandle {
         let path = write_archive(dir, name, bytes);
-        let source = ResourceHandle::new(dir, path, Sha::hash(bytes)).unwrap();
+        let source = project_source(dir, path);
         match store.archive(&source) {
             Ok(handle) => handle,
             Err(error) => panic!("source registers: {error}"),
         }
     }
 
-    fn handle_sha(handles: &[ResourceHandle], name: &str) -> Sha {
-        handles
-            .iter()
-            .find(|handle| handle.canonical().to_string_lossy().ends_with(name))
-            .unwrap()
-            .sha256()
-            .clone()
+    fn cache_path(dir: &Path, sha: &Sha) -> PathBuf {
+        dir.join("temp").join("cache").join(sha.hex())
     }
 
-    fn assert_no_pending(extract_base: &Path) {
-        for entry in driver::fs::read_dir(extract_base).unwrap() {
-            assert!(
-                !entry.to_string_lossy().contains(".part"),
-                "the extract leaves no stray pending: {}",
-                entry.display()
-            );
+    fn map_path(dir: &Path, archive: &ArchiveHandle) -> PathBuf {
+        cache_path(dir, archive.sha256()).with_extension("map")
+    }
+
+    fn open_text(resources: &Resources, handle: &ResourceHandle) -> Vec<u8> {
+        match resources.open(handle) {
+            Ok(mut reader) => {
+                let mut found = Vec::new();
+                reader.read_to_end(&mut found).unwrap();
+                found
+            }
+            Err(error) => panic!("member opens: {error}"),
         }
     }
 
     #[test]
-    fn create_registers_compressed_source() {
+    fn create_registers_project_without_copy() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.tar.gz", &raw);
-        let source = ResourceHandle::new(dir.path(), path.clone(), Sha::hash(&raw)).unwrap();
+        let source = project_source(dir.path(), path.clone());
         match store.archive(&source) {
             Ok(handle) => {
-                assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha256(), &Sha::hash(&raw));
+                assert_eq!(
+                    handle.path(),
+                    path.as_path(),
+                    "handle keeps the project path"
+                );
+                assert!(
+                    !cache_path(dir.path(), handle.sha256()).exists(),
+                    "project bytes stay in place"
+                );
             }
             Err(error) => panic!("source registers: {error}"),
         }
@@ -591,16 +496,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let path = write_archive(dir.path(), "note.txt", b"plain text");
-        let source =
-            ResourceHandle::new(dir.path(), path.clone(), Sha::hash(b"plain text")).unwrap();
+        let source = project_source(dir.path(), path.clone());
         match store.archive(&source) {
             Ok(_) => panic!("plain source passes"),
             Err(ArchiveError::NotArchive { .. }) => {}
             Err(error) => panic!("wrong plain variant: {error}"),
         }
         let missing = dir.path().join("absent.tar.gz");
-        let absent =
-            ResourceHandle::new(dir.path(), missing.clone(), Sha::hash(b"absent")).unwrap();
+        let absent = project_source(dir.path(), missing.clone());
         match store.archive(&absent) {
             Ok(_) => panic!("absent source passes"),
             Err(ArchiveError::Read { .. }) => {}
@@ -625,55 +528,28 @@ mod tests {
     }
 
     #[test]
-    fn extract_returns_extracted_handles_with_stable_hashes() {
+    fn members_serve_from_index_without_archive_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
-            &tar_gz_bytes(&[
-                ("a.txt", b"same"),
-                ("b.txt", b"same"),
-                ("sub/c.txt", b"other"),
-            ]),
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        let expected_extract = extract_base.join(archive.sha256().hex());
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("archive extracts: {error}"),
-        };
-        assert_eq!(handles.len(), 3);
-        for handle in &handles {
-            assert!(
-                handle.canonical().starts_with(&expected_extract),
-                "extract lands under temp extract and handle sha: {}",
-                handle.canonical().display()
-            );
+        match store.members(&archive) {
+            Ok(_) => {}
+            Err(error) => panic!("index builds: {error}"),
         }
-        assert_eq!(handle_sha(&handles, "a.txt"), Sha::hash(b"same"));
-        assert_eq!(handle_sha(&handles, "a.txt"), handle_sha(&handles, "b.txt"));
-        assert_ne!(
-            handle_sha(&handles, "a.txt"),
-            handle_sha(&handles, "sub/c.txt")
-        );
-        assert_eq!(
-            std::fs::read(handles[0].canonical()).unwrap(),
-            b"same".as_slice()
-        );
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        assert_no_pending(&extract_base);
-        match store.extract(&archive) {
-            Ok(reused) => assert_eq!(reused, handles),
-            Err(error) => panic!("repeat unpack skips: {error}"),
+        std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
+        match store.members(&archive) {
+            Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
+            Err(error) => panic!("present index skips archive bytes: {error}"),
         }
     }
 
     #[test]
-    fn handle_opens_present_and_missing_members() {
-        use crate::resources::error::ResourceError;
-
+    fn member_resolves_from_cache_without_archive_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
@@ -683,235 +559,141 @@ mod tests {
             "fonts.tar.gz",
             &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("archive extracts: {error}"),
-        };
-        let picked = handles
-            .iter()
-            .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
-            .unwrap();
-        match resources.open(picked) {
-            Ok(mut reader) => {
-                let mut found = Vec::new();
-                reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, b"beta");
-            }
-            Err(error) => panic!("member opens: {error}"),
+        match store.member(&archive, "a.txt") {
+            Ok(ResourceHandle::Cache(sha)) => assert_eq!(sha, Sha::hash(b"alpha")),
+            Ok(ResourceHandle::Project(..)) => panic!("member lands content-addressed"),
+            Err(error) => panic!("member resolves: {error}"),
         }
-        let extract_dir = dir
-            .path()
-            .join("temp")
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex());
-        let missing = match resources.cache(&extract_dir, "absent.txt", Sha::hash(b"absent")) {
-            Ok(handle) => handle,
-            Err(error) => panic!("absent creates: {error}"),
-        };
-        match resources.open(&missing) {
-            Ok(_) => panic!("absent member passes"),
-            Err(ResourceError::Read { .. }) => {}
-            Err(error) => panic!("wrong absent variant: {error}"),
+        std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
+        match store.member(&archive, "a.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"alpha"),
+            Err(error) => panic!("present member skips archive bytes: {error}"),
         }
     }
 
     #[test]
-    fn open_rejects_escaping_member() {
-        use crate::resources::error::ResourceError;
+    fn member_rewrites_missing_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let archive = fixture_archive(
+            &store,
+            dir.path(),
+            "fonts.tar.gz",
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+        );
+        match store.member(&archive, "a.txt") {
+            Ok(_) => {}
+            Err(error) => panic!("member resolves: {error}"),
+        }
+        std::fs::remove_file(map_path(dir.path(), &archive)).unwrap();
+        let store = test_store(dir.path());
+        match store.member(&archive, "sub/b.txt") {
+            Ok(ResourceHandle::Cache(sha)) => assert_eq!(sha, Sha::hash(b"beta")),
+            Ok(ResourceHandle::Project(..)) => panic!("member lands content-addressed"),
+            Err(error) => panic!("missing index repacks: {error}"),
+        }
+        assert!(
+            map_path(dir.path(), &archive).exists(),
+            "repack rewrites the index"
+        );
+    }
 
+    #[test]
+    fn member_repacks_missing_member_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
+        let archive = fixture_archive(
+            &store,
+            dir.path(),
+            "fonts.tar.gz",
+            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
+        );
+        match store.member(&archive, "a.txt") {
+            Ok(_) => {}
+            Err(error) => panic!("member resolves: {error}"),
+        }
+        std::fs::remove_file(cache_path(dir.path(), &Sha::hash(b"beta"))).unwrap();
+        match store.member(&archive, "sub/b.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
+            Err(error) => panic!("missing member bytes repack: {error}"),
+        }
+    }
+
+    #[test]
+    fn member_rejects_absent_without_archive_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
         let archive = fixture_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
             &tar_gz_bytes(&[("a.txt", b"alpha")]),
         );
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("archive extracts: {error}"),
-        };
-        let extract_dir = dir
-            .path()
-            .join("temp")
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex());
-        assert!(!handles.is_empty(), "extract creates handles");
-        match resources.cache(&extract_dir, "../evil.txt", Sha::hash(b"x")) {
-            Ok(_) => panic!("escaping member passes"),
-            Err(ResourceError::Escape { .. }) => {}
-            Err(error) => panic!("wrong escape variant: {error}"),
-        }
-    }
-
-    #[test]
-    fn open_tracks_current_extract_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let resources = test_resources(dir.path());
-        let archive = fixture_archive(
-            &store,
-            dir.path(),
-            "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
-        );
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("archive extracts: {error}"),
-        };
-        match resources.open(&handles[0]) {
-            Ok(mut reader) => {
-                let mut found = Vec::new();
-                reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, b"alpha");
-            }
-            Err(error) => panic!("member opens from extract: {error}"),
-        }
-        std::fs::write(handles[0].canonical(), b"patched").unwrap();
-        match resources.open(&handles[0]) {
-            Ok(mut reader) => {
-                let mut found = Vec::new();
-                reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, b"patched");
-            }
-            Err(error) => panic!("member tracks extract: {error}"),
-        }
-    }
-
-    #[test]
-    fn extract_member_resolves_present_rejects_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let archive = fixture_archive(
-            &store,
-            dir.path(),
-            "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
-        );
-        match store.extract(&archive) {
+        match store.members(&archive) {
             Ok(_) => {}
-            Err(error) => panic!("archive extracts: {error}"),
+            Err(error) => panic!("index builds: {error}"),
         }
-        let extract_dir = dir
-            .path()
-            .join("temp")
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex());
-        std::fs::remove_file(extract_dir.join("sub").join("b.txt")).unwrap();
-        match store.extract_member(&archive, "a.txt") {
-            Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
-            Err(error) => panic!("present member resolves: {error}"),
+        std::fs::remove_file(map_path(dir.path(), &archive)).unwrap();
+        std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
+        let store = test_store(dir.path());
+        match store.member(&archive, "a.txt") {
+            Ok(_) => panic!("absent archive passes"),
+            Err(ArchiveError::UnknownMember { path, name }) => {
+                assert_eq!(name, "a.txt");
+                assert_eq!(path, dir.path().join("fonts.tar.gz"));
+            }
+            Err(error) => panic!("wrong absent variant: {error}"),
         }
-        match store.extract_member(&archive, "absent.txt") {
+        match store.member(&archive, "absent.txt") {
             Ok(_) => panic!("absent member passes"),
             Err(ArchiveError::UnknownMember { name, .. }) => assert_eq!(name, "absent.txt"),
             Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 
-    fn extract_manifest(dir: &Path, archive: &ArchiveHandle) -> PathBuf {
-        dir.join("temp")
-            .join(EXTRACT_DIR)
-            .join(format!("{}.json", archive.sha256().hex()))
-    }
-
     #[test]
-    fn unpack_records_member_hashes_beside_extract() {
+    fn unpack_records_index_with_hashes_and_modes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = fixture_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
             &tar_gz_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
-        match store.extract(&archive) {
-            Ok(_) => {}
-            Err(error) => panic!("archive extracts: {error}"),
-        }
-        let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
-            Ok(text) => text,
-            Err(error) => panic!("manifest load: {error}"),
-        };
-        assert!(
-            text.contains(&Sha::hash(b"alpha").hex()),
-            "manifest records hashes: {text}"
-        );
-        assert!(text.contains("sub/b.txt"), "manifest records names: {text}");
-    }
-
-    #[test]
-    fn touched_members_rehash_and_refresh_records() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let archive = fixture_archive(
-            &store,
-            dir.path(),
-            "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha")]),
-        );
-        match store.extract_member(&archive, "a.txt") {
-            Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
+        match store.member(&archive, "sub/b.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
             Err(error) => panic!("member resolves: {error}"),
         }
-        let member = dir
-            .path()
-            .join("temp")
-            .join(EXTRACT_DIR)
-            .join(archive.sha256().hex())
-            .join("a.txt");
-        std::fs::write(&member, b"omega").unwrap();
-        match store.extract_member(&archive, "a.txt") {
-            Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"omega")),
-            Err(error) => panic!("touched member rehashes: {error}"),
-        }
-        let text = match std::fs::read_to_string(extract_manifest(dir.path(), &archive)) {
+        let text = match std::fs::read_to_string(map_path(dir.path(), &archive)) {
             Ok(text) => text,
-            Err(error) => panic!("manifest load: {error}"),
+            Err(error) => panic!("index load: {error}"),
         };
         assert!(
-            text.contains(&Sha::hash(b"omega").hex()),
-            "records refresh on touch: {text}"
+            text.contains(&Sha::hash(b"beta").hex()),
+            "index records hashes: {text}"
         );
-    }
-
-    #[test]
-    fn bad_manifests_fall_back_to_rehash() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let archive = fixture_archive(
-            &store,
-            dir.path(),
-            "fonts.tar.gz",
-            &tar_gz_bytes(&[("a.txt", b"alpha")]),
+        assert!(text.contains("sub/b.txt"), "index records names: {text}");
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(serde_json::Value::Object(map)) => match map.get("a.txt") {
+                Some(serde_json::Value::Array(pair)) => {
+                    assert_eq!(pair.len(), 2, "index pairs hashes with modes");
+                    assert_eq!(
+                        pair[0],
+                        serde_json::Value::String(Sha::hash(b"alpha").hex())
+                    );
+                    assert_eq!(pair[1], serde_json::Value::Number(0o644.into()));
+                }
+                other => panic!("index shapes pairs: {other:?}"),
+            },
+            other => panic!("index holds an object: {other:?}"),
+        }
+        assert!(
+            !dir.path().join("temp").join("extract").exists(),
+            "unpack leaves no extract folder"
         );
-        match store.extract(&archive) {
-            Ok(_) => {}
-            Err(error) => panic!("archive extracts: {error}"),
-        }
-        std::fs::write(extract_manifest(dir.path(), &archive), b"{bad").unwrap();
-        match store.extract_member(&archive, "a.txt") {
-            Ok(handle) => assert_eq!(handle.sha256(), &Sha::hash(b"alpha")),
-            Err(error) => panic!("bad manifest still resolves: {error}"),
-        }
-    }
-
-    #[test]
-    fn extract_rejects_escaping_members() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let archive = fixture_archive(&store, dir.path(), "evil.tar.gz", &evil_tar_gz_bytes());
-        match store.extract(&archive) {
-            Ok(_) => panic!("escaping member passes"),
-            Err(ArchiveError::Escape { .. }) => {}
-            Err(error) => panic!("wrong escape variant: {error}"),
-        }
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        if extract_base.exists() {
-            let left = driver::fs::read_dir(&extract_base).unwrap().len();
-            assert_eq!(left, 0);
-        }
     }
 
     #[test]
@@ -923,17 +705,16 @@ mod tests {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
         encoder.write_all(b"plain").unwrap();
         let raw = encoder.finish().unwrap();
-        let path = write_archive(dir.path(), "note.gz", &raw);
-        let archive = match ArchiveHandle::new(path, Sha::hash(&raw)) {
-            Ok(handle) => handle,
-            Err(error) => panic!("handle builds: {error}"),
-        };
+        let landed = cache_path(dir.path(), &Sha::hash(&raw));
+        std::fs::create_dir_all(landed.parent().unwrap()).unwrap();
+        std::fs::write(&landed, &raw).unwrap();
+        let archive = ArchiveHandle::new(Sha::hash(&raw), landed);
         match store.members(&archive) {
             Ok(_) => panic!("bare gzip passes"),
             Err(ArchiveError::CorruptedArchive { .. }) => {}
             Err(error) => panic!("wrong bare variant: {error}"),
         }
-        match store.extract(&archive) {
+        match store.member(&archive, "note.txt") {
             Ok(_) => panic!("bare gzip passes"),
             Err(ArchiveError::CorruptedArchive { .. }) => {}
             Err(error) => panic!("wrong bare variant: {error}"),
@@ -944,8 +725,7 @@ mod tests {
     fn members_rejects_missing_archive() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let missing = dir.path().join("absent.tar.gz");
-        let handle = ArchiveHandle::new(&missing, Sha::hash(b"absent")).unwrap();
+        let handle = ArchiveHandle::new(Sha::hash(b"absent"), dir.path().join("absent.cb"));
         match store.members(&handle) {
             Ok(_) => panic!("absent archive passes"),
             Err(ArchiveError::Read { .. }) => {}
@@ -954,55 +734,34 @@ mod tests {
     }
 
     #[test]
-    fn extract_keeps_one_extract_per_handle_sha() {
+    fn member_keeps_one_cache_entry_per_content() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
-        let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
-        let sha_a = Sha::hash(b"archive-a");
-        let sha_b = Sha::hash(b"archive-b");
-        assert_ne!(sha_a, sha_b);
-        let path_a = write_archive(dir.path(), "a.tar.gz", &raw);
-        let path_b = write_archive(dir.path(), "b.tar.gz", &raw);
-        let first_source = ResourceHandle::new(dir.path(), path_a, sha_a.clone()).unwrap();
-        let first = match store.archive(&first_source) {
-            Ok(handle) => handle,
-            Err(error) => panic!("first source registers: {error}"),
-        };
-        let second_source = ResourceHandle::new(dir.path(), path_b, sha_b.clone()).unwrap();
-        let second = match store.archive(&second_source) {
-            Ok(handle) => handle,
-            Err(error) => panic!("second source registers: {error}"),
-        };
+        let resources = test_resources(dir.path());
+        let raw_a = tar_gz_bytes(&[("a.txt", b"alpha")]);
+        let raw_b = tar_gz_bytes(&[("b.txt", b"alpha")]);
+        let sha_a = Sha::hash(&raw_a);
+        let sha_b = Sha::hash(&raw_b);
+        assert_ne!(sha_a, sha_b, "fixtures diverge by member name");
+        let first = fixture_archive(&store, dir.path(), "a.tar.gz", &raw_a);
+        let second = fixture_archive(&store, dir.path(), "b.tar.gz", &raw_b);
         assert_eq!(first.sha256(), &sha_a);
         assert_eq!(second.sha256(), &sha_b);
-        let first_handles = match store.extract(&first) {
-            Ok(handles) => handles,
-            Err(error) => panic!("first archive extracts: {error}"),
+        let first_handle = match store.member(&first, "a.txt") {
+            Ok(handle) => handle,
+            Err(error) => panic!("first member resolves: {error}"),
         };
-        let second_handles = match store.extract(&second) {
-            Ok(handles) => handles,
-            Err(error) => panic!("second archive extracts: {error}"),
+        let second_handle = match store.member(&second, "b.txt") {
+            Ok(handle) => handle,
+            Err(error) => panic!("second member resolves: {error}"),
         };
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        assert!(
-            first_handles[0]
-                .canonical()
-                .starts_with(extract_base.join(first.sha256().hex())),
-            "first extract follows its handle: {}",
-            first_handles[0].canonical().display()
-        );
-        assert!(
-            second_handles[0]
-                .canonical()
-                .starts_with(extract_base.join(second.sha256().hex())),
-            "second extract follows its handle: {}",
-            second_handles[0].canonical().display()
-        );
-        assert_ne!(first_handles[0].canonical(), second_handles[0].canonical());
+        assert_eq!(first_handle, second_handle);
+        assert_ne!(map_path(dir.path(), &first), map_path(dir.path(), &second));
+        assert_eq!(open_text(&resources, &first_handle), b"alpha");
     }
 
     #[test]
-    fn extract_and_open_streams_large_member() {
+    fn member_streams_large_member() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
@@ -1018,18 +777,9 @@ mod tests {
             Ok(names) => assert_eq!(names, vec!["big.bin"]),
             Err(error) => panic!("large members list: {error}"),
         }
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("large archive extracts: {error}"),
-        };
-        assert_eq!(handles.len(), 1);
-        match resources.open(&handles[0]) {
-            Ok(mut reader) => {
-                let mut found = Vec::new();
-                reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, raw);
-            }
-            Err(error) => panic!("large member opens: {error}"),
+        match store.member(&archive, "big.bin") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), raw),
+            Err(error) => panic!("large member resolves: {error}"),
         }
     }
 
@@ -1070,19 +820,6 @@ mod tests {
         }
     }
 
-    fn evil_zip_bytes() -> Vec<u8> {
-        let sink = std::io::Cursor::new(Vec::new());
-        let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
-        let mut reader = std::io::Cursor::new(b"x" as &[u8]);
-        if let Err(error) = builder.member("../evil.txt", 0o644, 1, &mut reader) {
-            panic!("fixture builds: {error}");
-        }
-        match builder.finish() {
-            Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
-        }
-    }
-
     fn symlink_zip_bytes() -> Vec<u8> {
         let sink = std::io::Cursor::new(Vec::new());
         let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
@@ -1102,17 +839,24 @@ mod tests {
         let store = test_store(dir.path());
         let raw = zip_bytes(&[("a.txt", b"alpha")]);
         let path = write_archive(dir.path(), "fonts.zip", &raw);
-        let source = ResourceHandle::new(dir.path(), path.clone(), Sha::hash(&raw)).unwrap();
+        let source = project_source(dir.path(), path.clone());
         match store.archive(&source) {
             Ok(handle) => {
-                assert_eq!(handle.canonical(), path.as_path());
                 assert_eq!(handle.sha256(), &Sha::hash(&raw));
+                assert_eq!(
+                    handle.path(),
+                    path.as_path(),
+                    "handle keeps the project path"
+                );
+                assert!(
+                    !cache_path(dir.path(), handle.sha256()).exists(),
+                    "zip bytes stay in place"
+                );
             }
             Err(error) => panic!("zip source registers: {error}"),
         }
         let plain = write_archive(dir.path(), "note.txt", b"plain text");
-        let plain_source =
-            ResourceHandle::new(dir.path(), plain.clone(), Sha::hash(b"plain text")).unwrap();
+        let plain_source = project_source(dir.path(), plain.clone());
         match store.archive(&plain_source) {
             Ok(_) => panic!("plain source passes"),
             Err(ArchiveError::NotArchive { .. }) => {}
@@ -1132,69 +876,53 @@ mod tests {
     }
 
     #[test]
-    fn zip_extract_unpacks_reuses_and_rejects_escape() {
+    fn zip_member_unpacks_and_reuses_cache() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = fixture_archive(
             &store,
             dir.path(),
             "fonts.zip",
             &zip_bytes(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]),
         );
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("zip archive extracts: {error}"),
-        };
-        assert_eq!(handles.len(), 2);
-        assert_eq!(handle_sha(&handles, "a.txt"), Sha::hash(b"alpha"));
-        assert_eq!(handle_sha(&handles, "sub/b.txt"), Sha::hash(b"beta"));
-        let picked = handles
-            .iter()
-            .find(|handle| handle.canonical().to_string_lossy().ends_with("sub/b.txt"))
-            .unwrap();
-        assert_eq!(std::fs::read(picked.canonical()).unwrap(), b"beta");
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        assert_no_pending(&extract_base);
-        match store.extract(&archive) {
-            Ok(reused) => assert_eq!(reused, handles),
-            Err(error) => panic!("repeat unpack skips: {error}"),
+        match store.member(&archive, "sub/b.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
+            Err(error) => panic!("zip member resolves: {error}"),
         }
-        let evil = fixture_archive(&store, dir.path(), "evil.zip", &evil_zip_bytes());
-        match store.extract(&evil) {
-            Ok(_) => panic!("escaping member passes"),
-            Err(ArchiveError::Escape { .. }) => {}
-            Err(error) => panic!("wrong escape variant: {error}"),
+        match store.member(&archive, "a.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"alpha"),
+            Err(error) => panic!("repeat member reuses the cache: {error}"),
         }
-        let evil_extract = extract_base.join(evil.sha256().hex());
-        assert!(!evil_extract.exists());
-        assert_no_pending(&extract_base);
+        assert!(
+            !dir.path().join("temp").join("extract").exists(),
+            "zip unpack leaves no extract folder"
+        );
     }
 
     #[test]
     fn zip_high_mode_extracts_as_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
+        let resources = test_resources(dir.path());
         let archive = fixture_archive(&store, dir.path(), "link.zip", &symlink_zip_bytes());
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["link.txt"]),
             Err(error) => panic!("symlink members list: {error}"),
         }
-        let handles = match store.extract(&archive) {
-            Ok(handles) => handles,
-            Err(error) => panic!("symlink archive extracts: {error}"),
-        };
-        assert_eq!(handles.len(), 1);
-        let extract_base = dir.path().join("temp").join(EXTRACT_DIR);
-        assert_no_pending(&extract_base);
+        match store.member(&archive, "link.txt") {
+            Ok(handle) => assert_eq!(open_text(&resources, &handle), b"a.txt"),
+            Err(error) => panic!("symlink member resolves: {error}"),
+        }
     }
 
     #[test]
-    fn extract_maps_write_quota() {
+    fn write_maps_quota() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(&[("a.txt", b"plain")]);
         let archive = fixture_archive(&store, dir.path(), "note.tar.gz", &raw);
-        let source = archive.canonical().to_path_buf();
+        let source = store.resources.cache_path(archive.sha256());
         let error = std::io::Error::new(std::io::ErrorKind::QuotaExceeded, "capped disk");
         match ArchiveError::from_write_io(&source, error) {
             ArchiveError::Write { path, fault } => {
@@ -1209,37 +937,142 @@ mod tests {
     }
 
     #[test]
-    fn extract_announces_unpacked_with_counts() {
+    fn unpack_announces_unpacked_with_counts() {
         use confit_driver::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
-        let resources = std::sync::Arc::new(Resources::new(&roots));
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = ArchiveStore::new(&roots, resources, sender);
+        let pools = std::sync::Arc::new(PoolStore::new(&roots, sender.clone()));
+        let resources = std::sync::Arc::new(Resources::new(&roots, pools));
+        let store = ArchiveStore::new(resources, sender);
         let archive = fixture_archive(
             &store,
             dir.path(),
             "fonts.tar.gz",
             &tar_gz_bytes(&[("a.txt", b"alpha"), ("b.txt", b"beta")]),
         );
-        match store.extract(&archive) {
-            Ok(handles) => {
-                assert_eq!(handles.len(), 2, "extract creates two members")
+        match store.members(&archive) {
+            Ok(names) => {
+                assert_eq!(names.len(), 2, "unpack lists two members")
             }
-            Err(error) => panic!("archive extracts: {error}"),
+            Err(error) => panic!("archive unpacks: {error}"),
         }
         let events: Vec<Event> = receiver.try_iter().collect();
         assert_eq!(events.len(), 1, "unpack fires one fact");
         match &events[0] {
-            Event::Unpacked { archive, total } => {
+            Event::Unpacked {
+                archive: seen,
+                total,
+            } => {
                 assert_eq!(*total, 2, "unpack counts every member");
-                assert!(
-                    archive.ends_with("fonts.tar.gz"),
-                    "unpack shows the archive: {archive}"
+                assert_eq!(
+                    seen,
+                    &dir.path()
+                        .join("fonts.tar.gz")
+                        .to_string_lossy()
+                        .into_owned(),
+                    "unpack names the archive path: {seen}"
                 );
             }
             other => panic!("unpack announces itself: {other:?}"),
         }
+    }
+
+    #[test]
+    fn unknown_algorithm_keeps_backend_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fonts.zip");
+        let detail = "compression method 99".to_owned();
+        match Unpack::driver_error(
+            &source,
+            driver::archive::Error::UnknownAlgorithm {
+                detail: detail.clone(),
+            },
+        ) {
+            ArchiveError::UnknownAlgorithm { path, detail } => {
+                assert_eq!(path, source);
+                assert_eq!(detail, "compression method 99");
+            }
+            error => panic!("wrong unknown variant: {error}"),
+        }
+        let rendered = ArchiveError::UnknownAlgorithm {
+            path: source.clone(),
+            detail,
+        }
+        .to_string();
+        assert!(
+            rendered.contains(&source.to_string_lossy().into_owned()),
+            "message shows the path: {rendered}"
+        );
+        assert!(
+            rendered.contains("compression method 99"),
+            "message shows the detail: {rendered}"
+        );
+    }
+
+    #[test]
+    fn unknown_failure_keeps_backend_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fonts.zip");
+        let detail = "mystery fault".to_owned();
+        match Unpack::driver_error(
+            &source,
+            driver::archive::Error::Unknown {
+                detail: detail.clone(),
+            },
+        ) {
+            ArchiveError::Unknown { path, detail } => {
+                assert_eq!(path, source);
+                assert_eq!(detail, "mystery fault");
+            }
+            error => panic!("wrong unknown variant: {error}"),
+        }
+        let rendered = ArchiveError::Unknown {
+            path: source.clone(),
+            detail,
+        }
+        .to_string();
+        assert!(
+            rendered.contains(&source.to_string_lossy().into_owned()),
+            "message shows the path: {rendered}"
+        );
+        assert!(
+            rendered.contains("mystery fault"),
+            "message shows the detail: {rendered}"
+        );
+        assert!(
+            rendered.contains("please report steps to replicate"),
+            "message asks for replication: {rendered}"
+        );
+    }
+
+    #[test]
+    fn stream_names_disk_kinds_before_corrupt() {
+        use crate::faults::AccessFault;
+
+        let source = Path::new("fonts.tar.gz");
+        let error = from_stream(
+            source,
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "disk failed"),
+        );
+        match &error {
+            ArchiveError::Write { path: found, fault } => {
+                assert_eq!(found, source, "extract keeps the source");
+                assert!(
+                    matches!(*fault, AccessFault::StorageFull),
+                    "extract keeps the fault: {error}"
+                );
+            }
+            other => panic!("wrong extract variant: {other}"),
+        }
+        let error = from_stream(
+            source,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt bytes"),
+        );
+        assert!(
+            matches!(error, ArchiveError::CorruptedArchive { .. }),
+            "corrupt bytes stay corrupt: {error}"
+        );
     }
 }

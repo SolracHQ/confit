@@ -2,7 +2,7 @@
 //! Named state removal with unreferenced pruning.
 
 use confit_runtime::error::RuntimeError;
-use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
 use confit_store::state::error::StateError;
@@ -15,20 +15,20 @@ use crate::error::{CliError, Result};
 pub struct DeleteReport {
     /// The deleted state name.
     pub name: String,
-    /// Pruned unreferenced pool blob count from the removal.
+    /// Pruned unreferenced pool entry count from the removal.
     pub pruned: usize,
 }
 
-/// Remove one named manifest, then prune unreferenced pool blobs.
+/// Remove one named manifest, then prune unreferenced pool entries.
 ///
-/// - Blobs shared with remaining states survive the prune.
+/// - Entries shared with remaining states survive the prune.
 ///
 /// # Errors
 ///
 /// - [`CliError::BadName`] for non-`@name` values.
 /// - [`CliError::BadPicker`] for malformed pickers.
 /// - [`CliError::Runtime`] for state removals.
-/// - [`CliError::Blob`] for unreferenced prunes.
+/// - [`CliError::Pool`] for unreferenced prunes.
 pub fn run(args: &DeleteArgs, stores: Stores) -> Result<DeleteReport> {
     let picker: Picker = args.name.parse().map_err(|_| CliError::BadPicker {
         input: args.name.clone(),
@@ -41,8 +41,8 @@ pub fn run(args: &DeleteArgs, stores: Stores) -> Result<DeleteReport> {
     let store = stores.states();
     let handle = store.resolve(&picker).map_err(from_state)?;
     store.remove(&handle).map_err(from_state)?;
-    let keep = Manifest::keep_set(&store)?;
-    let pruned = stores.blobs().prune(&keep)?;
+    let keep = stored::keep_set(&store)?;
+    let pruned = stores.pool().prune(&keep)?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,

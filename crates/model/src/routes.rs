@@ -147,7 +147,7 @@ mod tests {
     use crate::error::Error;
 
     #[test]
-    fn route_builds_for_every_base() {
+    fn route_built_for_every_base() {
         for base in [
             RouteBase::Home,
             RouteBase::Config,

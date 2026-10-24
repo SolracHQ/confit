@@ -38,7 +38,6 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::api::builtin;
-    use confit_driver::sha::Sha;
     use confit_store::{StoreRoots, Stores};
     use mlua::Value;
 
@@ -87,17 +86,6 @@ mod tests {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
             Ok(_) => panic!("project text returns a string"),
             Err(error) => panic!("project opens its file: {error}"),
-        }
-        let source = r#"
-            local handle = assert(open("note.txt"))
-            return handle:sha()
-        "#;
-        match run(&lua, source) {
-            Ok(Value::String(found)) => {
-                assert_eq!(found.to_string_lossy(), Sha::hash(b"hello").hex())
-            }
-            Ok(_) => panic!("project hash returns a string"),
-            Err(error) => panic!("project hashes its file: {error}"),
         }
     }
 

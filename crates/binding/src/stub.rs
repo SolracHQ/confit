@@ -205,7 +205,6 @@ fn collect_inlined(registry: &mut Registry, fields: &[FieldDescriptor]) -> Resul
 ///
 /// - Repeated holders keep the first entry.
 /// - Crossed classes hold holder fields beside arm fields.
-/// - Every inlined field face collects through its descriptor.
 ///
 /// # Errors
 ///
@@ -334,9 +333,6 @@ fn emit_function(
 }
 
 /// Emit one optional type expression.
-///
-/// - Function faces wrap in parens so the marker covers
-///   the whole signature instead of the return alone.
 pub fn emit_optional(face: &str) -> String {
     if face.ends_with('?') {
         face.to_owned()

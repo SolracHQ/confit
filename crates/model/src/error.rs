@@ -33,19 +33,17 @@ pub enum Error {
         /// The render reason.
         reason: String,
     },
-    /// Blob seal failure.
-    #[error("cannot seal '{document}': {reason}")]
-    Seal {
-        /// The destination display under sealing.
-        document: String,
-        /// The store reason.
-        reason: String,
-    },
     /// Unresolvable base folder.
     #[error("cannot resolve '{base}' folder", base = base.name())]
     Base {
         /// The base under resolving.
         base: RouteBase,
+    },
+    /// Unexpected failure.
+    #[error("unexpected failure: {detail}, replication steps welcome")]
+    Unknown {
+        /// The failure detail.
+        detail: String,
     },
 }
 

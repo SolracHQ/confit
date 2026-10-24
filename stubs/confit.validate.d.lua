@@ -111,7 +111,7 @@ function document(body) end
 --- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 --- @field unmanaged boolean? Existence-only document flag.
 
---- Handle to a project resource.
+--- Handle to a project or cached resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
@@ -119,10 +119,6 @@ ResourceHandle = {}
 --- @return string? File text, else nil.
 --- @return string? Failure reason, else nil.
 function ResourceHandle:text() end
-
---- Render the opened content hash.
---- @return string Hex digest of the file content.
-function ResourceHandle:sha() end
 
 --- Read file content.
 --- @return table? Decoded table, else nil.
@@ -155,10 +151,7 @@ function ArchiveHandle:member(name) end
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
 --- One tree member.  Bare handles take the default mode. Tables refer to the handle with a required mode.
---- @alias TreeMember Payload | TreeMember_Full
-
---- Blob payload as a live handle or sealed bytes.
---- @alias Payload ResourceHandle
+--- @alias TreeMember ResourceHandle | TreeMember_Full
 
 --- Handle with explicit mode.
 --- @class TreeMember_Full
@@ -203,7 +196,7 @@ function StructuredPatch.filter(route) end
 --- @param document Document_Structured Live structured document under patching.
 function StructuredPatch.apply(document) end
 
---- Patch merge level.  - Names parse case-insensitively.
+--- Patch merge level.
 --- @alias Level "minor" | "low" | "normal" | "high" | "major"
 
 --- One rc patch table.

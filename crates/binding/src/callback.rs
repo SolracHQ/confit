@@ -261,7 +261,7 @@ mod tests {
                 assert_eq!(returns.len(), 1);
                 assert_eq!(returns[0].face.as_ref(), "boolean");
             }
-            _ => panic!("filter holds function data"),
+            _ => panic!("expected function data for filter"),
         }
         let mut collector = Registry::new();
         FilterHolder::collect(&mut collector).unwrap();
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn call_decodes_boolean_returns() {
+    fn call_decoded_boolean_returns() {
         let lua = Lua::new();
         lua.load(
             r##"

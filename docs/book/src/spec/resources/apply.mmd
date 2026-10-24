@@ -21,6 +21,6 @@ flowchart TD
     Q --> R[Delete unreferenced paths plus dropped members]
     R --> S[Store the fixed slot]
     S --> T[Archive entry, rotate history]
-    T --> U[Prune unreferenced pool blobs]
+    T --> U[Prune unreferenced pool entries]
     U --> V[Run hooks by plan order]
     V --> W[Report counts plus archive path]

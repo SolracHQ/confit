@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::routes::Route;
-use confit_driver::sha::Sha;
-use confit_store::Stores;
-use confit_store::blob::error::BlobError;
 use confit_store::handles::ResourceHandle;
 
 pub use rc::{RcData, RcEntry};
@@ -64,58 +61,6 @@ impl std::fmt::Display for StructuredFormat {
     }
 }
 
-/// Blob payload as a live handle or sealed bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[serde(untagged)]
-#[face(userdata, untagged)]
-pub enum Payload {
-    /// Live project handle awaiting compression.
-    #[serde(skip_deserializing)]
-    Handle(#[serde(serialize_with = "refuse_unsealed")] ResourceHandle),
-    /// Sealed content hash with its pool identity.
-    #[face(skip_decode, skip_encode)]
-    Resolved(Sha),
-}
-
-impl Payload {
-    /// Resolve one payload into its content hash.
-    ///
-    /// - Handles compress into the blob pool.
-    /// - Resolved payloads pass through untouched.
-    ///
-    /// # Errors
-    ///
-    /// - [`BlobError::Read`] for unreadable handle content.
-    /// - [`BlobError::Write`] for cache write faults.
-    /// - [`BlobError::WriteUnknown`] for other cache write failures.
-    /// - [`BlobError::Compress`] for compression failures.
-    pub fn resolve(&self, stores: &Stores) -> std::result::Result<Sha, BlobError> {
-        match self {
-            Self::Resolved(blob) => Ok(blob.clone()),
-            Self::Handle(handle) => stores
-                .blobs()
-                .put(handle)
-                .map(|opened| opened.sha256().clone()),
-        }
-    }
-
-    /// Return the sealed content hash.
-    pub fn resolved(&self) -> Option<&Sha> {
-        match self {
-            Self::Resolved(blob) => Some(blob),
-            Self::Handle(_) => None,
-        }
-    }
-
-    /// Return the content hash.
-    pub fn sha256(&self) -> &Sha {
-        match self {
-            Self::Resolved(blob) => blob,
-            Self::Handle(handle) => handle.sha256(),
-        }
-    }
-}
-
 /// Symbolic link content with its target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
@@ -160,8 +105,7 @@ impl TextDocument {
 #[face(table)]
 pub struct OpaqueDocument {
     /// The opaque file handle.
-    #[face(proxy = ResourceHandle, decode_hook = decode_payload)]
-    pub handle: Payload,
+    pub handle: ResourceHandle,
     /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
     #[serde(default = "default_file_mode")]
     #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
@@ -206,12 +150,11 @@ impl StructuredDocument {
 #[face(table, untagged, rename = "TreeMember")]
 pub enum TreeMember {
     /// Bare handle with default mode.
-    Handle(Payload),
+    Handle(ResourceHandle),
     /// Handle with explicit mode.
     Full {
         /// The file payload.
-        #[face(proxy = ResourceHandle, decode_hook = decode_payload)]
-        handle: Payload,
+        handle: ResourceHandle,
         /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
         #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode)]
         mode: u32,
@@ -220,9 +163,9 @@ pub enum TreeMember {
 
 impl TreeMember {
     /// Return the member payload.
-    pub fn blob(&self) -> &Payload {
+    pub fn handle(&self) -> &ResourceHandle {
         match self {
-            Self::Handle(blob) | Self::Full { handle: blob, .. } => blob,
+            Self::Handle(handle) | Self::Full { handle, .. } => handle,
         }
     }
 
@@ -331,7 +274,7 @@ pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, 
             Err(Mismatch {
                 path: "mode".to_owned(),
                 want: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
-                found: ["'", text.as_str(), "'"].concat(),
+                found: format!("'{text}'"),
             })
         },
         Ok,
@@ -373,47 +316,6 @@ fn parse_mode_bits(text: &str) -> Option<u32> {
         }
         _ => None,
     }
-}
-
-/// Decode one handle value into its payload.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for values outside resource handles.
-pub(crate) fn decode_payload(lua: &Lua, value: &Value) -> std::result::Result<Payload, Mismatch> {
-    decode_handle(lua, value, "handle").map(Payload::Handle)
-}
-
-/// Decode one handle value into its resource handle.
-///
-/// # Errors
-///
-/// - [`Mismatch`] for values outside resource handles.
-pub(crate) fn decode_handle(
-    lua: &Lua,
-    value: &Value,
-    path: &str,
-) -> std::result::Result<ResourceHandle, Mismatch> {
-    ResourceHandle::decode(value, lua).map_err(|error| Mismatch {
-        path: path.to_owned(),
-        want: "a resource handle".to_owned(),
-        found: error.found,
-    })
-}
-
-/// Refuse one live handle during serialization.
-///
-/// # Errors
-///
-/// - Custom serde error for live handles.
-fn refuse_unsealed<S>(
-    _handle: &ResourceHandle,
-    _serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    Err(serde::ser::Error::custom("unsealed payload"))
 }
 
 /// Render one map to TOML text.

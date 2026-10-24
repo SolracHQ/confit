@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use confit_binding::callback::Callback;
 use confit_binding::value::Decode;
+use confit_driver::sha::Sha;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
@@ -15,11 +16,12 @@ use confit_engine::api::profile::Profile;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, OpaqueDocument, Payload, RcData, RcEntry, StructuredDocument, StructuredFormat,
+    Data, Document, OpaqueDocument, RcData, RcEntry, StructuredDocument, StructuredFormat,
     TextDocument,
 };
 use confit_model::hook::Hook;
 use confit_model::routes::{Route, RouteBase};
+use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
 use mlua::{Function, Lua, Value};
 
@@ -545,12 +547,10 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
     let root = stores.resources().roots.project_root.clone();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("blob.bin"), b"hi").unwrap();
-    let resource = stores.resources().resource("blob.bin").unwrap();
-    let opened = stores.blobs().put(&resource).unwrap();
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Opaque(OpaqueDocument {
-            handle: Payload::Resolved(opened.sha256().clone()),
+            handle: ResourceHandle::Cache(Sha::hash(b"hi")),
             mode: 0o644,
             unmanaged: true,
         }),

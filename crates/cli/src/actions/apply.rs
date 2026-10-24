@@ -8,9 +8,8 @@ use std::path::PathBuf;
 use confit_driver::sha::Sha;
 use confit_engine::Engine;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, Payload};
 use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::Manifest;
+use confit_runtime::manifest::stored;
 use confit_runtime::{HookDecision, HookRunner, Prepared, Writer, prepare, refresh};
 use confit_store::Stores;
 use confit_store::state::Picker;
@@ -78,7 +77,7 @@ impl<'a> ApplyRunner<'a> {
             let picker: Picker = raw.parse().map_err(|_| CliError::BadPicker {
                 input: raw.to_owned(),
             })?;
-            Manifest::resolve(&stores.states(), &picker)?
+            stored::resolve(&stores.states(), &picker)?
         } else if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
@@ -92,7 +91,9 @@ impl<'a> ApplyRunner<'a> {
                 });
             }
             let evaluated = Engine::new(stores.clone()).evaluate(&path)?;
-            Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
+            let built = prepare::build(evaluated.documents, evaluated.hooks)?;
+            built.persist(&stores)?;
+            built
         } else {
             if args.profile.is_some() {
                 return Err(CliError::ProfileWithoutProject {
@@ -105,7 +106,9 @@ impl<'a> ApplyRunner<'a> {
                 });
             }
             let evaluated = Engine::new(stores.clone()).evaluate(positional)?;
-            Manifest::build(&stores, evaluated.documents, evaluated.hooks)?
+            let built = prepare::build(evaluated.documents, evaluated.hooks)?;
+            built.persist(&stores)?;
+            built
         };
         let prepared = prepare(&stores, desired)?;
         Ok(Self {
@@ -131,7 +134,7 @@ impl<'a> ApplyRunner<'a> {
     /// - [`CliError::Unknown`] for prompt failures.
     /// - [`CliError::Runtime`] for destination writes and removals.
     /// - [`CliError::Runtime`] for state stores.
-    /// - [`CliError::Blob`] for blob resolves with persists and prunes.
+    /// - [`CliError::Pool`] for pool prunes.
     /// - [`CliError::Resolve`] for unresolvable hooks.
     /// - [`CliError::HookRequires`] for unmet Requires conditions.
     pub fn execute(self) -> Result<ApplyReport> {
@@ -139,7 +142,7 @@ impl<'a> ApplyRunner<'a> {
         if !self.force && !self.sinks.confirm(self.input)? {
             return Err(CliError::Aborted);
         }
-        let fresh = refresh(&self.stores, &self.prepared);
+        let fresh = refresh(&self.stores, &self.prepared)?;
         if fresh != self.prepared.differences {
             for line in difference_lines(&fresh) {
                 self.sinks.print_line(line);
@@ -153,13 +156,13 @@ impl<'a> ApplyRunner<'a> {
         Ok(report)
     }
 
-    /// Write built documents with deleted document removal and blob rotation.
+    /// Write built documents with deleted document removal and pool rotation.
     ///
     /// # Errors
     ///
     /// - [`CliError::Runtime`] for destination writes and removals.
     /// - [`CliError::Runtime`] for state stores.
-    /// - [`CliError::Blob`] for blob resolves with persists and prunes.
+    /// - [`CliError::Pool`] for pool prunes.
     fn commit(&self) -> Result<ApplyReport> {
         let built = &self.prepared.desired;
         let previous = &self.prepared.previous;
@@ -172,22 +175,9 @@ impl<'a> ApplyRunner<'a> {
         let removed = writer.remove_deleted(&previous.documents, &built.documents)?;
         let removed =
             removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
-        Manifest::store(&self.stores.states(), built)?;
-        let mut handles = Vec::new();
-        for document in &built.documents {
-            let payloads: Vec<&Payload> = match &document.data {
-                Data::Opaque(found) => vec![&found.handle],
-                Data::Tree(found) => found.members.values().map(|member| member.blob()).collect(),
-                Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
-            };
-            for payload in payloads {
-                let resolved = payload.resolve(&self.stores)?;
-                handles.push(self.stores.blobs().resolve(&resolved)?);
-            }
-        }
-        self.stores.blobs().persist(&handles)?;
-        let keep = Manifest::keep_set(&self.stores.states())?;
-        self.stores.blobs().prune(&keep)?;
+        stored::store(&self.stores.states(), built)?;
+        let keep = stored::keep_set(&self.stores.states())?;
+        self.stores.pool().prune(&keep)?;
         Ok(ApplyReport { written, removed })
     }
 

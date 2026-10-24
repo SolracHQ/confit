@@ -46,7 +46,7 @@ fn init_writes_scaffold_with_stubs_and_plugins() {
 }
 
 #[test]
-fn init_refuses_present_scaffold() {
+fn init_rejected_present_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());
     let args = InitArgs {

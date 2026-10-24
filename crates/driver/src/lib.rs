@@ -22,4 +22,4 @@ pub mod progress;
 /// Verified content hashes.
 pub mod sha;
 
-pub use atomic::{StagedDir, StagedFile, atomic_write, copy_stream};
+pub use atomic::{StagedDir, StagedFile};
