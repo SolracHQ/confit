@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use confit_core::error::{Error, EvalDetail, EvalError, Outcome};
 use mlua::{Lua, Value};
 
 use crate::api::profile::Profile;
@@ -11,24 +12,19 @@ use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
 use super::patches::split_patches;
-use crate::error::{EngineError, Result};
 
 /// Collect one profile's hooks in first-seen order.
 ///
-/// - Hook patches mutate live hooks in return order.
-/// - Unknown hook targets and repeated ids fail the plan.
-///
 /// # Errors
 ///
-/// - [`EngineError::DuplicateHook`] for repeated hook ids.
-/// - [`EngineError::UnknownHookTarget`] for patches showing unknown ids.
-/// - [`EngineError::ChangedUnknown`] for conditions showing unbuilt routes.
-/// - [`EngineError::Lua`] for bridge and callback failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids, unknown targets, unbuilt
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated ids, unknown targets, unbuilt
+///   routes, and Lua failures.
 pub(super) fn collect_hooks(
     lua: &Lua,
     profile: &Profile,
     documents: &[Document],
-) -> Result<Vec<Hook>> {
+) -> Outcome<Vec<Hook>> {
     check_hook_ids(profile)?;
     let mut hooks = Vec::new();
     for config in &profile.configs {
@@ -39,53 +35,76 @@ pub(super) fn collect_hooks(
     Ok(hooks)
 }
 
-/// Reject repeated hook ids. Errors hold the first repeat.
+/// Reject repeated hook ids.
 ///
 /// # Errors
 ///
-/// - [`EngineError::DuplicateHook`] for repeated ids.
-fn check_hook_ids(profile: &Profile) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids.
+fn check_hook_ids(profile: &Profile) -> Outcome<()> {
     let mut seen = BTreeSet::new();
     for config in &profile.configs {
         for hook in &config.hooks {
             if let Some(id) = hook.id.as_ref()
-                && !seen.insert(id.clone())
+                && !seen.insert(id.as_str().to_owned())
             {
-                return Err(EngineError::DuplicateHook { id: id.clone() });
+                return Err(Error::evaluate(
+                    EvalDetail::Eval(EvalError::DuplicateHook {
+                        name: id.as_str().to_owned(),
+                    }),
+                    None,
+                ));
             }
         }
     }
     Ok(())
 }
 
-/// Run hook patches over declared hooks mutating live tables in place.
-///
-/// - Patches apply in profile return order over matching ids.
+/// Run hook patches over declared hooks.
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownHookTarget`] for patches showing unknown ids.
-/// - [`EngineError::Lua`] for bridge and callback failures.
-fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown ids, bad shapes, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown ids, bad shapes, and Lua failures.
+fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> Outcome<()> {
     for patch in split_patches(profile)
         .iter()
         .filter_map(|patch| patch.hook())
     {
-        let Some(hook) = hooks
-            .iter_mut()
-            .find(|hook| hook.id.as_deref() == Some(patch.target.as_str()))
-        else {
-            return Err(EngineError::UnknownHookTarget {
-                id: patch.target.clone(),
-            });
+        let Some(hook) = hooks.iter_mut().find(|hook| {
+            hook.id
+                .as_ref()
+                .is_some_and(|id| id.as_str() == patch.target.as_str())
+        }) else {
+            return Err(Error::evaluate(
+                EvalDetail::Eval(EvalError::HookTargetUnknown {
+                    id: patch.target.clone(),
+                }),
+                None,
+            ));
         };
-        let Value::Table(table) = hook.encode(lua)? else {
-            return Err(EngineError::Lua(mlua::Error::runtime(
-                "hook views hold tables",
-            )));
+        let table = match hook.encode(lua) {
+            Ok(Value::Table(table)) => table,
+            Ok(_) => return Err(Error::lua_failed("hook views hold tables")),
+            Err(error) => return Err(Error::lua_failed(error.to_string())),
         };
-        patch.apply.call::<()>(lua, (table.clone(),))?;
-        let back = Hook::decode(&Value::Table(table), lua).map_err(EngineError::from)?;
+        match patch.apply.call::<()>(lua, (table.clone(),)) {
+            Ok(()) => {}
+            Err(error) => {
+                if let Some(terminal) = error.downcast_ref::<Error>() {
+                    return Err(terminal.clone());
+                }
+                return Err(Error::lua_failed(error.to_string()));
+            }
+        }
+        let back = match Hook::decode(&Value::Table(table), lua) {
+            Ok(found) => found,
+            Err(mismatch) => {
+                return Err(Error::evaluate(
+                    EvalDetail::Face(mismatch),
+                    Some(patch.target.clone()),
+                ));
+            }
+        };
         *hook = back;
     }
     Ok(())
@@ -95,8 +114,8 @@ fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> Resul
 ///
 /// # Errors
 ///
-/// - [`EngineError::ChangedUnknown`] for conditions showing unbuilt routes.
-fn validate_changed(hooks: &[Hook], documents: &[Document]) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for conditions showing unbuilt routes.
+fn validate_changed(hooks: &[Hook], documents: &[Document]) -> Outcome<()> {
     let built: BTreeSet<Route> = documents
         .iter()
         .map(|document| document.path.clone())
@@ -109,9 +128,11 @@ fn validate_changed(hooks: &[Hook], documents: &[Document]) -> Result<()> {
     }
     for path in paths {
         if !built.contains(&path) {
-            return Err(EngineError::ChangedUnknown {
-                route: path.display(),
-            });
+            let display = path.display();
+            return Err(Error::evaluate(
+                EvalDetail::Eval(EvalError::ChangedReferencesMissing { document: display }),
+                None,
+            ));
         }
     }
     Ok(())

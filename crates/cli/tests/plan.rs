@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use common::{repo_path, seed_file, seed_tree, test_sinks, test_stores};
 use confit_cli::actions::plan::PlanRunner;
 use confit_cli::cli::PlanArgs;
-use confit_cli::error::CliError;
 
 /// Fetch-free profile over the shared sugar plugin.
 const SUGAR_MAIN: &str = r#"
@@ -25,7 +24,7 @@ const ALT_MAIN: &str = r#"
 return {
     configs = {
         {
-            name = "alt",
+            name = id("alt"),
             documents = { { path = { base = "home", relative = "alt-note" }, text = "alt" } },
         },
     },
@@ -102,7 +101,7 @@ fn plan_without_main_lua_fails() {
     })
     .execute()
     {
-        Err(CliError::NoDefaultProfile { .. }) => {}
+        Err(error) if error.summary().contains("provided dir does not exist") => {}
         Err(other) => panic!("absent default flattens: {other}"),
         Ok(_) => panic!("absent default passes"),
     }

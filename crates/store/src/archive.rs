@@ -1,22 +1,21 @@
-//! Archive
-//! Member listing and extraction for compressed archives.
-
-pub mod error;
+//! Archive member listing and extraction for compressed archives.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_driver::progress::{Event, ProgressSender};
-use confit_driver::sha::Sha;
+use confit_core::error::locate::Locate;
+use confit_core::error::{
+    ArchiveError, ContentError, DocumentError, ErrorCause, ErrorContext, FilesystemError, Result,
+    fail,
+};
+use confit_core::progress::{Event, ProgressSender};
+use confit_core::sha::Sha;
 
-use crate::faults::AccessFault;
 use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
-use crate::resources::error::ResourceError;
 use confit_driver as driver;
-use error::{ArchiveError, Result};
 
 /// Head window for every probe, wide enough for tar magic.
 const HEAD_LEN: u64 = 512;
@@ -25,8 +24,6 @@ const HEAD_LEN: u64 = 512;
 type Map = BTreeMap<String, (Sha, u32)>;
 
 /// File-backed archive member listing and extraction.
-///
-/// Members are archive-relative with forward slashes.
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     resources: Arc<Resources>,
@@ -46,13 +43,10 @@ impl ArchiveStore {
 
     /// Register one trusted source as a verified archive.
     ///
-    /// - Project sources keep their bytes in place
-    /// - Cache entries trust the landed bytes.
-    ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable sources.
-    /// - [`ArchiveError::NotArchive`] for non-archives.
+    /// - [`confit_core::error::ArchiveError`] for non-archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable sources.
     pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
         match source {
             ResourceHandle::Project(path, sha) => {
@@ -61,9 +55,7 @@ impl ArchiveStore {
             }
             ResourceHandle::Cache(sha) => {
                 let path = self.resources.cache_path(sha);
-                self.resources
-                    .open(source)
-                    .map_err(|error| from_resource(&path, error))?;
+                self.resources.open(source)?;
                 self.probe(&path)?;
                 Ok(ArchiveHandle::new(sha.clone(), path))
             }
@@ -74,32 +66,26 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable sources.
-    /// - [`ArchiveError::NotArchive`] for non-archives.
+    /// - [`confit_core::error::ArchiveError`] for non-archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable sources.
     fn probe(&self, path: &Path) -> Result<()> {
         use std::io::Read as _;
 
-        let file = std::fs::File::open(path).map_err(|error| ArchiveError::from_io(path, error))?;
+        let file = std::fs::File::open(path).path(path)?;
         let mut head = Vec::new();
-        std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
-            .map_err(|error| ArchiveError::from_io(path, error))?;
+        std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head).path(path)?;
         if driver::archive::supported(&head) {
             return Ok(());
         }
-        Err(ArchiveError::NotArchive {
-            path: path.to_path_buf(),
-        })
+        fail(ArchiveError::NotArchive).path(path)
     }
 
     /// List member names from the archive index.
     ///
-    /// - Keys come straight from the map with no archive IO.
-    /// - A missing index unpacks from the archive bytes.
-    ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable and missing archives.
     pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
         if let Some(map) = self.read_map(archive.sha256()) {
             return Ok(map.keys().cloned().collect());
@@ -109,17 +95,10 @@ impl ArchiveStore {
 
     /// Pick one archive member by its archive-relative name.
     ///
-    /// - Names are archive-relative with forward slashes.
-    /// - Present entries trust the cache with no re-hash.
-    /// - A missing index or missing member bytes unpacks from the
-    ///   archive bytes.
-    ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Escape`] for escaping members.
-    /// - [`ArchiveError::UnknownMember`] for unknown members and for
-    ///   members of absent archive bytes.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
+    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable, missing, and absent members.
     pub fn member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
         let archive_path = archive.path().to_path_buf();
         if let Some(map) = self.read_map(archive.sha256()) {
@@ -128,38 +107,32 @@ impl ArchiveStore {
                     let handle = ResourceHandle::Cache(sha.clone());
                     match self.resources.open(&handle) {
                         Ok(_) => return Ok(handle),
-                        Err(ResourceError::Read {
-                            fault: AccessFault::Missing,
-                            ..
-                        }) => {}
-                        Err(error) => {
-                            return Err(from_resource(&self.resources.cache_path(sha), error));
-                        }
+                        Err(error)
+                            if matches!(
+                                error.root_cause(),
+                                ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                            ) => {}
+                        Err(error) => return Err(error),
                     }
                 }
                 None => {
-                    return Err(ArchiveError::UnknownMember {
-                        path: archive_path,
-                        name: name.to_owned(),
-                    });
+                    return Err(member_missing(&archive_path));
                 }
             }
         }
         match self.unpack_all(archive) {
             Ok(map) => match map.get(name) {
                 Some((sha, _)) => Ok(ResourceHandle::Cache(sha.clone())),
-                None => Err(ArchiveError::UnknownMember {
-                    path: archive_path,
-                    name: name.to_owned(),
-                }),
+                None => Err(member_missing(&archive_path)),
             },
-            Err(ArchiveError::Read {
-                fault: AccessFault::Missing,
-                ..
-            }) => Err(ArchiveError::UnknownMember {
-                path: archive_path,
-                name: name.to_owned(),
-            }),
+            Err(error)
+                if matches!(
+                    error.root_cause(),
+                    ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                ) =>
+            {
+                Err(member_missing(&archive_path))
+            }
             Err(error) => Err(error),
         }
     }
@@ -169,9 +142,7 @@ impl ArchiveStore {
         self.resources.cache_path(sha).with_extension("map")
     }
 
-    /// Load one archive index. Corrupt payloads read absent.
-    ///
-    /// - Poisoned locks read through to disk.
+    /// Load one archive index.
     fn read_map(&self, sha: &Sha) -> Option<Map> {
         if let Ok(guard) = self.maps.read()
             && let Some(map) = guard.get(sha)
@@ -190,18 +161,21 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Write`] for index write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other index write failures.
+    /// - [`confit_core::error::DocumentError`] for index encode faults.
+    /// - [`confit_core::error::FilesystemError`] for index write faults.
     fn write_map(&self, archive: &ArchiveHandle, map: &Map) -> Result<()> {
         let archive_path = archive.path().to_path_buf();
-        let bytes = serde_json::to_vec(map).map_err(|error| ArchiveError::WriteUnknown {
-            path: archive_path.clone(),
-            message: error.to_string(),
-        })?;
+        let bytes = serde_json::to_vec(map)
+            .map_err(|error| {
+                ErrorContext::from(DocumentError::RenderFailed {
+                    reason: error.to_string(),
+                })
+            })
+            .path(archive_path.clone())?;
         driver::StagedFile::write(&self.map_path(archive.sha256()), |file| {
             std::io::Write::write_all(file, &bytes)
         })
-        .map_err(|error| ArchiveError::from_write_io(&archive_path, error))?;
+        .path(&archive_path)?;
         if let Ok(mut guard) = self.maps.write() {
             guard.insert(archive.sha256().clone(), map.clone());
         }
@@ -212,15 +186,11 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::Escape`] for escaping members.
-    /// - [`ArchiveError::Write`] for cache write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable archives and cache write faults.
     fn unpack_all(&self, archive: &ArchiveHandle) -> Result<Map> {
         let archive_path = archive.path().to_path_buf();
-        let file = std::fs::File::open(&archive_path)
-            .map_err(|error| ArchiveError::from_io(&archive_path, error))?;
+        let file = std::fs::File::open(&archive_path).path(archive_path.clone())?;
         let map = Unpack::new(&self.resources, &archive_path).run(file)?;
         self.write_map(archive, &map)?;
         let total = map.len();
@@ -256,15 +226,11 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable archives.
-    /// - [`ArchiveError::CorruptedArchive`] for corrupt archives.
-    /// - [`ArchiveError::Escape`] for escaping members.
-    /// - [`ArchiveError::Write`] for cache write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
+    /// - [`confit_core::error::FilesystemError`] for unreadable archives and cache write faults.
     fn run(mut self, file: std::fs::File) -> Result<Map> {
         let archive_path = self.archive_path.clone();
-        driver::archive::uncompress(file, |entry| self.entry(entry))
-            .map_err(|error| Self::driver_error(&archive_path, error))?;
+        driver::archive::uncompress(file, |entry| self.entry(entry)).path(archive_path)?;
         Ok(self.entries)
     }
 
@@ -272,11 +238,7 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Escape`] for escaping members.
-    /// - [`ArchiveError::CorruptedArchive`] for members failing the
-    ///   expected hash.
-    /// - [`ArchiveError::Write`] for cache write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     fn entry(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
         let driver::archive::Entry { name, mode, reader } = entry;
         self.land(name, mode, reader)
@@ -286,90 +248,23 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::Read`] for unreadable members.
-    /// - [`ArchiveError::CorruptedArchive`] for members failing the
-    ///   expected hash.
-    /// - [`ArchiveError::Write`] for cache write faults.
-    /// - [`ArchiveError::WriteUnknown`] for other cache write failures.
+    /// - [`confit_core::error::ContentError`] for project handles landing in cache.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     fn land(&mut self, name: String, mode: u32, reader: impl std::io::Read) -> Result<()> {
-        let handle = self
-            .resources
-            .store(reader)
-            .map_err(|error| from_resource(&self.archive_path, error))?;
+        let handle = self.resources.store(reader)?;
         match handle {
             ResourceHandle::Cache(sha) => {
                 self.entries.insert(name, (sha, mode));
                 Ok(())
             }
-            ResourceHandle::Project(..) => Err(ArchiveError::CorruptedArchive {
-                path: self.archive_path.clone(),
-            }),
-        }
-    }
-
-    /// Map one driver archive failure into domain language.
-    fn driver_error(source: &Path, error: driver::archive::Error<ArchiveError>) -> ArchiveError {
-        match error {
-            driver::archive::Error::Visit(inner) => inner,
-            driver::archive::Error::Foreign => ArchiveError::NotArchive {
-                path: source.to_path_buf(),
-            },
-            driver::archive::Error::Bare
-            | driver::archive::Error::Corrupt(_)
-            | driver::archive::Error::Truncated(_) => ArchiveError::CorruptedArchive {
-                path: source.to_path_buf(),
-            },
-            driver::archive::Error::Locked => ArchiveError::PasswordProtectedArchive {
-                path: source.to_path_buf(),
-            },
-            driver::archive::Error::Unknown { detail } => ArchiveError::Unknown {
-                path: source.to_path_buf(),
-                detail,
-            },
-            driver::archive::Error::UnknownAlgorithm { detail } => ArchiveError::UnknownAlgorithm {
-                path: source.to_path_buf(),
-                detail,
-            },
-            driver::archive::Error::Denied(inner)
-            | driver::archive::Error::Missing(inner)
-            | driver::archive::Error::Invalid(inner)
-            | driver::archive::Error::Io(inner) => from_stream(source, inner),
+            ResourceHandle::Project(..) => fail(ContentError::ProjectHandleInCache),
         }
     }
 }
 
-/// Map one stream failure into its archive error.
-fn from_stream(source: &Path, error: std::io::Error) -> ArchiveError {
-    match error.kind() {
-        std::io::ErrorKind::StorageFull
-        | std::io::ErrorKind::ReadOnlyFilesystem
-        | std::io::ErrorKind::QuotaExceeded
-        | std::io::ErrorKind::FileTooLarge => ArchiveError::from_write_io(source, error),
-        std::io::ErrorKind::Other
-        | std::io::ErrorKind::InvalidInput
-        | std::io::ErrorKind::InvalidData
-        | std::io::ErrorKind::UnexpectedEof => ArchiveError::CorruptedArchive {
-            path: source.to_path_buf(),
-        },
-        _ => ArchiveError::from_io(source, error),
-    }
-}
-
-/// Map one resource creation failure into archive language.
-///
-/// - Hashed members failing the expected hash mean a corrupt archive.
-fn from_resource(source: &Path, error: ResourceError) -> ArchiveError {
-    match error {
-        ResourceError::Escape { path, .. } => ArchiveError::Escape { path },
-        ResourceError::Read { path, fault } => ArchiveError::Read { path, fault },
-        ResourceError::Write { path, fault } => ArchiveError::Write { path, fault },
-        ResourceError::WriteUnknown { path, message } => {
-            ArchiveError::WriteUnknown { path, message }
-        }
-        ResourceError::Mismatch { .. } => ArchiveError::CorruptedArchive {
-            path: source.to_path_buf(),
-        },
-    }
+/// Build one unknown member error with its archive path.
+fn member_missing(archive_path: &Path) -> ErrorContext {
+    ErrorContext::from(FilesystemError::FileMissing).path(archive_path)
 }
 
 #[cfg(test)]
@@ -377,6 +272,7 @@ mod tests {
     use super::*;
     use crate::StoreRoots;
     use crate::pool::PoolStore;
+    use confit_core::error::ErrorCause;
     use confit_driver::archive::{Algorithm, Builder, Level};
     use std::io::Read as _;
 
@@ -499,15 +395,33 @@ mod tests {
         let source = project_source(dir.path(), path.clone());
         match store.archive(&source) {
             Ok(_) => panic!("plain source passes"),
-            Err(ArchiveError::NotArchive { .. }) => {}
-            Err(error) => panic!("wrong plain variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::ArchiveError(ArchiveError::NotArchive)
+                    ),
+                    "plain keeps not-archive: {error}"
+                );
+                assert!(
+                    error.to_string().contains(&path.display().to_string()),
+                    "plain keeps the path"
+                );
+            }
         }
         let missing = dir.path().join("absent.tar.gz");
         let absent = project_source(dir.path(), missing.clone());
         match store.archive(&absent) {
             Ok(_) => panic!("absent source passes"),
-            Err(ArchiveError::Read { .. }) => {}
-            Err(error) => panic!("wrong absent variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps missing: {error}"
+                );
+            }
         }
     }
 
@@ -639,16 +553,39 @@ mod tests {
         let store = test_store(dir.path());
         match store.member(&archive, "a.txt") {
             Ok(_) => panic!("absent archive passes"),
-            Err(ArchiveError::UnknownMember { path, name }) => {
-                assert_eq!(name, "a.txt");
-                assert_eq!(path, dir.path().join("fonts.tar.gz"));
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps missing: {error}"
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&dir.path().join("fonts.tar.gz").display().to_string()),
+                    "absent keeps the path"
+                );
             }
-            Err(error) => panic!("wrong absent variant: {error}"),
         }
         match store.member(&archive, "absent.txt") {
             Ok(_) => panic!("absent member passes"),
-            Err(ArchiveError::UnknownMember { name, .. }) => assert_eq!(name, "absent.txt"),
-            Err(error) => panic!("wrong absent variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps missing: {error}"
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&dir.path().join("fonts.tar.gz").display().to_string()),
+                    "absent keeps the path"
+                );
+            }
         }
     }
 
@@ -698,11 +635,10 @@ mod tests {
 
     #[test]
     fn gzip_lists_and_opens_derived_member() {
-        use std::io::Write as _;
-
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+        use std::io::Write as _;
         encoder.write_all(b"plain").unwrap();
         let raw = encoder.finish().unwrap();
         let landed = cache_path(dir.path(), &Sha::hash(&raw));
@@ -711,13 +647,27 @@ mod tests {
         let archive = ArchiveHandle::new(Sha::hash(&raw), landed);
         match store.members(&archive) {
             Ok(_) => panic!("bare gzip passes"),
-            Err(ArchiveError::CorruptedArchive { .. }) => {}
-            Err(error) => panic!("wrong bare variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::ArchiveError(ArchiveError::BareGzip)
+                    ),
+                    "bare keeps bare-gzip: {error}"
+                );
+            }
         }
         match store.member(&archive, "note.txt") {
             Ok(_) => panic!("bare gzip passes"),
-            Err(ArchiveError::CorruptedArchive { .. }) => {}
-            Err(error) => panic!("wrong bare variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::ArchiveError(ArchiveError::BareGzip)
+                    ),
+                    "bare keeps bare-gzip: {error}"
+                );
+            }
         }
     }
 
@@ -728,8 +678,15 @@ mod tests {
         let handle = ArchiveHandle::new(Sha::hash(b"absent"), dir.path().join("absent.cb"));
         match store.members(&handle) {
             Ok(_) => panic!("absent archive passes"),
-            Err(ArchiveError::Read { .. }) => {}
-            Err(error) => panic!("wrong absent variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps missing: {error}"
+                );
+            }
         }
     }
 
@@ -859,8 +816,15 @@ mod tests {
         let plain_source = project_source(dir.path(), plain.clone());
         match store.archive(&plain_source) {
             Ok(_) => panic!("plain source passes"),
-            Err(ArchiveError::NotArchive { .. }) => {}
-            Err(error) => panic!("wrong plain variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::ArchiveError(ArchiveError::NotArchive)
+                    ),
+                    "plain keeps not-archive: {error}"
+                );
+            }
         }
     }
 
@@ -917,28 +881,8 @@ mod tests {
     }
 
     #[test]
-    fn write_maps_quota() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
-        let raw = tar_gz_bytes(&[("a.txt", b"plain")]);
-        let archive = fixture_archive(&store, dir.path(), "note.tar.gz", &raw);
-        let source = store.resources.cache_path(archive.sha256());
-        let error = std::io::Error::new(std::io::ErrorKind::QuotaExceeded, "capped disk");
-        match ArchiveError::from_write_io(&source, error) {
-            ArchiveError::Write { path, fault } => {
-                assert!(
-                    matches!(fault, AccessFault::QuotaExceeded),
-                    "mapping keeps the fault"
-                );
-                assert_eq!(path, source, "mapping keeps the source");
-            }
-            error => panic!("wrong mapping variant: {error}"),
-        }
-    }
-
-    #[test]
     fn unpack_announces_unpacked_with_counts() {
-        use confit_driver::progress::Event;
+        use confit_core::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
@@ -977,102 +921,5 @@ mod tests {
             }
             other => panic!("unpack announces itself: {other:?}"),
         }
-    }
-
-    #[test]
-    fn unknown_algorithm_keeps_backend_detail() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("fonts.zip");
-        let detail = "compression method 99".to_owned();
-        match Unpack::driver_error(
-            &source,
-            driver::archive::Error::UnknownAlgorithm {
-                detail: detail.clone(),
-            },
-        ) {
-            ArchiveError::UnknownAlgorithm { path, detail } => {
-                assert_eq!(path, source);
-                assert_eq!(detail, "compression method 99");
-            }
-            error => panic!("wrong unknown variant: {error}"),
-        }
-        let rendered = ArchiveError::UnknownAlgorithm {
-            path: source.clone(),
-            detail,
-        }
-        .to_string();
-        assert!(
-            rendered.contains(&source.to_string_lossy().into_owned()),
-            "message shows the path: {rendered}"
-        );
-        assert!(
-            rendered.contains("compression method 99"),
-            "message shows the detail: {rendered}"
-        );
-    }
-
-    #[test]
-    fn unknown_failure_keeps_backend_detail() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("fonts.zip");
-        let detail = "mystery fault".to_owned();
-        match Unpack::driver_error(
-            &source,
-            driver::archive::Error::Unknown {
-                detail: detail.clone(),
-            },
-        ) {
-            ArchiveError::Unknown { path, detail } => {
-                assert_eq!(path, source);
-                assert_eq!(detail, "mystery fault");
-            }
-            error => panic!("wrong unknown variant: {error}"),
-        }
-        let rendered = ArchiveError::Unknown {
-            path: source.clone(),
-            detail,
-        }
-        .to_string();
-        assert!(
-            rendered.contains(&source.to_string_lossy().into_owned()),
-            "message shows the path: {rendered}"
-        );
-        assert!(
-            rendered.contains("mystery fault"),
-            "message shows the detail: {rendered}"
-        );
-        assert!(
-            rendered.contains("please report steps to replicate"),
-            "message asks for replication: {rendered}"
-        );
-    }
-
-    #[test]
-    fn stream_names_disk_kinds_before_corrupt() {
-        use crate::faults::AccessFault;
-
-        let source = Path::new("fonts.tar.gz");
-        let error = from_stream(
-            source,
-            std::io::Error::new(std::io::ErrorKind::StorageFull, "disk failed"),
-        );
-        match &error {
-            ArchiveError::Write { path: found, fault } => {
-                assert_eq!(found, source, "extract keeps the source");
-                assert!(
-                    matches!(*fault, AccessFault::StorageFull),
-                    "extract keeps the fault: {error}"
-                );
-            }
-            other => panic!("wrong extract variant: {other}"),
-        }
-        let error = from_stream(
-            source,
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt bytes"),
-        );
-        assert!(
-            matches!(error, ArchiveError::CorruptedArchive { .. }),
-            "corrupt bytes stay corrupt: {error}"
-        );
     }
 }

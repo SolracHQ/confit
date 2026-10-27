@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use confit_model::document::{Data, Document, StructuredFormat, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
@@ -12,9 +12,11 @@ use super::Difference;
 use super::DifferenceOrder;
 use super::disk::{DiskReader, FileBytes, FileDigest};
 use super::ordered::Ordered;
-use crate::error::{Result, RuntimeError};
 use crate::manifest::status::mode;
 use crate::render::render_document;
+use confit_core::error::Result;
+use confit_core::error::locate::Locate;
+use confit_core::error::{DiffWarning, ErrorContext};
 
 /// Recorded against disk comparator.
 pub(crate) struct Comparator<'a> {
@@ -22,6 +24,8 @@ pub(crate) struct Comparator<'a> {
     stores: &'a Stores,
     /// Difference side order.
     ordered: Ordered,
+    /// Non-blocking warnings for failed states.
+    warnings: Vec<DiffWarning>,
 }
 
 impl<'a> Comparator<'a> {
@@ -30,6 +34,7 @@ impl<'a> Comparator<'a> {
         Self {
             stores,
             ordered: Ordered::new(order),
+            warnings: Vec::new(),
         }
     }
 
@@ -39,21 +44,24 @@ impl<'a> Comparator<'a> {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    pub(crate) fn run(&self, manifest: &crate::manifest::Manifest) -> Result<Vec<Difference>> {
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    pub(crate) fn run(
+        &mut self,
+        manifest: &crate::manifest::Manifest,
+    ) -> Result<(Vec<Difference>, Vec<DiffWarning>)> {
         let mut out = Vec::new();
         for document in &manifest.documents {
             out.extend(self.compare_one(document)?);
         }
-        Ok(out)
+        Ok((out, std::mem::take(&mut self.warnings)))
     }
 
     /// Collect difference entries for one recorded document.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    fn compare_one(&self, document: &Document) -> Result<Vec<Difference>> {
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    fn compare_one(&mut self, document: &Document) -> Result<Vec<Difference>> {
         if let Data::Tree(found) = &document.data {
             return self.compare_tree(&document.path, &found.members);
         }
@@ -61,8 +69,18 @@ impl<'a> Comparator<'a> {
             return self.compare_digest_handle(document);
         }
         DiskReader::digest(document, |FileDigest { digest, mode }| {
-            let Some(recorded) = render_document(document).ok() else {
-                return Ok(Vec::new());
+            let recorded = match render_document(document) {
+                Ok(found) => found,
+                Err(leaf) => {
+                    let chain = ErrorContext::from(leaf);
+                    let reason = chain.root_cause().to_string();
+                    self.warnings
+                        .push(DiffWarning::warn(document.path.display(), chain));
+                    return Ok(vec![Difference::Unreadable {
+                        path: document.path.clone(),
+                        reason,
+                    }]);
+                }
             };
             if digest.len == recorded.len() as u64 && digest.sha == Sha::hash(&recorded) {
                 let mut out = Vec::new();
@@ -81,21 +99,13 @@ impl<'a> Comparator<'a> {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     fn compare_tree(
-        &self,
+        &mut self,
         destination: &Route,
         members: &BTreeMap<String, TreeMember>,
     ) -> Result<Vec<Difference>> {
-        let base = match destination.expand() {
-            Ok(base) => base,
-            Err(source) => {
-                return Err(RuntimeError::Expand {
-                    route: destination.clone(),
-                    source,
-                });
-            }
-        };
+        let base = destination.expand().route(destination.display())?;
         let mut out = Vec::new();
         for (relative, member) in members {
             out.extend(self.compare_member(destination, &base, relative, member)?);
@@ -105,7 +115,7 @@ impl<'a> Comparator<'a> {
 
     /// Collect difference entries for one tree member.
     fn compare_member(
-        &self,
+        &mut self,
         destination: &Route,
         base: &Path,
         relative: &str,
@@ -120,12 +130,9 @@ impl<'a> Comparator<'a> {
                 let mut out = Vec::new();
                 let resolved = member.handle().sha();
                 if *resolved != digest.sha {
-                    out.push(self.digest(
-                        destination,
-                        relative,
-                        &self.recorded_label(resolved),
-                        &digest.label(),
-                    ));
+                    let recorded = self.recorded_label(&member_path, resolved);
+                    let disk = digest.label();
+                    out.push(self.digest(destination, relative, &recorded, &disk));
                 }
                 if let Some(seen) = mode
                     && seen != member.mode()
@@ -146,8 +153,8 @@ impl<'a> Comparator<'a> {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    fn compare_digest_handle(&self, document: &Document) -> Result<Vec<Difference>> {
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    fn compare_digest_handle(&mut self, document: &Document) -> Result<Vec<Difference>> {
         let Data::Opaque(found) = &document.data else {
             return Ok(Vec::new());
         };
@@ -155,11 +162,13 @@ impl<'a> Comparator<'a> {
         let mode = found.mode;
         DiskReader::digest(document, |FileDigest { digest, mode: seen }| {
             if *sha != digest.sha {
+                let recorded = self.recorded_label(&document.path, sha);
+                let disk = digest.label();
                 return Ok(vec![self.digest(
                     &document.path,
                     "content",
-                    &self.recorded_label(sha),
-                    &digest.label(),
+                    &recorded,
+                    &disk,
                 )]);
             }
             if let Some(seen) = seen
@@ -285,18 +294,28 @@ impl<'a> Comparator<'a> {
     /// Label one recorded hash with its pool byte count.
     ///
     /// - Missing pool entries fall back to the bare hash.
-    fn recorded_label(&self, sha: &Sha) -> String {
+    fn recorded_label(&mut self, route: &Route, sha: &Sha) -> String {
         use std::io::Read as _;
 
+        let pool_path = self.stores.pool().path(sha);
         match self.stores.pool().open(sha) {
             Ok(mut reader) => {
                 let mut body = Vec::new();
                 match reader.read_to_end(&mut body) {
                     Ok(_) => sha.label(body.len() as u64),
-                    Err(_) => sha.hex(),
+                    Err(fault) => {
+                        let chain = ErrorContext::from(fault).path(pool_path);
+                        self.warnings
+                            .push(DiffWarning::warn(route.display(), chain));
+                        sha.hex()
+                    }
                 }
             }
-            Err(_) => sha.hex(),
+            Err(chain) => {
+                self.warnings
+                    .push(DiffWarning::warn(route.display(), chain));
+                sha.hex()
+            }
         }
     }
 

@@ -7,7 +7,9 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+confit-binding = { version = "0.9.0", path = "../binding" }
 crossbeam-channel.workspace = true
+mlua = { workspace = true, features = ["lua54", "vendored"] }
 serde.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

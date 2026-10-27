@@ -4,39 +4,104 @@ use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
 use confit_cli::presentation::spinner::Terminal;
 use confit_cli::sinks::Sinks;
+use confit_core::error::{Outcome, Segment};
 use confit_store::{StoreRoots, Stores};
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("confit: {}", error.terminal());
+        let pieces = match error.chain() {
+            Some(chain) => chain.segments(),
+            None => Vec::new(),
+        };
+        let reason: Vec<serde_json::Value> = pieces
+            .into_iter()
+            .map(|segment| match segment {
+                Segment::Route { route } => serde_json::json!({"kind": "route", "route": route}),
+                Segment::Path { path } => serde_json::json!({"kind": "path", "path": path}),
+                Segment::Leaf { detail } => serde_json::json!({"kind": "leaf", "detail": detail}),
+                Segment::Cycle { chain } => serde_json::json!({"kind": "cycle", "chain": chain}),
+            })
+            .collect();
+        let summary = error.summary();
+        let payload = match summary.split_once('\n') {
+            Some((first, rest)) => serde_json::json!({
+                "error": first,
+                "trace": rest.lines().collect::<Vec<_>>(),
+                "reason": reason,
+            }),
+            None => serde_json::json!({"error": summary, "reason": reason}),
+        };
+        log::error!(target: "confit:error", "{payload}");
+        log::logger().flush();
+        eprintln!("error: {}", error.summary());
+        let closing = error.closing();
+        if !closing.is_empty() {
+            eprintln!("{closing}");
+        }
         std::process::exit(1);
     }
 }
 
 /// Run the selected subcommand to completion.
-fn run() -> confit_cli::error::Result<()> {
+fn run() -> Outcome<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);
     let logs_dir = resolve_logs_dir(cli.logs_dir.as_deref());
     let log_path = logs_dir.join(APP_LOG_NAME);
     let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
-    std::fs::create_dir_all(&hooks_dir)
-        .map_err(|error| confit_cli::error::CliError::from_write_io(&hooks_dir, error))?;
+    if let Err(error) = std::fs::create_dir_all(&hooks_dir) {
+        eprintln!(
+            "error: cannot create hooks dir '{}': {error}",
+            hooks_dir.display()
+        );
+        std::process::exit(1);
+    }
+    let log_file = match fern::log_file(&log_path) {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("error: cannot open log '{}': {error}", log_path.display());
+            std::process::exit(1);
+        }
+    };
     let dispatch = fern::Dispatch::new()
-        .format(|out, message, _record| {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|span| span.as_millis())
-                .unwrap_or(0);
-            out.finish(format_args!("[{stamp}] {message}"))
+        .format(|out, message, record| {
+            let now = time::OffsetDateTime::now_local()
+                .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+            let timestamp = format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+                now.year(),
+                now.month() as u8,
+                now.day(),
+                now.hour(),
+                now.minute(),
+                now.second(),
+                now.millisecond(),
+            );
+            let level = record.level().to_string();
+            let body = message.to_string();
+            if record.target() == "confit:error" {
+                let mut value = serde_json::from_str::<serde_json::Value>(&body)
+                    .unwrap_or_else(|_| serde_json::json!({"message": body}));
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("timestamp".to_owned(), serde_json::Value::String(timestamp));
+                    fields.insert("level".to_owned(), serde_json::Value::String(level));
+                }
+                let text =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+                out.finish(format_args!("{text}"));
+            } else {
+                let envelope = serde_json::json!({
+                    "timestamp": timestamp,
+                    "level": level,
+                    "message": body,
+                });
+                let text = serde_json::to_string_pretty(&envelope)
+                    .unwrap_or_else(|_| envelope.to_string());
+                out.finish(format_args!("{text}"));
+            }
         })
         .level(cli.log_level)
-        .chain(fern::log_file(&log_path).map_err(|error| {
-            confit_cli::error::CliError::Unknown {
-                context: "log file".to_owned(),
-                message: error.to_string(),
-            }
-        })?);
+        .chain(log_file);
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
     match &cli.command {
@@ -49,10 +114,7 @@ fn run() -> confit_cli::error::Result<()> {
 }
 
 /// Run plan with summary output.
-fn run_plan(
-    args: &confit_cli::cli::PlanArgs,
-    log_path: &std::path::Path,
-) -> confit_cli::error::Result<()> {
+fn run_plan(args: &confit_cli::cli::PlanArgs, log_path: &std::path::Path) -> Outcome<()> {
     let terminal = Terminal::new();
     let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
@@ -81,7 +143,7 @@ fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
     hooks_dir: &std::path::Path,
-) -> confit_cli::error::Result<()> {
+) -> Outcome<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let terminal = Terminal::new();
     let sender = terminal.sink();
@@ -110,7 +172,6 @@ fn run_apply(
         Err(error) => {
             terminal.finish();
             anstream::eprintln!("log: {}", log_path.display());
-            log::logger().flush();
             return Err(error);
         }
     };
@@ -120,14 +181,16 @@ fn run_apply(
         report.written,
         report.removed
     );
-    anstream::println!("restore: confit apply %1");
+    if report.written > 0 || report.removed > 0 {
+        anstream::println!("restore: confit apply %1");
+    }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();
     Ok(())
 }
 
 /// Run export and write a bundle file or print its manifest.
-fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<()> {
+fn run_export(args: &confit_cli::cli::ExportArgs) -> Outcome<()> {
     let terminal = Terminal::new();
     let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
@@ -140,7 +203,7 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_cli::error::Result<(
 }
 
 /// Run delete and drop one named state and unreferenced entries.
-fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<()> {
+fn run_delete(args: &confit_cli::cli::DeleteArgs) -> Outcome<()> {
     let terminal = Terminal::new();
     let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
@@ -153,7 +216,7 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_cli::error::Result<(
 }
 
 /// Run init with project scaffolding.
-fn run_init(args: &confit_cli::cli::InitArgs) -> confit_cli::error::Result<()> {
+fn run_init(args: &confit_cli::cli::InitArgs) -> Outcome<()> {
     let runner = confit_cli::actions::init::InitRunner { args };
     for outcome in runner.execute()? {
         match outcome {

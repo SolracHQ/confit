@@ -52,10 +52,7 @@ pub struct PlanArgs {
     pub output: Option<PathBuf>,
 }
 
-/// Apply one source: `.lua` and extensionless paths form a
-/// profile, `.cb` forms a bundle file, `@name` forms a named state, `%N`
-/// forms history newest-first from one, and folders form a project
-/// with `-p` profile choice.
+/// Apply one source.
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
     /// source to apply (`.lua`, `.cb`, `@name`, `%N` or project folder)
@@ -167,10 +164,6 @@ pub const APP_LOG_NAME: &str = "confit.log";
 pub const HOOKS_DIR_NAME: &str = "hooks";
 
 /// Resolve the logs dir from the flag with env and default fallbacks.
-///
-/// - Explicit flags win over the environment.
-/// - `CONFIT_LOG_DIR` fills the gap before the default.
-/// - Omitted values use a per-process temp dir.
 pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(dir) = explicit {
         return expand_tilde(dir);
@@ -182,9 +175,6 @@ pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 /// Resolve the plan profile against the project folder.
-///
-/// - Explicit profiles are absolute or project relative.
-/// - Omitted profiles use the default under the project.
 pub fn plan_profile(project: &std::path::Path, profile: Option<&std::path::Path>) -> PathBuf {
     match profile {
         Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
@@ -194,8 +184,6 @@ pub fn plan_profile(project: &std::path::Path, profile: Option<&std::path::Path>
 }
 
 /// Resolve the apply require base from the source parent.
-///
-/// - Source parent first, current folder fallback for absent parents.
 pub fn apply_root(source: &std::path::Path) -> PathBuf {
     source
         .parent()

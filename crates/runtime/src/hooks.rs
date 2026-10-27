@@ -3,21 +3,23 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use confit_core::error::{
+    Error, ErrorCause, ErrorContext, HookReason, HookRunError, Outcome, Result, Terminal,
+};
+use confit_core::progress::{Event, ProgressSender};
 use confit_driver as driver;
-use confit_driver::progress::{Event, ProgressSender};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-use crate::checks::{Checks, Unmet, find_executable};
-use crate::error::{Result, RuntimeError};
+use crate::checks::{Checks, Unmet, find_executable, unmet_names};
 
 /// One hook run decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// Unmet capability condition with its fault.
-    RequiresClosed(Condition, Unmet),
+    /// Blocked hook with its ready cause; apply pushes the argv location.
+    RequiresClosed(HookRunError),
     /// Unmet need condition with its fault.
     WhenClosed(Condition, Unmet),
     /// Passing check with done work.
@@ -43,7 +45,7 @@ pub struct HookRunner {
     pub progress: ProgressSender,
 }
 
-/// Decided hooks with the facts behind the verdicts.
+/// Decided hooks.
 pub struct DecidedHooks {
     /// Hook verdicts in plan order.
     pub decisions: Vec<HookDecision>,
@@ -56,8 +58,8 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::HookResolve`] for unresolvable binaries.
-    pub fn decide_all(&self, hooks: &[Hook], changed: &BTreeSet<Route>) -> Result<DecidedHooks> {
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unresolvable binaries and commands.
+    pub fn decide_all(&self, hooks: &[Hook], changed: &BTreeSet<Route>) -> Outcome<DecidedHooks> {
         let checks = Checks::current();
         let mut decisions = Vec::with_capacity(hooks.len());
         for hook in hooks {
@@ -68,21 +70,22 @@ impl HookRunner {
 
     /// Decide one hook outcome.
     ///
-    /// - Requires, when, and check evaluate before resolving.
-    /// - True checks run through binary resolving.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::HookResolve`] for unresolvable binaries.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unresolvable binaries and commands.
     pub fn decide(
         &self,
         hook: &Hook,
         checks: &Checks,
         changed: &BTreeSet<Route>,
-    ) -> Result<HookDecision> {
-        let scoped = scoped_checks(hook, checks)?;
+    ) -> Outcome<HookDecision> {
+        let argv = Arg::join(&hook.argv);
+        let scoped = scoped_checks(hook, checks).hook_failed(&argv, &HookReason::InvalidCommand)?;
         if let Some(fault) = scoped.unmet(&hook.requires, changed) {
-            return Ok(HookDecision::RequiresClosed(hook.requires.clone(), fault));
+            return Ok(HookDecision::RequiresClosed(HookRunError::Blocked {
+                condition: hook.requires.describe(),
+                unmet: unmet_names(&fault),
+            }));
         }
         if let Some(fault) = scoped.unmet(&hook.when, changed) {
             return Ok(HookDecision::WhenClosed(hook.when.clone(), fault));
@@ -90,13 +93,22 @@ impl HookRunner {
         if !hook.check.is_true() && scoped.unmet(&hook.check, changed).is_none() {
             return Ok(HookDecision::ChecksPass);
         }
-        let binary = match resolve_binary(hook, &scoped)? {
-            Some(found) => found,
-            None => {
-                return Err(RuntimeError::HookResolve {
-                    argv: Arg::join(&hook.argv),
-                    head: hook.argv.first().map(Arg::display).unwrap_or_default(),
-                });
+        let binary = match resolve_binary(hook, &scoped) {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                let leaf = HookRunError::BinaryUnresolved;
+                return Err(Error::hook_failed(
+                    argv.clone(),
+                    HookReason::of(&leaf),
+                    ErrorContext::from(leaf),
+                ));
+            }
+            Err(error) => {
+                return Err(Error::hook_failed(
+                    argv.clone(),
+                    HookReason::InvalidCommand,
+                    error,
+                ));
             }
         };
         Ok(HookDecision::Run(binary))
@@ -106,34 +118,47 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::EmptyArgv`] for empty argv.
-    /// - [`RuntimeError::Spawn`] for spawn failures.
-    /// - [`RuntimeError::Wait`] for wait failures.
-    /// - [`RuntimeError::Timeout`] for timed-out runs.
-    /// - [`RuntimeError::Output`] for output join failures.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for failed hook runs with the log chain.
     pub fn spawn(
         &self,
         hook: &Hook,
         binary: &Path,
         position: usize,
         total: usize,
-    ) -> Result<Spawned> {
+    ) -> Outcome<Spawned> {
         let argv_text = Arg::join(&hook.argv);
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for arg in hook.argv.iter().skip(1) {
-            spawn.push(materialize_arg(arg)?.to_string_lossy().into_owned());
+            let materialized =
+                materialize_arg(arg).hook_failed(&argv_text, &HookReason::InvalidCommand)?;
+            spawn.push(materialized.to_string_lossy().into_owned());
         }
         let mut path_dirs: Vec<PathBuf> = Vec::with_capacity(hook.path.len());
         for entry in &hook.path {
-            path_dirs.push(materialize_arg(entry)?);
+            let materialized =
+                materialize_arg(entry).hook_failed(&argv_text, &HookReason::InvalidCommand)?;
+            path_dirs.push(materialized);
         }
         let _ = self.progress.send(Event::HookRunning {
             position,
             total,
             argv: argv_text.clone(),
         });
-        let outcome = driver::process::run(&spawn, &path_dirs, hook.timeout_secs)
-            .map_err(|error| map_process(error, &argv_text))?;
+        let outcome = match driver::process::run(&spawn, &path_dirs, hook.timeout_secs) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let ErrorCause::HookRunError(leaf) = error.root_cause() {
+                    let leaf = leaf.clone();
+                    return Err(Error::hook_failed(
+                        argv_text.clone(),
+                        HookReason::of(&leaf),
+                        ErrorContext::from(leaf),
+                    ));
+                }
+                return Err(Error::spawn_hook(argv_text.clone(), error));
+            }
+        };
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
         Ok(Spawned {
             argv: argv_text,
@@ -146,13 +171,15 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::HookFailed`] for nonzero codes.
-    pub fn confirm(&self, spawned: &Spawned) -> Result<()> {
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
+    pub fn confirm(&self, spawned: &Spawned) -> Outcome<()> {
         if spawned.code != 0 {
-            return Err(RuntimeError::HookFailed {
-                argv: spawned.argv.clone(),
-                code: spawned.code,
-            });
+            let leaf = HookRunError::ExitedNonzero { code: spawned.code };
+            return Err(Error::hook_failed(
+                spawned.argv.clone(),
+                HookReason::of(&leaf),
+                ErrorContext::from(leaf),
+            ));
         }
         Ok(())
     }
@@ -161,21 +188,24 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::HookChecks`] for unmet post-checks.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
     pub fn verify(
         &self,
         hook: &Hook,
         checks: &Checks,
         changed: &BTreeSet<Route>,
         argv: &str,
-    ) -> Result<()> {
-        let scoped = scoped_checks(hook, checks)?;
+    ) -> Outcome<()> {
+        let scoped = scoped_checks(hook, checks).hook_failed(argv, &HookReason::InvalidCommand)?;
         if let Some(fault) = scoped.unmet(&hook.check, changed) {
-            return Err(RuntimeError::HookChecks {
-                argv: argv.to_owned(),
-                check: hook.check.clone(),
-                failed: Box::new(fault),
-            });
+            let leaf = HookRunError::ChecksUnmet {
+                failed: unmet_names(&fault),
+            };
+            return Err(Error::hook_failed(
+                argv.to_owned(),
+                HookReason::of(&leaf),
+                ErrorContext::from(leaf),
+            ));
         }
         Ok(())
     }
@@ -185,7 +215,7 @@ impl HookRunner {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
 fn scoped_checks(hook: &Hook, checks: &Checks) -> Result<Checks> {
     let mut dirs = Vec::with_capacity(hook.path.len());
     for entry in &hook.path {
@@ -195,11 +225,6 @@ fn scoped_checks(hook: &Hook, checks: &Checks) -> Result<Checks> {
 }
 
 /// Resolve one hook binary with routes expanded inline.
-///
-/// Route args map against host folders, text unchanged.
-///
-/// - Scoped dirs carry hook path entries first.
-/// - The first existing executable wins.
 fn resolve_binary(hook: &Hook, scoped: &Checks) -> Result<Option<PathBuf>> {
     let Some(first) = hook.argv.first() else {
         return Ok(None);
@@ -212,36 +237,11 @@ fn resolve_binary(hook: &Hook, scoped: &Checks) -> Result<Option<PathBuf>> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
 fn materialize_arg(arg: &Arg) -> Result<PathBuf> {
     match arg {
         Arg::Text(text) => Ok(PathBuf::from(text)),
-        Arg::Route(route) => route.expand().map_err(|source| RuntimeError::Expand {
-            route: route.clone(),
-            source,
-        }),
-    }
-}
-
-/// Map one driver process failure onto runtime language with argv.
-fn map_process(error: driver::process::ProcessError, argv: &str) -> RuntimeError {
-    match error {
-        driver::process::ProcessError::Empty => RuntimeError::EmptyArgv,
-        driver::process::ProcessError::Spawn { fault } => RuntimeError::Spawn {
-            argv: argv.to_owned(),
-            fault,
-        },
-        driver::process::ProcessError::Wait { fault } => RuntimeError::Wait {
-            argv: argv.to_owned(),
-            fault,
-        },
-        driver::process::ProcessError::Timeout { timeout_secs } => RuntimeError::Timeout {
-            argv: argv.to_owned(),
-            timeout_secs,
-        },
-        driver::process::ProcessError::Output => RuntimeError::Output {
-            argv: argv.to_owned(),
-        },
+        Arg::Route(route) => route.expand(),
     }
 }
 
@@ -382,7 +382,7 @@ mod tests {
             Err(error) => panic!("hooks decide: {error}"),
         };
         assert!(
-            matches!(closed.decisions[0], HookDecision::RequiresClosed(_, _)),
+            matches!(closed.decisions[0], HookDecision::RequiresClosed(_)),
             "missing sentinel fails the condition"
         );
         let writer = writer_in(dir.path());

@@ -5,6 +5,5 @@
 
 pub mod actions;
 pub mod cli;
-pub mod error;
 pub mod presentation;
 pub mod sinks;

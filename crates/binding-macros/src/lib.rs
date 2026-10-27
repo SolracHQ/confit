@@ -73,7 +73,7 @@ mod untagged;
 ///
 /// #[face_impl]
 /// impl Handle {
-///     /// Answer the label.
+///     /// Return the label.
 ///     ///
 ///     /// # Returns
 ///     ///
@@ -92,11 +92,11 @@ mod untagged;
 /// derive encodes it.
 ///
 /// ```rust,no_run
-/// use confit_binding::value::Mismatch;
+/// use confit_binding::fault::FaceFault;
 /// use confit_binding_macros::Face;
 /// use mlua::{Lua, Value};
 ///
-/// fn decode_timeout(lua: &Lua, value: &Value) -> Result<u64, Mismatch> {
+/// fn decode_timeout(lua: &Lua, value: &Value) -> Result<u64, FaceFault> {
 ///     Ok(60)
 /// }
 ///
@@ -118,10 +118,12 @@ pub fn derive_face(input: TokenStream) -> TokenStream {
 
 /// Userdata methods and static namespaces from one impl block.
 ///
-/// Blocks without a namespace hold &self methods alone. Blocks with
-/// a namespace hold statics alone and answer NAMESPACE, VERBS,
-/// register and stubs on the type itself. Statics accept
+/// Plain blocks hold &self methods alone. Namespace blocks hold
+/// statics alone and return NAMESPACE, VERBS, register and stubs
+/// on the type itself. Statics accept
 /// #[face(optional)] with missing filling Default.
+/// Metamethods ride one marker with the hook name. Flagged methods
+/// leave stubs and answer the hook alone.
 ///
 /// ```rust,no_run
 /// use confit_binding_macros::{Face, face_impl};
@@ -145,6 +147,38 @@ pub fn derive_face(input: TokenStream) -> TokenStream {
 ///     /// - Greeting text.
 ///     fn greeting(&self, prefix: String) -> String {
 ///         format!("{prefix} {}", self.name)
+///     }
+/// }
+/// ```
+///
+/// ```rust,no_run
+/// use confit_binding_macros::{Face, face_impl};
+///
+/// #[derive(Clone, Face)]
+/// #[face(userdata)]
+/// struct Boom {
+///     message: String,
+/// }
+///
+/// #[face_impl]
+/// impl Boom {
+///     /// Read the message.
+///     ///
+///     /// # Returns
+///     ///
+///     /// - The message text.
+///     fn message(&self) -> String {
+///         self.message.clone()
+///     }
+///
+///     /// Render the error line.
+///     ///
+///     /// # Returns
+///     ///
+///     /// - The rendered error line.
+///     #[face_meta(__tostring)]
+///     fn render(&self) -> String {
+///         format!("boom: {}", self.message)
 ///     }
 /// }
 /// ```

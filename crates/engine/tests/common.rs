@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use confit_binding::callback::Callback;
 use confit_binding::value::Decode;
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
@@ -20,6 +20,7 @@ use confit_model::document::{
     TextDocument,
 };
 use confit_model::hook::Hook;
+use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
@@ -30,11 +31,11 @@ pub const PAIR: &str = r#"
         return {
             configs = {
                 {
-                    name = "first",
+                    name = id("first"),
                     documents = { { path = { base = "home", relative = "zebra" }, text = "z" } },
                 },
                 {
-                    name = "second",
+                    name = id("second"),
                     documents = { { path = { base = "home", relative = "apple" }, text = "a" } },
                 },
             },
@@ -45,8 +46,8 @@ pub const PAIR: &str = r#"
 pub const DUPLICATE: &str = r#"
         return {
             configs = {
-                { name = "first", documents = { { path = { base = "home", relative = ".bashrc" }, text = "one" } } },
-                { name = "second", documents = { { path = { base = "home", relative = ".bashrc" }, text = "two" } } },
+                { name = id("first"), documents = { { path = { base = "home", relative = ".bashrc" }, text = "one" } } },
+                { name = id("second"), documents = { { path = { base = "home", relative = ".bashrc" }, text = "two" } } },
             },
         }
     "#;
@@ -56,7 +57,7 @@ pub const STRUCTURED: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/bat",
+                    name = id("tools/bat"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.toml" },
@@ -73,8 +74,8 @@ pub const STRUCTURED: &str = r#"
 pub const DUPLICATE_NAMES: &str = r#"
         return {
             configs = {
-                { name = "same", documents = { { path = { base = "home", relative = "a" }, text = "one" } } },
-                { name = "same", documents = { { path = { base = "home", relative = "b" }, text = "two" } } },
+                { name = id("same"), documents = { { path = { base = "home", relative = "a" }, text = "one" } } },
+                { name = id("same"), documents = { { path = { base = "home", relative = "b" }, text = "two" } } },
             },
         }
     "#;
@@ -84,7 +85,7 @@ pub const MERGED_PATCHES: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -114,7 +115,7 @@ pub const MISSING_TARGET: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     patches = {
                         {
                             target = { base = "home", relative = "fresh.json" },
@@ -132,7 +133,7 @@ pub const TEXT_BASE: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                     patches = {
                         {
@@ -151,7 +152,7 @@ pub const FAILING_CALLBACK: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -176,7 +177,7 @@ pub const RC_MERGED: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/shell",
+                    name = id("tools/shell"),
                     documents = {
                         {
                             path = { base = "home", relative = ".bashrc" },
@@ -203,7 +204,7 @@ pub const RC_MISSING: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/shell",
+                    name = id("tools/shell"),
                     patches = {
                         {
                             target = { base = "home", relative = ".bashrc" },
@@ -220,7 +221,7 @@ pub const RC_TEXT_BASE: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/shell",
+                    name = id("tools/shell"),
                     documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                     patches = {
                         {
@@ -238,7 +239,7 @@ pub const RC_FAILING: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/shell",
+                    name = id("tools/shell"),
                     documents = {
                         {
                             path = { base = "home", relative = ".bashrc" },
@@ -261,7 +262,7 @@ pub const RC_FORMAT_GAP: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/shell",
+                    name = id("tools/shell"),
                     documents = {
                         {
                             path = { base = "home", relative = ".bashrc" },
@@ -285,7 +286,7 @@ pub const FORMAT_GAP: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -312,7 +313,7 @@ pub const PROJECT_TEXT: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/bat",
+                    name = id("tools/bat"),
                     documents = { { path = { base = "home", relative = ".bashrc" }, text = assert(handle:text()) } },
                 },
             },
@@ -324,7 +325,7 @@ pub const PATCHED: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -349,7 +350,7 @@ pub const MIXED_SPLIT: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/both",
+                    name = id("tools/both"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -382,7 +383,7 @@ pub const RC_OVER_STRUCTURED: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -406,7 +407,7 @@ pub const MIXED_FORMATS: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "fresh.json" },
@@ -436,7 +437,7 @@ pub const MIXED_SAME_TARGET: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     documents = {
                         {
                             path = { base = "home", relative = "config.json" },
@@ -465,7 +466,7 @@ pub const FOREIGN_PATCH_KEY: &str = r#"
         return {
             configs = {
                 {
-                    name = "tools/app",
+                    name = id("tools/app"),
                     patches = {
                         {
                             target = { base = "home", relative = "config.json" },
@@ -484,7 +485,7 @@ pub const HOOKS_THROUGH: &str = r#"
             return {
                 configs = {
                     {
-                        name = "tools/app",
+                        name = id("tools/app"),
                         documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
                         hooks = {
                             { argv = { "mise", "install" } },
@@ -561,7 +562,7 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
 pub fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
     Profile::new(
         vec![Config::new(
-            "tools/test".to_owned(),
+            Id::of("tools/test"),
             documents,
             patches,
             Vec::new(),
@@ -684,7 +685,7 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
 /// Build one identified hook with argv words and a timeout.
 pub fn identified_hook_of(id: &str, argv: &[&str], timeout_secs: u64) -> Hook {
     let mut hook = hook_of(argv, timeout_secs);
-    hook.id = Some(id.to_owned());
+    hook.id = Some(Id::of(id));
     hook
 }
 

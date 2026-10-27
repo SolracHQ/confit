@@ -74,7 +74,7 @@ function document(body) end
 --- @class Condition_Changed
 --- @field route Route The document route under testing.
 
---- PATH like variable around its current value.  The directory always prepends to the existing entries.
+--- PATH like variable around its current value.
 --- @class RcEntry_Path
 --- @field name string The variable name, like `PATH`.
 --- @field dir Route The directory route for placement.
@@ -111,7 +111,7 @@ function document(body) end
 --- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 --- @field unmanaged boolean? Existence-only document flag.
 
---- Handle to a project or cached resource.
+--- Handle to a trusted resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
@@ -150,7 +150,7 @@ function ArchiveHandle:member(name) end
 --- @field path Route The destination route.
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
---- One tree member.  Bare handles take the default mode. Tables refer to the handle with a required mode.
+--- One tree member.
 --- @alias TreeMember ResourceHandle | TreeMember_Full
 
 --- Handle with explicit mode.
@@ -158,7 +158,7 @@ function ArchiveHandle:member(name) end
 --- @field handle ResourceHandle The file payload.
 --- @field mode string File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
 
---- One declared document with its destination path.  One flat Lua table with the path beside body fields.
+--- One declared document.
 --- @alias Document Document_Structured | Document_Text | Document_Link | Document_Rc | Document_Opaque | Document_Tree
 
 --- Check one config table, else nil with reason.
@@ -169,11 +169,15 @@ function config(config) end
 
 --- One decoded config.
 --- @class Config
---- @field name string The config name.
+--- @field name Id The config name.
 --- @field documents Document[]? Documents in declaration order with destination paths.
 --- @field patches Patch[]? Patches in profile return order.
 --- @field hooks Hook[]? Hooks in profile return order.
 --- @field requirements {[string]: string}? Requirements keyed by config name with hints.
+
+--- One opaque identity.
+--- @class Id
+Id = {}
 
 --- One patch table in either shape.
 --- @alias Patch StructuredPatch | RcPatch | HookPatch
@@ -230,7 +234,7 @@ function HookPatch.apply(hook) end
 --- @class Hook
 --- @field argv Arg[] Command for the subprocess.
 --- @field path Arg[]? PATH entries for the subprocess alone.
---- @field id string? The hook identifier.
+--- @field id Id? The hook identifier.
 --- @field requires Condition? The capability condition.
 --- @field when Condition? The need condition.
 --- @field check Condition? The run condition.
@@ -255,7 +259,7 @@ function hook(value) end
 function condition(value) end
 
 --- Check one rc entry table, else nil with reason.
---- @param value any The entry table under checking.
+--- @param value any The rc entry table under checking.
 --- @return RcEntry? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function entry(value) end

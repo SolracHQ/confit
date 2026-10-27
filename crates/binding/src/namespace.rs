@@ -1,4 +1,3 @@
-//! Namespace
 //! Shared namespace registration.
 
 use mlua::{Lua, Table, Value};

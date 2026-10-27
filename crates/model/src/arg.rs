@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 
 use confit_binding_macros::Face;
-use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
@@ -14,7 +13,7 @@ const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
 /// Text or route for command arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Face)]
 #[serde(untagged)]
 #[face(table, untagged)]
 pub enum Arg {
@@ -22,46 +21,6 @@ pub enum Arg {
     Text(String),
     /// Destination route argument.
     Route(Route),
-}
-
-impl<'de> Deserialize<'de> for Arg {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ArgVisitor)
-    }
-}
-
-struct ArgVisitor;
-
-impl<'de> Visitor<'de> for ArgVisitor {
-    type Value = Arg;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a string or route")
-    }
-
-    fn visit_str<E>(self, text: &str) -> std::result::Result<Arg, E>
-    where
-        E: de::Error,
-    {
-        Ok(Arg::Text(text.to_owned()))
-    }
-
-    fn visit_string<E>(self, text: String) -> std::result::Result<Arg, E>
-    where
-        E: de::Error,
-    {
-        self.visit_str(&text)
-    }
-
-    fn visit_map<A>(self, map: A) -> std::result::Result<Arg, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        Route::deserialize(de::value::MapAccessDeserializer::new(map)).map(Arg::Route)
-    }
 }
 
 impl Arg {
@@ -74,8 +33,6 @@ impl Arg {
     }
 
     /// Render argv args as one shell-safe display line.
-    ///
-    /// - Args with shell-special text quote single.
     pub fn join(argv: &[Arg]) -> String {
         argv.iter()
             .map(Arg::display)
@@ -104,8 +61,6 @@ impl From<Route> for Arg {
 }
 
 /// Quote one word for shell use.
-///
-/// - Safe text with alphanumerics and `@%_+=:,./-` only.
 pub fn quote(text: &str) -> Cow<'_, str> {
     if !text.is_empty() && text.bytes().all(|byte| SAFE_CHARS.contains(&byte)) {
         Cow::Borrowed(text)

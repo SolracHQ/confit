@@ -24,8 +24,6 @@ pub enum RcEntry {
         when: Option<Condition>,
     },
     /// PATH like variable around its current value.
-    ///
-    /// The directory always prepends to the existing entries.
     Path {
         /// The variable name, like `PATH`.
         name: String,

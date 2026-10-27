@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use common::seed_file;
 use confit_cli::actions::init::{InitOutcome, InitRunner};
 use confit_cli::cli::InitArgs;
-use confit_cli::error::CliError;
 use confit_driver::fs::read_dir;
 
 /// Scaffold one temp dir with default flags.
@@ -57,7 +56,7 @@ fn init_rejected_present_scaffold() {
     };
     let outcome = InitRunner { args: &args }.execute();
     match outcome {
-        Err(CliError::Exists { .. }) => {}
+        Err(error) if error.summary().contains("Cannot overwrite existing") => {}
         Err(other) => panic!("present scaffold flattens: {other}"),
         Ok(_) => panic!("present scaffold passes"),
     }

@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{Data, Document, RcEntry, tree_changed};
 use confit_model::hook::{HookLifecycle, diff_lifecycle};
@@ -53,8 +53,6 @@ pub enum Sigil {
 
 impl Sigil {
     /// Return the line mark for one sigil.
-    ///
-    /// Headers carry no lifecycle mark.
     pub fn mark(self) -> char {
         match self {
             Sigil::Add => '+',
@@ -209,7 +207,7 @@ impl Summary<'_> {
 
     /// Render the closing counts lines.
     ///
-    /// Hooks line present with moving hooks.
+    /// - Hooks line present with moving hooks.
     pub fn summary_lines(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(2);
         if self.first_run {
@@ -462,9 +460,6 @@ fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
 }
 
 /// Collect one document's difference entries for first runs.
-///
-/// - Tree member entries group under their destination path.
-/// - Every other entry under its own path.
 fn first_run_entries<'a>(
     differences: &'a [Difference],
     document: &Document,
@@ -494,9 +489,6 @@ fn member_of(destination: &Route, path: &Route) -> bool {
 }
 
 /// Report whether one first-run group is whole.
-///
-/// - Whole-file missing entries always land whole.
-/// - Whole trees with missing entries alone land whole.
 fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     if entries
         .iter()
@@ -513,9 +505,6 @@ fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
 }
 
 /// Render one first-run update group with disk values first.
-///
-/// Trees collapse to one changed member count. Unreadable paths show the
-/// replacement.
 fn first_run_updates(
     painter: &Painter,
     document: &Document,
@@ -789,8 +778,7 @@ fn recorded_diff(old: &str, new: &str) -> String {
         .join("\n")
 }
 
-/// Render one rc update as a recorded to desired text diff with desired-body
-/// fallback.
+/// Render one rc update as a recorded to desired text diff.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match render_document(recorded) {
         Ok(bytes) => bytes,
@@ -935,6 +923,7 @@ mod tests {
                 hooks: Vec::new(),
             },
             differences: Vec::new(),
+            warnings: Vec::new(),
             first_run: false,
             changed: BTreeSet::new(),
         };

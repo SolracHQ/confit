@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use crate::fs::create_parent;
 
 /// Staged scratch file under one destination folder.
-///
-/// Drop removes the scratch file. Persist moves it onto the destination.
 pub struct StagedFile {
     /// The staged scratch file.
     file: tempfile::NamedTempFile,
@@ -15,13 +13,11 @@ pub struct StagedFile {
 impl StagedFile {
     /// Stage one empty scratch file under the destination folder.
     ///
-    /// - Parent folders build first.
-    ///
     /// # Errors
     ///
-    /// - [NotFound] for missing parents.
-    /// - [PermissionDenied] for unwritable destinations.
-    /// - [Other] for scratch staging failures.
+    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
+    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
+    /// - [`std::io::ErrorKind::Other`] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
         create_parent(dest)?;
         tempfile::NamedTempFile::new_in(scratch_dir(dest)).map(|file| Self { file })
@@ -29,17 +25,11 @@ impl StagedFile {
 
     /// Write one file atomically through a sibling rename.
     ///
-    /// - Parent folders build first.
-    /// - The closure writes the open scratch file; failures remove it and
-    ///   report the closure error.
-    /// - Rename failures with a present destination report success with the
-    ///   present entry kept.
-    ///
     /// # Errors
     ///
-    /// - [NotFound] for missing parents.
-    /// - [PermissionDenied] for unwritable destinations.
-    /// - [Other] for staging failures.
+    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
+    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
+    /// - [`std::io::ErrorKind::Other`] for staging failures.
     pub fn write(
         dest: &Path,
         write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -56,12 +46,10 @@ impl StagedFile {
 
     /// Move the scratch file onto the destination.
     ///
-    /// - A present destination stays on persist failures.
-    ///
     /// # Errors
     ///
-    /// - [PermissionDenied] for unwritable destinations.
-    /// - [Other] for persist failures with an absent destination.
+    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
+    /// - [`std::io::ErrorKind::Other`] for persist failures with an absent destination.
     pub fn persist(self, dest: &Path) -> std::io::Result<()> {
         match self.file.persist(dest) {
             Ok(_) => Ok(()),
@@ -72,8 +60,6 @@ impl StagedFile {
 }
 
 /// Staged scratch dir under one destination folder.
-///
-/// Drop removes the scratch dir. Persist renames it onto the destination.
 pub struct StagedDir {
     /// The staged scratch dir.
     dir: tempfile::TempDir,
@@ -82,13 +68,11 @@ pub struct StagedDir {
 impl StagedDir {
     /// Stage one empty scratch dir under the destination folder.
     ///
-    /// - Parent folders build first.
-    ///
     /// # Errors
     ///
-    /// - [NotFound] for missing parents.
-    /// - [PermissionDenied] for unwritable destinations.
-    /// - [Other] for scratch staging failures.
+    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
+    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
+    /// - [`std::io::ErrorKind::Other`] for scratch staging failures.
     pub fn stage(dest: &Path) -> std::io::Result<Self> {
         create_parent(dest)?;
         tempfile::TempDir::new_in(scratch_dir(dest)).map(|dir| Self { dir })
@@ -101,13 +85,11 @@ impl StagedDir {
 
     /// Rename the scratch dir onto the destination.
     ///
-    /// - A present destination stays on rename failures.
-    ///
     /// # Errors
     ///
-    /// - [NotFound] for missing scratch entries.
-    /// - [PermissionDenied] for unwritable destinations.
-    /// - [Other] for rename failures with an absent destination.
+    /// - [`std::io::ErrorKind::NotFound`] for missing scratch entries.
+    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
+    /// - [`std::io::ErrorKind::Other`] for rename failures with an absent destination.
     pub fn persist(self, dest: &Path) -> std::io::Result<()> {
         match std::fs::rename(self.path(), dest) {
             Ok(()) => {

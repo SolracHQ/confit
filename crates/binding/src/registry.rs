@@ -1,16 +1,12 @@
-//! Registry
 //! Collector holding every bound face once in order.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::error::Result;
 use crate::face::{FaceData, FieldDescriptor, FunctionParameter, FunctionReturn, UnionArm};
 use crate::stub::{emit, emit_callback_method, emit_method};
 use crate::userdata::MethodDescriptor;
 
 /// One collected stub entry.
-///
-/// Rendering to LuaLS text happens once at emission.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StubEntry {
     /// One table shape.
@@ -54,8 +50,6 @@ pub enum StubEntry {
 }
 
 /// One collected callback signature.
-///
-/// Params with returns for method stub emission.
 #[derive(Clone, Debug)]
 struct CallbackSignature {
     /// The callback params in order.
@@ -65,9 +59,6 @@ struct CallbackSignature {
 }
 
 /// Face collector with one entry per Lua name.
-///
-/// Registration order and
-/// stub emission in that order.
 #[derive(Debug, Default)]
 pub struct Registry {
     /// The seen Lua names.
@@ -84,9 +75,7 @@ impl Registry {
         Self::default()
     }
 
-    /// Register one class by name with its fields.
-    ///
-    /// - Repeated names keep the first entry.
+    /// Register one class by name.
     pub(crate) fn register_class(
         &mut self,
         name: String,
@@ -103,9 +92,7 @@ impl Registry {
         )
     }
 
-    /// Register one alias by name with its arms.
-    ///
-    /// - Repeated names keep the first entry.
+    /// Register one alias by name.
     pub(crate) fn register_alias(
         &mut self,
         name: String,
@@ -122,9 +109,7 @@ impl Registry {
         )
     }
 
-    /// Register one userdata class with its methods.
-    ///
-    /// - Repeated names keep the first entry.
+    /// Register one userdata class.
     pub fn register_userdata(
         &mut self,
         class: &'static str,
@@ -142,8 +127,6 @@ impl Registry {
     }
 
     /// Register one face.
-    ///
-    /// - Repeated names keep the first entry.
     pub fn register(&mut self, name: String, data: &FaceData) -> bool {
         match data {
             FaceData::Scalar { .. } | FaceData::Userdata { .. } => false,
@@ -171,23 +154,14 @@ impl Registry {
         }
     }
 
-    /// Collect one face with every referenced face.
-    ///
-    /// - Repeated names keep the first entry.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    pub fn collect(&mut self, name: String, data: &FaceData) -> Result<()> {
+    /// Collect one face.
+    pub fn collect(&mut self, name: String, data: &FaceData) {
         if self.register(name, data) {
-            data.collect_referenced(self)?;
+            data.collect_referenced(self);
         }
-        Ok(())
     }
 
     /// Register one callback signature.
-    ///
-    /// - Repeated faces keep the first signature.
     pub fn register_callback(&mut self, face: String, data: &FaceData) -> bool {
         match data {
             FaceData::Function {
@@ -212,8 +186,6 @@ impl Registry {
     }
 
     /// Register one static function.
-    ///
-    /// - Repeated names keep the first entry.
     pub fn register_function(&mut self, name: &'static str, data: &FaceData) -> bool {
         match data {
             FaceData::Function {
@@ -314,10 +286,6 @@ impl Registry {
     }
 
     /// Build one class block with its callback methods.
-    ///
-    /// - Class block comes first with method blocks after.
-    /// - Fields without known params hold no method.
-    /// - Holders with methods gain one table for dot calls.
     fn class_blocks(&self, name: &str, data: &FaceData) -> Vec<String> {
         let FaceData::Class { fields, .. } = data else {
             return Vec::new();
@@ -385,8 +353,8 @@ mod tests {
     #[test]
     fn data_walk_matches_snapshot() {
         let mut collector = Registry::new();
-        SnapshotHolder::collect(&mut collector).unwrap();
-        SnapshotUnion::collect(&mut collector).unwrap();
+        SnapshotHolder::collect(&mut collector);
+        SnapshotUnion::collect(&mut collector);
         assert!(collector.contains("SnapshotHolder"));
         assert!(collector.contains("SnapshotUnion"));
         assert!(collector.contains("SnapshotUnion_Text"));

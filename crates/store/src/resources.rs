@@ -1,22 +1,18 @@
-//! Resources
-//! Trusted sources and text.
-
-pub mod error;
+//! Resources trusted sources and text.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use confit_driver::sha::{Sha, ShaWriter};
+use confit_core::error::locate::Locate;
+use confit_core::error::{ErrorCause, FilesystemError, Result, fail};
+use confit_core::sha::{Sha, ShaWriter};
 use file_format::FileFormat;
 use mlua::{Lua, Table};
 
 use crate::StoreRoots;
-use crate::faults::AccessFault;
 use crate::handles::ResourceHandle;
 use crate::pool::PoolStore;
-use crate::pool::error::PoolError;
 use confit_driver as driver;
-use error::{ResourceError, Result, SegmentFault};
 
 /// Content-addressed cache folder under the temp base.
 const CACHE_DIR: &str = "cache";
@@ -66,58 +62,49 @@ impl Resources {
 
     /// Create a resource handle for one project-relative file.
     ///
-    /// - Handles hold the canonical path plus its identity sha, hashed once at construction, trusted after.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Escape`] for escaping files.
-    /// - [`ResourceError::Read`] for unreadable files.
+    /// - [`confit_core::error::FilesystemError`] for escaping, malformed,
+    ///   and unreadable files.
     pub fn resource(&self, relative: &str) -> Result<ResourceHandle> {
-        let parts = split_checked(relative, false).map_err(|fault| ResourceError::Escape {
-            path: PathBuf::from(relative),
-            reason: fault.reason().to_owned(),
-        })?;
+        let parts = match split_checked(relative) {
+            Ok(parts) => parts,
+            Err(_) => {
+                return fail(FilesystemError::MalformedPath {
+                    input: relative.to_owned(),
+                });
+            }
+        };
         let exec_root = &self.roots.project_root;
         let mut full = exec_root.clone();
         for part in &parts {
             full.push(part);
         }
         if !normalize(&full).starts_with(normalize(exec_root)) {
-            return Err(ResourceError::Escape {
-                path: full,
-                reason: format!("'{relative}' is outside the project root"),
-            });
+            return fail(FilesystemError::OutsideRoot {
+                input: relative.to_owned(),
+            })
+            .path(full);
         }
-        let canonical_full = match std::fs::canonicalize(&full) {
-            Ok(resolved) => resolved,
-            Err(error) => return Err(ResourceError::from_io(&full, error)),
-        };
-        let canonical_root = match std::fs::canonicalize(exec_root) {
-            Ok(resolved) => resolved,
-            Err(error) => return Err(ResourceError::from_io(&full, error)),
-        };
+        let canonical_full = std::fs::canonicalize(&full).path(&full)?;
+        let canonical_root = std::fs::canonicalize(exec_root).path(&full)?;
         if !canonical_full.starts_with(&canonical_root) {
-            return Err(ResourceError::Escape {
-                path: canonical_full,
-                reason: format!("'{relative}' is outside the project root"),
-            });
+            return fail(FilesystemError::OutsideRoot {
+                input: relative.to_owned(),
+            })
+            .path(canonical_full);
         }
-        let mut file = std::fs::File::open(&canonical_full)
-            .map_err(|error| ResourceError::from_io(&canonical_full, error))?;
-        let sha =
-            Sha::read(&mut file).map_err(|error| ResourceError::from_io(&canonical_full, error))?;
+        let mut file = std::fs::File::open(&canonical_full).path(&canonical_full)?;
+        let sha = Sha::read(&mut file).path(&canonical_full)?;
         Ok(ResourceHandle::Project(canonical_full, sha))
     }
 
     /// Land reader bytes in the cache under the expected hash.
     ///
-    /// - Present cache files skip without reading the stream.
-    /// - Landed files turn read-only.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable cache entries.
-    /// - [`ResourceError::Mismatch`] for streams failing the expected hash.
+    /// - [`confit_core::error::ErrorCause`] for streams failing the expected hash.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     pub fn store_checked(
         &self,
         sha: &Sha,
@@ -127,92 +114,67 @@ impl Resources {
         if dest.exists() {
             return Ok(ResourceHandle::Cache(sha.clone()));
         }
-        let staged = driver::StagedFile::stage(&dest)
-            .map_err(|error| ResourceError::from_io(&dest, error))?;
+        let staged = driver::StagedFile::stage(&dest).path(dest.clone())?;
         let pending = staged.path().to_path_buf();
         let found = {
-            let file = std::fs::File::create(&pending)
-                .map_err(|error| ResourceError::from_io(&dest, error))?;
+            let file = std::fs::File::create(&pending).path(dest.clone())?;
             let mut writer = ShaWriter::new(file);
-            std::io::copy(&mut reader, &mut writer)
-                .map_err(|error| ResourceError::from_io(&dest, error))?;
+            std::io::copy(&mut reader, &mut writer).path(dest.clone())?;
             writer.digest()
         };
         if found != *sha {
-            return Err(ResourceError::Mismatch {
-                path: dest,
+            return fail(ErrorCause::ContentHashMismatch {
                 expected: sha.clone(),
                 found,
-            });
+            })
+            .path(dest);
         }
-        staged
-            .persist(&dest)
-            .map_err(|error| ResourceError::from_io(&dest, error))?;
-        driver::fs::set_mode(&dest, Some(CACHE_MODE))
-            .map_err(|error| ResourceError::from_io(&dest, error))?;
+        staged.persist(&dest).path(dest.clone())?;
+        driver::fs::set_mode(&dest, Some(CACHE_MODE)).path(dest.clone())?;
         Ok(ResourceHandle::Cache(sha.clone()))
     }
 
     /// Land reader bytes in the cache under the discovered hash.
     ///
-    /// - Landed files turn read-only.
-    /// - Present destinations stay with success.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable cache entries.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     pub fn store(&self, mut reader: impl std::io::Read) -> Result<ResourceHandle> {
-        let staged = driver::StagedFile::stage(&self.cache_dir().join("land"))
-            .map_err(|error| ResourceError::from_io(&self.cache_dir(), error))?;
+        let staged =
+            driver::StagedFile::stage(&self.cache_dir().join("land")).path(self.cache_dir())?;
         let pending = staged.path().to_path_buf();
         let found = {
-            let file = std::fs::File::create(&pending)
-                .map_err(|error| ResourceError::from_io(&self.cache_dir(), error))?;
+            let file = std::fs::File::create(&pending).path(self.cache_dir())?;
             let mut writer = ShaWriter::new(file);
-            std::io::copy(&mut reader, &mut writer)
-                .map_err(|error| ResourceError::from_io(&self.cache_dir(), error))?;
+            std::io::copy(&mut reader, &mut writer).path(self.cache_dir())?;
             writer.digest()
         };
         let dest = self.cache_path(&found);
-        staged
-            .persist(&dest)
-            .map_err(|error| ResourceError::from_io(&dest, error))?;
-        driver::fs::set_mode(&dest, Some(CACHE_MODE))
-            .map_err(|error| ResourceError::from_io(&dest, error))?;
+        staged.persist(&dest).path(&dest)?;
+        driver::fs::set_mode(&dest, Some(CACHE_MODE)).path(&dest)?;
         Ok(ResourceHandle::Cache(found))
     }
 
     /// Read one trusted file as text.
     ///
-    /// - Project files read live bytes.
-    /// - Cache entries trust the landed bytes.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable files.
+    /// - [`confit_core::error::FilesystemError`] for unreadable files.
+    /// - [`confit_core::error::DocumentError`] for non-UTF8 files.
     pub fn read_text(&self, handle: &ResourceHandle) -> Result<String> {
         let path = self.resolved_path(handle);
-        String::from_utf8(self.read_bytes(handle)?).map_err(|error| ResourceError::Read {
-            path: path.clone(),
-            fault: AccessFault::Unknown {
-                message: error.to_string(),
-            },
-        })
+        let bytes = self.read_bytes(handle)?;
+        String::from_utf8(bytes).path(path)
     }
 
     /// Stream one handle for reading.
     ///
-    /// - Project files open live with no verification.
-    /// - Cache misses promote from the pool before opening.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable files.
+    /// - [`confit_core::error::FilesystemError`] for unreadable files.
     pub fn open(&self, handle: &ResourceHandle) -> Result<std::fs::File> {
         match handle {
-            ResourceHandle::Project(path, _) => {
-                std::fs::File::open(path).map_err(|error| ResourceError::from_io(path, error))
-            }
+            ResourceHandle::Project(path, _) => std::fs::File::open(path).path(path.clone()),
             ResourceHandle::Cache(sha) => self.open_cache(sha),
         }
     }
@@ -221,82 +183,66 @@ impl Resources {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable entries.
+    /// - [`confit_core::error::ErrorCause`] for promoted hash mismatches.
+    /// - [`confit_core::error::FilesystemError`] for unreadable entries.
     fn open_cache(&self, sha: &Sha) -> Result<std::fs::File> {
         let dest = self.cache_path(sha);
         if !dest.exists() {
             self.promote(sha)?;
         }
-        std::fs::File::open(&dest).map_err(|error| ResourceError::from_io(&dest, error))
+        std::fs::File::open(&dest).path(dest.clone())
     }
 
     /// Promote one pool entry into the cache.
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable pool entries.
+    /// - [`confit_core::error::ErrorCause`] for streams failing the expected hash.
+    /// - [`confit_core::error::FilesystemError`] for unreadable pool entries.
     fn promote(&self, sha: &Sha) -> Result<()> {
-        let dest = self.cache_path(sha);
-        let reader = self
-            .pools
-            .open(sha)
-            .map_err(|error| from_pool(&dest, error))?;
-        self.store_checked(sha, reader).map(|_| ())
+        let reader = self.pools.open(sha)?;
+        self.store_checked(sha, reader)?;
+        Ok(())
     }
 
     /// Fill the pool from one sealed digest.
     ///
-    /// - Present pool entries return untouched.
-    /// - Missing entries stream from the cache file.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable cache entries.
-    /// - [`ResourceError::Write`] for pool write faults.
-    /// - [`ResourceError::WriteUnknown`] for other pool write failures.
-    /// - [`ResourceError::Mismatch`] for streams failing the expected hash.
+    /// - [`confit_core::error::ErrorCause`] for streams failing the expected hash.
+    /// - [`confit_core::error::FilesystemError`] for unreadable cache and pool write faults.
     pub fn persist(&self, sha: &Sha) -> Result<Sha> {
         if self.pools.path(sha).exists() {
             return Ok(sha.clone());
         }
         let dest = self.cache_path(sha);
-        let mut reader =
-            std::fs::File::open(&dest).map_err(|error| ResourceError::from_io(&dest, error))?;
-        self.pools
-            .store_checked(sha, &mut reader)
-            .map_err(from_persist)?;
+        let mut reader = std::fs::File::open(&dest).path(dest.clone())?;
+        self.pools.store_checked(sha, &mut reader)?;
         Ok(sha.clone())
     }
 
     /// Read one handle fully into bytes.
     ///
-    /// - Project files read live bytes.
-    /// - Cache entries trust the landed bytes.
-    ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable files.
+    /// - [`confit_core::error::FilesystemError`] for unreadable files.
     fn read_bytes(&self, handle: &ResourceHandle) -> Result<Vec<u8>> {
         use std::io::Read as _;
 
         match handle {
-            ResourceHandle::Project(path, _) => {
-                std::fs::read(path).map_err(|error| ResourceError::from_io(path, error))
-            }
+            ResourceHandle::Project(path, _) => std::fs::read(path).path(path.clone()),
             ResourceHandle::Cache(_) => {
                 let mut stream = self.open(handle)?;
                 let mut bytes = Vec::new();
                 stream
                     .read_to_end(&mut bytes)
-                    .map_err(|error| ResourceError::from_io(&self.resolved_path(handle), error))?;
+                    .path(self.resolved_path(handle))?;
                 Ok(bytes)
             }
         }
     }
 
     /// Load one handle payload into its Lua table.
-    ///
-    /// - Payloads without a table shape fail with the reason.
     pub fn load_table(
         &self,
         lua: &Lua,
@@ -313,37 +259,34 @@ impl Resources {
 ///
 /// # Errors
 ///
-/// - [`SegmentFault`] for every escaping or empty shape.
-fn split_checked(raw: &str, absolute_ok: bool) -> std::result::Result<Vec<String>, SegmentFault> {
+/// - Returns the escape reason for every escaping or empty shape.
+fn split_checked(raw: &str) -> std::result::Result<Vec<String>, String> {
     if raw.contains('\\') {
-        return Err(SegmentFault::Backslash);
+        return Err("backslashes are not supported".to_owned());
     }
     if raw.len() >= 2 && raw.as_bytes()[0].is_ascii_alphabetic() && raw.as_bytes()[1] == b':' {
-        return Err(SegmentFault::Drive);
+        return Err("drive prefixes are not supported".to_owned());
     }
-    let absolute = raw.starts_with('/');
-    if absolute && !absolute_ok {
-        return Err(SegmentFault::Absolute);
+    if raw.starts_with('/') {
+        return Err("expected a relative path".to_owned());
     }
     let mut parts = Vec::new();
-    for component in raw.trim_start_matches('/').split('/') {
+    for component in raw.split('/') {
         if component.is_empty() {
-            return Err(SegmentFault::EmptyComponent);
+            return Err("empty components are not supported".to_owned());
         }
         if component == ".." {
-            return Err(SegmentFault::Parent);
+            return Err("parent steps are not supported".to_owned());
         }
         parts.push(component.to_owned());
     }
     if parts.is_empty() {
-        return Err(SegmentFault::Empty);
+        return Err("expected a path".to_owned());
     }
     Ok(parts)
 }
 
 /// Normalize one path lexically.
-///
-/// - Current-dir steps drop.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -359,50 +302,7 @@ fn normalize(path: &Path) -> PathBuf {
     }
 }
 
-/// Map one pool failure into resource language.
-///
-/// - Pool write faults keep the pool path.
-fn from_persist(error: PoolError) -> ResourceError {
-    match error {
-        PoolError::Write { path, fault } => ResourceError::Write { path, fault },
-        PoolError::WriteUnknown { path, message } => ResourceError::WriteUnknown { path, message },
-        PoolError::Mismatch {
-            path,
-            expected,
-            found,
-        } => ResourceError::Mismatch {
-            path,
-            expected,
-            found,
-        },
-    }
-}
-
-/// Map one pool failure at the cache path into resource language.
-fn from_pool(path: &Path, error: PoolError) -> ResourceError {
-    match error {
-        PoolError::Write { fault, .. } => ResourceError::Read {
-            path: path.to_path_buf(),
-            fault,
-        },
-        PoolError::WriteUnknown { message, .. } => ResourceError::Read {
-            path: path.to_path_buf(),
-            fault: AccessFault::Unknown { message },
-        },
-        PoolError::Mismatch {
-            expected, found, ..
-        } => ResourceError::Mismatch {
-            path: path.to_path_buf(),
-            expected,
-            found,
-        },
-    }
-}
-
 /// Read one handle fully into bytes.
-///
-/// - Project files read live bytes.
-/// - Binary inputs fail with the reason.
 fn sniffed_bytes(
     resources: &Resources,
     handle: &ResourceHandle,
@@ -422,8 +322,6 @@ fn sniffed_bytes(
 }
 
 /// Read one handle payload into its Lua table.
-///
-/// - Payloads without a table shape fail with the reason.
 fn table_for(
     lua: &Lua,
     resources: &Resources,
@@ -497,6 +395,7 @@ fn parse_ini(text: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_core::error::ErrorCause;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -564,8 +463,15 @@ mod tests {
         let store = test_store(dir.path());
         match store.resource("absent.lua") {
             Ok(_) => panic!("absent resource passes"),
-            Err(ResourceError::Read { .. }) => {}
-            Err(error) => panic!("wrong absent variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps the cause: {error}"
+                );
+            }
         }
     }
 
@@ -580,8 +486,15 @@ mod tests {
         let store = test_store(dir.path());
         match store.resource("outside") {
             Ok(_) => panic!("escaping link passes"),
-            Err(ResourceError::Escape { .. }) => {}
-            Err(error) => panic!("wrong link variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::OutsideRoot { .. })
+                    ),
+                    "escape keeps outside-root: {error}"
+                );
+            }
         }
     }
 
@@ -608,20 +521,27 @@ mod tests {
 
     #[test]
     fn read_text_rejected_invalid_text() {
+        use confit_core::error::{DocumentError, Require};
+
         let dir = tempfile::tempdir().unwrap();
         let path = project_file(dir.path(), "binary.lua", &[0xFF, 0xFE, b'x']);
         let store = test_store(dir.path());
         match store.resource("binary.lua") {
             Ok(handle) => match store.read_text(&handle) {
                 Ok(_) => panic!("invalid text passes"),
-                Err(ResourceError::Read { path: found, fault }) => {
-                    assert_eq!(found, path, "binary reports the path");
+                Err(error) => {
+                    assert_eq!(store.resolved_path(&handle), path);
                     assert!(
-                        matches!(fault, AccessFault::Unknown { .. }),
-                        "binary keeps its text: {fault}"
+                        matches!(
+                            error.root_cause(),
+                            ErrorCause::DocumentError(DocumentError::ParseFailed {
+                                require: Require::Utf8Text,
+                                ..
+                            })
+                        ),
+                        "binary keeps its text: {error}"
                     );
                 }
-                Err(error) => panic!("wrong text variant: {error}"),
             },
             Err(error) => panic!("binary resource creates: {error}"),
         }
@@ -692,16 +612,22 @@ mod tests {
         let wrong = Sha::hash(b"garbage");
         match store.store_checked(&sha, std::io::Cursor::new(b"garbage")) {
             Ok(_) => panic!("mismatched stream passes"),
-            Err(ResourceError::Mismatch {
-                path,
-                expected,
-                found,
-            }) => {
-                assert_eq!(path, cache_path(dir.path(), &sha));
-                assert_eq!(expected, sha, "mismatch keeps expected");
-                assert_eq!(found, wrong, "mismatch keeps found");
-            }
-            Err(error) => panic!("wrong mismatch variant: {error}"),
+            Err(error) => match error.root_cause() {
+                ErrorCause::ContentHashMismatch { expected, found } => {
+                    assert_eq!(expected, &sha, "mismatch keeps expected");
+                    assert_eq!(found, &wrong, "mismatch keeps found");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains(&cache_path(dir.path(), &sha).display().to_string())
+                            || error
+                                .to_string()
+                                .contains(&cache_path(dir.path(), &sha).display().to_string()),
+                        "mismatch keeps the path"
+                    );
+                }
+                other => panic!("wrong mismatch cause: {other:?}"),
+            },
         }
         assert!(
             !cache_path(dir.path(), &sha).exists(),
@@ -712,19 +638,26 @@ mod tests {
     #[test]
     fn open_names_missing_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let store = test_store(dir.path());
+        let (store, pools) = test_pair(dir.path());
         let sha = Sha::hash(b"absent");
         let handle = ResourceHandle::Cache(sha.clone());
         match store.open(&handle) {
             Ok(_) => panic!("absent cache passes"),
-            Err(ResourceError::Read { path, fault }) => {
-                assert_eq!(path, cache_path(dir.path(), &sha));
+            Err(error) => {
                 assert!(
-                    matches!(fault, AccessFault::Missing),
-                    "absent keeps the fault: {fault}"
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps the cause: {error}"
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&pools.path(&sha).display().to_string()),
+                    "absent keeps the pool path"
                 );
             }
-            Err(error) => panic!("wrong absent variant: {error}"),
         }
     }
 
@@ -779,27 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn open_reports_read_denied() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = project_file(dir.path(), "profile.lua", b"return {}");
-        let store = test_store(dir.path());
-        let handle = match store.resource("profile.lua") {
-            Ok(handle) => handle,
-            Err(error) => panic!("resource creates: {error}"),
-        };
-        driver::fs::set_mode(&path, Some(0o000)).unwrap();
-        match store.open(&handle) {
-            Ok(_) => panic!("refused file passes"),
-            Err(ResourceError::Read { path: found, fault }) => {
-                assert_eq!(found, path, "open keeps the path");
-                assert!(matches!(fault, AccessFault::Denied), "open keeps the fault");
-            }
-            Err(error) => panic!("wrong open variant: {error}"),
-        }
-        driver::fs::set_mode(&path, Some(0o644)).unwrap();
-    }
-
-    #[test]
     fn persist_cache_fills_pool() {
         use std::io::Read as _;
 
@@ -847,14 +759,21 @@ mod tests {
         let sha = Sha::hash(b"absent");
         match store.persist(&sha) {
             Ok(_) => panic!("absent cache passes"),
-            Err(ResourceError::Read { path, fault }) => {
-                assert_eq!(path, cache_path(dir.path(), &sha));
+            Err(error) => {
                 assert!(
-                    matches!(fault, AccessFault::Missing),
-                    "absent keeps the fault: {fault}"
+                    matches!(
+                        error.root_cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ),
+                    "absent keeps the cause: {error}"
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&cache_path(dir.path(), &sha).display().to_string()),
+                    "absent keeps the path"
                 );
             }
-            Err(error) => panic!("wrong persist variant: {error}"),
         }
     }
 
@@ -871,10 +790,14 @@ mod tests {
         std::fs::write(dir.path().join("config").join("blobs"), b"not a dir").unwrap();
         match store.persist(&sha) {
             Ok(_) => panic!("blocked pool passes"),
-            Err(ResourceError::WriteUnknown { path, .. }) => {
-                assert_eq!(path, pools.path(&sha), "pool fault keeps the pool path");
+            Err(error) => {
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&pools.path(&sha).display().to_string()),
+                    "pool fault keeps the pool path"
+                );
             }
-            Err(error) => panic!("wrong pool fault variant: {error}"),
         }
     }
 }

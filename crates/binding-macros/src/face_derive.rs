@@ -41,6 +41,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     &declaration.attrs,
                     &header.validate,
                     &header.rename,
+                    header.traced,
                 ),
                 None => Err(syn::Error::new_spanned(
                     &identifier,

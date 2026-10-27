@@ -98,7 +98,7 @@ function nerd_fonts.font(name, version)
 	local archive = is.must("nerd_fonts: cannot open the font zip: ", handle:archive())
 	local dest = font_route(name)
 	local config = {
-		name = name,
+		name = id(name),
 		documents = { { path = dest, members = ttf_members(archive) } },
 		hooks = { refresh_hook(dest) },
 	}

@@ -21,6 +21,7 @@ noyalib.workspace = true
 serini = "0.3.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 flate2.workspace = true
+confit-core = { version = "0.9.0", path = "../core" }
 
 [dev-dependencies]
 confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }

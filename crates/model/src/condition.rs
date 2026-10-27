@@ -101,10 +101,6 @@ impl Condition {
     }
 
     /// Return the simplified form of one condition tree.
-    ///
-    /// The form is an equivalent tree in idempotent normal form.
-    ///
-    /// - Empty `All` is true and empty `Any` is false.
     pub fn simplified(&self) -> Self {
         let mut out = self.simplify_step();
         loop {
@@ -130,8 +126,6 @@ impl Condition {
     }
 
     /// Simplify one `All` or `Any` member list.
-    ///
-    /// - Singletons collapse to their member.
     fn nary(kind: NaryKind, items: &[Self]) -> Self {
         let mut simple: Vec<Self> = items.iter().map(Self::simplified).collect();
         let mut flat = Vec::with_capacity(simple.len());
@@ -185,15 +179,37 @@ impl Condition {
     }
 
     /// Report whether one branch absorbs into a sibling member.
-    ///
-    /// `All` drops an `Any` branch with any sibling member, and `Any`
-    /// drops an `All` branch with any sibling member.
     fn absorbed(flat: &[Self], member: &Self, kind: NaryKind) -> bool {
         let inner = match (kind, member) {
             (NaryKind::All, Self::Any(inner)) | (NaryKind::Any, Self::All(inner)) => inner,
             _ => return false,
         };
         flat.iter().any(|sibling| inner.contains(sibling))
+    }
+
+    /// Render one condition in compact form for condition text.
+    pub fn describe(&self) -> String {
+        fn render(cond: &Condition) -> String {
+            match cond {
+                Condition::EnvEq { key, value } => format!("env_eq({key}={value})"),
+                Condition::EnvSet { key } => format!("env_set({key})"),
+                Condition::InPath { name } => format!("in_path({name})"),
+                Condition::Exists { route } => format!("exists({})", route.display()),
+                Condition::Changed { route } => format!("changed({})", route.display()),
+                Condition::All(items) if items.is_empty() => "true".to_string(),
+                Condition::Any(items) if items.is_empty() => "false".to_string(),
+                Condition::All(items) => format!(
+                    "({})",
+                    items.iter().map(render).collect::<Vec<_>>().join(" and ")
+                ),
+                Condition::Any(items) => format!(
+                    "({})",
+                    items.iter().map(render).collect::<Vec<_>>().join(" or ")
+                ),
+                Condition::Not(inner) => format!("(not {})", render(inner)),
+            }
+        }
+        render(&self.simplified())
     }
 }
 

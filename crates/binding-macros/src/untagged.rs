@@ -154,7 +154,6 @@ fn build_inline_payload(
         }
         let lua_key = flags.rename.clone().unwrap_or_else(|| field_name.clone());
         let field_docs = doc_lines(&field.attrs).join(" ");
-        let path = format!("{outer}.{variant_name}.{lua_key}");
         if flags.ignore {
             declarations.push(quote! { #[doc = #field_docs] pub #field_ident: #field_type });
             decoders.push(quote! {
@@ -174,20 +173,13 @@ fn build_inline_payload(
                     ),
                 ));
             }
-            let sibling = format!("{outer}.{variant_name}.{field_name}");
             let decode_hook = flags.decode_hook.as_ref();
             declarations.push(quote! { #[doc = #field_docs] pub #field_ident: #field_type });
             decoders.push(quote! {
-                let #field_ident: #field_type = #decode_hook(lua, &table).map_err(|error| {
-                    ::confit_binding::value::Mismatch {
-                        path: #sibling.to_owned(),
-                        want: error.want,
-                        found: error.found,
-                    }
-                })?;
+                let #field_ident: #field_type = #decode_hook(lua, &table)?;
             });
             members.push(quote! {
-                <#field_type as ::confit_binding::face::Face>::collect(collector)?;
+                <#field_type as ::confit_binding::face::Face>::collect(collector);
             });
             field_idents.push(field_ident);
             continue;
@@ -234,14 +226,14 @@ fn build_inline_payload(
             if flags.optional || inferred {
                 decoders.push(quote! {
                     let raw_value: ::mlua::Value =
-                        ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                        ::confit_binding::value::read_field(&table, #lua_key)?;
                     let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                         <#field_type as ::std::default::Default>::default()
                     } else {
                         ::confit_binding::value::decode_proxy(
                             lua,
                             &raw_value,
-                            #path,
+                            #lua_key,
                             #decode_hook,
                         )?
                     };
@@ -253,14 +245,14 @@ fn build_inline_payload(
                 };
                 decoders.push(quote! {
                     let raw_value: ::mlua::Value =
-                        ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                        ::confit_binding::value::read_field(&table, #lua_key)?;
                     let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                         #fallback
                     } else {
                         ::confit_binding::value::decode_proxy(
                             lua,
                             &raw_value,
-                            #path,
+                            #lua_key,
                             #decode_hook,
                         )?
                     };
@@ -268,20 +260,24 @@ fn build_inline_payload(
             } else {
                 decoders.push(quote! {
                     let raw_value: ::mlua::Value =
-                        ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                        ::confit_binding::value::read_field(&table, #lua_key)?;
                     if matches!(raw_value, ::mlua::Value::Nil) {
                         return ::std::result::Result::Err(
-                            ::confit_binding::value::Mismatch {
-                                path: #path.to_owned(),
-                                want: <#face_tokens as ::confit_binding::face::Face>::face_name(),
-                                found: "nil".to_owned(),
+                            ::confit_binding::fault::FaceFault {
+                                segments: ::std::vec![::confit_binding::fault::Segment::Field(
+                                    #lua_key.to_owned(),
+                                )],
+                                reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                    require: <#field_type as ::confit_binding::face::Face>::face_name(),
+                                    found: "nil".to_owned(),
+                                },
                             },
                         );
                     }
                     let #field_ident = ::confit_binding::value::decode_proxy(
                         lua,
                         &raw_value,
-                        #path,
+                        #lua_key,
                         #decode_hook,
                     )?;
                 });
@@ -289,15 +285,17 @@ fn build_inline_payload(
         } else if flags.optional || inferred {
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                     <#field_type as ::std::default::Default>::default()
                 } else {
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: ::std::format!("{}: {}", #path, error.path),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?
                 };
             });
@@ -308,37 +306,45 @@ fn build_inline_payload(
             };
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                     #fallback
                 } else {
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: ::std::format!("{}: {}", #path, error.path),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?
                 };
             });
         } else {
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 if matches!(raw_value, ::mlua::Value::Nil) {
                     return ::std::result::Result::Err(
-                        ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: <#field_type as ::confit_binding::face::Face>::face_name(),
-                            found: "nil".to_owned(),
+                        ::confit_binding::fault::FaceFault {
+                            segments: ::std::vec![::confit_binding::fault::Segment::Field(
+                                #lua_key.to_owned(),
+                            )],
+                            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                require: <#field_type as ::confit_binding::face::Face>::face_name(),
+                                found: "nil".to_owned(),
+                            },
                         },
                     );
                 }
                 let #field_ident =
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: ::std::format!("{}: {}", #path, error.path),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?;
             });
         }
@@ -392,13 +398,12 @@ fn build_inline_payload(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                     #(#members)*
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -406,7 +411,7 @@ fn build_inline_payload(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 Self::decode_ignored(value, lua, &[])
             }
 
@@ -414,11 +419,10 @@ fn build_inline_payload(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
                 ignored: &[&str],
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
-                let table = ::confit_binding::value::table_value(value, #class_name)?;
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
+                let table = ::confit_binding::value::table_value(value)?;
                 ::confit_binding::value::check_keys_ignored(
                     &table,
-                    #class_name,
                     &[#(#field_names),*],
                     ignored,
                 )?;
@@ -458,10 +462,12 @@ fn validate_check(outer: &str, validate: &Option<syn::Path>) -> Tokens {
     match validate {
         Some(hook) => quote! {
             #hook(&result).map_err(|error: ::mlua::Error| {
-                ::confit_binding::value::Mismatch {
-                    path: #outer.to_owned(),
-                    want: ::std::format!("valid {}", #outer),
-                    found: error.to_string(),
+                ::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: ::std::format!("valid {}", #outer),
+                        found: error.to_string(),
+                    },
                 }
             })?;
         },
@@ -506,7 +512,7 @@ fn family_dispatch(index: usize, family: &Family, check: &Tokens) -> Tokens {
     quote! {
         if _index == #index {
             let mut last_error: ::std::option::Option<
-                ::confit_binding::value::Mismatch,
+                ::confit_binding::fault::FaceFault,
             > = ::std::option::Option::None;
             #(#arms)*
             if let ::std::option::Option::Some(error) = last_error {
@@ -521,7 +527,6 @@ fn family_dispatch(index: usize, family: &Family, check: &Tokens) -> Tokens {
 /// - Stranger tables keep the tuple-arm mismatch past its front door.
 /// - Ambiguous tables and bare values keep the union mismatch.
 fn default_body(
-    name: &syn::Ident,
     families: &[Family],
     fallback: &[Tokens],
     discarded: &[Tokens],
@@ -546,7 +551,7 @@ fn default_body(
     } else {
         quote! { &[#(#sets),*] }
     };
-    let stranger_want: Tokens = if known.is_empty() {
+    let stranger_require: Tokens = if known.is_empty() {
         quote! { [#(#faces),*].join(" | ") }
     } else {
         quote! { ::std::format!("one of {}", [#(#known),*].join(", ")) }
@@ -557,60 +562,58 @@ fn default_body(
                 ::confit_binding::value::FamilyRoute::Stranger(unknown)
                     if !unknown.is_empty() =>
                 {
-                    ::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: #stranger_want,
-                        found: ::std::format!(
-                            "unknown field '{}'",
-                            unknown.join("', '")
-                        ),
+                    ::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                            require: #stranger_require,
+                            found: ::std::format!(
+                                "unknown field '{}'",
+                                unknown.join("', '")
+                            ),
+                        },
                     }
                 }
-                _ => ::confit_binding::value::Mismatch {
-                    path: stringify!(#name).to_owned(),
-                    want: [#(#faces),*].join(" | "),
-                    found: value.type_name().to_owned(),
+                _ => ::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: [#(#faces),*].join(" | "),
+                        found: value.type_name().to_owned(),
+                    },
                 },
             });
         }
     } else {
         quote! {
             let mut fallback_error: ::std::option::Option<
-                ::confit_binding::value::Mismatch,
+                ::confit_binding::fault::FaceFault,
             > = ::std::option::Option::None;
             #(#fallback)*
             if let ::confit_binding::value::FamilyRoute::Stranger(_) = &outcome {
                 if let ::std::option::Option::Some(error) = fallback_error {
-                    return ::std::result::Result::Err(
-                        ::confit_binding::value::Mismatch {
-                            path: ::std::format!(
-                                "{}: {}",
-                                stringify!(#name),
-                                error.path
-                            ),
-                            want: error.want,
-                            found: error.found,
-                        },
-                    );
+                    return ::std::result::Result::Err(error);
                 }
             }
             return ::std::result::Result::Err(match outcome {
                 ::confit_binding::value::FamilyRoute::Stranger(unknown)
                     if !unknown.is_empty() =>
                 {
-                    ::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: #stranger_want,
-                        found: ::std::format!(
-                            "unknown field '{}'",
-                            unknown.join("', '")
-                        ),
+                    ::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                            require: #stranger_require,
+                            found: ::std::format!(
+                                "unknown field '{}'",
+                                unknown.join("', '")
+                            ),
+                        },
                     }
                 }
-                _ => ::confit_binding::value::Mismatch {
-                    path: stringify!(#name).to_owned(),
-                    want: [#(#faces),*].join(" | "),
-                    found: value.type_name().to_owned(),
+                _ => ::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: [#(#faces),*].join(" | "),
+                        found: value.type_name().to_owned(),
+                    },
                 },
             });
         }
@@ -618,7 +621,7 @@ fn default_body(
     quote! {
         if let ::mlua::Value::Table(table) = value.clone() {
             let keys =
-                ::confit_binding::value::table_keys(&table, stringify!(#name))?;
+                ::confit_binding::value::table_keys(&table)?;
             let keys: ::std::vec::Vec<::std::string::String> = keys
                 .into_iter()
                 .filter(|key| !ignored.contains(&key.as_str()))
@@ -627,10 +630,12 @@ fn default_body(
                 ::confit_binding::value::FamilyRoute::Match(_index) => {
                     #(#dispatch)*
                     return ::std::result::Result::Err(
-                        ::confit_binding::value::Mismatch {
-                            path: stringify!(#name).to_owned(),
-                            want: [#(#faces),*].join(" | "),
-                            found: "an unknown shape".to_owned(),
+                        ::confit_binding::fault::FaceFault {
+                            segments: ::std::vec::Vec::new(),
+                            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                require: [#(#faces),*].join(" | "),
+                                found: "an unknown shape".to_owned(),
+                            },
                         },
                     );
                 }
@@ -640,10 +645,12 @@ fn default_body(
             }
         }
         #(#discarded)*
-        ::std::result::Result::Err(::confit_binding::value::Mismatch {
-            path: stringify!(#name).to_owned(),
-            want: [#(#faces),*].join(" | "),
-            found: value.type_name().to_owned(),
+        ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+            segments: ::std::vec::Vec::new(),
+            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                require: [#(#faces),*].join(" | "),
+                found: value.type_name().to_owned(),
+            },
         })
     }
 }
@@ -853,9 +860,7 @@ pub(crate) fn expand_untagged_enum(
                                 return ::std::result::Result::Ok(result);
                             }
                             ::std::result::Result::Err(error) => {
-                                if error.path
-                                    != <#payload as ::confit_binding::face::Face>::face_name()
-                                {
+                                if !error.segments.is_empty() {
                                     fallback_error = ::std::option::Option::Some(error);
                                 }
                             }
@@ -884,7 +889,7 @@ pub(crate) fn expand_untagged_enum(
             quote! {
                 #nil
                 let _ = ignored;
-                let table = ::confit_binding::value::table_value(value, stringify!(#name))?;
+                let table = ::confit_binding::value::table_value(value)?;
                 let result = #hook(lua, &table)?;
                 #check
                 ::std::result::Result::Ok(result)
@@ -892,7 +897,7 @@ pub(crate) fn expand_untagged_enum(
         }
         None => {
             let nil = nil_attempt.clone();
-            let routed = default_body(name, &families, &fallback, &discarded, &faces, &check);
+            let routed = default_body(&families, &fallback, &discarded, &faces, &check);
             quote! {
                 #nil
                 #routed
@@ -916,12 +921,11 @@ pub(crate) fn expand_untagged_enum(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -929,7 +933,7 @@ pub(crate) fn expand_untagged_enum(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 Self::decode_ignored(value, lua, &[])
             }
 
@@ -937,7 +941,7 @@ pub(crate) fn expand_untagged_enum(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
                 ignored: &[&str],
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 #decode_body
             }
         }

@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{Level, Patch};
 use confit_engine::api::profile::Profile;
@@ -12,6 +12,7 @@ use confit_model::document::{
     Data, Document, LinkDocument, OpaqueDocument, RcEntry, StructuredDocument, StructuredFormat,
     TextDocument, TreeDocument, TreeMember,
 };
+use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
 use mlua::Lua;
@@ -23,14 +24,14 @@ fn duplicates_fail() {
     let profile = Profile::new(
         vec![
             Config::new(
-                "first".to_owned(),
+                Id::of("first"),
                 [placed_text(".bashrc", "one")].into_iter().collect(),
                 vec![],
                 Vec::new(),
                 HashMap::new(),
             ),
             Config::new(
-                "second".to_owned(),
+                Id::of("second"),
                 [placed_text(".bashrc", "two")].into_iter().collect(),
                 vec![],
                 Vec::new(),
@@ -47,14 +48,14 @@ fn duplicates_fail() {
     let profile = Profile::new(
         vec![
             Config::new(
-                "same".to_owned(),
+                Id::of("same"),
                 [placed_text("a", "one")].into_iter().collect(),
                 vec![],
                 Vec::new(),
                 HashMap::new(),
             ),
             Config::new(
-                "same".to_owned(),
+                Id::of("same"),
                 [placed_text("b", "two")].into_iter().collect(),
                 vec![],
                 Vec::new(),
@@ -67,7 +68,7 @@ fn duplicates_fail() {
     let lua = Lua::new();
     let profile = Profile::new(
         vec![Config::new(
-            "tools/test".to_owned(),
+            Id::of("tools/test"),
             [placed_text(".bashrc", "two")].into_iter().collect(),
             vec![],
             Vec::new(),
@@ -672,7 +673,7 @@ fn hooks_pass_through_without_merging() {
     let lua = Lua::new();
     let profile = profile_with_hooks(vec![
         Config::new(
-            "tools/first".to_owned(),
+            Id::of("tools/first"),
             Vec::new(),
             Vec::new(),
             vec![
@@ -682,7 +683,7 @@ fn hooks_pass_through_without_merging() {
             HashMap::new(),
         ),
         Config::new(
-            "tools/second".to_owned(),
+            Id::of("tools/second"),
             Vec::new(),
             Vec::new(),
             vec![hook_of(&["mise", "install"], 600)],
@@ -708,14 +709,14 @@ fn repeated_hook_ids_fail_showing_ids() {
     let lua = Lua::new();
     let profile = profile_with_hooks(vec![
         Config::new(
-            "tools/first".to_owned(),
+            Id::of("tools/first"),
             Vec::new(),
             Vec::new(),
             vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
             HashMap::new(),
         ),
         Config::new(
-            "tools/second".to_owned(),
+            Id::of("tools/second"),
             Vec::new(),
             Vec::new(),
             vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
@@ -740,7 +741,7 @@ fn hook_patches_mutate_live_hooks_in_order() {
         r#"return function(hook) hook.check = { in_path = { name = "extra" } } end"#,
     );
     let profile = profile_with_hooks(vec![Config::new(
-        "tools/test".to_owned(),
+        Id::of("tools/test"),
         Vec::new(),
         vec![Patch::Hook(patch)],
         vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
@@ -750,7 +751,10 @@ fn hook_patches_mutate_live_hooks_in_order() {
     match Assembler::new(&lua).collect_hooks(&profile, &documents) {
         Ok(hooks) => {
             assert_eq!(hooks.len(), 1);
-            assert_eq!(hooks[0].id.as_deref(), Some("mise:install"));
+            assert_eq!(
+                hooks[0].id.as_ref().map(|id| id.as_str()),
+                Some("mise:install")
+            );
             assert_eq!(
                 hooks[0].check,
                 Condition::InPath {
@@ -788,7 +792,7 @@ fn hook_patches_append_checks_through_all_unions() {
         end"#,
     );
     let profile = profile_with_hooks(vec![Config::new(
-        "tools/test".to_owned(),
+        Id::of("tools/test"),
         Vec::new(),
         vec![Patch::Hook(first), Patch::Hook(second)],
         vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
@@ -823,7 +827,7 @@ fn hook_patches_over_missing_ids_fail() {
         r#"return function(hook) return hook end"#,
     );
     let profile = profile_with_hooks(vec![Config::new(
-        "tools/test".to_owned(),
+        Id::of("tools/test"),
         Vec::new(),
         vec![Patch::Hook(patch)],
         vec![identified_hook_of("mise:install", &["mise", "install"], 60)],
@@ -843,7 +847,7 @@ fn missing_requirements_fail_with_hints() {
     let lua = Lua::new();
     let profile = Profile::new(
         vec![Config::new(
-            "tools/bat".to_owned(),
+            Id::of("tools/bat"),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -866,14 +870,14 @@ fn present_requirements_pass() {
     let profile = Profile::new(
         vec![
             Config::new(
-                "plugin:_/mise:install".to_owned(),
+                Id::of("plugin:_/mise:install"),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 HashMap::new(),
             ),
             Config::new(
-                "tools/bat".to_owned(),
+                Id::of("tools/bat"),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -902,7 +906,7 @@ fn changed_conditions_over_unbuilt_routes_fail() {
     };
     let documents = [placed_text("present", "hi")];
     let profile = profile_with_hooks(vec![Config::new(
-        "tools/test".to_owned(),
+        Id::of("tools/test"),
         documents.into_iter().collect(),
         Vec::new(),
         vec![built_hook],
@@ -916,7 +920,7 @@ fn changed_conditions_over_unbuilt_routes_fail() {
     let mut foreign_hook = hook_of(&["mise"], 60);
     foreign_hook.when = Condition::Changed { route: missing };
     let profile = profile_with_hooks(vec![Config::new(
-        "tools/test".to_owned(),
+        Id::of("tools/test"),
         Vec::new(),
         Vec::new(),
         vec![foreign_hook],

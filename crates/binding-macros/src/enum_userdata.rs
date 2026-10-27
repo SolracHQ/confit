@@ -69,8 +69,8 @@ pub(crate) fn expand_enum_userdata(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
-                <Self as ::confit_binding::userdata::UserdataClass>::collect(collector)
+            ) {
+                <Self as ::confit_binding::userdata::UserdataClass>::collect(collector);
             }
         }
 
@@ -78,25 +78,29 @@ pub(crate) fn expand_enum_userdata(
             fn decode(
                 value: &::mlua::Value,
                 _lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 let want =
                     ::std::format!("a {} handle", stringify!(#name));
                 match value.as_userdata() {
                     ::std::option::Option::Some(found) => {
                         let result = found.borrow::<Self>().map(|held| held.clone()).map_err(|_| {
-                            ::confit_binding::value::Mismatch {
-                                path: stringify!(#name).to_owned(),
-                                want: want.clone(),
-                                found: "foreign userdata".to_owned(),
+                            ::confit_binding::fault::FaceFault {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                    require: want.clone(),
+                                    found: "foreign userdata".to_owned(),
+                                },
                             }
                         })?;
                         #epilogue
                     }
                     ::std::option::Option::None => {
-                        ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                            path: stringify!(#name).to_owned(),
-                            want,
-                            found: value.type_name().to_owned(),
+                        ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+                            segments: ::std::vec::Vec::new(),
+                            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                require: want.clone(),
+                                found: value.type_name().to_owned(),
+                            },
                         })
                     }
                 }
@@ -119,10 +123,12 @@ fn validate_epilogue(outer: &str, validate: &Option<syn::Path>) -> Tokens {
     match validate {
         Some(hook) => quote! {
             #hook(&result).map_err(|error: ::mlua::Error| {
-                ::confit_binding::value::Mismatch {
-                    path: #outer.to_owned(),
-                    want: ::std::format!("valid {}", #outer),
-                    found: error.to_string(),
+                ::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: ::std::format!("valid {}", #outer),
+                        found: error.to_string(),
+                    },
                 }
             })?;
             ::std::result::Result::Ok(result)

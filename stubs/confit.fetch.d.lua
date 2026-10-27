@@ -10,7 +10,7 @@ function fetch(url, opts) end
 --- @class FetchOpts
 --- @field sha256 string? The pinned sha256 hex digest.
 
---- Handle to a project or cached resource.
+--- Handle to a trusted resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 

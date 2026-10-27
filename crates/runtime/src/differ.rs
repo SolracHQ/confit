@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use compare::Comparator;
 
-use crate::error::Result;
 use crate::manifest::Manifest;
+use confit_core::error::{DiffWarning, Result};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -81,18 +81,14 @@ pub struct Differ {
 impl Differ {
     /// Report manual edits between recorded documents and disk.
     ///
-    /// Link documents compare target text.
-    ///
-    /// - Entries follow recorded destination order.
-    ///
     /// # Errors
     ///
-    /// - [`crate::error::RuntimeError::Expand`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub fn differences(
         &self,
         manifest: &Manifest,
         order: DifferenceOrder,
-    ) -> Result<Vec<Difference>> {
+    ) -> Result<(Vec<Difference>, Vec<DiffWarning>)> {
         Comparator::new(&self.stores, order).run(manifest)
     }
 }
@@ -101,7 +97,7 @@ impl Differ {
 mod tests {
     use super::*;
 
-    use confit_driver::sha::Sha;
+    use confit_core::sha::Sha;
     use confit_model::document::{
         Data, Document, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
     };
@@ -155,6 +151,7 @@ mod tests {
         test_differ(dir)
             .differences(&manifest_of(documents), DifferenceOrder::RecordedFirst)
             .unwrap()
+            .0
     }
 
     #[test]
@@ -254,7 +251,8 @@ mod tests {
         };
         let found = differ
             .differences(&manifest, DifferenceOrder::RecordedFirst)
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(
             found.is_empty(),
             "matching expanded bytes are zero difference"

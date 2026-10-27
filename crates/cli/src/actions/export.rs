@@ -3,14 +3,12 @@
 
 use std::path::PathBuf;
 
+use confit_core::error::Terminal;
+use confit_core::error::{Error, ErrorCause, Failure, Outcome};
 use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::Manifest;
 use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
-use confit_store::state::StateStore;
-
-use crate::error::{CliError, Result};
 
 use crate::cli::ExportArgs;
 
@@ -42,7 +40,16 @@ pub struct ExportRunner<'a> {
 
 impl<'a> ExportRunner<'a> {
     /// Run the full export flow from flags.
-    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Result<ExportReport> {
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] for malformed slots.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Outcome<ExportReport> {
         Self {
             args,
             stores,
@@ -51,37 +58,55 @@ impl<'a> ExportRunner<'a> {
         .execute()
     }
 
-    /// Resolve the picker, then write the bundle file or render pretty
-    /// manifest JSON.
-    ///
-    /// Report with the bundle path for file exports, else the
-    /// manifest text.
-    ///
-    /// - The `-o` destination is a literal file path.
-    /// - Omitted destinations derive from the state.
+    /// Resolve the picker, then write the bundle file or render manifest JSON.
     ///
     /// # Errors
     ///
-    /// - [`CliError::FlagRefuse`] for joint flags.
-    /// - [`CliError::BadPicker`] for malformed pickers.
-    /// - [`CliError::Runtime`] for state resolves and bundle writes.
-    /// - [`CliError::Model`] for manifest renders.
-    pub fn execute(self) -> Result<ExportReport> {
+    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] for malformed slots.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    pub fn execute(self) -> Outcome<ExportReport> {
         let args = self.args;
         let stores = self.stores;
-        if args.manifest && args.output.is_some() {
-            return Err(CliError::FlagRefuse);
-        }
         let bundles = Bundler::new(&stores);
         let picker = match args.picker.as_deref() {
             None => Picker::Applied,
-            Some(raw) => raw.parse().map_err(|_| CliError::BadPicker {
-                input: raw.to_owned(),
-            })?,
+            Some(raw) => match raw.parse::<Picker>() {
+                Ok(picker) => picker,
+                Err(error) => match error.root_cause() {
+                    ErrorCause::SlotReason(reason) => {
+                        return Err(Error::export_slot(raw.to_owned(), reason.clone()));
+                    }
+                    _ => return Err(Error::export_state(error)),
+                },
+            },
         };
-        let (manifest, auto) = resolve_state_bundle(&picker, &stores.states())?;
+        let manifest = match stored::resolve(&stores.states(), &picker) {
+            Ok(found) => found,
+            Err(Failure::Terminal(terminal)) => return Err(terminal),
+            Err(Failure::Mid(error)) => match error.root_cause() {
+                ErrorCause::SlotReason(reason) => {
+                    let raw = match &picker {
+                        Picker::Applied => "applied".to_owned(),
+                        Picker::Named(name) => format!("@{name}"),
+                        Picker::History(pick) => format!("%{pick}"),
+                    };
+                    return Err(Error::export_slot(raw, reason.clone()));
+                }
+                _ => return Err(Error::export_state(error)),
+            },
+        };
+        let stem = match &picker {
+            Picker::Applied => APPLIED_STEM.to_owned(),
+            Picker::Named(name) => name.clone(),
+            Picker::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
+        };
+        let auto = PathBuf::from(stem);
         if args.manifest {
-            let text = manifest.json().map_err(CliError::from)?;
+            let text = manifest.json().write_bundle(&auto)?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),
@@ -91,30 +116,10 @@ impl<'a> ExportRunner<'a> {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        let dest = bundles.write(&manifest, &dest).map_err(CliError::from)?;
+        let dest = bundles.write(&manifest, &dest)?;
         Ok(ExportReport {
             dest: Some(dest),
             manifest: None,
         })
     }
-}
-
-/// Resolve one picker to its stored manifest and auto bundle name.
-///
-/// # Errors
-///
-/// - [`CliError::Runtime`] for state resolves.
-pub fn resolve_state_bundle(picker: &Picker, states: &StateStore) -> Result<(Manifest, PathBuf)> {
-    let manifest = stored::resolve(states, picker)?;
-    let stem = match picker {
-        Picker::Applied => APPLIED_STEM.to_string(),
-        Picker::Named(name) => name.clone(),
-        Picker::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
-    };
-    Ok((manifest, auto_dest(&stem)))
-}
-
-/// Build one state-derived bundle destination stem.
-fn auto_dest(stem: &str) -> PathBuf {
-    std::path::Path::new(stem).to_path_buf()
 }

@@ -4,16 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 
+use confit_core::error::Terminal;
+use confit_core::error::{DocumentError, Error, ErrorCause, ErrorContext, EvalDetail, Outcome};
+use confit_core::progress::{Event, ProgressSender};
 use confit_driver as driver;
-use confit_driver::progress::{Event, ProgressSender};
-use confit_driver::sha::Sha;
 use confit_model::document::{Data, Document, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
-use confit_store::faults::AccessFault;
-use confit_store::resources::error::ResourceError;
 
-use crate::error::{Result, RuntimeError};
 use crate::render::render_document;
 
 /// Destination writer.
@@ -32,19 +30,14 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    /// - [`RuntimeError::Write`] for write faults.
-    /// - [`RuntimeError::WriteUnknown`] for unmapped
-    ///   write failures.
-    /// - [`RuntimeError::MissingContent`] for dangling tree
-    ///   content hashes.
-    /// - [`RuntimeError::Refusal`] with [`RuntimeError::Render`]
-    ///   through rendering.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases, write faults,
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for unresolvable bases, write faults,
+    ///   and render faults.
     pub fn write_documents(
         &self,
         documents: &[Document],
         changed: &BTreeSet<Route>,
-    ) -> Result<usize> {
+    ) -> Outcome<usize> {
         let total = documents.len();
         let mut done = 0;
         let mut written = 0;
@@ -59,7 +52,8 @@ impl Writer {
                 continue;
             }
             if let Data::Tree(found) = &document.data {
-                let count = self.write_tree_members(&expanded, &found.members)?;
+                let count =
+                    self.write_tree_members(&expanded, &document.path.display(), &found.members)?;
                 done += 1;
                 self.emit_written(&document.path, done, total);
                 written += count;
@@ -68,22 +62,20 @@ impl Writer {
             if let Data::Opaque(found) = &document.data {
                 use std::io::Write as _;
 
-                if let Err(error) = driver::fs::remove_link(&expanded) {
-                    return Err(RuntimeError::from_write_io(&expanded, error));
-                }
+                driver::fs::remove_link(&expanded).write_destination(&expanded)?;
                 let handle = &found.handle;
                 let mut reader = self
                     .stores
                     .resources()
                     .open(handle)
-                    .map_err(|error| map_resource(error, handle.sha(), &expanded, &expanded))?;
+                    .map_err(|error| error.route(document.path.display()))
+                    .write_destination(&expanded)?;
                 driver::StagedFile::write(&expanded, |file| {
                     std::io::copy(&mut reader, file)?;
                     file.flush()
                 })
-                .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
-                driver::fs::set_mode(&expanded, Some(found.mode))
-                    .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
+                .write_destination(&expanded)?;
+                driver::fs::set_mode(&expanded, Some(found.mode)).write_destination(&expanded)?;
                 done += 1;
                 self.emit_written(&document.path, done, total);
                 written += 1;
@@ -92,19 +84,18 @@ impl Writer {
             let outcome = match &document.data {
                 Data::Link(found) => {
                     let link = found.target.display();
-                    driver::fs::write_link(&expanded, Path::new(&link))
-                        .map_err(|error| RuntimeError::from_write_io(&expanded, error))
+                    driver::fs::write_link(&expanded, Path::new(&link)).write_destination(&expanded)
                 }
                 Data::Text(_) | Data::Structured(_) | Data::Rc(_) => {
-                    if let Err(error) = driver::fs::remove_link(&expanded) {
-                        return Err(RuntimeError::from_write_io(&expanded, error));
-                    }
-                    let bytes = render_document(document)?;
-                    if let Err(error) = driver::fs::create_parent(&expanded) {
-                        return Err(RuntimeError::from_write_io(&expanded, error));
-                    }
-                    std::fs::write(&expanded, &bytes)
-                        .map_err(|error| RuntimeError::from_write_io(&expanded, error))
+                    driver::fs::remove_link(&expanded).write_destination(&expanded)?;
+                    let bytes = render_document(document).map_err(|leaf| {
+                        Error::write_destination(
+                            expanded.clone(),
+                            ErrorContext::from(leaf).route(document.path.display()),
+                        )
+                    })?;
+                    driver::fs::create_parent(&expanded).write_destination(&expanded)?;
+                    std::fs::write(&expanded, &bytes).write_destination(&expanded)
                 }
                 Data::Tree(_) | Data::Opaque(_) => {
                     continue;
@@ -116,8 +107,7 @@ impl Writer {
                 Data::Opaque(found) => Some(found.mode),
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
             };
-            driver::fs::set_mode(&expanded, mode)
-                .map_err(|error| RuntimeError::from_write_io(&expanded, error))?;
+            driver::fs::set_mode(&expanded, mode).write_destination(&expanded)?;
             done += 1;
             self.emit_written(&document.path, done, total);
             written += 1;
@@ -137,17 +127,13 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::MissingContent`] for dangling member
-    ///   hashes with the destination and the member.
-    /// - [`RuntimeError::Write`] for unwritable members
-    ///   and mode failures.
-    /// - [`RuntimeError::WriteUnknown`] for unmapped
-    ///   member failures.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for unreadable members and unwritable members.
     fn write_tree_members(
         &self,
         dest: &Path,
+        route: &str,
         members: &BTreeMap<String, TreeMember>,
-    ) -> Result<usize> {
+    ) -> Outcome<usize> {
         use std::io::Write as _;
 
         for (relative, member) in members {
@@ -157,14 +143,14 @@ impl Writer {
                 .stores
                 .resources()
                 .open(handle)
-                .map_err(|error| map_resource(error, handle.sha(), dest, &path))?;
+                .map_err(|error| error.route(route))
+                .write_destination(&path)?;
             driver::StagedFile::write(&path, |file| {
                 std::io::copy(&mut reader, file)?;
                 file.flush()
             })
-            .map_err(|error| RuntimeError::from_write_io(&path, error))?;
-            driver::fs::set_mode(&path, Some(member.mode()))
-                .map_err(|error| RuntimeError::from_write_io(&path, error))?;
+            .write_destination(&path)?;
+            driver::fs::set_mode(&path, Some(member.mode())).write_destination(&path)?;
         }
         Ok(1)
     }
@@ -174,15 +160,19 @@ impl Writer {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn expand_destination(document: &Document) -> Result<PathBuf> {
-    document
-        .path
-        .expand()
-        .map_err(|source| RuntimeError::Expand {
-            route: document.path.clone(),
-            source,
-        })
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable base folders.
+fn expand_destination(document: &Document) -> Outcome<PathBuf> {
+    match document.path.expand() {
+        Ok(found) => Ok(found),
+        Err(ErrorContext::Leaf(ErrorCause::DocumentError(DocumentError::ParseFailed {
+            input,
+            require,
+        }))) => Err(Error::evaluate(
+            EvalDetail::Parse { input, require },
+            Some(document.path.display()),
+        )),
+        Err(_) => unreachable!("route expand fails parsing alone"),
+    }
 }
 
 /// Remove one backend path and report whether anything remains.
@@ -194,58 +184,14 @@ fn remove(path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// Map one resource open failure at the destination into runtime language.
-fn map_resource(error: ResourceError, sha: &Sha, dest: &Path, target: &Path) -> RuntimeError {
-    match error {
-        ResourceError::Read {
-            fault: AccessFault::Missing,
-            ..
-        } => {
-            log::error!("missing content '{}' for '{}'", sha.hex(), target.display());
-            RuntimeError::MissingContent {
-                dest: dest.to_path_buf(),
-                sha: sha.clone(),
-                member: target.to_path_buf(),
-            }
-        }
-        ResourceError::Mismatch {
-            expected, found, ..
-        } => RuntimeError::Write {
-            path: target.to_path_buf(),
-            fault: AccessFault::Corrupt { expected, found },
-        },
-        ResourceError::Read { fault, .. } => RuntimeError::Write {
-            path: target.to_path_buf(),
-            fault,
-        },
-        ResourceError::Write { fault, .. } => RuntimeError::Write {
-            path: target.to_path_buf(),
-            fault,
-        },
-        ResourceError::WriteUnknown { message, .. } => {
-            log::error!("resource write failed: {message}");
-            RuntimeError::WriteUnknown {
-                path: target.to_path_buf(),
-                message,
-            }
-        }
-        other => RuntimeError::WriteUnknown {
-            path: target.to_path_buf(),
-            message: other.to_string(),
-        },
-    }
-}
-
 impl Writer {
     /// Remove recorded destinations absent from desired documents.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    /// - [`RuntimeError::Remove`] for removal faults.
-    /// - [`RuntimeError::RemoveUnknown`] for unmapped
-    ///   removal failures.
-    pub fn remove_deleted(&self, recorded: &[Document], desired: &[Document]) -> Result<usize> {
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases and removal faults.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for unresolvable bases and removal faults.
+    pub fn remove_deleted(&self, recorded: &[Document], desired: &[Document]) -> Outcome<usize> {
         let total = recorded.len();
         let mut done = 0;
         let mut removed = 0;
@@ -258,7 +204,7 @@ impl Writer {
                 continue;
             }
             let expanded = expand_destination(old)?;
-            if remove(&expanded).map_err(|error| RuntimeError::from_remove_io(&expanded, error))? {
+            if remove(&expanded).remove_destination(&expanded)? {
                 done += 1;
                 self.emit_removed(&old.path, done, total);
                 removed += 1;
@@ -271,15 +217,13 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
-    /// - [`RuntimeError::Remove`] for removal faults.
-    /// - [`RuntimeError::RemoveUnknown`] for unmapped
-    ///   removal failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases and removal faults.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for unresolvable bases and removal faults.
     pub fn remove_tree_members(
         &self,
         recorded: &[Document],
         desired: &[Document],
-    ) -> Result<usize> {
+    ) -> Outcome<usize> {
         let total: usize = recorded
             .iter()
             .filter_map(|old| match &old.data {
@@ -318,7 +262,7 @@ impl Writer {
                     continue;
                 }
                 let path = dest.join(relative);
-                if remove(&path).map_err(|error| RuntimeError::from_remove_io(&path, error))? {
+                if remove(&path).remove_destination(&path)? {
                     done += 1;
                     self.emit_removed(&old.path.join(relative), done, total);
                     removed += 1;
@@ -340,7 +284,7 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::progress::Event;
+    use confit_core::progress::Event;
     use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;

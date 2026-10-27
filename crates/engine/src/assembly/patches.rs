@@ -1,4 +1,3 @@
-//! Split patch lists.
 //! Group structured with rc patches over matched destinations.
 
 use std::cmp::Reverse;
@@ -13,7 +12,9 @@ use confit_model::document::{Data, Document, RcData, StructuredFormat};
 use confit_model::routes::Route;
 
 use super::owned::{OwnedPatch, assemble_config};
-use crate::error::{EngineError, Result};
+use confit_core::error::{
+    DocumentError, Error, ErrorContext, EvalDetail, EvalError, Outcome, Result,
+};
 
 /// Split one profile's patches into owned patches in return order.
 pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
@@ -24,29 +25,30 @@ pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
     owned
 }
 
-/// Group structured patches over matched destinations in first-seen order.
-///
-/// - Target patches group under their route.
-/// - Filter patches fan out over structured matches.
-/// - Groups follow first-seen declaration order.
-/// - Fan-out follows destination order.
+/// Group structured patches over matched destinations.
 ///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::Mismatch`] for doubled and missing destinations.
-/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for doubled destinations, missing
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for doubled destinations, missing
+///   destinations, and Lua failures.
 pub(super) fn grouped_structured<'a>(
     lua: &Lua,
     placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Result<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+) -> Outcome<Vec<(Route, Vec<&'a OwnedPatch>)>> {
     let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
     let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
         let Some(found) = patch.structured() else {
             continue;
         };
-        let target = join_destination(found.target.clone(), found.filter.clone())?;
+        let target = match join_destination(found.target.clone(), found.filter.clone()) {
+            Ok(target) => target,
+            Err(mismatch) => {
+                return Err(Error::evaluate(EvalDetail::Face(mismatch), None));
+            }
+        };
         for destination in expanded_destinations(lua, placed, &target, is_structured)? {
             push_grouped(&mut grouped, &mut index, destination, patch);
         }
@@ -57,29 +59,30 @@ pub(super) fn grouped_structured<'a>(
     Ok(grouped)
 }
 
-/// Group rc patches over matched destinations in first-seen order.
-///
-/// - Target patches group under their route.
-/// - Filter patches fan out over rc matches.
-/// - Groups follow first-seen declaration order.
-/// - Fan-out follows destination order.
+/// Group rc patches over matched destinations.
 ///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::Mismatch`] for doubled and missing destinations.
-/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for doubled destinations, missing
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for doubled destinations, missing
+///   destinations, and Lua failures.
 pub(super) fn grouped_rc<'a>(
     lua: &Lua,
     placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Result<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+) -> Outcome<Vec<(Route, Vec<&'a OwnedPatch>)>> {
     let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
     let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
         let Some(found) = patch.rc() else {
             continue;
         };
-        let target = join_destination(found.target.clone(), found.filter.clone())?;
+        let target = match join_destination(found.target.clone(), found.filter.clone()) {
+            Ok(target) => target,
+            Err(mismatch) => {
+                return Err(Error::evaluate(EvalDetail::Face(mismatch), None));
+            }
+        };
         for destination in expanded_destinations(lua, placed, &target, is_rc)? {
             push_grouped(&mut grouped, &mut index, destination, patch);
         }
@@ -119,13 +122,13 @@ fn rank_of(patch: &OwnedPatch) -> u8 {
 ///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for Lua failures.
 fn expanded_destinations(
     lua: &Lua,
     placed: &[Document],
     target: &PatchTarget,
     area_matches: fn(&Document) -> bool,
-) -> Result<Vec<Route>> {
+) -> Outcome<Vec<Route>> {
     match target {
         PatchTarget::Target(route) => Ok(vec![route.clone()]),
         PatchTarget::Filter(filter) => matched_destinations(lua, placed, filter, area_matches),
@@ -134,23 +137,30 @@ fn expanded_destinations(
 
 /// Collect filter destinations over callback matches.
 ///
-/// - Matches hold callback results in destination order.
-///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for Lua failures.
 fn matched_destinations(
     lua: &Lua,
     placed: &[Document],
     filter: &Callback<FilterArgs>,
     area_matches: fn(&Document) -> bool,
-) -> Result<Vec<Route>> {
+) -> Outcome<Vec<Route>> {
     let mut matched = Vec::new();
     for document in placed {
         if !area_matches(document) {
             continue;
         }
-        if filter.call::<bool>(lua, (&document.path,))? {
+        let keep = match filter.call::<bool>(lua, (&document.path,)) {
+            Ok(found) => found,
+            Err(error) => {
+                if let Some(terminal) = error.downcast_ref::<Error>() {
+                    return Err(terminal.clone());
+                }
+                return Err(Error::lua_failed(error.to_string()));
+            }
+        };
+        if keep {
             matched.push(document.path.clone());
         }
     }
@@ -171,8 +181,8 @@ fn is_rc(document: &Document) -> bool {
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownTarget`] for missing targets.
-/// - [`EngineError::Structured`] for foreign bases with gaps.
+/// - [`confit_core::error::EvalError::PatchTargetUnknown`] for missing targets.
+/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
 pub(super) fn structured_base_of(
     placed: &[Document],
     target: &Route,
@@ -184,9 +194,7 @@ pub(super) fn structured_base_of(
             let display = target.display();
             structured_declared_base(&document.data, &display, first, patches)
         }
-        None => Err(EngineError::UnknownTarget {
-            display: target.display(),
-        }),
+        None => Err(unknown_target(target)),
     }
 }
 
@@ -194,7 +202,7 @@ pub(super) fn structured_base_of(
 ///
 /// # Errors
 ///
-/// - [`EngineError::Structured`] for foreign bases with gaps.
+/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
 fn structured_declared_base(
     body: &Data,
     display: &str,
@@ -205,16 +213,36 @@ fn structured_declared_base(
         Data::Structured(found) => {
             for patch in patches {
                 if patch.format != found.format {
-                    return Err(gap(display, found.format.name(), patch.format.name()));
+                    return Err(ErrorContext::from(gap(
+                        display,
+                        found.format.name(),
+                        patch.format.name(),
+                    )));
                 }
             }
             Ok((found.format, found.data.clone()))
         }
-        Data::Rc(_) => Err(gap(display, "rc", first.format.name())),
-        Data::Text(_) => Err(gap(display, "text", first.format.name())),
-        Data::Link(_) => Err(gap(display, "link", first.format.name())),
-        Data::Opaque(_) => Err(gap(display, "opaque", first.format.name())),
-        Data::Tree(_) => Err(gap(display, "tree", first.format.name())),
+        Data::Rc(_) => Err(ErrorContext::from(gap(display, "rc", first.format.name()))),
+        Data::Text(_) => Err(ErrorContext::from(gap(
+            display,
+            "text",
+            first.format.name(),
+        ))),
+        Data::Link(_) => Err(ErrorContext::from(gap(
+            display,
+            "link",
+            first.format.name(),
+        ))),
+        Data::Opaque(_) => Err(ErrorContext::from(gap(
+            display,
+            "opaque",
+            first.format.name(),
+        ))),
+        Data::Tree(_) => Err(ErrorContext::from(gap(
+            display,
+            "tree",
+            first.format.name(),
+        ))),
     }
 }
 
@@ -222,30 +250,36 @@ fn structured_declared_base(
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownTarget`] for missing targets.
-/// - [`EngineError::Structured`] for foreign bases with gaps.
+/// - [`confit_core::error::EvalError::PatchTargetUnknown`] for missing targets.
+/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
 pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> Result<RcData> {
     match placed.iter().find(|document| document.path == *target) {
         Some(document) => match &document.data {
             Data::Rc(found) => Ok(found.clone()),
-            Data::Structured(found) => Err(gap(&target.display(), found.format.name(), "rc")),
-            Data::Text(_) => Err(gap(&target.display(), "text", "rc")),
-            Data::Link(_) => Err(gap(&target.display(), "link", "rc")),
-            Data::Opaque(_) => Err(gap(&target.display(), "opaque", "rc")),
-            Data::Tree(_) => Err(gap(&target.display(), "tree", "rc")),
+            Data::Structured(found) => Err(ErrorContext::from(gap(
+                &target.display(),
+                found.format.name(),
+                "rc",
+            ))),
+            Data::Text(_) => Err(ErrorContext::from(gap(&target.display(), "text", "rc"))),
+            Data::Link(_) => Err(ErrorContext::from(gap(&target.display(), "link", "rc"))),
+            Data::Opaque(_) => Err(ErrorContext::from(gap(&target.display(), "opaque", "rc"))),
+            Data::Tree(_) => Err(ErrorContext::from(gap(&target.display(), "tree", "rc"))),
         },
-        None => Err(EngineError::UnknownTarget {
-            display: target.display(),
-        }),
+        None => Err(unknown_target(target)),
     }
 }
 
-/// Build one patch gap error over its base with patch names.
-fn gap(display: &str, base: &str, patch: &str) -> EngineError {
-    EngineError::Structured {
-        display: display.to_owned(),
-        base: base.to_owned(),
-        patch: patch.to_owned(),
+/// Build one missing patch target error keeping the destination route.
+fn unknown_target(target: &Route) -> ErrorContext {
+    let display = target.display();
+    ErrorContext::from(EvalError::PatchTargetUnknown { route: display })
+}
+
+/// Build one patch gap cause over its base with patch names.
+fn gap(display: &str, base: &str, patch: &str) -> DocumentError {
+    DocumentError::RenderFailed {
+        reason: format!("patch targets '{display}' hold '{base}' under '{patch}' patches"),
     }
 }
 
@@ -255,6 +289,7 @@ mod tests {
     use crate::api::config::Config;
     use crate::api::patch::{Level, Patch, RcPatch, StructuredPatch};
     use confit_model::document::{StructuredDocument, TextDocument};
+    use confit_model::id::Id;
     use confit_model::routes::RouteBase;
     use mlua::{Function, Lua};
 
@@ -262,7 +297,7 @@ mod tests {
     fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
         Profile::new(
             vec![Config::new(
-                "tools/test".to_owned(),
+                Id::of("tools/test"),
                 documents,
                 patches,
                 Vec::new(),

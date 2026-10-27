@@ -233,7 +233,6 @@ name = "confit-binding"
 version = "0.9.0"
 dependencies = [
  "confit-binding-macros",
- "confit-driver",
  "mlua",
  "serde_json",
 ]
@@ -255,6 +254,7 @@ version = "0.9.0"
 dependencies = [
  "anstream",
  "clap",
+ "confit-core",
  "confit-driver",
  "confit-engine",
  "confit-model",
@@ -269,13 +269,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
 ]
 
 [[package]]
 name = "confit-core"
 version = "0.9.0"
 dependencies = [
+ "confit-binding",
  "crossbeam-channel",
+ "mlua",
  "serde",
  "sha2",
  "thiserror",
@@ -285,6 +288,7 @@ dependencies = [
 name = "confit-driver"
 version = "0.9.0"
 dependencies = [
+ "confit-core",
  "crossbeam-channel",
  "dirs",
  "flate2",
@@ -303,6 +307,7 @@ version = "0.9.0"
 dependencies = [
  "confit-binding",
  "confit-binding-macros",
+ "confit-core",
  "confit-driver",
  "confit-model",
  "confit-store",
@@ -323,6 +328,7 @@ version = "0.9.0"
 dependencies = [
  "confit-binding",
  "confit-binding-macros",
+ "confit-core",
  "confit-driver",
  "confit-store",
  "crossbeam-channel",
@@ -341,6 +347,7 @@ version = "0.9.0"
 dependencies = [
  "confit-binding",
  "confit-binding-macros",
+ "confit-core",
  "confit-driver",
  "confit-model",
  "confit-store",
@@ -364,6 +371,7 @@ dependencies = [
  "bytemuck",
  "confit-binding",
  "confit-binding-macros",
+ "confit-core",
  "confit-driver",
  "crossbeam-channel",
  "file-format",
@@ -939,6 +947,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_threads"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1377,10 +1394,13 @@ checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "js-sys",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",
+ "time-macros",
 ]
 
 [[package]]
@@ -1388,6 +1408,16 @@ name = "time-core"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
+
+[[package]]
+name = "time-macros"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+dependencies = [
+ "num-conv",
+ "time-core",
+]
 
 [[package]]
 name = "toml"

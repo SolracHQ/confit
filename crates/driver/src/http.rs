@@ -1,59 +1,19 @@
 //! HTTP downloads.
 
-use std::fmt;
 use std::io;
 
-/// HTTP failure shapes.
-#[derive(Debug)]
-pub enum HttpError {
-    /// Refused status.
-    Status {
-        /// The refused status code.
-        code: u16,
-    },
-    /// Timed-out request.
-    Timeout,
-    /// Transport failure.
-    Io(io::Error),
-    /// Unscripted test url.
-    Unscripted,
-}
-
-impl fmt::Display for HttpError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Status { code } => write!(formatter, "status {code}"),
-            Self::Timeout => write!(formatter, "timeout"),
-            Self::Io(cause) => write!(formatter, "{cause}"),
-            Self::Unscripted => write!(formatter, "no scripted body"),
-        }
-    }
-}
-
-impl std::error::Error for HttpError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(cause) => Some(cause),
-            _ => None,
-        }
-    }
-}
-
-impl From<io::Error> for HttpError {
-    fn from(cause: io::Error) -> Self {
-        Self::Io(cause)
-    }
-}
+use confit_core::error::ErrorContext;
+#[cfg(not(any(test, feature = "test-support")))]
+use confit_core::error::FetchError;
 
 /// Download one URL body as a readable stream with the total length.
 ///
 /// # Errors
 ///
-/// - [Status] for failing statuses.
-/// - [Timeout] for timeouts.
-/// - [Io] for transport read failures.
-/// - [Unscripted] for unscripted test urls.
-pub fn download(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
+/// - [`confit_core::error::FetchError::StatusRejected`] for failing statuses.
+/// - [`confit_core::error::FetchError::TimedOut`] for timeouts.
+/// - [`confit_core::error::FetchError::DownloadFailed`] for transport failures.
+pub fn download(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), ErrorContext> {
     #[cfg(any(test, feature = "test-support"))]
     {
         registry::download(url, limit)
@@ -68,12 +28,25 @@ pub fn download(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>
 ///
 /// # Errors
 ///
-/// - [Status] for failing statuses.
-/// - [Timeout] for timeouts.
-/// - [Io] for transport read failures.
+/// - [`FetchError::StatusRejected`] for failing statuses.
+/// - [`FetchError::TimedOut`] for timeouts.
+/// - [`FetchError::DownloadFailed`] for transport failures.
 #[cfg(not(any(test, feature = "test-support")))]
-fn network(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
-    let response = ureq::get(url).call().map_err(from_ureq)?;
+fn network(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), ErrorContext> {
+    let response = match ureq::get(url).call() {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(code)) => {
+            return Err(ErrorContext::from(FetchError::StatusRejected { code }));
+        }
+        Err(ureq::Error::Timeout(_)) => {
+            return Err(ErrorContext::from(FetchError::TimedOut));
+        }
+        Err(other) => {
+            return Err(ErrorContext::from(FetchError::DownloadFailed {
+                reason: other.to_string(),
+            }));
+        }
+    };
     let total = response.body().content_length();
     let reader = response
         .into_body()
@@ -81,20 +54,6 @@ fn network(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), Ht
         .limit(limit)
         .reader();
     Ok((Box::new(reader), total))
-}
-
-/// Map one ureq failure into its http error.
-///
-/// Status, timeout, and io keep their shape, other failures are io with
-/// the ureq message.
-#[cfg(not(any(test, feature = "test-support")))]
-fn from_ureq(error: ureq::Error) -> HttpError {
-    match error {
-        ureq::Error::StatusCode(code) => HttpError::Status { code },
-        ureq::Error::Timeout(_) => HttpError::Timeout,
-        ureq::Error::Io(cause) => HttpError::Io(cause),
-        other => HttpError::Io(io::Error::other(other.to_string())),
-    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -108,7 +67,7 @@ mod registry {
     use std::collections::HashMap;
     use std::io;
 
-    use super::HttpError;
+    use confit_core::error::{ErrorContext, FetchError};
 
     struct Scripts {
         bodies: HashMap<String, Vec<u8>>,
@@ -158,20 +117,18 @@ mod registry {
     }
 
     /// Serve one scripted download with the scripted body length.
-    ///
-    /// Scripted failures are io with the scripted message.
-    ///
-    /// - Unscripted urls fail.
     pub(super) fn download(
         url: &str,
         _limit: u64,
-    ) -> Result<(Box<dyn io::Read>, Option<u64>), HttpError> {
+    ) -> Result<(Box<dyn io::Read>, Option<u64>), ErrorContext> {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();
             let count = scripts.calls.get(url).copied().unwrap_or(0);
             scripts.calls.insert(url.to_string(), count + 1);
             if let Some(message) = scripts.failures.get(url).cloned() {
-                return Err(HttpError::Io(io::Error::other(message)));
+                return Err(ErrorContext::from(FetchError::DownloadFailed {
+                    reason: message,
+                }));
             }
             match scripts.bodies.get(url).cloned() {
                 Some(body) => {
@@ -181,7 +138,7 @@ mod registry {
                         Some(total),
                     ))
                 }
-                None => Err(HttpError::Unscripted),
+                None => panic!("no scripted body for url '{url}'"),
             }
         })
     }

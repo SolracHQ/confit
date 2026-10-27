@@ -2,9 +2,8 @@
 
 use std::io::BufRead;
 
-use crate::error::{CliError, Result};
-
-use confit_driver::progress::ProgressSender;
+use confit_core::error::{Error, Outcome};
+use confit_core::progress::ProgressSender;
 
 use crate::presentation::spinner::{PrintSender, SuspendControl};
 
@@ -41,29 +40,21 @@ impl Sinks {
 
     /// Prompt for the literal `yes` confirmation.
     ///
-    /// The answer is true only for the literal `yes`.
-    ///
     /// # Errors
     ///
-    /// - [`CliError::Unknown`] for prompt failures.
-    pub fn confirm(&self, input: &mut dyn BufRead) -> Result<bool> {
+    /// - [`confit_core::error::kind::ErrorKind::ReadReply`] for prompt failures.
+    pub fn confirm(&self, input: &mut dyn BufRead) -> Outcome<bool> {
         if let Some(control) = self.suspend.clone() {
             return control
                 .ask("\nApply these changes? Type 'yes' to continue: ")
-                .map_err(|error| CliError::Unknown {
-                    context: "prompt".to_owned(),
-                    message: error.to_string(),
-                });
+                .map_err(|error| Error::read_reply(error.to_string()));
         }
-        log::debug!("prompt waiting for answer");
-        let mut answer = String::new();
+        log::debug!("prompt waiting for input");
+        let mut line = String::new();
         let got = input
-            .read_line(&mut answer)
-            .map_err(|error| CliError::Unknown {
-                context: "prompt".to_owned(),
-                message: error.to_string(),
-            })?;
+            .read_line(&mut line)
+            .map_err(|error| Error::read_reply(error.to_string()))?;
         log::debug!("prompt read {got} bytes");
-        Ok(answer.trim() == "yes")
+        Ok(line.trim() == "yes")
     }
 }

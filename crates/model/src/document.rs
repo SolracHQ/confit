@@ -7,14 +7,14 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use confit_binding::value::{Decode, Mismatch};
+use crate::routes::Route;
+use confit_binding::fault::FaceFault;
+use confit_binding::value::Decode;
 use confit_binding_macros::Face;
+use confit_core::error::{DocumentError, ErrorContext, Result};
+use confit_store::handles::ResourceHandle;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
-
-use crate::error::{Error, Result};
-use crate::routes::Route;
-use confit_store::handles::ResourceHandle;
 
 pub use rc::{RcData, RcEntry};
 
@@ -61,7 +61,7 @@ impl std::fmt::Display for StructuredFormat {
     }
 }
 
-/// Symbolic link content with its target.
+/// Symbolic link content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct LinkDocument {
@@ -76,7 +76,7 @@ impl LinkDocument {
     }
 }
 
-/// Plain text file content with its flags.
+/// Plain text file content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct TextDocument {
@@ -100,7 +100,7 @@ impl TextDocument {
     }
 }
 
-/// Binary file content with its flags.
+/// Binary file content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct OpaqueDocument {
@@ -116,7 +116,7 @@ pub struct OpaqueDocument {
     pub unmanaged: bool,
 }
 
-/// Structured file content with its format.
+/// Structured file content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct StructuredDocument {
@@ -131,7 +131,7 @@ impl StructuredDocument {
     ///
     /// # Errors
     ///
-    /// - [`Error::Render`] for serializer failures.
+    /// - [`DocumentError::RenderFailed`] for serializer failures.
     pub fn bytes(&self) -> Result<Vec<u8>> {
         match self.format {
             StructuredFormat::Toml => Ok(render_toml(&self.data)?.into_bytes()),
@@ -142,9 +142,6 @@ impl StructuredDocument {
 }
 
 /// One tree member.
-///
-/// Bare handles take the default mode. Tables refer to
-/// the handle with a required mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[serde(untagged)]
 #[face(table, untagged, rename = "TreeMember")]
@@ -178,7 +175,7 @@ impl TreeMember {
     }
 }
 
-/// Managed file set with its members.
+/// Managed file set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct TreeDocument {
@@ -205,9 +202,7 @@ pub enum Data {
     Tree(TreeDocument),
 }
 
-/// One declared document with its destination path.
-///
-/// One flat Lua table with the path beside body fields.
+/// One declared document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
 #[face(table)]
 pub struct Document {
@@ -262,19 +257,29 @@ pub(crate) fn default_file_mode() -> u32 {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside octal or symbolic text.
-pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, Mismatch> {
-    let text = String::decode(value, lua).map_err(|error| Mismatch {
-        path: "mode".to_owned(),
-        want: "expected a string".to_owned(),
-        found: error.found,
+/// - [`FaceFault`] for values outside octal or symbolic text.
+pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, FaceFault> {
+    let text = String::decode(value, lua).map_err(|error| {
+        let found = match error.reason {
+            confit_binding::fault::FaultReason::ShapeMismatch { found, .. } => found,
+            confit_binding::fault::FaultReason::UnknownVariant { found, .. } => found,
+        };
+        FaceFault {
+            segments: Vec::new(),
+            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                require: "expected a string".to_owned(),
+                found,
+            },
+        }
     })?;
     parse_mode_bits(&text).map_or_else(
         || {
-            Err(Mismatch {
-                path: "mode".to_owned(),
-                want: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
-                found: format!("'{text}'"),
+            Err(FaceFault {
+                segments: Vec::new(),
+                reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                    require: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
+                    found: format!("'{text}'"),
+                },
             })
         },
         Ok,
@@ -322,11 +327,12 @@ fn parse_mode_bits(text: &str) -> Option<u32> {
 ///
 /// # Errors
 ///
-/// - [`Error::Render`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] for serializer failures.
 fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    toml::to_string(value).map_err(|source| Error::Render {
-        format: StructuredFormat::Toml,
-        reason: source.to_string(),
+    toml::to_string(value).map_err(|source| {
+        ErrorContext::from(DocumentError::RenderFailed {
+            reason: source.to_string(),
+        })
     })
 }
 
@@ -334,11 +340,12 @@ fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`Error::Render`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] for serializer failures.
 fn render_json(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    serde_json::to_string_pretty(value).map_err(|source| Error::Render {
-        format: StructuredFormat::Json,
-        reason: source.to_string(),
+    serde_json::to_string_pretty(value).map_err(|source| {
+        ErrorContext::from(DocumentError::RenderFailed {
+            reason: source.to_string(),
+        })
     })
 }
 
@@ -346,10 +353,11 @@ fn render_json(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`Error::Render`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] for serializer failures.
 fn render_yaml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    noyalib::to_string(value).map_err(|source| Error::Render {
-        format: StructuredFormat::Yaml,
-        reason: source.to_string(),
+    noyalib::to_string(value).map_err(|source| {
+        ErrorContext::from(DocumentError::RenderFailed {
+            reason: source.to_string(),
+        })
     })
 }

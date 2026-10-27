@@ -26,6 +26,8 @@ serde_json.workspace = true
 confit-driver = { version = "0.9.0", path = "../driver" }
 thiserror.workspace = true
 minijinja = "3.0.0"
+confit-core = { version = "0.9.0", path = "../core" }
+time = { workspace = true, features = ["local-offset"] }
 
 [dev-dependencies]
 confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }

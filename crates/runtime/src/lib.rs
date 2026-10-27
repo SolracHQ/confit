@@ -6,7 +6,6 @@
 pub mod bundle;
 pub mod checks;
 mod differ;
-pub mod error;
 #[cfg(test)]
 mod fixtures;
 mod hooks;
@@ -15,7 +14,7 @@ pub mod prepare;
 mod render;
 mod write;
 
-pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, Unmet, find_executable};
+pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, Unmet, find_executable, unmet_names};
 pub use differ::{Differ, Difference, DifferenceOrder};
 pub use hooks::{DecidedHooks, HookDecision, HookRunner, Spawned};
 pub use prepare::{Prepared, prepare, refresh};

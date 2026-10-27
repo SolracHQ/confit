@@ -1,4 +1,3 @@
-//! Owned patches
 //! Patch tables under owner config names.
 
 use crate::api::config::Config;
@@ -14,7 +13,7 @@ pub struct OwnedPatch {
 }
 
 impl OwnedPatch {
-    /// Build one owned patch from its patch under the config owner.
+    /// Build one owned patch.
     pub fn join_patch(patch: Patch, owner: &str) -> Self {
         Self {
             owner: owner.to_owned(),
@@ -52,6 +51,6 @@ pub(crate) fn assemble_config(config: &Config) -> Vec<OwnedPatch> {
     config
         .patches
         .iter()
-        .map(|patch| OwnedPatch::join_patch(patch.clone(), &config.name))
+        .map(|patch| OwnedPatch::join_patch(patch.clone(), config.name.as_str()))
         .collect()
 }

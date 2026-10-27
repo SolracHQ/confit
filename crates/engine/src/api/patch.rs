@@ -1,10 +1,10 @@
-//! Patches
 //! Patch declarations over routes with callbacks.
 
 use mlua::{Lua, Table, Value};
 
 use confit_binding::callback::Callback;
-use confit_binding::value::{Decode, Mismatch};
+use confit_binding::fault::FaceFault;
+use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use serde::{Deserialize, Serialize};
 
@@ -193,29 +193,26 @@ pub enum Patch {
 
 /// Route one patch table.
 ///
-/// String targets route hook patches, route targets route document patches
-/// over the format marker.
-///
-/// # Returns
-///
-/// - Return the patch face over the target shape.
-///
 /// # Errors
 ///
-/// - [`Mismatch`] for unreadable tables.
-fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, Mismatch> {
-    let target = table.get::<Value>("target").map_err(|error| Mismatch {
-        path: "Patch".to_owned(),
-        want: "readable entries".to_owned(),
-        found: error.to_string(),
+/// - [`FaceFault`] for unreadable tables.
+fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault> {
+    let target = table.get::<Value>("target").map_err(|error| FaceFault {
+        segments: Vec::new(),
+        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            require: "readable entries".to_owned(),
+            found: error.to_string(),
+        },
     })?;
     if matches!(target, Value::String(_)) {
         return HookPatch::decode(&Value::Table(table.clone()), lua).map(Patch::Hook);
     }
-    let raw = table.get::<Value>("format").map_err(|error| Mismatch {
-        path: "Patch".to_owned(),
-        want: "readable entries".to_owned(),
-        found: error.to_string(),
+    let raw = table.get::<Value>("format").map_err(|error| FaceFault {
+        segments: Vec::new(),
+        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            require: "readable entries".to_owned(),
+            found: error.to_string(),
+        },
     })?;
     if matches!(raw, Value::Nil) {
         RcPatch::decode(&Value::Table(table.clone()), lua).map(Patch::Rc)
@@ -228,23 +225,27 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, Mismatch>
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for missing and doubled destinations.
+/// - [`FaceFault`] for missing and doubled destinations.
 pub fn join_destination(
     target: Option<Route>,
     filter: Option<Callback<FilterArgs>>,
-) -> std::result::Result<PatchTarget, Mismatch> {
+) -> std::result::Result<PatchTarget, FaceFault> {
     match (target, filter) {
         (Some(route), None) => Ok(PatchTarget::Target(route)),
         (None, Some(filter)) => Ok(PatchTarget::Filter(filter)),
-        (Some(_), Some(_)) => Err(Mismatch {
-            path: "patch target".to_owned(),
-            want: "either 'target' or 'filter'".to_owned(),
-            found: "'target' with 'filter'".to_owned(),
+        (Some(_), Some(_)) => Err(FaceFault {
+            segments: Vec::new(),
+            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                require: "either 'target' or 'filter'".to_owned(),
+                found: "'target' with 'filter'".to_owned(),
+            },
         }),
-        (None, None) => Err(Mismatch {
-            path: "patch target".to_owned(),
-            want: "either 'target' or 'filter'".to_owned(),
-            found: "nil".to_owned(),
+        (None, None) => Err(FaceFault {
+            segments: Vec::new(),
+            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                require: "either 'target' or 'filter'".to_owned(),
+                found: "nil".to_owned(),
+            },
         }),
     }
 }
@@ -256,8 +257,8 @@ pub fn join_destination(
 /// - [`mlua::Error`] for missing and doubled destinations.
 fn reject_structured_destination(patch: &StructuredPatch) -> mlua::Result<()> {
     join_destination(patch.target.clone(), patch.filter.clone())
-        .map(|_| ())
-        .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))
+        .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))?;
+    Ok(())
 }
 
 /// Reject rc faces missing or doubling destinations.
@@ -267,8 +268,8 @@ fn reject_structured_destination(patch: &StructuredPatch) -> mlua::Result<()> {
 /// - [`mlua::Error`] for missing and doubled destinations.
 fn reject_rc_destination(patch: &RcPatch) -> mlua::Result<()> {
     join_destination(patch.target.clone(), patch.filter.clone())
-        .map(|_| ())
-        .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))
+        .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -280,9 +281,9 @@ mod tests {
     #[test]
     fn filter_stubs_show_boolean_returns_while_apply_stays_bare() {
         let mut collector = Registry::new();
-        StructuredPatch::collect(&mut collector).unwrap();
-        RcPatch::collect(&mut collector).unwrap();
-        HookPatch::collect(&mut collector).unwrap();
+        StructuredPatch::collect(&mut collector);
+        RcPatch::collect(&mut collector);
+        HookPatch::collect(&mut collector);
         let text = collector.stub_text();
         assert!(
             text.contains("fun(route: Route): boolean"),

@@ -14,26 +14,25 @@ use confit_model::routes::Route;
 use super::Assembler;
 use super::owned::OwnedPatch;
 use super::patches::{rc_base_of, structured_base_of};
-use crate::error::{EngineError, Result};
+use confit_core::error::{
+    DocumentError, Error, ErrorCause, ErrorContext, EvalDetail, EvalError, Outcome,
+};
 
 impl Assembler<'_> {
-    /// Apply structured patch groups over declared bases into documents.
-    ///
-    /// - First writes win in rank-descending level order with collision logs.
-    /// - Groups follow first-seen declaration order.
-    /// - Callbacks run over live documents.
+    /// Apply structured patch groups over declared bases.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownTarget`] for missing targets.
-    /// - [`EngineError::Structured`] for foreign bases with gaps.
-    /// - [`EngineError::Lua`] for bridge and callback failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for missing targets, foreign bases,
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for missing targets, foreign bases,
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing targets, foreign bases,
+    ///   bad shapes, drifting paths, and Lua failures.
     pub(super) fn apply_structured(
         &self,
         placed: &[Document],
         grouped: &[(Route, Vec<&OwnedPatch>)],
         finished: &mut Vec<Document>,
-    ) -> Result<()> {
+    ) -> Outcome<()> {
         for (target, patches) in grouped {
             let inners: Vec<&StructuredPatch> = patches
                 .iter()
@@ -43,7 +42,29 @@ impl Assembler<'_> {
                 continue;
             };
             let display = target.display();
-            let (format, data) = structured_base_of(placed, target, first, &inners)?;
+            let (format, data) = match structured_base_of(placed, target, first, &inners) {
+                Ok(found) => found,
+                Err(chain) => {
+                    let unknown = match chain.root_cause() {
+                        ErrorCause::EvalError(EvalError::PatchTargetUnknown { route }) => {
+                            Some(route.clone())
+                        }
+                        ErrorCause::DocumentError(_) => None,
+                        _ => unreachable!("patch bases fail unknown or gapped"),
+                    };
+                    match unknown {
+                        Some(route) => {
+                            return Err(Error::evaluate(
+                                EvalDetail::Eval(EvalError::PatchTargetUnknown { route }),
+                                None,
+                            ));
+                        }
+                        None => {
+                            return Err(Error::render_manifest(chain.route(target.display())));
+                        }
+                    }
+                }
+            };
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
             finished.push(Document::new(
                 target.clone(),
@@ -53,25 +74,44 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Apply rc patch groups over declared bases into documents.
-    ///
-    /// - First writes win in rank-descending level order with collision logs.
-    /// - Groups follow first-seen declaration order.
-    /// - Callbacks run over live documents.
+    /// Apply rc patch groups over declared bases.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownTarget`] for missing targets.
-    /// - [`EngineError::Structured`] for foreign bases with gaps.
-    /// - [`EngineError::Lua`] for bridge and callback failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for missing targets, foreign bases,
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for missing targets, foreign bases,
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing targets, foreign bases,
+    ///   bad shapes, drifting paths, and Lua failures.
     pub(super) fn apply_rc(
         &self,
         placed: &[Document],
         grouped: &[(Route, Vec<&OwnedPatch>)],
         finished: &mut Vec<Document>,
-    ) -> Result<()> {
+    ) -> Outcome<()> {
         for (target, patches) in grouped {
-            let document = rc_base_of(placed, target)?;
+            let document = match rc_base_of(placed, target) {
+                Ok(found) => found,
+                Err(chain) => {
+                    let unknown = match chain.root_cause() {
+                        ErrorCause::EvalError(EvalError::PatchTargetUnknown { route }) => {
+                            Some(route.clone())
+                        }
+                        ErrorCause::DocumentError(_) => None,
+                        _ => unreachable!("patch bases fail unknown or gapped"),
+                    };
+                    match unknown {
+                        Some(route) => {
+                            return Err(Error::evaluate(
+                                EvalDetail::Eval(EvalError::PatchTargetUnknown { route }),
+                                None,
+                            ));
+                        }
+                        None => {
+                            return Err(Error::render_manifest(chain.route(target.display())));
+                        }
+                    }
+                }
+            };
             let display = target.display();
             let patched = self.run_rc_callbacks(target, &display, document, patches)?;
             let data = RcData::new(patched.profile, patched.config, patched.r#final);
@@ -80,17 +120,14 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Run patch callbacks over base data through live documents keeping
-    /// first writes.
-    ///
-    /// - Callbacks run over live documents.
-    /// - Callbacks keep the path fixed.
+    /// Run patch callbacks over base data through live documents.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Structured`] for format gaps.
-    /// - [`EngineError::Mismatch`] for tables outside the live shape.
-    /// - [`EngineError::Lua`] for bridge, callback, and path drift failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for format gaps, bad shapes, drifting
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for format gaps, bad shapes, drifting
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for format gaps, bad shapes, drifting
+    ///   paths, and Lua failures.
     pub(super) fn run_callbacks(
         &self,
         destination: &Route,
@@ -98,7 +135,7 @@ impl Assembler<'_> {
         format: &StructuredFormat,
         data: BTreeMap<String, serde_json::Value>,
         patches: &[&OwnedPatch],
-    ) -> Result<BTreeMap<String, serde_json::Value>> {
+    ) -> Outcome<BTreeMap<String, serde_json::Value>> {
         let mut data = data;
         let mut owners = seed_key_owners(&data);
         for patch in patches {
@@ -113,39 +150,56 @@ impl Assembler<'_> {
                 },
             };
             let table = live_view(self.lua(), &live)?;
-            found.apply.call::<()>(self.lua(), (table.clone(),))?;
-            let back = StructuredLiveDocument::decode(&Value::Table(table), self.lua())
-                .map_err(EngineError::from)?;
+            match found.apply.call::<()>(self.lua(), (table.clone(),)) {
+                Ok(()) => {}
+                Err(error) => {
+                    if let Some(terminal) = error.downcast_ref::<Error>() {
+                        return Err(terminal.clone());
+                    }
+                    return Err(Error::lua_failed(error.to_string()));
+                }
+            }
+            let back = match StructuredLiveDocument::decode(&Value::Table(table), self.lua()) {
+                Ok(found) => found,
+                Err(mismatch) => {
+                    return Err(Error::evaluate(
+                        EvalDetail::Face(mismatch),
+                        Some(display.to_owned()),
+                    ));
+                }
+            };
             check_live_path(destination, &back.path)?;
             if back.body.format != *format {
-                return Err(EngineError::Structured {
-                    display: display.to_owned(),
-                    base: format.name().to_owned(),
-                    patch: back.body.format.name().to_owned(),
-                });
+                return Err(Error::render_manifest(
+                    ErrorContext::from(DocumentError::RenderFailed {
+                        reason: format!(
+                            "patch targets '{display}' hold '{}' under '{}' patches",
+                            format.name(),
+                            back.body.format.name()
+                        ),
+                    })
+                    .route(display),
+                ));
             }
             data = merge(display, data, &mut owners, back.body.data, &patch.owner);
         }
         Ok(data)
     }
 
-    /// Run patch callbacks over rc sections through live documents keeping
-    /// first entries.
-    ///
-    /// - Callbacks run over live documents.
-    /// - Callbacks keep the path fixed.
+    /// Run patch callbacks over rc sections through live documents.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Mismatch`] for tables outside the live shape.
-    /// - [`EngineError::Lua`] for bridge, callback, and path drift failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for bad shapes, drifting paths, and
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for bad shapes, drifting paths, and
+    ///   Lua failures.
     pub(super) fn run_rc_callbacks(
         &self,
         destination: &Route,
         display: &str,
         document: RcData,
         patches: &[&OwnedPatch],
-    ) -> Result<RcData> {
+    ) -> Outcome<RcData> {
         let mut document = document;
         let mut owned = seed_collision_owners(&document);
         for patch in patches {
@@ -157,9 +211,24 @@ impl Assembler<'_> {
                 body: document.clone(),
             };
             let table = live_view(self.lua(), &live)?;
-            found.apply.call::<()>(self.lua(), (table.clone(),))?;
-            let back = RcLiveDocument::decode(&Value::Table(table), self.lua())
-                .map_err(EngineError::from)?;
+            match found.apply.call::<()>(self.lua(), (table.clone(),)) {
+                Ok(()) => {}
+                Err(error) => {
+                    if let Some(terminal) = error.downcast_ref::<Error>() {
+                        return Err(terminal.clone());
+                    }
+                    return Err(Error::lua_failed(error.to_string()));
+                }
+            }
+            let back = match RcLiveDocument::decode(&Value::Table(table), self.lua()) {
+                Ok(found) => found,
+                Err(mismatch) => {
+                    return Err(Error::evaluate(
+                        EvalDetail::Face(mismatch),
+                        Some(display.to_owned()),
+                    ));
+                }
+            };
             check_live_path(destination, &back.path)?;
             document = merge_rc(display, &document, back.body, &mut owned, &patch.owner);
         }
@@ -171,13 +240,12 @@ impl Assembler<'_> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for faces outside the table shape.
-fn live_view(lua: &Lua, document: &impl Encode) -> Result<Table> {
-    match document.encode(lua)? {
-        Value::Table(table) => Ok(table),
-        _ => Err(EngineError::Lua(mlua::Error::runtime(
-            "patch live views hold tables",
-        ))),
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for faces outside the table shape.
+fn live_view(lua: &Lua, document: &impl Encode) -> Outcome<Table> {
+    match document.encode(lua) {
+        Ok(Value::Table(table)) => Ok(table),
+        Ok(_) => Err(Error::lua_failed("patch live views hold tables")),
+        Err(error) => Err(Error::lua_failed(error.to_string())),
     }
 }
 
@@ -185,14 +253,14 @@ fn live_view(lua: &Lua, document: &impl Encode) -> Result<Table> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for paths apart from the target.
-fn check_live_path(destination: &Route, back: &Route) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for paths apart from the target.
+fn check_live_path(destination: &Route, back: &Route) -> Outcome<()> {
     if back != destination {
-        return Err(EngineError::Lua(mlua::Error::runtime(format!(
+        return Err(Error::lua_failed(format!(
             "patch target '{}' changed path to '{}'; patches keep the path fixed",
             destination.display(),
             back.display()
-        ))));
+        )));
     }
     Ok(())
 }

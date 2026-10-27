@@ -5,7 +5,8 @@ use std::io::BufRead;
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use confit_driver::sha::Sha;
+use confit_core::error::{Error, ErrorCause, ErrorContext, Failure, HookReason, Mixed, Outcome};
+use confit_core::sha::Sha;
 use confit_engine::Engine;
 use confit_model::arg::Arg;
 use confit_runtime::bundle::Bundler;
@@ -14,11 +15,8 @@ use confit_runtime::{HookDecision, HookRunner, Prepared, Writer, prepare, refres
 use confit_store::Stores;
 use confit_store::state::Picker;
 
-use crate::error::{CliError, Result};
-
 use crate::cli::{ApplyArgs, plan_profile};
 use crate::presentation::difference::difference_lines;
-use crate::presentation::hooks::describe_blocked;
 use crate::presentation::summary::render_prepared;
 
 use crate::sinks::Sinks;
@@ -38,7 +36,7 @@ pub struct ApplyRunner<'a> {
     pub prepared: Prepared,
     /// First prompt skip with difference re-prompt.
     pub force: bool,
-    /// Confirmation answer reader, stdin on the host.
+    /// Stdin confirmation reader.
     pub input: &'a mut dyn BufRead,
     /// Write capabilities for the run.
     pub stores: Stores,
@@ -46,38 +44,41 @@ pub struct ApplyRunner<'a> {
     pub sinks: Sinks,
     /// Hook output folder holding one file per hook.
     pub hooks_dir: PathBuf,
+    /// Source text holding the slot context for state mapping.
+    pub source: String,
 }
 
 impl<'a> ApplyRunner<'a> {
     /// Resolve desired documents from flags with explicit run fields.
     ///
-    /// `@name` is a named state, `%N` is history newest-first from one,
-    /// `.cb` is a bundle file, folders evaluate as a project with `-p`
-    /// profile choice, and everything else evaluates as a profile.
-    ///
     /// # Errors
     ///
-    /// - [`CliError::BadPicker`] for malformed pickers.
-    /// - [`CliError::Runtime`] for unreadable states and bundles.
-    /// - [`CliError::Engine`] for evaluation failures.
-    /// - [`CliError::NoProfile`] for absent profiles.
-    /// - [`CliError::NoDefaultProfile`] for absent defaults.
-    /// - [`CliError::ProfileWithoutProject`] for `-p` with file sources.
+    /// - [`confit_core::error::kind::ErrorKind::ApplySlot`] for malformed slots.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states and bundles.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
+    /// - [`confit_core::error::kind::ErrorKind::MissingProfile`] for absent profiles.
+    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
+    /// - [`confit_core::error::kind::ErrorKind::FlagsConflict`] for conflicting flags.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
     pub fn from_args(
         args: &ApplyArgs,
         input: &'a mut dyn BufRead,
         stores: Stores,
         sinks: Sinks,
         hooks_dir: PathBuf,
-    ) -> Result<Self> {
+    ) -> Outcome<Self> {
         let positional = args.source.as_path();
-        let raw = positional.to_str().unwrap_or("");
+        let raw = positional.to_str().unwrap_or("").to_owned();
         let bundles = Bundler::new(&stores);
         let desired = if raw.starts_with('@') || raw.starts_with('%') {
-            let picker: Picker = raw.parse().map_err(|_| CliError::BadPicker {
-                input: raw.to_owned(),
-            })?;
-            stored::resolve(&stores.states(), &picker)?
+            let picker = Self::map_state(&raw, raw.parse::<Picker>().map_err(Failure::Mid))?;
+            Self::map_state(&raw, stored::resolve(&stores.states(), &picker))?
         } else if positional
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
@@ -86,31 +87,28 @@ impl<'a> ApplyRunner<'a> {
         } else if positional.is_dir() {
             let path = plan_profile(positional, args.profile.as_deref());
             if args.profile.is_none() && !path.exists() {
-                return Err(CliError::NoDefaultProfile {
-                    project: positional.to_path_buf(),
-                });
+                return Err(Error::missing_project(positional.to_path_buf()));
             }
             let evaluated = Engine::new(stores.clone()).evaluate(&path)?;
             let built = prepare::build(evaluated.documents, evaluated.hooks)?;
-            built.persist(&stores)?;
+            built.persist(&stores).map_err(Error::store_state)?;
             built
         } else {
             if args.profile.is_some() {
-                return Err(CliError::ProfileWithoutProject {
-                    path: positional.to_path_buf(),
-                });
+                return Err(Error::flags_conflict(
+                    "apply".to_owned(),
+                    vec!["--profile".to_owned(), positional.display().to_string()],
+                ));
             }
             if !positional.exists() {
-                return Err(CliError::NoProfile {
-                    path: positional.to_path_buf(),
-                });
+                return Err(Error::missing_profile(positional.to_path_buf()));
             }
             let evaluated = Engine::new(stores.clone()).evaluate(positional)?;
             let built = prepare::build(evaluated.documents, evaluated.hooks)?;
-            built.persist(&stores)?;
+            built.persist(&stores).map_err(Error::store_state)?;
             built
         };
-        let prepared = prepare(&stores, desired)?;
+        let prepared = Self::map_state(&raw, prepare(&stores, desired))?;
         Ok(Self {
             prepared,
             force: args.force,
@@ -118,37 +116,85 @@ impl<'a> ApplyRunner<'a> {
             stores,
             sinks,
             hooks_dir,
+            source: raw,
         })
+    }
+
+    /// Map one mixed state result to its apply terminal.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::kind::ErrorKind::ApplySlot`] for malformed slots and state faults.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for malformed slots and state faults.
+    fn map_state<T>(raw: &str, result: Mixed<T>) -> Outcome<T> {
+        match result {
+            Ok(found) => Ok(found),
+            Err(Failure::Terminal(terminal)) => Err(terminal),
+            Err(Failure::Mid(error)) => match error.root_cause() {
+                ErrorCause::SlotReason(reason) => {
+                    Err(Error::apply_slot(raw.to_owned(), reason.clone()))
+                }
+                _ => Err(Error::apply_state(error)),
+            },
+        }
     }
 
     /// Apply desired documents with preview, difference prompts, and rotation.
     ///
-    /// Success with the state file and one stored manifest with rotation.
-    /// Report with the write counts.
-    ///
-    /// - Literal `yes` for progress, anything else for an abort without writes.
-    ///
     /// # Errors
     ///
-    /// - [`CliError::Aborted`] for non-`yes` answers.
-    /// - [`CliError::Unknown`] for prompt failures.
-    /// - [`CliError::Runtime`] for destination writes and removals.
-    /// - [`CliError::Runtime`] for state stores.
-    /// - [`CliError::Pool`] for pool prunes.
-    /// - [`CliError::Resolve`] for unresolvable hooks.
-    /// - [`CliError::HookRequires`] for unmet Requires conditions.
-    pub fn execute(self) -> Result<ApplyReport> {
+    /// - [`confit_core::error::kind::ErrorKind::ReadReply`] for prompt failures.
+    /// - [`confit_core::error::kind::ErrorKind::ApplySlot`] for state refresh faults.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for state refresh faults.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for state refresh faults.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for state refresh faults.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
+    pub fn execute(self) -> Outcome<ApplyReport> {
         self.sinks.print_line(render_prepared(&self.prepared));
-        if !self.force && !self.sinks.confirm(self.input)? {
-            return Err(CliError::Aborted);
+        for warning in &self.prepared.warnings {
+            self.sinks.print_line(warning.summary());
+            log::warn!(
+                "diff warning: {} chain: {:?}",
+                warning.summary(),
+                warning.chain()
+            );
         }
-        let fresh = refresh(&self.stores, &self.prepared)?;
+        if !self.force && !self.sinks.confirm(self.input)? {
+            self.sinks.print_line("no yes passed, bye".to_owned());
+            return Ok(ApplyReport {
+                written: 0,
+                removed: 0,
+            });
+        }
+        let (fresh, fresh_warnings) =
+            Self::map_state(&self.source, refresh(&self.stores, &self.prepared))?;
+        for warning in &fresh_warnings {
+            self.sinks.print_line(warning.summary());
+            log::warn!(
+                "diff warning: {} chain: {:?}",
+                warning.summary(),
+                warning.chain()
+            );
+        }
         if fresh != self.prepared.differences {
             for line in difference_lines(&fresh) {
                 self.sinks.print_line(line);
             }
             if !self.sinks.confirm(self.input)? {
-                return Err(CliError::Aborted);
+                self.sinks.print_line("no yes passed, bye".to_owned());
+                return Ok(ApplyReport {
+                    written: 0,
+                    removed: 0,
+                });
             }
         }
         let report = self.commit()?;
@@ -160,10 +206,14 @@ impl<'a> ApplyRunner<'a> {
     ///
     /// # Errors
     ///
-    /// - [`CliError::Runtime`] for destination writes and removals.
-    /// - [`CliError::Runtime`] for state stores.
-    /// - [`CliError::Pool`] for pool prunes.
-    fn commit(&self) -> Result<ApplyReport> {
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for destination writes and removals.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] for stored states.
+    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for pruned blobs.
+    fn commit(&self) -> Outcome<ApplyReport> {
         let built = &self.prepared.desired;
         let previous = &self.prepared.previous;
         let changed = &self.prepared.changed;
@@ -176,14 +226,22 @@ impl<'a> ApplyRunner<'a> {
         let removed =
             removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
         stored::store(&self.stores.states(), built)?;
-        let keep = stored::keep_set(&self.stores.states())?;
-        self.stores.pool().prune(&keep)?;
+        let keep = stored::keep_set(&self.stores.states()).map_err(Error::apply_state)?;
+        self.stores
+            .pool()
+            .prune(&keep)
+            .map_err(Error::prune_blobs)?;
         Ok(ApplyReport { written, removed })
     }
 
     /// Run built hooks after files, state, and history land.
-    /// Unmet Requires conditions and hook failures abort the run.
-    fn run_hooks(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
+    fn run_hooks(&self) -> Outcome<()> {
         let runner = HookRunner {
             progress: self.sinks.progress.clone(),
         };
@@ -193,13 +251,26 @@ impl<'a> ApplyRunner<'a> {
         for (index, hook) in prepared.desired.hooks.iter().enumerate() {
             let position = index + 1;
             match &decided.decisions[index] {
-                HookDecision::RequiresClosed(condition, fault) => {
-                    return Err(CliError::HookRequires {
-                        argv: Arg::join(&hook.argv),
-                        condition: describe_blocked(condition, fault),
-                    });
+                HookDecision::RequiresClosed(blocked) => {
+                    return Err(Error::hook_failed(
+                        Arg::join(&hook.argv),
+                        HookReason::of(blocked),
+                        ErrorContext::from(blocked.clone()),
+                    ));
                 }
-                HookDecision::WhenClosed(_, _) | HookDecision::ChecksPass => {}
+                HookDecision::WhenClosed(condition, _) => {
+                    log::info!(
+                        "hook {position} of {total} skips, when-guard closed for {}: {}",
+                        Arg::join(&hook.argv),
+                        condition.describe()
+                    );
+                }
+                HookDecision::ChecksPass => {
+                    log::info!(
+                        "hook {position} of {total} skips, checks pass for {}",
+                        Arg::join(&hook.argv)
+                    );
+                }
                 HookDecision::Run(binary) => {
                     let line = format!("hook {position} of {total}: {}", Arg::join(&hook.argv));
                     self.sinks.print_line(line.clone());
@@ -237,34 +308,28 @@ fn hook_file_name(argv: &str) -> String {
     format!("{slug}-{hash}.log")
 }
 
-/// Write one hook header and captured bytes into its own log file, with
-/// parent folders created as needed.
+/// Write one hook log file with parent folders created as needed.
 ///
 /// # Errors
 ///
-/// - [`CliError::Write`] with [`CliError::WriteUnknown`]
-///   for failed log writes.
+/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for failed log writes.
 fn write_hook_log(
     hooks_dir: &std::path::Path,
     file_name: &str,
     header: &str,
     output: &[u8],
-) -> Result<()> {
+) -> Outcome<()> {
+    use confit_core::error::Terminal as _;
+
     let log = hooks_dir.join(file_name);
-    std::fs::create_dir_all(hooks_dir).map_err(|error| CliError::from_write_io(&log, error))?;
-    let mut sink =
-        std::fs::File::create(&log).map_err(|error| CliError::from_write_io(&log, error))?;
-    sink.write_all(header.as_bytes())
-        .map_err(|error| CliError::from_write_io(&log, error))?;
-    sink.write_all(b"\n")
-        .map_err(|error| CliError::from_write_io(&log, error))?;
-    sink.write_all(output)
-        .map_err(|error| CliError::from_write_io(&log, error))?;
+    std::fs::create_dir_all(hooks_dir).write_hook_log(&log)?;
+    let mut sink = std::fs::File::create(&log).write_hook_log(&log)?;
+    sink.write_all(header.as_bytes()).write_hook_log(&log)?;
+    sink.write_all(b"\n").write_hook_log(&log)?;
+    sink.write_all(output).write_hook_log(&log)?;
     if !output.ends_with(b"\n") {
-        sink.write_all(b"\n")
-            .map_err(|error| CliError::from_write_io(&log, error))?;
+        sink.write_all(b"\n").write_hook_log(&log)?;
     }
-    sink.sync_all()
-        .map_err(|error| CliError::from_write_io(&log, error))?;
+    sink.sync_all().write_hook_log(&log)?;
     Ok(())
 }

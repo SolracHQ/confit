@@ -35,6 +35,8 @@ pub(crate) struct VariantFlags {
 pub(crate) struct ContainerHeader {
     /// The kind marker.
     pub(crate) kind: Option<ContainerKind>,
+    /// The trace fill marker.
+    pub(crate) traced: bool,
     /// The union annotation.
     pub(crate) union: Option<UnionKind>,
     /// The stub name override.
@@ -60,6 +62,8 @@ pub(crate) struct FieldFlags {
     pub(crate) ignore: bool,
     /// The flatten marker for nested table faces.
     pub(crate) flatten: bool,
+    /// The trace marker for Rust-filled call stacks.
+    pub(crate) lua_trace: bool,
     /// The Lua key override.
     pub(crate) rename: Option<String>,
     /// The Lua face override.
@@ -131,6 +135,10 @@ pub(crate) fn parse_header(
                         "untagged" => UnionKind::Untagged,
                         "tagged" => UnionKind::Tagged,
                         "probe" => UnionKind::Probe,
+                        "traced" => {
+                            header.traced = true;
+                            continue;
+                        }
                         "optional" | "opaque" | "default" => {
                             return Err(syn::Error::new_spanned(
                                 item,
@@ -145,7 +153,7 @@ pub(crate) fn parse_header(
                                 item,
                                 format!(
                                     "{type_name}: unknown face marker '{ident}'; want \
-                                     table, userdata, callback_shape, string, \
+                                     table, userdata, callback_shape, traced, string, \
                                      untagged, tagged, probe, validate, or probe \
                                      with a hook path"
                                 ),
@@ -305,6 +313,12 @@ pub(crate) fn parse_header(
             format!("{type_name}: untagged enums are expected for probe hooks"),
         ));
     }
+    if header.traced && (is_enum || header.kind != Some(ContainerKind::Userdata)) {
+        return Err(syn::Error::new_spanned(
+            identifier,
+            format!("{type_name}: face option 'traced' needs userdata structs alone"),
+        ));
+    }
     Ok(header)
 }
 
@@ -435,6 +449,7 @@ pub(crate) fn parse_field_flags(
                         "live" => flags.live = true,
                         "ignore" => flags.ignore = true,
                         "flatten" => flags.flatten = true,
+                        "lua_trace" => flags.lua_trace = true,
                         "default" => flags.default = Some(None),
                         _ => {
                             return Err(syn::Error::new_spanned(
@@ -442,8 +457,8 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown face option '{ident}'; \
                                      want 'optional', 'opaque', 'live', 'ignore', 'flatten', \
-                                     'proxy', 'decode_hook', 'encode_hook', 'key_convert', \
-                                     'value_convert', 'rename', or 'default'"
+                                     'lua_trace', 'proxy', 'decode_hook', 'encode_hook', \
+                                     'key_convert', 'value_convert', 'rename', or 'default'"
                                 ),
                             ));
                         }
@@ -599,8 +614,8 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown face option '{key}'; \
                                      want 'optional', 'opaque', 'live', 'ignore', 'flatten', \
-                                     'proxy', 'decode_hook', 'encode_hook', 'key_convert', \
-                                     'value_convert', 'rename', or 'default'"
+                                     'lua_trace', 'proxy', 'decode_hook', 'encode_hook', \
+                                     'key_convert', 'value_convert', 'rename', or 'default'"
                                 ),
                             ));
                         }
@@ -611,8 +626,8 @@ pub(crate) fn parse_field_flags(
                         &item,
                         format!(
                             "{outer}.{field}: unknown face shape; want 'optional', \
-                             'opaque', 'live', 'ignore', 'flatten', 'proxy', 'decode_hook', \
-                             'encode_hook', 'key_convert', \
+                             'opaque', 'live', 'ignore', 'flatten', 'lua_trace', 'proxy', \
+                             'decode_hook', 'encode_hook', 'key_convert', \
                              'value_convert', 'rename', or 'default'"
                         ),
                     ));
@@ -666,6 +681,25 @@ pub(crate) fn parse_field_flags(
         return Err(syn::Error::new_spanned(
             attrs.first(),
             format!("{outer}.{field}: face option 'flatten' stays apart from key options"),
+        ));
+    }
+    if flags.lua_trace
+        && (flags.optional
+            || flags.opaque
+            || flags.live
+            || flags.ignore
+            || flags.flatten
+            || flags.proxy.is_some()
+            || flags.decode_hook.is_some()
+            || flags.encode_hook.is_some()
+            || flags.key_convert.is_some()
+            || flags.value_convert.is_some()
+            || flags.rename.is_some()
+            || flags.default.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            attrs.first(),
+            format!("{outer}.{field}: face option 'lua_trace' stays apart from key options"),
         ));
     }
     Ok(flags)

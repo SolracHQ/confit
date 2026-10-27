@@ -7,7 +7,7 @@ use syn::{Attribute, Type, ext::IdentExt};
 
 use super::parse::{doc_lines, parse_field_flags};
 
-/// One callback parameter with its call shape.
+/// One callback parameter.
 struct CallbackField {
     /// The parameter binding.
     binding: syn::Ident,
@@ -219,15 +219,14 @@ pub(crate) fn expand_struct_callback(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register_callback(
                     <Self as ::confit_binding::callback::CallbackArgs>::call_face(),
                     &data,
                 ) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -246,7 +245,7 @@ pub(crate) fn expand_struct_callback(
             fn decode_function(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<::mlua::Function, ::confit_binding::value::Mismatch>
+            ) -> ::std::result::Result<::mlua::Function, ::confit_binding::fault::FaceFault>
             {
                 match value {
                     ::mlua::Value::Function(found) => {
@@ -254,23 +253,27 @@ pub(crate) fn expand_struct_callback(
                         if !info.is_vararg && info.num_params as ::std::primitive::usize != #count
                         {
                             return ::std::result::Result::Err(
-                                ::confit_binding::value::Mismatch {
-                                    path: #outer.to_owned(),
-                                    want: #want_arity.to_owned(),
-                                    found: ::std::format!(
-                                        "a function with {} param{}",
-                                        info.num_params,
-                                        if info.num_params == 1 { "" } else { "s" },
-                                    ),
+                                ::confit_binding::fault::FaceFault {
+                                    segments: ::std::vec::Vec::new(),
+                                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                        require: #want_arity.to_owned(),
+                                        found: ::std::format!(
+                                            "a function with {} param{}",
+                                            info.num_params,
+                                            if info.num_params == 1 { "" } else { "s" },
+                                        ),
+                                    },
                                 },
                             );
                         }
                         ::std::result::Result::Ok(found.clone())
                     }
-                    _ => ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                        path: #outer.to_owned(),
-                        want: <#name as ::confit_binding::face::Face>::face_name(),
-                        found: value.type_name().to_owned(),
+                    _ => ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                            require: <#name as ::confit_binding::face::Face>::face_name(),
+                            found: value.type_name().to_owned(),
+                        },
                     }),
                 }
             }

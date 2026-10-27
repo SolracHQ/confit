@@ -1,5 +1,4 @@
-//! Profiles
-//! Plain profile decode into configs and documents.
+//! Plain profile decode.
 
 use confit_binding_macros::Face;
 
@@ -19,7 +18,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Build one profile from configs and documents.
+    /// Build one profile.
     pub fn new(configs: Vec<Config>, documents: Vec<Document>) -> Self {
         Self { configs, documents }
     }

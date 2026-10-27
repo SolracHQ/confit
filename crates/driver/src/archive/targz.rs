@@ -1,11 +1,11 @@
 //! Tar member reading.
-//!
-//! Readers visit plain and gzipped tar members.
 
 use std::io;
 use std::io::Read as _;
 
-use super::Error;
+use confit_core::error::Result as CoreResult;
+use confit_core::error::{ArchiveError, ErrorContext as CoreError};
+
 use super::Result;
 
 /// Gzip magic for deflated streams.
@@ -26,7 +26,7 @@ const FALLBACK_MODE: u32 = 0o644;
 /// Permission mask for exposed modes.
 const MODE_MASK: u32 = 0o777;
 
-/// One tar file head with its name and mode.
+/// One tar file head.
 struct NamedFile {
     /// Container name with forward slashes.
     name: String,
@@ -34,7 +34,7 @@ struct NamedFile {
     mode: u32,
 }
 
-/// One sniffed stream with its gzip verdict.
+/// One sniffed stream.
 enum Probed<R> {
     /// Gzipped stream with bytes chained back.
     Gzipped(io::Chain<io::Cursor<Vec<u8>>, R>),
@@ -44,16 +44,10 @@ enum Probed<R> {
 
 /// Return tar member names in archive order.
 ///
-/// - Every returned name is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Bare`] for bare gzip singles.
-/// - [`Error::Corrupt`] for corrupt decodes.
-/// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
+/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_names(stream),
@@ -66,22 +60,14 @@ pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
 
 /// Walk tar members with one visitor.
 ///
-/// - Every visited member is a file with a non-empty name.
-/// - Modes mask toward 0o777 with 0o644 fallback.
-///
 /// # Errors
 ///
-/// - [`Error::Bare`] for bare gzip singles.
-/// - [`Error::Corrupt`] for corrupt decodes.
-/// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
-/// - [`Error::Visit`] for failing visitors.
-pub(super) fn walk<E>(
+/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+pub(super) fn walk(
     reader: impl io::Read,
-    visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
-) -> Result<(), E> {
+    visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
+) -> Result<()> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_walk(stream, visit),
         Probed::Gzipped(stream) => {
@@ -95,10 +81,8 @@ pub(super) fn walk<E>(
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams.
-fn sniff<R: io::Read, E>(mut reader: R) -> Result<Probed<R>, E> {
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+fn sniff<R: io::Read>(mut reader: R) -> Result<Probed<R>> {
     let mut prefix = Vec::with_capacity(GZIP_MAGIC.len());
     let mut byte = [0u8; 1];
     while prefix.len() < GZIP_MAGIC.len() {
@@ -119,26 +103,20 @@ fn sniff<R: io::Read, E>(mut reader: R) -> Result<Probed<R>, E> {
 
 /// Decode one tar block window.
 ///
-/// Empty windows read as tarred.
-///
 /// # Errors
 ///
-/// - [`Error::Bare`] for bare singles.
-/// - [`Error::Corrupt`] for corrupt decodes.
-/// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams.
-fn gunzip_window<R: io::Read, E>(
+/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+fn gunzip_window<R: io::Read>(
     reader: R,
-) -> Result<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>, E> {
+) -> Result<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>> {
     let mut decoder = flate2::read::GzDecoder::new(reader);
     let mut window = Vec::with_capacity(TAR_BLOCK as usize);
     decoder.by_ref().take(TAR_BLOCK).read_to_end(&mut window)?;
     if window.is_empty() || is_tar_tag(&window) {
         Ok(io::Cursor::new(window).chain(decoder))
     } else {
-        Err(Error::Bare)
+        Err(CoreError::from(ArchiveError::BareGzip))
     }
 }
 
@@ -150,13 +128,9 @@ fn is_tar_tag(head: &[u8]) -> bool {
 
 /// Return file names from one plain tar stream.
 ///
-/// - Every returned name is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
+/// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
 fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
@@ -175,18 +149,13 @@ fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
 
 /// Walk file members from one plain tar stream.
 ///
-/// - Every visited member is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
-/// - [`Error::Visit`] for failing visitors.
-fn plain_walk<E>(
+/// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
+fn plain_walk(
     reader: impl io::Read,
-    mut visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
-) -> Result<(), E> {
+    mut visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
+) -> Result<()> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
     for entry in entries {
@@ -200,7 +169,7 @@ fn plain_walk<E>(
             mode: found.mode,
             reader: Box::new(entry),
         };
-        visit(member).map_err(Error::Visit)?;
+        visit(member)?;
     }
     Ok(())
 }
@@ -209,8 +178,8 @@ fn plain_walk<E>(
 ///
 /// # Errors
 ///
-/// - [`Error::Io`] for failed paths.
-fn file_head<R: io::Read, E>(entry: &mut tar::Entry<'_, R>) -> Result<Option<NamedFile>, E> {
+/// - [`confit_core::error::FilesystemError`] for failed paths.
+fn file_head<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> Result<Option<NamedFile>> {
     let kind = entry.header().entry_type();
     if kind.is_dir() || !kind.is_file() {
         return Ok(None);

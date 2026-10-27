@@ -1,12 +1,9 @@
-//! Encode
 //! Blanket encoding for container and foreign faces.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use mlua::{Function, Lua, Value};
-
-use confit_driver::sha::Sha;
 
 use crate::value::Encode;
 
@@ -76,13 +73,6 @@ impl Encode for isize {
     }
 }
 
-/// Encode one hash through its hex digest.
-impl Encode for Sha {
-    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
-        lua.create_string(self.hex().as_str()).map(Value::String)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,13 +125,5 @@ mod tests {
             (-2isize).encode(&lua).unwrap(),
             Value::Integer(-2)
         ));
-    }
-
-    #[test]
-    fn hashes_encode_hex_digests() {
-        let lua = Lua::new();
-        let digest = Sha::hash(b"confit fixture");
-        let encoded = digest.encode(&lua).unwrap();
-        assert!(matches!(encoded, Value::String(found) if found.to_string_lossy() == digest.hex()));
     }
 }

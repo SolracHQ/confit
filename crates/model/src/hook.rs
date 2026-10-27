@@ -1,13 +1,15 @@
 //! Hook
 //! Post-config steps follow plans beside documents.
 
-use confit_binding::value::{Decode, Mismatch};
+use confit_binding::fault::FaceFault;
+use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::arg::Arg;
 use crate::condition::Condition;
+use crate::id::Id;
 
 /// One post-config step with conditions and checks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
@@ -20,7 +22,7 @@ pub struct Hook {
     #[face(default)]
     pub path: Vec<Arg>,
     /// The hook identifier.
-    pub id: Option<String>,
+    pub id: Option<Id>,
     /// The capability condition.
     #[serde(default)]
     #[face(default)]
@@ -149,8 +151,6 @@ impl HookLifecycle<'_> {
 }
 
 /// Diff desired hooks against previous hooks in render order.
-///
-/// - Current hooks lead in plan order, removals trail in previous order.
 pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<HookLifecycle<'a>> {
     let mut out = Vec::new();
     for hook in current {
@@ -226,8 +226,6 @@ fn timeout_change(before: u64, after: u64) -> Option<TimeoutChange> {
 }
 
 /// Build one hook modification across conditions and timeout.
-///
-/// - Conditions collect in key order.
 fn modify_hook(recorded: &Hook, hook: &Hook) -> HookModification {
     let mut conditions = Vec::new();
     if let Some(change) =
@@ -260,7 +258,7 @@ fn default_timeout_secs() -> u64 {
 fn reject_empty_argv(hook: &Hook) -> mlua::Result<()> {
     if hook.argv.is_empty() {
         return Err(mlua::Error::external(
-            "invalid hook argv 'table': want a non-empty string-or-route array",
+            "invalid hook argv 'table': require a non-empty string-or-route array",
         ));
     }
     Ok(())
@@ -270,13 +268,15 @@ fn reject_empty_argv(hook: &Hook) -> mlua::Result<()> {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside the duration shape.
-fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, Mismatch> {
+/// - [`FaceFault`] for values outside the duration shape.
+fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, FaceFault> {
     let text = String::decode(value, lua)?;
-    parse_timeout(&text).ok_or_else(|| Mismatch {
-        path: "timeout".to_owned(),
-        want: "a duration like '10m'".to_owned(),
-        found: format!("'{text}'"),
+    parse_timeout(&text).ok_or_else(|| FaceFault {
+        segments: Vec::new(),
+        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            require: "a duration like '10m'".to_owned(),
+            found: format!("'{text}'"),
+        },
     })
 }
 
@@ -286,9 +286,6 @@ fn render_timeout(_lua: &Lua, timeout: &u64) -> mlua::Result<String> {
 }
 
 /// Parse one duration string into seconds.
-///
-/// Bare digits read seconds. Suffixed parts read hours, minutes,
-/// and seconds in descending order with each unit at most once.
 fn parse_timeout(text: &str) -> Option<u64> {
     if text.is_empty() {
         return None;

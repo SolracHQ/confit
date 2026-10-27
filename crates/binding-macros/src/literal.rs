@@ -75,19 +75,23 @@ pub(crate) fn expand_string_enum(
                 #(#lowers => Self::#idents,)*
                 _ => {
                     return ::std::result::Result::Err(
-                        ::confit_binding::value::Mismatch {
-                            path: stringify!(#name).to_owned(),
-                            want: #want.to_owned(),
-                            found: ::std::format!("string \"{text}\""),
+                        ::confit_binding::fault::FaceFault {
+                            segments: ::std::vec::Vec::new(),
+                            reason: ::confit_binding::fault::FaultReason::UnknownVariant {
+                                found: ::std::format!("\"{text}\""),
+                                options: ::std::vec![#(#literals.to_owned()),*],
+                            },
                         },
                     );
                 }
             };
             #hook(&result).map_err(|error: ::mlua::Error| {
-                ::confit_binding::value::Mismatch {
-                    path: #outer.to_owned(),
-                    want: ::std::format!("valid {}", #outer),
-                    found: error.to_string(),
+                ::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: ::std::format!("valid {}", #outer),
+                        found: error.to_string(),
+                    },
                 }
             })?;
             ::std::result::Result::Ok(result)
@@ -95,10 +99,12 @@ pub(crate) fn expand_string_enum(
         None => quote! {
             match text.to_lowercase().as_str() {
                 #(#lowers => ::std::result::Result::Ok(Self::#idents),)*
-                _ => ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                    path: stringify!(#name).to_owned(),
-                    want: #want.to_owned(),
-                    found: ::std::format!("string \"{text}\""),
+                _ => ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::UnknownVariant {
+                        found: ::std::format!("\"{text}\""),
+                        options: ::std::vec![#(#literals.to_owned()),*],
+                    },
                 }),
             }
         },
@@ -118,12 +124,11 @@ pub(crate) fn expand_string_enum(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -131,16 +136,25 @@ pub(crate) fn expand_string_enum(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 let text = <::std::string::String as ::confit_binding::value::Decode>::decode(
                     value,
                     lua,
                 )
                 .map_err(|error| {
-                    ::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: #want.to_owned(),
-                        found: error.found,
+                    let found = match error.reason {
+                        ::confit_binding::fault::FaultReason::ShapeMismatch { found, .. } => found,
+                        ::confit_binding::fault::FaultReason::UnknownVariant {
+                            found,
+                            ..
+                        } => found,
+                    };
+                    ::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                            require: #want.to_owned(),
+                            found,
+                        },
                     }
                 })?;
                 #validate_arm

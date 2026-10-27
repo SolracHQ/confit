@@ -5,7 +5,7 @@
 --- @return string? The failure reason, else nil.
 function open(path) end
 
---- Handle to a project or cached resource.
+--- Handle to a trusted resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 

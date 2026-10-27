@@ -3,12 +3,11 @@
 
 use std::collections::BTreeMap;
 
+use confit_core::error::{DocumentError, ErrorCause};
 use confit_model::arg::{Arg, quote};
 use confit_model::condition::Condition;
 use confit_model::document::{Data, Document, RcData, RcEntry, StructuredFormat};
 use confit_model::routes::Route;
-
-use crate::error::{RefusalShape, Result, RuntimeError};
 
 /// Interactivity guard shared by every shell file.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -17,78 +16,61 @@ const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Refusal`] for opaque with tree payloads.
-/// - [`RuntimeError::Render`] for serializer failures.
-pub fn render_document(document: &Document) -> Result<Vec<u8>> {
+/// - [`confit_core::error::DocumentError::OpaqueNotRenderable`] for opaque payloads.
+/// - [`confit_core::error::DocumentError::TreeNotRenderable`] for tree payloads.
+/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+pub fn render_document(document: &Document) -> std::result::Result<Vec<u8>, DocumentError> {
     match &document.data {
         Data::Structured(found) => match found.format {
-            StructuredFormat::Toml => Ok(render_toml(&document.path, &found.data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(&document.path, &found.data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(&document.path, &found.data)?.into_bytes()),
+            StructuredFormat::Toml => render_toml(&found.data).map(|text| text.into_bytes()),
+            StructuredFormat::Json => render_json(&found.data).map(|text| text.into_bytes()),
+            StructuredFormat::Yaml => render_yaml(&found.data).map(|text| text.into_bytes()),
         },
         Data::Text(found) => Ok(found.content.as_bytes().to_vec()),
         Data::Link(found) => Ok(found.target.display().as_bytes().to_vec()),
-        Data::Rc(data) => Ok(render_rc(&document.path, data)?.into_bytes()),
-        Data::Opaque(found) => {
-            use confit_store::handles::ResourceHandle;
-
-            let label = match &found.handle {
-                ResourceHandle::Cache(sha) => sha.hex(),
-                ResourceHandle::Project(path, _) => path.display().to_string(),
-            };
-            log::error!(
-                "opaque '{}' uses content '{}'",
-                document.path.display(),
-                label
-            );
-            Err(RuntimeError::Refusal {
-                route: document.path.clone(),
-                shape: RefusalShape::Opaque,
-            })
-        }
-        Data::Tree(_) => Err(RuntimeError::Refusal {
-            route: document.path.clone(),
-            shape: RefusalShape::Tree,
-        }),
+        Data::Rc(data) => render_rc(data).map(|text| text.into_bytes()),
+        Data::Opaque(_) => Err(DocumentError::OpaqueNotRenderable),
+        Data::Tree(_) => Err(DocumentError::TreeNotRenderable),
     }
 }
 
 /// Render one map to TOML text.
-fn render_toml(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    toml::to_string(value).map_err(|source| {
-        let reason = source.to_string();
-        log::error!("render '{}' as toml failed: {reason}", route.display());
-        RuntimeError::Render {
-            route: route.clone(),
-            format: StructuredFormat::Toml,
-            reason,
-        }
+///
+/// # Errors
+///
+/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+fn render_toml(
+    value: &BTreeMap<String, serde_json::Value>,
+) -> std::result::Result<String, DocumentError> {
+    toml::to_string(value).map_err(|source| DocumentError::RenderFailed {
+        reason: source.to_string(),
     })
 }
 
 /// Render one map to pretty JSON text.
-fn render_json(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    serde_json::to_string_pretty(value).map_err(|source| {
-        let reason = source.to_string();
-        log::error!("render '{}' as json failed: {reason}", route.display());
-        RuntimeError::Render {
-            route: route.clone(),
-            format: StructuredFormat::Json,
-            reason,
-        }
+///
+/// # Errors
+///
+/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+fn render_json(
+    value: &BTreeMap<String, serde_json::Value>,
+) -> std::result::Result<String, DocumentError> {
+    serde_json::to_string_pretty(value).map_err(|source| DocumentError::RenderFailed {
+        reason: source.to_string(),
     })
 }
 
 /// Render one map to YAML text.
-fn render_yaml(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    noyalib::to_string(value).map_err(|source| {
-        let reason = source.to_string();
-        log::error!("render '{}' as yaml failed: {reason}", route.display());
-        RuntimeError::Render {
-            route: route.clone(),
-            format: StructuredFormat::Yaml,
-            reason,
-        }
+///
+/// # Errors
+///
+/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+fn render_yaml(
+    value: &BTreeMap<String, serde_json::Value>,
+) -> std::result::Result<String, DocumentError> {
+    noyalib::to_string(value).map_err(|source| DocumentError::RenderFailed {
+        reason: source.to_string(),
     })
 }
 
@@ -96,11 +78,11 @@ fn render_yaml(route: &Route, value: &BTreeMap<String, serde_json::Value>) -> Re
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn render_rc(route: &Route, data: &RcData) -> Result<String> {
-    let profile = section_lines(route, &data.profile)?;
-    let config = section_lines(route, &data.config)?;
-    let finals = section_lines(route, &data.r#final)?;
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn render_rc(data: &RcData) -> std::result::Result<String, DocumentError> {
+    let profile = section_lines(&data.profile)?;
+    let config = section_lines(&data.config)?;
+    let finals = section_lines(&data.r#final)?;
     let mut blocks: Vec<String> = Vec::new();
     if !profile.is_empty() {
         blocks.push(profile.join("\n"));
@@ -126,11 +108,11 @@ fn render_rc(route: &Route, data: &RcData) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn section_lines(route: &Route, entries: &[RcEntry]) -> Result<Vec<String>> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn section_lines(entries: &[RcEntry]) -> std::result::Result<Vec<String>, DocumentError> {
     let mut out = Vec::new();
     for entry in entries {
-        out.extend(render_entry(route, entry)?);
+        out.extend(render_entry(entry)?);
     }
     Ok(out)
 }
@@ -139,15 +121,15 @@ fn section_lines(route: &Route, entries: &[RcEntry]) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn render_entry(route: &Route, entry: &RcEntry) -> Result<Vec<String>> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn render_entry(entry: &RcEntry) -> std::result::Result<Vec<String>, DocumentError> {
     let line = match entry {
         RcEntry::Env { name, value, .. } => {
             let exported = escape_argv(std::slice::from_ref(value));
             format!("export {name}={exported}")
         }
         RcEntry::Path { name, dir, .. } => {
-            let expanded = expand_field(route, dir)?;
+            let expanded = expand_field(dir)?;
             let placed = quote(&expanded);
             format!("export {name}={placed}:\"${{{name}}}\"")
         }
@@ -157,17 +139,17 @@ fn render_entry(route: &Route, entry: &RcEntry) -> Result<Vec<String>> {
             let expanded = escape_argv(std::slice::from_ref(expansion));
             format!("alias {name}={expanded}")
         }
-        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(route, argv)?),
-        RcEntry::Cmd { argv, .. } => escape_args(route, argv)?,
+        RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", escape_args(argv)?),
+        RcEntry::Cmd { argv, .. } => escape_args(argv)?,
         RcEntry::Source { path, .. } => {
-            let expanded = expand_field(route, path)?;
+            let expanded = expand_field(path)?;
             format!("source {}", quote(&expanded))
         }
     };
     Ok(match entry.when() {
         None => vec![line],
         Some(guard) => vec![
-            format!("if {}; then", render_guard(route, guard)?),
+            format!("if {}; then", render_guard(guard)?),
             format!("  {line}"),
             "fi".to_string(),
         ],
@@ -178,8 +160,8 @@ fn render_entry(route: &Route, entry: &RcEntry) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn render_guard(route: &Route, guard: &Condition) -> Result<String> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn render_guard(guard: &Condition) -> std::result::Result<String, DocumentError> {
     match guard {
         Condition::EnvEq { key, value } => {
             let rhs = escape_argv(std::slice::from_ref(value));
@@ -191,7 +173,7 @@ fn render_guard(route: &Route, guard: &Condition) -> Result<String> {
             Ok(format!("command -v {binary} >/dev/null 2>&1"))
         }
         Condition::Exists { route: found } => {
-            let expanded = expand_field(route, found)?;
+            let expanded = expand_field(found)?;
             let candidate = escape_argv(std::slice::from_ref(&expanded));
             Ok(format!("[ -e {candidate} ]"))
         }
@@ -199,13 +181,13 @@ fn render_guard(route: &Route, guard: &Condition) -> Result<String> {
         Condition::Changed { .. } => Ok("false".to_string()),
         Condition::All(items) if items.is_empty() => Ok("true".to_string()),
         Condition::Any(items) if items.is_empty() => Ok("false".to_string()),
-        Condition::All(items) => join_guards(route, items, "&&"),
-        Condition::Any(items) => join_guards(route, items, "||"),
+        Condition::All(items) => join_guards(items, "&&"),
+        Condition::Any(items) => join_guards(items, "||"),
         Condition::Not(inner) => match inner.as_ref() {
             Condition::All(_) | Condition::Any(_) | Condition::Not(_) => {
-                Ok(format!("! ( {} )", render_guard(route, inner)?))
+                Ok(format!("! ( {} )", render_guard(inner)?))
             }
-            _ => Ok(format!("! {}", render_guard(route, inner)?)),
+            _ => Ok(format!("! {}", render_guard(inner)?)),
         },
     }
 }
@@ -214,11 +196,11 @@ fn render_guard(route: &Route, guard: &Condition) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn join_guards(route: &Route, items: &[Condition], op: &str) -> Result<String> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn join_guards(items: &[Condition], op: &str) -> std::result::Result<String, DocumentError> {
     let mut rendered = Vec::with_capacity(items.len());
     for item in items {
-        rendered.push(group_guard(route, item, op)?);
+        rendered.push(group_guard(item, op)?);
     }
     Ok(rendered.join(&format!(" {op} ")))
 }
@@ -227,9 +209,9 @@ fn join_guards(route: &Route, items: &[Condition], op: &str) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn group_guard(route: &Route, item: &Condition, parent: &str) -> Result<String> {
-    let rendered = render_guard(route, item)?;
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn group_guard(item: &Condition, parent: &str) -> std::result::Result<String, DocumentError> {
+    let rendered = render_guard(item)?;
     Ok(match item {
         Condition::All(_) if parent != "&&" => format!("( {rendered} )"),
         Condition::Any(_) if parent != "||" => format!("( {rendered} )"),
@@ -249,11 +231,11 @@ fn escape_argv(argv: &[String]) -> String {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn escape_args(route: &Route, args: &[Arg]) -> Result<String> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn escape_args(args: &[Arg]) -> std::result::Result<String, DocumentError> {
     let mut rendered = Vec::with_capacity(args.len());
     for arg in args {
-        rendered.push(escape_arg(route, arg)?);
+        rendered.push(escape_arg(arg)?);
     }
     Ok(rendered.join(" "))
 }
@@ -262,28 +244,28 @@ fn escape_args(route: &Route, args: &[Arg]) -> Result<String> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn escape_arg(route: &Route, arg: &Arg) -> Result<String> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn escape_arg(arg: &Arg) -> std::result::Result<String, DocumentError> {
     match arg {
         Arg::Text(text) => Ok(quote(text).into_owned()),
         Arg::Route(found) => {
-            let expanded = expand_field(route, found)?;
+            let expanded = expand_field(found)?;
             Ok(quote(&expanded).into_owned())
         }
     }
 }
 
-/// Expand one route field against its document route for errors.
+/// Expand one route field to its host path.
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Expand`] for unresolvable base folders.
-fn expand_field(route: &Route, found: &Route) -> Result<String> {
+/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+fn expand_field(found: &Route) -> std::result::Result<String, DocumentError> {
     found
         .expand()
         .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|source| RuntimeError::Expand {
-            route: route.clone(),
-            source,
+        .map_err(|error| match error.root_cause() {
+            ErrorCause::DocumentError(leaf) => leaf.clone(),
+            _ => unreachable!("route expansion fails parsing alone"),
         })
 }

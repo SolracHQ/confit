@@ -1,4 +1,3 @@
-//! Sha
 //! Verified content hashes.
 
 use serde::{Deserialize, Serialize};
@@ -11,15 +10,17 @@ pub enum ShaError {
     Parse {
         /// The offending input value.
         input: String,
-        /// The wanted shape.
-        want: String,
+        /// The required shape.
+        require: String,
     },
 }
 
 impl std::fmt::Display for ShaError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse { input, want } => write!(formatter, "invalid '{input}': want {want}"),
+            Self::Parse { input, require } => {
+                write!(formatter, "invalid '{input}', require {require}")
+            }
         }
     }
 }
@@ -82,7 +83,7 @@ impl Sha {
     ///
     /// # Errors
     ///
-    /// Stream read failures surface as io errors.
+    /// - Stream read failures surface as io errors.
     pub fn read_with_size(stream: &mut impl std::io::Read) -> std::io::Result<(Self, u64)> {
         let mut hasher = sha2::Sha256::new();
         let mut chunk = [0u8; READ_CHUNK_BYTES];
@@ -102,7 +103,7 @@ impl Sha {
     ///
     /// # Errors
     ///
-    /// Stream read failures surface as io errors.
+    /// - Stream read failures surface as io errors.
     pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
         Ok(Self::read_with_size(stream)?.0)
     }
@@ -136,11 +137,6 @@ impl Sha {
     /// Render the short hash prefix for terminal lines.
     pub fn short(&self) -> String {
         self.hex()[..12].to_owned()
-    }
-
-    /// Render the short hash and size label for terminal lines.
-    pub fn label_short(&self, len: u64) -> String {
-        format!("sha256:{} ({len} bytes)", self.short())
     }
 }
 
@@ -216,7 +212,7 @@ fn hex_value(byte: u8, sha: &str) -> Result<u8> {
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(ShaError::Parse {
             input: sha.to_owned(),
-            want: "64 hex characters".to_owned(),
+            require: "64 hex characters".to_owned(),
         }),
     }
 }
@@ -228,6 +224,6 @@ fn check_sha_hex(sha: &str) -> Result<()> {
     }
     Err(ShaError::Parse {
         input: sha.to_owned(),
-        want: "64 hex characters".to_owned(),
+        require: "64 hex characters".to_owned(),
     })
 }

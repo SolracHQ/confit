@@ -1,10 +1,8 @@
 //! Archive containers.
-//!
-//! Builders hold members under names and modes.
-//! Readers visit members under names and modes.
-//! Probes report the shape of one head window.
 
 use std::io::{self, Read as _};
+
+use confit_core::error::{ArchiveError, ErrorContext as CoreError};
 
 mod targz;
 mod zip_ext;
@@ -34,8 +32,6 @@ const FALLBACK_MODE: u32 = 0o644;
 const MODE_MASK: u32 = 0o777;
 
 /// Archive container shape.
-///
-/// Defaults are TarGz for compact output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Algorithm {
     /// Zip container with per-member deflation.
@@ -46,8 +42,6 @@ pub enum Algorithm {
 }
 
 /// Compression strength for archive builders.
-///
-/// Defaults are High for balanced output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
     /// Raw storage.
@@ -63,9 +57,7 @@ pub enum Level {
     Max,
 }
 
-/// One archive member with its body stream.
-///
-/// The reader borrows the archive walk.
+/// One archive member.
 pub struct Entry<'a> {
     /// Container name with forward slashes.
     pub name: String,
@@ -75,126 +67,29 @@ pub struct Entry<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Archive failure shapes.
-#[derive(Debug, thiserror::Error)]
-pub enum Error<E = io::Error> {
-    /// Foreign bytes.
-    #[error("cannot read members: foreign input")]
-    Foreign,
-    /// Bare gzip single.
-    #[error("cannot read members: bare gzip input")]
-    Bare,
-    /// Locked archive.
-    #[error("locked archive needs a password")]
-    Locked,
-    /// Unsupported algorithm.
-    #[error("cannot read members: unknown algorithm ({detail})")]
-    UnknownAlgorithm {
-        /// The refusal detail from the backend.
-        detail: String,
-    },
-    /// Unknown archive shape.
-    #[error("cannot read members: unknown shape ({detail})")]
-    Unknown {
-        /// The refusal detail from the backend.
-        detail: String,
-    },
-    /// Corrupt archive.
-    #[error("cannot read members: corrupt archive ({0})")]
-    Corrupt(#[source] io::Error),
-    /// Cut archive.
-    #[error("cut archive ends mid stream: {0}")]
-    Truncated(#[source] io::Error),
-    /// Refused access.
-    #[error("cannot read members: denied access ({0})")]
-    Denied(#[source] io::Error),
-    /// Absent input.
-    #[error("cannot read members: missing input ({0})")]
-    Missing(#[source] io::Error),
-    /// Rejected name.
-    #[error("cannot read members: rejected name ({0})")]
-    Invalid(#[source] io::Error),
-    /// Transport failure.
-    #[error(transparent)]
-    Io(io::Error),
-    /// Failing visitor.
-    #[error("cannot read members: failing visitor ({0})")]
-    Visit(E),
-}
-
 /// Archive result alias.
-pub type Result<T, E = io::Error> = std::result::Result<T, Error<E>>;
+pub type Result<T> = confit_core::error::Result<T>;
 
-impl<E> From<io::Error> for Error<E> {
-    fn from(cause: io::Error) -> Self {
-        match cause.kind() {
-            io::ErrorKind::InvalidData => Self::Corrupt(cause),
-            io::ErrorKind::UnexpectedEof => Self::Truncated(cause),
-            io::ErrorKind::PermissionDenied => Self::Denied(cause),
-            io::ErrorKind::NotFound => Self::Missing(cause),
-            io::ErrorKind::InvalidInput => Self::Invalid(cause),
-            _ => Self::Io(cause),
+/// Map one zip backend failure to a bare core cause.
+fn zip_error(error: zip::result::ZipError) -> CoreError {
+    use zip::result::ZipError as Zip;
+    let message = error.to_string();
+    match error {
+        Zip::Io(cause) => CoreError::from(cause),
+        Zip::InvalidPassword | Zip::UnsupportedArchive(Zip::PASSWORD_REQUIRED) => {
+            CoreError::from(ArchiveError::PasswordLocked)
         }
-    }
-}
-
-impl From<Error<io::Error>> for io::Error {
-    fn from(error: Error) -> Self {
-        match error {
-            Error::Io(cause)
-            | Error::Visit(cause)
-            | Error::Corrupt(cause)
-            | Error::Truncated(cause)
-            | Error::Denied(cause)
-            | Error::Missing(cause)
-            | Error::Invalid(cause) => cause,
-            Error::Foreign => Self::new(
-                io::ErrorKind::InvalidData,
-                "cannot read members: foreign input",
-            ),
-            Error::Bare => Self::new(
-                io::ErrorKind::InvalidData,
-                "cannot read members: bare gzip input",
-            ),
-            Error::Locked => Self::new(
-                io::ErrorKind::InvalidInput,
-                "locked archive needs a password",
-            ),
-            Error::Unknown { detail } | Error::UnknownAlgorithm { detail } => {
-                Self::new(io::ErrorKind::Unsupported, detail)
-            }
+        Zip::UnsupportedArchive(_) | Zip::CompressionMethodNotSupported(_) => {
+            CoreError::from(ArchiveError::AlgorithmUnknown { detail: message })
         }
-    }
-}
-
-impl<E> From<zip::result::ZipError> for Error<E> {
-    fn from(error: zip::result::ZipError) -> Self {
-        let message = error.to_string();
-        match error {
-            zip::result::ZipError::Io(cause) => Self::Io(cause),
-            zip::result::ZipError::InvalidPassword => Self::Locked,
-            zip::result::ZipError::UnsupportedArchive(detail)
-                if detail == zip::result::ZipError::PASSWORD_REQUIRED =>
-            {
-                Self::Locked
-            }
-            zip::result::ZipError::UnsupportedArchive(_) => {
-                Self::UnknownAlgorithm { detail: message }
-            }
-            zip::result::ZipError::CompressionMethodNotSupported(_) => {
-                Self::UnknownAlgorithm { detail: message }
-            }
-            zip::result::ZipError::FileNotFound | zip::result::ZipError::InvalidArchive(_) => {
-                Self::Corrupt(io::Error::new(io::ErrorKind::InvalidData, message))
-            }
-            _ => Self::Unknown { detail: message },
+        Zip::FileNotFound | Zip::InvalidArchive(_) => {
+            CoreError::from(ArchiveError::BackendCorrupt { detail: message })
         }
+        _ => CoreError::from(ArchiveError::BackendCorrupt { detail: message }),
     }
 }
 
 /// Streaming archive writer over one seekable sink.
-///
-/// Writers hold one backend and its level.
 pub struct Builder<W: io::Write + io::Seek> {
     inner: Inner<W>,
 }
@@ -251,16 +146,10 @@ impl<W: io::Write + io::Seek> Builder<W> {
 
     /// Append one member with its body bytes.
     ///
-    /// - Names carry forward slashes.
-    /// - Modes carry unix permission bits.
-    /// - Len sizes tar headers.
-    ///
     /// # Errors
     ///
-    /// - [`Error::Corrupt`] for rejected zip framing.
-    /// - [`Error::Invalid`] for rejected names.
-    /// - [`Error::Denied`] for denied access.
-    /// - [`Error::Io`] for failed readers and sinks.
+    /// - [`ArchiveError::BackendCorrupt`] for rejected framing.
+    /// - [`confit_core::error::FilesystemError`] for denied access and failed sinks.
     pub fn member<R: io::Read>(
         &mut self,
         name: &str,
@@ -288,7 +177,7 @@ impl<W: io::Write + io::Seek> Builder<W> {
                     .compression_method(method)
                     .compression_level(compression)
                     .unix_permissions(mode);
-                writer.start_file(name, options)?;
+                writer.start_file(name, options).map_err(zip_error)?;
                 std::io::copy(reader, writer)?;
                 Ok(())
             }
@@ -307,12 +196,11 @@ impl<W: io::Write + io::Seek> Builder<W> {
     ///
     /// # Errors
     ///
-    /// - [`Error::Corrupt`] for broken zip tails.
-    /// - [`Error::Denied`] for denied access.
-    /// - [`Error::Io`] for failed tails.
+    /// - [`ArchiveError::BackendCorrupt`] for broken tails.
+    /// - [`confit_core::error::FilesystemError`] for denied access and failed tails.
     pub fn finish(self) -> Result<W> {
         match self.inner {
-            Inner::Zip { writer, .. } => Ok((*writer).finish()?),
+            Inner::Zip { writer, .. } => Ok((*writer).finish().map_err(zip_error)?),
             Inner::Tar { builder } => {
                 let encoder = (*builder).into_inner()?;
                 Ok(encoder.finish()?)
@@ -328,25 +216,17 @@ pub fn supported(head: &[u8]) -> bool {
 
 /// Walk archive members with one visitor.
 ///
-/// - Every visited member is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Foreign`] for foreign bytes.
-/// - [`Error::Bare`] for bare gzip singles.
-/// - [`Error::Locked`] for locked archives.
-/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
-/// - [`Error::Unknown`] for unexpected failures.
-/// - [`Error::Corrupt`] for corrupt archives.
-/// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
-/// - [`Error::Visit`] for failing visitors.
-pub fn uncompress<R: io::Read + io::Seek, E>(
+/// - [`ArchiveError::NotArchive`] for foreign bytes.
+/// - [`ArchiveError::BackendCorrupt`] for corrupt archives and cut streams.
+/// - [`ArchiveError::PasswordLocked`] for locked archives.
+/// - [`ArchiveError::AlgorithmUnknown`] for unknown features and methods.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+pub fn uncompress<R: io::Read + io::Seek>(
     mut reader: R,
-    visit: impl FnMut(Entry<'_>) -> std::result::Result<(), E>,
-) -> Result<(), E> {
+    visit: impl FnMut(Entry<'_>) -> confit_core::error::Result<()>,
+) -> Result<()> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
         return zip_ext::walk(reader, visit);
@@ -354,25 +234,18 @@ pub fn uncompress<R: io::Read + io::Seek, E>(
     if is_gzip(&head) || is_tar_tag(&head) {
         return targz::walk(reader, visit);
     }
-    Err(Error::Foreign)
+    Err(CoreError::from(ArchiveError::NotArchive))
 }
 
 /// Return member names in archive order.
 ///
-/// - Every returned name is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Foreign`] for foreign bytes.
-/// - [`Error::Bare`] for bare gzip singles.
-/// - [`Error::Locked`] for locked archives.
-/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
-/// - [`Error::Unknown`] for unexpected failures.
-/// - [`Error::Corrupt`] for corrupt archives.
-/// - [`Error::Truncated`] for cut streams.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
+/// - [`ArchiveError::NotArchive`] for foreign bytes.
+/// - [`ArchiveError::BackendCorrupt`] for corrupt archives and cut streams.
+/// - [`ArchiveError::PasswordLocked`] for locked archives.
+/// - [`ArchiveError::AlgorithmUnknown`] for unknown features and methods.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
@@ -381,17 +254,15 @@ pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
     if is_gzip(&head) || is_tar_tag(&head) {
         return targz::names(reader);
     }
-    Err(Error::Foreign)
+    Err(CoreError::from(ArchiveError::NotArchive))
 }
 
 /// Read one head window and restore the cursor.
 ///
 /// # Errors
 ///
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams.
-fn peek_head<R: io::Read + io::Seek, E>(reader: &mut R) -> Result<Vec<u8>, E> {
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> Result<Vec<u8>> {
     let pos = reader.stream_position()?;
     let mut head = Vec::with_capacity(HEAD_LEN);
     reader

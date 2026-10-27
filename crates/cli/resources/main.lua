@@ -10,7 +10,7 @@ local bashrc = sugar.home(".bashrc")
 -- documents. Run `confit plan` to preview, `confit apply`
 -- to write.
 local shell = {
-	name = "shell",
+	name = id("shell"),
 	patches = {
 		sugar.patch(bashrc, function(document)
 			table.insert(document.config, sugar.alias("ll", "ls -l"))

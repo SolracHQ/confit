@@ -1,68 +1,29 @@
-//! Value
 //! Lua value translation for bound faces.
-
-use std::fmt::{Display, Formatter};
 
 use mlua::{Lua, Table, Value};
 
-/// One value mismatch with its field path.
-///
-/// The field path from the failing
-/// value to the conversion error.
-#[derive(Debug, Clone)]
-pub struct Mismatch {
-    /// The dotted field path.
-    pub path: String,
-    /// The wanted face expression.
-    pub want: String,
-    /// The found Lua type name.
-    pub found: String,
-}
-
-impl Display for Mismatch {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{}: want {}, found {}",
-            self.path, self.want, self.found
-        )
-    }
-}
+use super::fault::{FaceFault, FaultReason, Segment};
 
 /// Value translation for one bound face.
-///
-/// - Every implementor decodes Lua values of its documented
-///   shape and rejects every other shape.
-/// - Every failure carries the full field path.
 pub trait Decode: Sized {
     /// Decode one Lua value into the bound face.
     ///
-    /// - Tables decode field by field in declaration order.
-    /// - First failure aborts the decode.
-    ///
     /// # Errors
     ///
-    /// - [`Mismatch`] for values outside the documented shape.
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch>;
+    /// - [`FaceFault`] for values outside the documented shape.
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault>;
 
     /// Decode one Lua value with sibling keys ignored.
     ///
-    /// - Table faces accept sibling keys beside their own keys.
-    /// - Other faces decode without reading the list.
-    /// - Flatten holders pass their sibling keys through this list.
-    ///
     /// # Errors
     ///
-    /// - [`Mismatch`] for values outside the documented shape.
-    fn decode_ignored(value: &Value, lua: &Lua, _ignored: &[&str]) -> Result<Self, Mismatch> {
+    /// - [`FaceFault`] for values outside the documented shape.
+    fn decode_ignored(value: &Value, lua: &Lua, _ignored: &[&str]) -> Result<Self, FaceFault> {
         Self::decode(value, lua)
     }
 }
 
 /// Value encoding for one bound face.
-///
-/// - Every implementor renders values of its documented shape.
-/// - Every implementor answers owned Lua values alone.
 pub trait Encode {
     /// Encode the bound face into a Lua value.
     ///
@@ -76,27 +37,33 @@ pub trait Encode {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables outside the single-entry shape.
-pub fn single_entry(name: &str, table: &Table) -> Result<(String, Value), Mismatch> {
+/// - [`FaceFault`] for tables outside the single-entry shape.
+pub fn single_entry(table: &Table) -> Result<(String, Value), FaceFault> {
     let mut entries = table.pairs::<String, Value>();
     let found = entries
         .next()
         .transpose()
-        .map_err(|error| Mismatch {
-            path: name.to_owned(),
-            want: "a readable entry".to_owned(),
-            found: error.to_string(),
+        .map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "a readable entry".to_owned(),
+                found: error.to_string(),
+            },
         })?
-        .ok_or_else(|| Mismatch {
-            path: name.to_owned(),
-            want: "one entry".to_owned(),
-            found: "an empty table".to_owned(),
+        .ok_or_else(|| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "one entry".to_owned(),
+                found: "an empty table".to_owned(),
+            },
         })?;
     if entries.next().is_some() {
-        return Err(Mismatch {
-            path: name.to_owned(),
-            want: "one entry".to_owned(),
-            found: "a full table".to_owned(),
+        return Err(FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "one entry".to_owned(),
+                found: "a full table".to_owned(),
+            },
         });
     }
     Ok(found)
@@ -106,12 +73,14 @@ pub fn single_entry(name: &str, table: &Table) -> Result<(String, Value), Mismat
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside the table shape.
-pub fn table_value(value: &Value, shape: &str) -> Result<Table, Mismatch> {
-    value.as_table().cloned().ok_or_else(|| Mismatch {
-        path: shape.to_owned(),
-        want: "a table".to_owned(),
-        found: value.type_name().to_owned(),
+/// - [`FaceFault`] for values outside the table shape.
+pub fn table_value(value: &Value) -> Result<Table, FaceFault> {
+    value.as_table().cloned().ok_or_else(|| FaceFault {
+        segments: Vec::new(),
+        reason: FaultReason::ShapeMismatch {
+            require: "a table".to_owned(),
+            found: value.type_name().to_owned(),
+        },
     })
 }
 
@@ -119,58 +88,61 @@ pub fn table_value(value: &Value, shape: &str) -> Result<Table, Mismatch> {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables holding unknown fields.
-pub fn check_keys(table: &Table, shape: &str, allowed: &[&str]) -> Result<(), Mismatch> {
-    check_keys_ignored(table, shape, allowed, &[])
+/// - [`FaceFault`] for tables holding unknown fields.
+pub fn check_keys(table: &Table, allowed: &[&str]) -> Result<(), FaceFault> {
+    check_keys_ignored(table, allowed, &[])
 }
 
 /// Reject unknown string keys outside the allowed and ignored lists.
 ///
-/// - Keys in either list pass, every other key fails.
-/// - Flatten holders pass their sibling keys as the ignored list.
-/// - Overlapping lists fail as outer and inner key collisions.
-///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables holding unknown fields.
-/// - [`Mismatch`] for keys present in both lists.
+/// - [`FaceFault`] for tables holding unknown fields.
+/// - [`FaceFault`] for keys present in both lists.
 pub fn check_keys_ignored(
     table: &Table,
-    shape: &str,
     allowed: &[&str],
     ignored: &[&str],
-) -> Result<(), Mismatch> {
+) -> Result<(), FaceFault> {
     for key in allowed {
         if ignored.contains(key) {
-            return Err(Mismatch {
-                path: shape.to_owned(),
-                want: "distinct outer and inner keys".to_owned(),
-                found: format!("collision on '{key}'"),
+            return Err(FaceFault {
+                segments: Vec::new(),
+                reason: FaultReason::ShapeMismatch {
+                    require: "distinct outer and inner keys".to_owned(),
+                    found: format!("collision on '{key}'"),
+                },
             });
         }
     }
     for pair in table.pairs::<Value, Value>() {
-        let (key, _) = pair.map_err(|error| Mismatch {
-            path: shape.to_owned(),
-            want: "readable entries".to_owned(),
-            found: error.to_string(),
+        let (key, _) = pair.map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "readable entries".to_owned(),
+                found: error.to_string(),
+            },
         })?;
         match key {
             Value::String(text) => {
                 let name = text.to_string_lossy();
                 if !allowed.contains(&name.as_str()) && !ignored.contains(&name.as_str()) {
-                    return Err(Mismatch {
-                        path: shape.to_owned(),
-                        want: format!("one of {}", allowed.join(", ")),
-                        found: format!("unknown field '{name}'"),
+                    return Err(FaceFault {
+                        segments: Vec::new(),
+                        reason: FaultReason::ShapeMismatch {
+                            require: format!("one of {}", allowed.join(", ")),
+                            found: format!("unknown field '{name}'"),
+                        },
                     });
                 }
             }
             _ => {
-                return Err(Mismatch {
-                    path: shape.to_owned(),
-                    want: "a string key".to_owned(),
-                    found: key.type_name().to_owned(),
+                return Err(FaceFault {
+                    segments: Vec::new(),
+                    reason: FaultReason::ShapeMismatch {
+                        require: "a string key".to_owned(),
+                        found: key.type_name().to_owned(),
+                    },
                 });
             }
         }
@@ -182,14 +154,16 @@ pub fn check_keys_ignored(
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables with unreadable entries.
-pub fn table_keys(table: &Table, shape: &str) -> Result<Vec<String>, Mismatch> {
+/// - [`FaceFault`] for tables with unreadable entries.
+pub fn table_keys(table: &Table) -> Result<Vec<String>, FaceFault> {
     let mut keys = Vec::new();
     for pair in table.pairs::<Value, Value>() {
-        let (key, _) = pair.map_err(|error| Mismatch {
-            path: shape.to_owned(),
-            want: "readable entries".to_owned(),
-            found: error.to_string(),
+        let (key, _) = pair.map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "readable entries".to_owned(),
+                found: error.to_string(),
+            },
         })?;
         if let Value::String(text) = key {
             keys.push(text.to_string_lossy());
@@ -199,9 +173,7 @@ pub fn table_keys(table: &Table, shape: &str) -> Result<Vec<String>, Mismatch> {
     Ok(keys)
 }
 
-/// One untagged routing outcome across variant key families.
-///
-/// The matched family index with stranger keys.
+/// One untagged routing outcome.
 pub enum FamilyRoute {
     /// All input keys sit in exactly one family.
     Match(usize),
@@ -242,32 +214,31 @@ pub fn route_family(input: &[String], families: &[&[&str]]) -> FamilyRoute {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables with unreadable fields.
-pub fn read_field(table: &Table, shape: &str, field: &str) -> Result<Value, Mismatch> {
-    table.get::<Value>(field).map_err(|error| Mismatch {
-        path: format!("{shape}.{field}"),
-        want: "a readable field".to_owned(),
-        found: error.to_string(),
+/// - [`FaceFault`] for tables with unreadable fields.
+pub fn read_field(table: &Table, field: &str) -> Result<Value, FaceFault> {
+    table.get::<Value>(field).map_err(|error| FaceFault {
+        segments: vec![Segment::Field(field.to_owned())],
+        reason: FaultReason::ShapeMismatch {
+            require: "a readable field".to_owned(),
+            found: error.to_string(),
+        },
     })
 }
 
 /// Decode one field through its convert function.
 ///
-/// - Failures carry the field path.
-///
 /// # Errors
 ///
-/// - [`Mismatch`] for values the convert function rejects.
+/// - [`FaceFault`] for values the convert function rejects.
 pub fn decode_proxy<T>(
     lua: &Lua,
     value: &Value,
-    path: &str,
-    convert: fn(&Lua, &Value) -> Result<T, Mismatch>,
-) -> Result<T, Mismatch> {
-    convert(lua, value).map_err(|error| Mismatch {
-        path: path.to_owned(),
-        want: error.want,
-        found: error.found,
+    field: &str,
+    convert: fn(&Lua, &Value) -> Result<T, FaceFault>,
+) -> Result<T, FaceFault> {
+    convert(lua, value).map_err(|mut error| {
+        error.segments.insert(0, Segment::Field(field.to_owned()));
+        error
     })
 }
 
@@ -275,22 +246,26 @@ pub fn decode_proxy<T>(
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables outside the sequence shape.
-pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
+/// - [`FaceFault`] for tables outside the sequence shape.
+pub fn decode_seq(table: &Table) -> Result<Vec<Value>, FaceFault> {
     let mut items: Vec<(i64, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
-        let (key, item) = pair.map_err(|error| Mismatch {
-            path: name.to_owned(),
-            want: "readable entries".to_owned(),
-            found: error.to_string(),
+        let (key, item) = pair.map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "readable entries".to_owned(),
+                found: error.to_string(),
+            },
         })?;
         match key {
             Value::Integer(index) => items.push((index, item)),
             _ => {
-                return Err(Mismatch {
-                    path: name.to_owned(),
-                    want: "integer sequence keys".to_owned(),
-                    found: key.type_name().to_owned(),
+                return Err(FaceFault {
+                    segments: Vec::new(),
+                    reason: FaultReason::ShapeMismatch {
+                        require: "integer sequence keys".to_owned(),
+                        found: key.type_name().to_owned(),
+                    },
                 });
             }
         }
@@ -298,10 +273,12 @@ pub fn decode_seq(table: &Table, name: &str) -> Result<Vec<Value>, Mismatch> {
     items.sort_by_key(|(index, _)| *index);
     for (position, (index, _)) in items.iter().enumerate() {
         if *index != position as i64 + 1 {
-            return Err(Mismatch {
-                path: name.to_owned(),
-                want: "contiguous keys from 1".to_owned(),
-                found: format!("key {index}"),
+            return Err(FaceFault {
+                segments: Vec::new(),
+                reason: FaultReason::ShapeMismatch {
+                    require: "contiguous keys from 1".to_owned(),
+                    found: format!("key {index}"),
+                },
             });
         }
     }
@@ -319,31 +296,30 @@ pub fn take_arg(arguments: &[Value], next: &mut usize) -> Option<Value> {
 }
 
 macro_rules! primitive_decode {
-    ($type:ty, $face:literal, $want:literal, $body:expr) => {
+    ($type:ty, $require:literal, $body:expr) => {
         impl Decode for $type {
-            fn decode(value: &Value, _lua: &Lua) -> Result<Self, Mismatch> {
+            fn decode(value: &Value, _lua: &Lua) -> Result<Self, FaceFault> {
                 let body: fn(&Value) -> Option<Self> = $body;
-                body(value).ok_or_else(|| Mismatch {
-                    path: $face.to_owned(),
-                    want: $want.to_owned(),
-                    found: value.type_name().to_owned(),
+                body(value).ok_or_else(|| FaceFault {
+                    segments: Vec::new(),
+                    reason: FaultReason::ShapeMismatch {
+                        require: $require.to_owned(),
+                        found: value.type_name().to_owned(),
+                    },
                 })
             }
         }
     };
 }
 
-primitive_decode!(String, "string", "a string", |value: &Value| match value {
+primitive_decode!(String, "a string", |value: &Value| match value {
     Value::String(text) => Some(text.to_string_lossy()),
     _ => None,
 });
-primitive_decode!(bool, "boolean", "a boolean", |value: &Value| value
-    .as_boolean());
-primitive_decode!(i64, "integer", "an integer", |value: &Value| value
-    .as_integer());
+primitive_decode!(bool, "a boolean", |value: &Value| value.as_boolean());
+primitive_decode!(i64, "an integer", |value: &Value| value.as_integer());
 primitive_decode!(
     u32,
-    "integer",
     "a non-negative integer",
     |value: &Value| match value.as_integer() {
         Some(found) if found >= 0 && found <= u32::MAX as i64 => Some(found as u32),
@@ -352,30 +328,24 @@ primitive_decode!(
 );
 primitive_decode!(
     u64,
-    "integer",
     "a non-negative integer",
     |value: &Value| match value.as_integer() {
         Some(found) if found >= 0 => Some(found as u64),
         _ => None,
     }
 );
-primitive_decode!(f64, "number", "a number", |value: &Value| match value {
+primitive_decode!(f64, "a number", |value: &Value| match value {
     Value::Integer(found) => Some(*found as f64),
     Value::Number(found) => Some(*found),
     _ => None,
 });
-primitive_decode!(
-    mlua::Function,
-    "function",
-    "a function",
-    |value: &Value| match value {
-        Value::Function(found) => Some(found.clone()),
-        _ => None,
-    }
-);
+primitive_decode!(mlua::Function, "a function", |value: &Value| match value {
+    Value::Function(found) => Some(found.clone()),
+    _ => None,
+});
 
 impl<T: Decode> Decode for Option<T> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
         match value {
             Value::Nil => Ok(None),
             _ => T::decode(value, lua).map(Some),
@@ -384,17 +354,16 @@ impl<T: Decode> Decode for Option<T> {
 }
 
 impl<T: Decode> Decode for Vec<T> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
-        let table = table_value(value, "sequence")?;
-        let items = decode_seq(&table, "sequence")?;
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
+        let table = table_value(value)?;
+        let items = decode_seq(&table)?;
         items
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                T::decode(item, lua).map_err(|error| Mismatch {
-                    path: format!("entry {}: {}", index + 1, error.path),
-                    want: error.want,
-                    found: error.found,
+                T::decode(item, lua).map_err(|mut error| {
+                    error.segments.insert(0, Segment::Index(index as u32 + 1));
+                    error
                 })
             })
             .collect()
@@ -402,39 +371,36 @@ impl<T: Decode> Decode for Vec<T> {
 }
 
 impl<T: Decode> Decode for Box<T> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
         T::decode(value, lua).map(Box::new)
     }
 }
 
-/// Decode one string keyed map with recursive values.
-///
-/// - String keys alone decode with other keys rejected.
-/// - Values decode through their bound face in key order.
+/// Decode one string keyed map.
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for tables outside the map shape.
-fn decode_map<V: Decode>(
-    value: &Value,
-    lua: &Lua,
-    shape: &str,
-) -> Result<Vec<(String, V)>, Mismatch> {
-    let table = table_value(value, shape)?;
+/// - [`FaceFault`] for tables outside the map shape.
+fn decode_map<V: Decode>(value: &Value, lua: &Lua) -> Result<Vec<(String, V)>, FaceFault> {
+    let table = table_value(value)?;
     let mut pairs: Vec<(String, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
-        let (key, item) = pair.map_err(|error| Mismatch {
-            path: shape.to_owned(),
-            want: "readable entries".to_owned(),
-            found: error.to_string(),
+        let (key, item) = pair.map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "readable entries".to_owned(),
+                found: error.to_string(),
+            },
         })?;
         match key {
             Value::String(text) => pairs.push((text.to_string_lossy(), item)),
             _ => {
-                return Err(Mismatch {
-                    path: shape.to_owned(),
-                    want: "a string key".to_owned(),
-                    found: key.type_name().to_owned(),
+                return Err(FaceFault {
+                    segments: Vec::new(),
+                    reason: FaultReason::ShapeMismatch {
+                        require: "a string key".to_owned(),
+                        found: key.type_name().to_owned(),
+                    },
                 });
             }
         }
@@ -442,10 +408,9 @@ fn decode_map<V: Decode>(
     pairs.sort_by(|left, right| left.0.cmp(&right.0));
     let mut decoded: Vec<(String, V)> = Vec::new();
     for (key, item) in &pairs {
-        let found = V::decode(item, lua).map_err(|error| Mismatch {
-            path: format!("{shape}.{key}: {}", error.path),
-            want: error.want,
-            found: error.found,
+        let found = V::decode(item, lua).map_err(|mut error| {
+            error.segments.insert(0, Segment::Field(key.clone()));
+            error
         })?;
         decoded.push((key.clone(), found));
     }
@@ -453,42 +418,46 @@ fn decode_map<V: Decode>(
 }
 
 impl<V: Decode> Decode for std::collections::HashMap<String, V> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
-        decode_map::<V>(value, lua, "map").map(|pairs| pairs.into_iter().collect())
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
+        decode_map::<V>(value, lua).map(|pairs| pairs.into_iter().collect())
     }
 }
 
 impl<V: Decode> Decode for std::collections::BTreeMap<String, V> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
-        decode_map::<V>(value, lua, "map").map(|pairs| pairs.into_iter().collect())
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
+        decode_map::<V>(value, lua).map(|pairs| pairs.into_iter().collect())
     }
 }
 
 impl Decode for Value {
-    fn decode(value: &Value, _lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, _lua: &Lua) -> Result<Self, FaceFault> {
         Ok(value.clone())
     }
 }
 
 impl Decode for serde_json::Value {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
         use mlua::LuaSerdeExt as _;
-        lua.from_value(value.clone()).map_err(|error| Mismatch {
-            path: "value".to_owned(),
-            want: "a JSON value".to_owned(),
-            found: error.to_string(),
+        lua.from_value(value.clone()).map_err(|error| FaceFault {
+            segments: Vec::new(),
+            reason: FaultReason::ShapeMismatch {
+                require: "a JSON value".to_owned(),
+                found: error.to_string(),
+            },
         })
     }
 }
 
 impl Decode for () {
-    fn decode(value: &Value, _lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, _lua: &Lua) -> Result<Self, FaceFault> {
         match value {
             Value::Nil => Ok(()),
-            _ => Err(Mismatch {
-                path: "nil".to_owned(),
-                want: "nil".to_owned(),
-                found: value.type_name().to_owned(),
+            _ => Err(FaceFault {
+                segments: Vec::new(),
+                reason: FaultReason::ShapeMismatch {
+                    require: "nil".to_owned(),
+                    found: value.type_name().to_owned(),
+                },
             }),
         }
     }
@@ -579,6 +548,7 @@ impl Encode for Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace::{LuaTrace, SourceSite};
     use confit_binding_macros::Face;
 
     // Untagged routing pins live here. Macro shape tests pin docs alone.
@@ -856,9 +826,9 @@ mod tests {
         let table = lua.create_table().unwrap();
         table.set("content", "hello").unwrap();
         table.set("path", "doc/a").unwrap();
-        check_keys_ignored(&table, "FlatInner", &["content"], &["path"]).unwrap();
+        check_keys_ignored(&table, &["content"], &["path"]).unwrap();
         assert!(
-            check_keys_ignored(&table, "FlatInner", &["content"], &["content"]).is_err(),
+            check_keys_ignored(&table, &["content"], &["content"]).is_err(),
             "clashing ignored keys fail"
         );
     }
@@ -928,5 +898,130 @@ mod tests {
             digest: "aa".to_owned(),
         };
         assert!(sealed.encode(&lua).is_err(), "sealed arms refuse encode");
+    }
+
+    #[test]
+    fn vec_decode_marks_failing_position_from_one() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set(1, "ok").unwrap();
+        table.set(2, 1).unwrap();
+        match <Vec<String>>::decode(&Value::Table(table), &lua) {
+            Ok(_) => panic!("foreign item passes"),
+            Err(error) => {
+                assert_eq!(error.segments, vec![Segment::Index(2)]);
+                assert!(
+                    matches!(error.reason, FaultReason::ShapeMismatch { .. }),
+                    "the reason keeps the shape: {}",
+                    error.reason
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn map_decode_marks_failing_field() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("good", "ok").unwrap();
+        table.set("bad", 1).unwrap();
+        match <std::collections::BTreeMap<String, String>>::decode(&Value::Table(table), &lua) {
+            Ok(_) => panic!("foreign value passes"),
+            Err(error) => {
+                assert_eq!(error.segments, vec![Segment::Field("bad".to_owned())]);
+                assert!(
+                    matches!(error.reason, FaultReason::ShapeMismatch { .. }),
+                    "the reason keeps the shape: {}",
+                    error.reason
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn trace_capture_outside_lua_returns_none() {
+        let lua = Lua::new();
+        assert!(
+            LuaTrace::capture(&lua).is_none(),
+            "bare state holds no frames"
+        );
+        assert!(LuaTrace::default().0.is_empty(), "default holds no sites");
+    }
+
+    #[test]
+    fn trace_capture_inside_lua_holds_file_and_line() {
+        let lua = Lua::new();
+        let probe = lua
+            .create_function(|lua, ()| {
+                let trace = LuaTrace::capture(lua).unwrap_or_default();
+                let site = trace.0.first().cloned().unwrap_or(SourceSite {
+                    file: String::new(),
+                    line: String::new(),
+                });
+                Ok((site.file, site.line))
+            })
+            .unwrap();
+        lua.globals().set("probe", probe).unwrap();
+        let (file, line): (String, String) = lua
+            .load("return probe()")
+            .set_name("@probe_case.lua")
+            .call(())
+            .unwrap();
+        assert!(
+            file.contains("probe_case.lua"),
+            "frame shows the chunk file"
+        );
+        assert_eq!(line, "1", "frame shows the chunk line");
+    }
+
+    #[test]
+    fn trace_capture_inside_wrapper_holds_both_frames() {
+        let lua = Lua::new();
+        let probe = lua
+            .create_function(|lua, ()| {
+                let trace = LuaTrace::capture(lua).unwrap_or_default();
+                Ok(trace
+                    .0
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>())
+            })
+            .unwrap();
+        lua.globals().set("probe", probe).unwrap();
+        let source = "local function wrap()\n  local out = probe()\n  return out\nend\nlocal done = wrap()\nreturn done";
+        let frames: Vec<String> = lua
+            .load(source)
+            .set_name("@wrap_case.lua")
+            .call(())
+            .unwrap();
+        assert_eq!(frames.len(), 2, "wrapper holds two frames");
+        assert!(
+            frames[0].contains("wrap_case.lua:2"),
+            "inner frame shows the wrapper line"
+        );
+        assert!(
+            frames[1].contains("wrap_case.lua:5"),
+            "outer frame shows the chunk line"
+        );
+    }
+
+    #[test]
+    fn proxy_decode_marks_field_name() {
+        let lua = Lua::new();
+        match decode_proxy(&lua, &Value::Integer(1), "base", |lua, value| {
+            String::decode(value, lua)
+        }) {
+            Ok(_) => panic!("foreign field passes"),
+            Err(error) => {
+                assert_eq!(error.segments, vec![Segment::Field("base".to_owned())]);
+                match &error.reason {
+                    FaultReason::ShapeMismatch { require, found } => {
+                        assert_eq!(require, "a string");
+                        assert_eq!(found, "integer");
+                    }
+                    _ => panic!("proxy keeps the shape: {}", error.reason),
+                }
+            }
+        }
     }
 }

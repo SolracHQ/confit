@@ -1,15 +1,13 @@
-//! Userdata
 //! Method glue for bound userdata handles.
 
 use std::borrow::Cow;
 
-use crate::error::Result;
 use crate::registry::Registry;
 
 /// Collect one face with every referenced face.
-pub type CollectFn = fn(&mut Registry) -> Result<()>;
+pub type CollectFn = fn(&mut Registry);
 
-/// One userdata method parameter with its Lua face.
+/// One userdata method parameter.
 #[derive(Clone, Debug)]
 pub struct MethodParameter {
     /// The Lua parameter name.
@@ -31,7 +29,7 @@ impl PartialEq for MethodParameter {
     }
 }
 
-/// One userdata method return with its Lua face.
+/// One userdata method return.
 #[derive(Clone, Debug)]
 pub struct MethodReturn {
     /// The return face expression.
@@ -50,7 +48,7 @@ impl PartialEq for MethodReturn {
     }
 }
 
-/// One userdata method with its Lua faces.
+/// One userdata method.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MethodDescriptor {
     /// The method name.
@@ -65,45 +63,30 @@ pub struct MethodDescriptor {
 
 impl MethodDescriptor {
     /// Collect every referenced face.
-    ///
-    /// - Params in order, returns after.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    pub fn collect_referenced(&self, collector: &mut Registry) -> Result<()> {
+    pub fn collect_referenced(&self, collector: &mut Registry) {
         for parameter in &self.parameters {
-            (parameter.collect)(collector)?;
+            (parameter.collect)(collector);
         }
         for returned in &self.returns {
-            (returned.collect)(collector)?;
+            (returned.collect)(collector);
         }
-        Ok(())
     }
 }
 
 /// Bound userdata class.
-///
-/// - Every implementor answers one stable class name.
-/// - Every implementor answers its method descriptors.
-/// - Collection registers the class with every
-///   referenced face exactly once.
 pub trait UserdataClass: mlua::UserData {
     /// Return the class name.
     fn class_name() -> &'static str;
     /// Return the collected method descriptors.
     fn methods() -> Vec<MethodDescriptor>;
     /// Register the class with every referenced face.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> Result<()>;
+    fn collect(collector: &mut Registry);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace::LuaTrace;
     use confit_binding_macros::{Face, face_impl};
     use mlua::Lua;
 
@@ -130,7 +113,7 @@ mod tests {
             Ok(vec![self.seed.clone(), prefix])
         }
 
-        /// Answer the seed.
+        /// Return the seed.
         ///
         /// # Returns
         ///
@@ -141,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_methods_answer_calls_through_lua() {
+    fn generated_methods_return_calls_through_lua() {
         let methods = Roster::methods();
         let names: Vec<&str> = methods.iter().map(|method| method.name).collect();
         assert_eq!(names, vec!["members", "seed_name"]);
@@ -208,6 +191,76 @@ mod tests {
         );
     }
 
+    /// Blast handle for metamethod tests.
+    #[derive(Clone, Face)]
+    #[face(traced, userdata)]
+    struct Boom {
+        message: String,
+        #[face(lua_trace)]
+        trace: LuaTrace,
+    }
+
+    #[face_impl]
+    impl Boom {
+        /// Read the message.
+        ///
+        /// # Returns
+        ///
+        /// - The message text.
+        fn message(&self) -> String {
+            self.message.clone()
+        }
+
+        /// Render the error line.
+        ///
+        /// # Returns
+        ///
+        /// - The rendered error line.
+        #[face_meta(__tostring)]
+        fn render(&self) -> String {
+            format!("boom: {}", self.message)
+        }
+    }
+
+    /// Blast source for global constructor tests.
+    struct BoomSource;
+
+    #[face_impl(global)]
+    impl BoomSource {
+        /// Build one blast handle.
+        ///
+        /// # Arguments
+        ///
+        /// - [message] The blast message text.
+        ///
+        /// # Returns
+        ///
+        /// - The blast handle.
+        pub fn boom(lua: &Lua, message: String) -> Boom {
+            Boom::traced(
+                lua,
+                Boom {
+                    message,
+                    trace: LuaTrace::default(),
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn meta_tostring_renders_through_lua() {
+        let methods = Boom::methods();
+        let names: Vec<&str> = methods.iter().map(|method| method.name).collect();
+        assert_eq!(names, vec!["message"]);
+        let lua = Lua::new();
+        BoomSource::install(&lua, &lua.globals()).unwrap();
+        let rendered: String = lua
+            .load("return tostring(boom('loud failure'))")
+            .eval()
+            .unwrap();
+        assert_eq!(rendered, "boom: loud failure");
+    }
+
     /// Cache fixture.
     #[derive(Clone, Debug, PartialEq, Face)]
     #[face(userdata)]
@@ -218,7 +271,7 @@ mod tests {
 
     #[face_impl]
     impl CacheHandle {
-        /// Answer a constant.
+        /// Return a constant.
         ///
         /// # Returns
         ///

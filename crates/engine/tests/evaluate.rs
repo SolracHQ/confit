@@ -359,3 +359,24 @@ fn evaluation_carries_hooks_through() {
         Err(error) => panic!("hooks evaluate: {error}"),
     }
 }
+
+#[test]
+fn bad_base_renders_face_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = test_engine(dir.path());
+    let source = r#"
+        return {
+            documents = {
+                { path = { base = "void", relative = "note.txt" }, text = "hi" },
+            },
+        }
+    "#;
+    let (_, profile) = profile_with(dir.path(), source);
+    match engine.evaluate(&profile) {
+        Ok(_) => panic!("bad base passes"),
+        Err(error) => assert_eq!(
+            error.to_string(),
+            "Cannot evaluate the profile, documents[1].path.base: \"void\" is not a valid variant, choose one of home, config, data, cache, literal"
+        ),
+    }
+}

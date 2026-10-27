@@ -1,16 +1,14 @@
-//! Store
-//! Write-backed capability roots for one run.
+//! Store write-backed capability roots for one run.
 
 #![deny(missing_docs)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use confit_core::progress::ProgressSender;
 use confit_driver::paths::BaseDirs;
-use confit_driver::progress::ProgressSender;
 
 pub mod archive;
-pub mod faults;
 pub mod fetch;
 pub mod handles;
 pub mod pool;
@@ -24,9 +22,6 @@ use resources::Resources;
 use state::StateStore;
 
 /// Base folders for every write-backed capability.
-///
-/// Config, temp, and project roots travel together from one
-/// construction site. Empty paths are unset.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
     /// State and history storage base.
@@ -56,12 +51,6 @@ pub struct Stores {
 
 impl StoreRoots {
     /// Build standard host roots from environment folders.
-    ///
-    /// - Config uses the system config folder under `confit`, temp uses the
-    ///   process temp folder under `confit`, and the project root is the
-    ///   working folder.
-    /// - Unset folders fall back to relative `confit` folders, an unavailable
-    ///   working folder falls back to `.`.
     pub fn standard() -> Self {
         let config_base = BaseDirs::new()
             .config

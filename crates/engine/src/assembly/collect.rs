@@ -2,51 +2,50 @@
 
 use std::collections::BTreeSet;
 
+use confit_core::error::{Error, EvalDetail, EvalError, Outcome};
+
 use crate::api::profile::Profile;
 use confit_model::document::Document;
 
-use crate::error::{EngineError, Result};
-
-/// Reject repeated config names. Errors hold the first repeat.
+/// Reject repeated config names.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Defined`] for repeated names.
-pub(super) fn check_names(profile: &Profile) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated names.
+pub(super) fn check_names(profile: &Profile) -> Outcome<()> {
     let mut names = BTreeSet::new();
     for config in &profile.configs {
-        let name = &config.name;
-        if !names.insert(name.to_owned()) {
-            return Err(EngineError::Defined {
-                name: name.to_owned(),
-            });
+        let name = config.name.as_str().to_owned();
+        if !names.insert(name.clone()) {
+            return Err(Error::duplicate_document(name));
         }
     }
     Ok(())
 }
 
-/// Reject requirement edges showing unknown configs. Errors hold the hint.
-///
-/// - Configs match by exact name in profile order with targets in key order.
+/// Reject requirement edges showing unknown configs.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Require`] for edges showing unknown configs.
-pub(super) fn check_requirements(profile: &Profile) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for edges showing unknown configs.
+pub(super) fn check_requirements(profile: &Profile) -> Outcome<()> {
     let mut present = BTreeSet::new();
     for config in &profile.configs {
-        present.insert(config.name.clone());
+        present.insert(config.name.as_str().to_owned());
     }
     for config in &profile.configs {
         let mut targets: Vec<(&String, &String)> = config.requirements.iter().collect();
         targets.sort();
         for (target, hint) in targets {
             if !present.contains(target) {
-                return Err(EngineError::Require {
-                    name: config.name.clone(),
-                    target: target.clone(),
-                    hint: Some(hint.clone()),
-                });
+                return Err(Error::evaluate(
+                    EvalDetail::Eval(EvalError::ConfigRequiresMissing {
+                        config: config.name.as_str().to_owned(),
+                        target: target.clone(),
+                        hint: hint.clone(),
+                    }),
+                    None,
+                ));
             }
         }
     }
@@ -55,12 +54,10 @@ pub(super) fn check_requirements(profile: &Profile) -> Result<()> {
 
 /// Collect one profile's documents in destination order.
 ///
-/// - Profile documents join first, config documents follow in order.
-///
 /// # Errors
 ///
-/// - [`EngineError::Duplicate`] for repeated destinations.
-pub(super) fn dedupe(profile: &Profile) -> Result<Vec<Document>> {
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated destinations.
+pub(super) fn dedupe(profile: &Profile) -> Outcome<Vec<Document>> {
     let mut seen = BTreeSet::new();
     let mut placed = Vec::new();
     for document in profile.documents.iter().chain(
@@ -70,9 +67,8 @@ pub(super) fn dedupe(profile: &Profile) -> Result<Vec<Document>> {
             .flat_map(|config| config.documents.iter()),
     ) {
         if !seen.insert(document.path.clone()) {
-            return Err(EngineError::Duplicate {
-                display: document.path.display(),
-            });
+            let display = document.path.display();
+            return Err(Error::duplicate_document(display));
         }
         placed.push(document.clone());
     }

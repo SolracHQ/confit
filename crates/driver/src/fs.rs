@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 
 /// Build the parent folder for one file path.
 ///
-/// - Empty and parentless paths skip.
-///
 /// # Errors
 ///
 /// - Parent build failures fail as io errors.
@@ -23,9 +21,9 @@ pub fn create_parent(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] for missing folders.
-/// - [PermissionDenied] for unreadable folders.
-/// - [NotADirectory] when the path is a file.
+/// - [`std::io::ErrorKind::NotFound`] for missing folders.
+/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable folders.
+/// - [`std::io::ErrorKind::NotADirectory`] when the path is a file.
 pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(path)? {
@@ -35,37 +33,13 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
-/// Read the last bytes of one file from the tail.
-///
-/// # Errors
-///
-/// - [NotFound] for missing paths.
-/// - [PermissionDenied] for unreadable paths.
-/// - [UnexpectedEof] when the file runs short of the tail.
-pub fn read_tail(path: &Path, tail: u64) -> io::Result<Vec<u8>> {
-    use std::io::{Read as _, Seek as _};
-
-    let facts = std::fs::metadata(path)?;
-    if facts.len() < tail {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("short file '{}'", path.display()),
-        ));
-    }
-    let mut file = std::fs::File::open(path)?;
-    file.seek(io::SeekFrom::End(-(tail as i64)))?;
-    let mut out = vec![0u8; tail as usize];
-    file.read_exact(&mut out)?;
-    Ok(out)
-}
-
 /// Create one symlink and replace any present entry.
 ///
 /// # Errors
 ///
-/// - [NotFound] for missing parents.
-/// - [PermissionDenied] for unwritable folders.
-/// - [InvalidInput] when link paths carry bad bytes.
+/// - [`std::io::ErrorKind::NotFound`] for missing parents.
+/// - [`std::io::ErrorKind::PermissionDenied`] for unwritable folders.
+/// - [`std::io::ErrorKind::InvalidInput`] when link paths carry bad bytes.
 pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
     create_parent(link)?;
     if std::fs::symlink_metadata(link).is_ok() {
@@ -75,8 +49,6 @@ pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
 }
 
 /// Remove one symlink without touching other entries.
-///
-/// - Links remove, other entries stay.
 ///
 /// # Errors
 ///
@@ -92,9 +64,9 @@ pub fn remove_link(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] for missing paths.
-/// - [PermissionDenied] for unreadable paths.
-/// - [InvalidInput] for non-link paths.
+/// - [`std::io::ErrorKind::NotFound`] for missing paths.
+/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable paths.
+/// - [`std::io::ErrorKind::InvalidInput`] for non-link paths.
 pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
     Ok(std::fs::read_link(path)?
         .as_os_str()
@@ -107,12 +79,10 @@ const DEFAULT_MODE: u32 = 0o644;
 
 /// Set unix permission bits on one path.
 ///
-/// - Absent modes take the default.
-///
 /// # Errors
 ///
-/// - [NotFound] for missing paths.
-/// - [PermissionDenied] for unwritable paths.
+/// - [`std::io::ErrorKind::NotFound`] for missing paths.
+/// - [`std::io::ErrorKind::PermissionDenied`] for unwritable paths.
 pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -127,23 +97,13 @@ pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [NotFound] for missing paths.
-/// - [PermissionDenied] for unreadable paths.
+/// - [`std::io::ErrorKind::NotFound`] for missing paths.
+/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable paths.
 pub fn mode(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 
     let facts = std::fs::symlink_metadata(path)?;
     Ok(facts.permissions().mode() & 0o777)
-}
-
-/// Read mtime nanos since the epoch, zero when missing or pre-epoch.
-pub fn modified_nanos(facts: &std::fs::Metadata) -> u64 {
-    facts
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .and_then(|span| u64::try_from(span.as_nanos()).ok())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -1,26 +1,21 @@
-//! Callback
 //! Lua callbacks over args faces.
 
 use std::marker::PhantomData;
 
 use mlua::{Function, Lua, Value};
 
-use crate::error::Result as BindingResult;
 use crate::face::{Face, FaceData};
+use crate::fault::FaceFault;
 use crate::registry::Registry;
-use crate::value::{Decode, Encode, Mismatch};
+use crate::value::{Decode, Encode};
 
 /// One Lua callback over its args face.
-///
-/// One Lua function with its args marker.
 pub struct Callback<Args> {
     function: Function,
     marker: PhantomData<Args>,
 }
 
 /// Callback args shape.
-///
-/// The function face with the call arity and the call encoding.
 pub trait CallbackArgs {
     /// Call parameters with borrowed plain values beside owned live tables.
     type Parameters<'args>;
@@ -38,9 +33,9 @@ pub trait CallbackArgs {
     ///
     /// # Errors
     ///
-    /// - [`Mismatch`] for values outside the function shape.
-    /// - [`Mismatch`] for fixed functions with param counts apart from the arity.
-    fn decode_function(value: &Value, lua: &Lua) -> Result<Function, Mismatch>;
+    /// - [`FaceFault`] for values outside the function shape.
+    /// - [`FaceFault`] for fixed functions with param counts apart from the arity.
+    fn decode_function(value: &Value, lua: &Lua) -> Result<Function, FaceFault>;
 
     /// Call the function with the encoded parameters.
     ///
@@ -92,9 +87,9 @@ impl<Args: CallbackArgs> Callback<Args> {
     ///
     /// # Errors
     ///
-    /// - [`Mismatch`] for values outside the function shape.
-    /// - [`Mismatch`] for fixed functions with param counts apart from the arity.
-    pub fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+    /// - [`FaceFault`] for values outside the function shape.
+    /// - [`FaceFault`] for fixed functions with param counts apart from the arity.
+    pub fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
         Args::decode_function(value, lua).map(Self::new)
     }
 
@@ -119,13 +114,13 @@ impl<Args: CallbackArgs + Face> Face for Callback<Args> {
         Args::face()
     }
 
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        Args::collect(collector)
+    fn collect(collector: &mut Registry) {
+        Args::collect(collector);
     }
 }
 
 impl<Args: CallbackArgs> Decode for Callback<Args> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, Mismatch> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, FaceFault> {
         Self::decode(value, lua)
     }
 }
@@ -228,7 +223,7 @@ mod tests {
             _ => panic!("args hold function data"),
         }
         let mut collector = Registry::new();
-        TestHolder::collect(&mut collector).unwrap();
+        TestHolder::collect(&mut collector);
         assert!(!collector.contains("TestArgs"));
         assert!(collector.contains("TestHolder"));
         assert!(collector.contains("TestLive"));
@@ -264,7 +259,7 @@ mod tests {
             _ => panic!("expected function data for filter"),
         }
         let mut collector = Registry::new();
-        FilterHolder::collect(&mut collector).unwrap();
+        FilterHolder::collect(&mut collector);
         let text = collector.stub_text();
         assert!(text.contains("@field filter fun(route: string): boolean"));
         assert!(text.contains("@field apply fun(route: string, document: TestLive)"));

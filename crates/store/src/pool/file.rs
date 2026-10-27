@@ -6,9 +6,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use bytemuck::{Pod, Zeroable};
-use confit_driver::sha::Sha;
-
-use super::error::{PoolError, Result};
+use confit_core::error::locate::Locate;
+use confit_core::error::{ContentError, ErrorCause, Result, fail};
+use confit_core::sha::Sha;
 
 /// Object identity prefix.
 #[repr(C)]
@@ -30,7 +30,7 @@ const OBJECT_VERSION: u8 = 0;
 /// Pool gzip level.
 const POOL_GZIP_LEVEL: u32 = 6;
 
-/// Checked object file with its content identity.
+/// Checked object file.
 pub struct PoolFile {
     /// Object file location.
     path: PathBuf,
@@ -38,7 +38,7 @@ pub struct PoolFile {
     size: u64,
 }
 
-/// Object body writer with its header written.
+/// Object body writer.
 pub(crate) struct BodyWriter {
     /// Gzip encoder over the object sink.
     encoder: flate2::write::GzEncoder<std::fs::File>,
@@ -61,31 +61,35 @@ impl PoolFile {
     ///
     /// # Errors
     ///
-    /// - [`PoolError::Write`] for missing pool files.
-    /// - [`PoolError::WriteUnknown`] for truncated files, bad headers,
-    ///   and filename and header mismatches.
+    /// - [`confit_core::error::ContentError`] for short and undecodable objects.
+    /// - [`confit_core::error::ErrorCause`] for header hash mismatches.
+    /// - [`confit_core::error::FilesystemError`] for missing and unreadable pool files.
     pub fn open(path: PathBuf, expected: &Sha) -> Result<Self> {
-        let mut file =
-            std::fs::File::open(&path).map_err(|error| PoolError::from_write_io(&path, error))?;
+        let mut file = std::fs::File::open(&path).path(path.clone())?;
         let mut raw = [0u8; std::mem::size_of::<ObjectHeader>()];
         if let Err(error) = file.read_exact(&mut raw) {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Err(PoolError::WriteUnknown {
-                    path,
-                    message: format!("corrupt content '{}'", expected.hex()),
-                });
+                return fail(ContentError::CorruptObject {
+                    expected: expected.clone(),
+                })
+                .path(path);
             }
-            return Err(PoolError::from_write_io(&path, error));
+            return fail(error).path(path);
         }
         match decode_header(&raw) {
             Some(header) if header.sha() == *expected => Ok(Self {
                 path,
                 size: header.size(),
             }),
-            _ => Err(PoolError::WriteUnknown {
-                path,
-                message: format!("corrupt content '{}'", expected.hex()),
-            }),
+            Some(header) => fail(ErrorCause::ContentHashMismatch {
+                expected: expected.clone(),
+                found: header.sha(),
+            })
+            .path(path),
+            None => fail(ContentError::CorruptObject {
+                expected: expected.clone(),
+            })
+            .path(path),
         }
     }
 
@@ -114,15 +118,13 @@ impl PoolFile {
     ///
     /// # Errors
     ///
-    /// - [`PoolError::Write`] for missing pool files.
-    /// - [`PoolError::WriteUnknown`] for failed pool opens.
+    /// - [`confit_core::error::FilesystemError`] for missing and unreadable pool files.
     pub fn body(&self) -> Result<flate2::read::GzDecoder<std::fs::File>> {
-        let mut file = std::fs::File::open(&self.path)
-            .map_err(|error| PoolError::from_write_io(&self.path, error))?;
+        let mut file = std::fs::File::open(&self.path).path(&self.path)?;
         file.seek(std::io::SeekFrom::Start(
             std::mem::size_of::<ObjectHeader>() as u64,
         ))
-        .map_err(|error| PoolError::from_write_io(&self.path, error))?;
+        .path(&self.path)?;
         Ok(flate2::read::GzDecoder::new(file))
     }
 }
@@ -160,8 +162,6 @@ fn encode_header(sha: &Sha, size: u64) -> ObjectHeader {
 }
 
 /// Check one header image into its content hash and byte count.
-///
-/// - Bad magic and versions fail.
 fn decode_header(raw: &[u8]) -> Option<ObjectHeader> {
     let header: &ObjectHeader = bytemuck::try_from_bytes(raw).ok()?;
     if header.magic != *b"blob" || header.version != OBJECT_VERSION {

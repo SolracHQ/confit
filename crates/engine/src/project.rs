@@ -2,9 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_core::error::{
+    DocumentError, Error, ErrorContext, EvalDetail, Outcome, ProjectError, Require, Result,
+};
 use serde::{Deserialize, Serialize};
-
-use crate::error::{EngineError, Result};
 
 /// Project file name under the project root.
 pub const FILE: &str = "project.toml";
@@ -78,26 +79,20 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Read`] for unreadable files.
-    /// - [`EngineError::Utf8`] for non-UTF8 files.
-    /// - [`EngineError::Project`] for malformed files.
-    pub fn read(root: &Path) -> Result<Self> {
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable and malformed files.
+    pub fn read(root: &Path) -> Outcome<Self> {
         let path = root.join(FILE);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
-            Err(error) => {
-                return Err(EngineError::Read {
-                    path: path.display().to_string(),
-                    reason: error.to_string(),
-                });
-            }
+            Err(error) => return Err(Error::load_project(path, ErrorContext::from(error))),
         };
-        let text = String::from_utf8(bytes).map_err(|_| EngineError::Utf8 {
-            path: path.display().to_string(),
-        })?;
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) => return Err(Error::load_project(path, ErrorContext::from(error))),
+        };
         Self::parse(&text, &path)
     }
 
@@ -105,57 +100,68 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Project`] for malformed text.
-    pub fn parse(text: &str, path: &Path) -> Result<Self> {
-        toml::from_str(text).map_err(|error| EngineError::Project {
-            path: path.display().to_string(),
-            reason: error.to_string(),
-        })
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for malformed text.
+    pub fn parse(text: &str, path: &Path) -> Outcome<Self> {
+        match toml::from_str(text) {
+            Ok(found) => Ok(found),
+            Err(error) => Err(Error::load_project(
+                path.to_path_buf(),
+                ErrorContext::from(ProjectError::InvalidConfig {
+                    detail: error.to_string(),
+                }),
+            )),
+        }
     }
 
     /// Render one project text.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::Project`] for unrenderable projects.
+    /// - [`confit_core::error::DocumentError::RenderFailed`] for unrenderable projects.
     pub fn render(&self) -> Result<String> {
-        toml::to_string_pretty(self).map_err(|error| EngineError::Project {
-            path: FILE.to_owned(),
-            reason: error.to_string(),
+        toml::to_string_pretty(self).map_err(|error| {
+            ErrorContext::from(DocumentError::RenderFailed {
+                reason: error.to_string(),
+            })
+            .path(PathBuf::from(FILE))
         })
     }
 
     /// Resolve the plugin tree against one project root.
     ///
-    /// Missing folders fall back lexical, so requires fail as unknown
-    /// modules exactly as without config. Folders outside the root fail
-    /// without the allow flag.
-    ///
     /// # Errors
     ///
-    /// - [`EngineError::Project`] for outside folders without allow.
-    /// - [`EngineError::Read`] for unreadable roots.
-    pub fn plugin_root(&self, root: &Path) -> Result<PluginRoot> {
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable roots and outside folders.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable roots and outside folders.
+    pub fn plugin_root(&self, root: &Path) -> Outcome<PluginRoot> {
         let joined = root.join(&self.plugins.folder);
-        let root_real = std::fs::canonicalize(root).map_err(|error| EngineError::Read {
-            path: root.display().to_string(),
-            reason: error.to_string(),
-        })?;
+        let root_real = match std::fs::canonicalize(root) {
+            Ok(found) => found,
+            Err(error) => {
+                return Err(Error::load_project(
+                    root.join(FILE),
+                    ErrorContext::from(error),
+                ));
+            }
+        };
         let dir = match std::fs::canonicalize(&joined) {
             Ok(dir) => dir,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => joined,
             Err(error) => {
-                return Err(EngineError::Read {
-                    path: joined.display().to_string(),
-                    reason: error.to_string(),
-                });
+                return Err(Error::load_project(
+                    root.join(FILE),
+                    ErrorContext::from(error),
+                ));
             }
         };
         if !dir.starts_with(&root_real) && !self.plugins.allow_external_folders {
-            return Err(EngineError::Project {
-                path: self.plugins.folder.display().to_string(),
-                reason: format!("folder is outside '{}' without allow", root_real.display()),
-            });
+            return Err(Error::evaluate(
+                EvalDetail::Parse {
+                    input: self.plugins.folder.display().to_string(),
+                    require: Require::ProjectFolder,
+                },
+                None,
+            ));
         }
         Ok(PluginRoot { dir })
     }

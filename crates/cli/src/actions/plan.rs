@@ -3,14 +3,13 @@
 
 use std::path::Path;
 
+use confit_core::error::{Error, ErrorCause, Failure, Outcome};
 use confit_engine::Engine;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
-
-use crate::error::{CliError, Result};
 
 use crate::cli::{PlanArgs, plan_profile};
 use crate::presentation::summary::render_prepared;
@@ -37,44 +36,68 @@ pub struct PlanRunner<'a> {
 impl PlanRunner<'_> {
     /// Prepare the shared preview and write the payload on demand.
     ///
-    /// Report with the rendered preview.
-    ///
     /// # Errors
     ///
-    /// - [`crate::error::CliError::BadPicker`] for malformed names.
-    /// - [`crate::error::CliError::Runtime`] for state and bundle writes.
-    /// - [`crate::error::CliError::Engine`] for evaluation failures.
-    /// - [`crate::error::CliError::NoDefaultProfile`] for absent defaults.
-    /// - [`crate::error::CliError::NoProfile`] for absent profiles.
-    pub fn execute(self) -> Result<PlanReport> {
+    /// - [`confit_core::error::kind::ErrorKind::BundleSlot`] for malformed slots.
+    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
+    /// - [`confit_core::error::kind::ErrorKind::PlanState`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for state faults.
+    pub fn execute(self) -> Outcome<PlanReport> {
         let path = plan_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {
-            return Err(CliError::NoDefaultProfile {
-                project: self.args.project.clone(),
-            });
+            return Err(Error::missing_project(self.args.project.clone()));
         }
         let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
         let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
-        let prepared = prepare(&self.stores, desired)?;
+        let raw = self
+            .args
+            .output
+            .as_deref()
+            .and_then(|path| path.to_str())
+            .map(str::to_owned);
+        let prepared = match prepare(&self.stores, desired) {
+            Ok(found) => found,
+            Err(Failure::Terminal(terminal)) => return Err(terminal),
+            Err(Failure::Mid(error)) => match error.root_cause() {
+                ErrorCause::SlotReason(reason) => {
+                    return Err(Error::bundle_slot(raw.unwrap_or_default(), reason.clone()));
+                }
+                _ => return Err(Error::plan_state(error)),
+            },
+        };
+        for warning in &prepared.warnings {
+            self.sinks.print_line(warning.summary());
+            log::warn!(
+                "diff warning: {} chain: {:?}",
+                warning.summary(),
+                warning.chain()
+            );
+        }
         let text = render_prepared(&prepared);
         if let Some(output) = self.args.output.as_deref() {
             if is_named_output(output) {
                 let raw = output.to_str().unwrap_or("");
-                let picker: Picker = raw.parse().map_err(|_| CliError::BadPicker {
-                    input: raw.to_owned(),
-                })?;
-                let Picker::Named(_) = picker else {
-                    return Err(CliError::BadPicker {
-                        input: raw.to_owned(),
-                    });
+                let picker: Picker = match raw.parse() {
+                    Ok(picker) => picker,
+                    Err(error) => match error.root_cause() {
+                        ErrorCause::SlotReason(reason) => {
+                            return Err(Error::bundle_slot(raw.to_owned(), reason.clone()));
+                        }
+                        _ => return Err(Error::plan_state(error)),
+                    },
                 };
-                stored::store_named(&self.stores.states(), &picker, &prepared.desired)
-                    .map_err(CliError::from)?;
+                let Picker::Named(_) = picker else {
+                    return Err(Error::bundle_slot(
+                        raw.to_owned(),
+                        confit_core::error::SlotReason::BareSlot,
+                    ));
+                };
+                stored::store_named(&self.stores.states(), &picker, &prepared.desired)?;
             } else {
-                Bundler::new(&self.stores)
-                    .write(&prepared.desired, output)
-                    .map(|_| ())
-                    .map_err(CliError::from)?;
+                Bundler::new(&self.stores).write(&prepared.desired, output)?;
             }
         }
         Ok(PlanReport { text })

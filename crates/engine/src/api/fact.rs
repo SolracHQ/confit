@@ -1,4 +1,3 @@
-//! Facts
 //! Immediate host facts over closed names.
 
 use confit_binding_macros::{Face, face_impl};
@@ -62,7 +61,7 @@ mod tests {
         let lua = test_lua();
         match run(&lua, r#"return fact("OS")"#) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), std::env::consts::OS),
-            Ok(_) => panic!("fact names answer strings"),
+            Ok(_) => panic!("fact names return strings"),
             Err(error) => panic!("fact names fold case: {error}"),
         }
     }

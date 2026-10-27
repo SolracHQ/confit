@@ -39,7 +39,7 @@ local installer = nil
 ---@return Hook Hook running mise install with conditions.
 local function install_hook()
 	return {
-		id = HOOK_ID,
+		id = id(HOOK_ID),
 		argv = { "mise", "install" },
 		path = { MISE_BINDIR },
 		requires = { in_path = { name = "mise" } },
@@ -58,7 +58,7 @@ function mise.init(version)
 	if not installer then
 		local resolved = release.resolve(version)
 		installer = {
-			name = INSTALLER_NAME,
+			name = id(INSTALLER_NAME),
 			documents = {
 				{ path = MISE_TOML, format = "toml", data = { tools = {} } },
 				{ path = MISE_BIN, handle = release.binary(resolved), mode = "755" },
@@ -138,7 +138,7 @@ end
 function mise.package(spec)
 	local name, version, bin, options, rc = speclib.check(spec)
 	local config = {
-		name = name,
+		name = id(name),
 		requirements = { [INSTALLER_NAME] = INSTALLER_HINT },
 		patches = { fold_patch(name, version, options), shim_patch(bin) },
 	}

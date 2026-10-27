@@ -99,7 +99,6 @@ fn build_inline_payload(
         }
         let lua_key = flags.rename.clone().unwrap_or_else(|| field_name.clone());
         let field_docs = doc_lines(&field.attrs).join(" ");
-        let path = format!("{outer}.{variant_name}.{lua_key}");
         declarations.push(quote! { #[doc = #field_docs] pub #field_ident: #field_type });
         field_shapes.push(field.ty.clone());
         field_lua_keys.push(lua_key.clone());
@@ -135,15 +134,17 @@ fn build_inline_payload(
         if flags.optional || inferred {
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                     <#field_type as ::std::default::Default>::default()
                 } else {
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?
                 };
             });
@@ -154,37 +155,45 @@ fn build_inline_payload(
             };
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
                     #fallback
                 } else {
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?
                 };
             });
         } else {
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
-                    ::confit_binding::value::read_field(&table, #outer, #lua_key)?;
+                    ::confit_binding::value::read_field(&table, #lua_key)?;
                 if matches!(raw_value, ::mlua::Value::Nil) {
                     return ::std::result::Result::Err(
-                        ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: <#field_type as ::confit_binding::face::Face>::face_name(),
-                            found: "nil".to_owned(),
+                        ::confit_binding::fault::FaceFault {
+                            segments: ::std::vec![::confit_binding::fault::Segment::Field(
+                                #lua_key.to_owned(),
+                            )],
+                            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                require: <#field_type as ::confit_binding::face::Face>::face_name(),
+                                found: "nil".to_owned(),
+                            },
                         },
                     );
                 }
                 let #field_ident =
                     <#field_type as ::confit_binding::value::Decode>::decode(&raw_value, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#lua_key.to_owned()),
+                            );
+                            error
                         })?;
             });
         }
@@ -217,12 +226,11 @@ fn build_inline_payload(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -230,11 +238,10 @@ fn build_inline_payload(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
-                let table = ::confit_binding::value::table_value(value, #class_name)?;
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
+                let table = ::confit_binding::value::table_value(value)?;
                 ::confit_binding::value::check_keys(
                     &table,
-                    #class_name,
                     &[#(#field_names),*],
                 )?;
                 #(#decoders)*
@@ -338,7 +345,6 @@ pub(crate) fn expand_tagged_enum(
         }
         let tag = flags.tag.unwrap_or_else(|| snake_case(&variant_name));
         let docs = doc_lines(&variant.attrs).join(" ");
-        let path = format!("{outer}.{tag}");
         if let Fields::Named(named) = &variant.fields {
             let payload = build_inline_payload(&display, variant, named)?;
             let identifier = payload.identifier.clone();
@@ -365,19 +371,23 @@ pub(crate) fn expand_tagged_enum(
                     #tag => {
                         let inner =
                             <#identifier as ::confit_binding::value::Decode>::decode(&inner, lua)
-                                .map_err(|error| ::confit_binding::value::Mismatch {
-                                    path: #path.to_owned(),
-                                    want: error.want,
-                                    found: error.found,
+                                .map_err(|mut error| {
+                                    error.segments.insert(
+                                        0,
+                                        ::confit_binding::fault::Segment::Field(#tag.to_owned()),
+                                    );
+                                    error
                                 })?;
                         let result = Self::#ident {
                             #(#field_idents: inner.#field_idents),*
                         };
                         #hook(&result).map_err(|error: ::mlua::Error| {
-                            ::confit_binding::value::Mismatch {
-                                path: #outer.to_owned(),
-                                want: ::std::format!("valid {}", #outer),
-                                found: error.to_string(),
+                            ::confit_binding::fault::FaceFault {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                    require: ::std::format!("valid {}", #outer),
+                                    found: error.to_string(),
+                                },
                             }
                         })?;
                         ::std::result::Result::Ok(result)
@@ -388,10 +398,12 @@ pub(crate) fn expand_tagged_enum(
                     #tag => {
                         let inner =
                             <#identifier as ::confit_binding::value::Decode>::decode(&inner, lua)
-                                .map_err(|error| ::confit_binding::value::Mismatch {
-                                    path: #path.to_owned(),
-                                    want: error.want,
-                                    found: error.found,
+                                .map_err(|mut error| {
+                                    error.segments.insert(
+                                        0,
+                                        ::confit_binding::fault::Segment::Field(#tag.to_owned()),
+                                    );
+                                    error
                                 })?;
                         ::std::result::Result::Ok(Self::#ident {
                             #(#field_idents: inner.#field_idents),*
@@ -449,17 +461,21 @@ pub(crate) fn expand_tagged_enum(
                 #tag => {
                     let result = Self::#ident(
                         <#payload as ::confit_binding::value::Decode>::decode(&inner, lua)
-                            .map_err(|error| ::confit_binding::value::Mismatch {
-                                path: #path.to_owned(),
-                                want: error.want,
-                                found: error.found,
+                            .map_err(|mut error| {
+                                error.segments.insert(
+                                    0,
+                                    ::confit_binding::fault::Segment::Field(#tag.to_owned()),
+                                );
+                                error
                             })?,
                     );
                     #hook(&result).map_err(|error: ::mlua::Error| {
-                        ::confit_binding::value::Mismatch {
-                            path: #outer.to_owned(),
-                            want: ::std::format!("valid {}", #outer),
-                            found: error.to_string(),
+                        ::confit_binding::fault::FaceFault {
+                            segments: ::std::vec::Vec::new(),
+                            reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                require: ::std::format!("valid {}", #outer),
+                                found: error.to_string(),
+                            },
                         }
                     })?;
                     ::std::result::Result::Ok(result)
@@ -469,17 +485,18 @@ pub(crate) fn expand_tagged_enum(
             arms.push(quote! {
                 #tag => ::std::result::Result::Ok(Self::#ident(
                     <#payload as ::confit_binding::value::Decode>::decode(&inner, lua)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: error.want,
-                            found: error.found,
+                        .map_err(|mut error| {
+                            error.segments.insert(
+                                0,
+                                ::confit_binding::fault::Segment::Field(#tag.to_owned()),
+                            );
+                            error
                         })?,
                 )),
             });
         }
         tags.push(tag);
     }
-    let want = format!("one of {}", tags.join(", "));
     Ok(quote! {
         #(#payloads)*
 
@@ -497,12 +514,11 @@ pub(crate) fn expand_tagged_enum(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -510,17 +526,19 @@ pub(crate) fn expand_tagged_enum(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 let table =
-                    ::confit_binding::value::table_value(value, stringify!(#name))?;
+                    ::confit_binding::value::table_value(value)?;
                 let (key, inner) =
-                    ::confit_binding::value::single_entry(stringify!(#name), &table)?;
+                    ::confit_binding::value::single_entry(&table)?;
                 match key.as_str() {
                     #(#arms)*
-                    _ => ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: #want.to_owned(),
-                        found: ::std::format!("unknown tag '{key}'"),
+                    _ => ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::UnknownVariant {
+                            found: ::std::format!("'{key}'"),
+                            options: ::std::vec![#(#tags.to_owned()),*],
+                        },
                     }),
                 }
             }

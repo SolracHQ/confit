@@ -4,16 +4,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use confit_driver::progress::{Event, ProgressSender};
+use confit_core::progress::{Event, ProgressSender};
 
 /// Sender for already formatted stderr lines.
-///
-/// Lines flow toward the renderer thread for ordered printing.
 pub type PrintSender = crossbeam_channel::Sender<String>;
 
 /// Widget pause control for prompts.
-///
-/// Clones share one draw target. Prompts run inside `suspend`.
 #[derive(Debug, Clone)]
 pub struct SuspendControl {
     /// Shared draw target for terminal runs.
@@ -32,12 +28,11 @@ impl SuspendControl {
 
     /// Ask one question with widgets parked.
     ///
-    /// The answer is true only for the literal `yes`.
-    /// Queued prints land before the question.
+    /// - Confirmation holds only for the literal `yes`.
     ///
     /// # Errors
     ///
-    /// Stderr and stdin failures surface as io errors.
+    /// - Stderr and stdin failures surface as io errors.
     pub fn ask(&self, question: &str) -> std::io::Result<bool> {
         self.flush();
         self.suspend(|| {
@@ -46,7 +41,7 @@ impl SuspendControl {
             stderr.write_all(question.as_bytes())?;
             stderr.flush()?;
             drop(stderr);
-            log::debug!("prompt waiting for answer");
+            log::debug!("prompt waiting for input");
             let mut line = String::new();
             let got = std::io::stdin().lock().read_line(&mut line)?;
             log::debug!("prompt read {got} bytes");
@@ -73,9 +68,6 @@ impl SuspendControl {
 }
 
 /// One tty-controlled renderer and its senders.
-///
-/// Thread-owned spinner over facts, prints, and shutdown.
-/// Print lines through `println`. Single-line shutdown clear with thread join on finish.
 pub struct Terminal {
     /// Fact sender for the renderer thread.
     tx: ProgressSender,

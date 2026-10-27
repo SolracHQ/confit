@@ -19,12 +19,12 @@ use blocks::expand_block;
 
 /// Expand method collection for one impl block.
 pub fn expand(attribute: TokenStream, item: TokenStream) -> TokenStream {
-    let namespace = match parse_namespace(attribute) {
+    let mode = match parse_namespace(attribute) {
         Ok(found) => found,
         Err(error) => return error.to_compile_error().into(),
     };
     let block = parse_macro_input!(item as ItemImpl);
-    let expanded = expand_block(&block, namespace);
+    let expanded = expand_block(&block, mode);
     match expanded {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),

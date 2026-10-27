@@ -1,5 +1,4 @@
-//! Configs
-//! Plain config decode into names with documents and patches.
+//! Plain config decode.
 
 use std::collections::HashMap;
 
@@ -8,13 +7,14 @@ use confit_binding_macros::Face;
 use super::patch::Patch;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
+use confit_model::id::Id;
 
 /// One decoded config.
 #[derive(Debug, Clone, Default, Face)]
 #[face(table)]
 pub struct Config {
     /// The config name.
-    pub name: String,
+    pub name: Id,
     /// Documents in declaration order with destination paths.
     #[face(default)]
     pub documents: Vec<Document>,
@@ -30,9 +30,9 @@ pub struct Config {
 }
 
 impl Config {
-    /// Build one config from its name with documents, patches, hooks, and requirements.
+    /// Build one config from its name.
     pub fn new(
-        name: String,
+        name: Id,
         documents: Vec<Document>,
         patches: Vec<Patch>,
         hooks: Vec<Hook>,

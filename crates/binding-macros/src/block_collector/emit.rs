@@ -5,6 +5,7 @@ use proc_macro2::TokenStream as Tokens;
 use quote::quote;
 use syn::{Pat, Type};
 
+use super::attribute::MetaHook;
 use super::faces::{MethodFace, StaticFace};
 use super::shapes::{is_tuple, tuple_indices};
 
@@ -144,6 +145,33 @@ pub(crate) fn method_of(method: &MethodFace) -> Tokens {
         methods.add_method(#name, |lua, this, args: ::mlua::Variadic<::mlua::Value>| {
             #prelude
             #(#takes)*
+            #call
+        });
+    }
+}
+
+/// Build the runtime registration for one flagged metamethod.
+pub(crate) fn meta_method_of(method: &MethodFace, hook: &MetaHook) -> Tokens {
+    let path: Tokens = match hook {
+        MetaHook::ToString => quote! { ::mlua::MetaMethod::ToString },
+    };
+    let ident = &method.ident;
+    let call: Tokens = match (&method.returns, method.fallible) {
+        (Some(returns), true) => quote! {
+            let outcome: #returns = this.#ident()?;
+            ::confit_binding::value::Encode::encode(&outcome, _lua)
+        },
+        (Some(returns), false) => quote! {
+            let outcome: #returns = this.#ident();
+            ::confit_binding::value::Encode::encode(&outcome, _lua)
+        },
+        (None, _) => quote! {
+            this.#ident();
+            ::confit_binding::value::Encode::encode(&(), _lua)
+        },
+    };
+    quote! {
+        methods.add_meta_method(#path, |_lua, this, _args: ()| {
             #call
         });
     }
@@ -304,7 +332,7 @@ pub(crate) fn static_stub_block(method: &StaticFace) -> Tokens {
                 ],
             };
             if collector.register_function(#name, &data) {
-                data.collect_referenced(collector)?;
+                data.collect_referenced(collector);
             }
         }
     }

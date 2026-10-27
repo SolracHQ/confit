@@ -2,32 +2,42 @@
 //! Applied, named, and history manifests in the state store.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
-use confit_driver::sha::Sha;
-use confit_store::faults::AccessFault;
+use confit_core::error::Result as CoreResult;
+use confit_core::error::locate::Locate;
+use confit_core::error::{
+    Error, ErrorCause, ErrorContext, Failure, ManifestError, Mixed, Outcome, SlotReason,
+};
+use confit_core::sha::Sha;
 use confit_store::handles::StateHandle;
 use confit_store::state::Picker;
 use confit_store::state::StateStore;
-use confit_store::state::error::StateError as StoreError;
 
-use super::{CodecError, MANIFEST_VERSION, Manifest};
-use crate::error::{Result as RuntimeResult, RuntimeError};
+use super::{MANIFEST_VERSION, Manifest};
 
 /// Load the applied manifest with missing states as empty.
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::StateRead`] for unreadable states.
-/// - [`RuntimeError::StateCorrupt`] for bad payloads.
-/// - [`RuntimeError::StateVersion`] for unsupported versions.
-pub fn load(states: &StateStore) -> RuntimeResult<Manifest> {
+/// - [`confit_core::error::FilesystemError`] for unreadable states beyond missing states.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for bad payloads and unsupported versions.
+/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for bad payloads and unsupported versions.
+/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for bad payloads and unsupported versions.
+pub fn load(states: &StateStore) -> Mixed<Manifest> {
     match resolve(states, &Picker::Applied) {
-        Err(RuntimeError::BadPick { .. }) => Ok(empty()),
-        Err(RuntimeError::StateRead {
-            fault: AccessFault::Missing,
-            ..
-        }) => Ok(empty()),
+        Err(Failure::Mid(error)) => {
+            let mut current = &error;
+            while let Some(inner) = current.inner() {
+                current = inner;
+            }
+            match current {
+                ErrorContext::Leaf(ErrorCause::SlotReason(_)) => Ok(empty()),
+                ErrorContext::Leaf(ErrorCause::FilesystemError(
+                    confit_core::error::FilesystemError::FileMissing,
+                )) => Ok(empty()),
+                _ => Err(Failure::Mid(error.clone())),
+            }
+        }
         other => other,
     }
 }
@@ -36,31 +46,16 @@ pub fn load(states: &StateStore) -> RuntimeResult<Manifest> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::Write`] for state write faults.
-/// - [`RuntimeError::StateWriteUnknown`] for clock and other write
-///   failures.
-/// - [`RuntimeError::StateManifest`] for manifest render failures.
-pub fn store(states: &StateStore, manifest: &Manifest) -> RuntimeResult<()> {
-    let text = manifest
-        .json()
-        .map_err(|error| RuntimeError::StateManifest { source: error })?;
+/// - [`confit_core::error::Cannot::store_state`] for manifest render and state write faults.
+/// - [`confit_core::error::Cannot::rotate_history`] for history rotation faults.
+pub fn store(states: &StateStore, manifest: &Manifest) -> Outcome<()> {
+    let text = manifest.json().map_err(Error::store_state)?;
     let bytes = text.into_bytes();
     let picker = Picker::Applied;
-    match &picker {
-        Picker::Applied => {}
-        Picker::Named(name) => {
-            return Err(RuntimeError::BadPick {
-                input: format!("@{name}"),
-            });
-        }
-        Picker::History(pick) => {
-            return Err(RuntimeError::BadPick {
-                input: format!("%{pick}"),
-            });
-        }
-    }
-    store_bytes(states, &picker, &bytes)?;
-    states.rotate(bytes.as_slice()).map_err(from_store)?;
+    store_bytes(states, &picker, &bytes).map_err(Error::store_state)?;
+    states
+        .rotate(bytes.as_slice())
+        .map_err(Error::rotate_history)?;
     Ok(())
 }
 
@@ -68,57 +63,65 @@ pub fn store(states: &StateStore, manifest: &Manifest) -> RuntimeResult<()> {
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::BadPick`] for absent states and out-of-range
-///   picks.
-/// - [`RuntimeError::StateRead`] for unreadable states.
-/// - [`RuntimeError::StateCorrupt`] for bad payloads.
-/// - [`RuntimeError::StateVersion`] for unsupported versions.
-pub fn resolve(states: &StateStore, picker: &Picker) -> RuntimeResult<Manifest> {
-    let handle = states.resolve(picker).map_err(from_store)?;
-    let bytes = states.read(&handle).map_err(from_store)?;
-    Manifest::decode(&bytes).map_err(|error| from_codec(handle.canonical(), error))
+/// - [`confit_core::error::SlotReason`] for absent states and out-of-range picks.
+/// - [`confit_core::error::FilesystemError`] for unreadable states.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for bad payloads and unsupported versions.
+/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for bad payloads and unsupported versions.
+/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for bad payloads and unsupported versions.
+pub fn resolve(states: &StateStore, picker: &Picker) -> Mixed<Manifest> {
+    let handle = states.resolve(picker)?;
+    let bytes = states.read(&handle)?;
+    match Manifest::decode(&bytes).path(handle.canonical()) {
+        Ok(manifest) => Ok(manifest),
+        Err(ErrorContext::AtPath { path, inner }) => match *inner {
+            ErrorContext::Leaf(ErrorCause::ManifestError(ManifestError::Invalid { detail })) => {
+                Err(Failure::Terminal(Error::corrupt_manifest(path, detail)))
+            }
+            ErrorContext::Leaf(ErrorCause::ManifestError(ManifestError::VersionUnsupported {
+                got,
+            })) => Err(Failure::Terminal(Error::manifest_version(path, got))),
+            ErrorContext::Leaf(ErrorCause::ManifestError(ManifestError::MissingVersion)) => {
+                Err(Failure::Terminal(Error::manifest_no_version(path)))
+            }
+            other => Err(Failure::Mid(ErrorContext::AtPath {
+                path,
+                inner: Box::new(other),
+            })),
+        },
+        Err(other) => Err(Failure::Mid(other)),
+    }
 }
 
 /// Write one named state with its bundle manifest.
 ///
 /// # Errors
 ///
-/// - [`RuntimeError::BadPick`] for wrong picker kinds and bad names.
-/// - [`RuntimeError::Write`] for state write faults.
-/// - [`RuntimeError::StateWriteUnknown`] for other write failures.
-/// - [`RuntimeError::StateManifest`] for manifest render failures.
-pub fn store_named(states: &StateStore, picker: &Picker, manifest: &Manifest) -> RuntimeResult<()> {
+/// - [`confit_core::error::Cannot::store_state`] for wrong picker kinds, manifest render faults, and state write faults.
+pub fn store_named(states: &StateStore, picker: &Picker, manifest: &Manifest) -> Outcome<()> {
     let Picker::Named(_) = picker else {
-        let input = match picker {
-            Picker::Applied => String::new(),
-            Picker::Named(name) => format!("@{name}"),
-            Picker::History(pick) => format!("%{pick}"),
-        };
-        return Err(RuntimeError::BadPick { input });
+        return Err(Error::store_state(ErrorContext::from(
+            ErrorCause::SlotReason(SlotReason::BareSlot),
+        )));
     };
-    let text = manifest
-        .json()
-        .map_err(|error| RuntimeError::StateManifest { source: error })?;
-    store_bytes(states, picker, text.as_bytes())?;
+    let text = manifest.json().map_err(Error::store_state)?;
+    store_bytes(states, picker, text.as_bytes()).map_err(Error::store_state)?;
     Ok(())
 }
 
 /// Gather content refs for a sweep.
 ///
-/// Every readable state manifest feeds the keep set.
-///
 /// # Errors
 ///
-/// - [`RuntimeError::StateRead`] for unreadable folders.
-pub fn keep_set(states: &StateStore) -> RuntimeResult<BTreeSet<Sha>> {
+/// - [`confit_core::error::FilesystemError`] for unreadable folders.
+pub fn keep_set(states: &StateStore) -> CoreResult<BTreeSet<Sha>> {
     let mut keep = BTreeSet::new();
     if let Ok(handle) = states.applied() {
         collect_state_refs(&handle, states, &mut keep);
     }
-    for handle in states.list().map_err(from_store)? {
+    for handle in states.list()? {
         collect_state_refs(&handle, states, &mut keep);
     }
-    for handle in states.list_named().map_err(from_store)? {
+    for handle in states.list_named()? {
         collect_state_refs(&handle, states, &mut keep);
     }
     Ok(keep)
@@ -135,13 +138,21 @@ fn empty() -> Manifest {
 }
 
 /// Write one state handle with history-free bytes.
-fn store_bytes(states: &StateStore, picker: &Picker, bytes: &[u8]) -> RuntimeResult<()> {
+fn store_bytes(states: &StateStore, picker: &Picker, bytes: &[u8]) -> CoreResult<()> {
     let handle = match states.resolve(picker) {
         Ok(handle) => handle,
-        Err(StoreError::BadPick { .. }) => states.create(picker).map_err(from_store)?,
-        Err(error) => return Err(from_store(error)),
+        Err(error) => {
+            let mut current = &error;
+            while let Some(inner) = current.inner() {
+                current = inner;
+            }
+            match current {
+                ErrorContext::Leaf(ErrorCause::SlotReason(_)) => states.create(picker)?,
+                _ => return Err(error.clone()),
+            }
+        }
     };
-    states.write(&handle, bytes).map_err(from_store)?;
+    states.write(&handle, bytes)?;
     Ok(())
 }
 
@@ -160,30 +171,5 @@ fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTre
     }
     for handle in found.handles() {
         keep.insert(handle.sha().clone());
-    }
-}
-
-/// Map one store failure into runtime language.
-fn from_store(error: StoreError) -> RuntimeError {
-    match error {
-        StoreError::Read { path, fault } => RuntimeError::StateRead { path, fault },
-        StoreError::Write { path, fault } => RuntimeError::Write { path, fault },
-        StoreError::WriteUnknown { path, message } => {
-            RuntimeError::StateWriteUnknown { path, message }
-        }
-        StoreError::BadPick { input } => RuntimeError::BadPick { input },
-    }
-}
-
-/// Map one codec failure at the state path into runtime language.
-fn from_codec(path: &Path, error: CodecError) -> RuntimeError {
-    match error {
-        CodecError::Version { got } => RuntimeError::StateVersion {
-            path: path.to_path_buf(),
-            got,
-        },
-        CodecError::Corrupt { .. } => RuntimeError::StateCorrupt {
-            path: path.to_path_buf(),
-        },
     }
 }

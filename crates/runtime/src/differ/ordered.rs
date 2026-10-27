@@ -7,7 +7,7 @@ use confit_model::routes::Route;
 use super::Difference;
 use super::DifferenceOrder;
 
-/// Ordered old and new leaf values.
+/// Ordered leaf values.
 pub(crate) struct Sides {
     /// The old leaf value.
     pub(crate) old: serde_json::Value,
@@ -15,7 +15,7 @@ pub(crate) struct Sides {
     pub(crate) new: serde_json::Value,
 }
 
-/// Difference side order with its swap verbs.
+/// Difference side order.
 pub(crate) struct Ordered {
     /// The side order under comparing.
     order: DifferenceOrder,

@@ -1,19 +1,18 @@
 //! Content-addressed fetch cache for remote bytes.
 
-pub mod error;
-pub mod transport;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use confit_driver::progress::{Event, ProgressSender};
-use confit_driver::sha::Sha;
+use confit_core::error::{ContentError, ErrorCause, Result, fail};
+use confit_core::progress::{Event, ProgressSender};
+use confit_core::sha::Sha;
 
-use self::transport::BODY_LIMIT_BYTES;
 use crate::handles::ResourceHandle;
 use crate::resources::Resources;
 use confit_driver as driver;
-use error::{FetchError, Result};
+
+/// Body cap passed per call into the driver download.
+const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Progress step for in-flight download events.
 const PROGRESS_STEP_BYTES: u64 = 64 * 1024;
@@ -49,13 +48,9 @@ impl FetchCache {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Status`] for failing statuses.
-    /// - [`FetchError::Timeout`] for timeouts.
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    /// - [`FetchError::Unscripted`] for unscripted test urls.
-    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    /// - [`confit_core::error::FetchError`] for failing downloads.
+    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     pub fn fetch(
         &self,
         url: &str,
@@ -82,7 +77,7 @@ impl<R: std::io::Read, F: FnMut(u64)> std::io::Read for Meter<R, F> {
     }
 }
 
-/// One fetch walk with its progress state.
+/// One fetch walk.
 struct Fetch<'a> {
     /// The cache under fetching.
     cache: &'a FetchCache,
@@ -115,13 +110,9 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Status`] for failing statuses.
-    /// - [`FetchError::Timeout`] for timeouts.
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    /// - [`FetchError::Unscripted`] for unscripted test urls.
-    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    /// - [`confit_core::error::FetchError`] for failing downloads.
+    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     fn run(&mut self, re_fetch: bool) -> Result<ResourceHandle> {
         let _ = self.cache.progress.send(Event::FetchStarted {
             url: self.url.to_owned(),
@@ -136,7 +127,7 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::DigestMismatch`] for cached hits failing the user sha.
+    /// - [`confit_core::error::ErrorCause`] for hits failing the user sha.
     fn hit(&self) -> Option<Result<ResourceHandle>> {
         let hit = self.lookup()?;
         let ResourceHandle::Cache(sha) = &hit else {
@@ -157,9 +148,6 @@ impl<'a> Fetch<'a> {
     }
 
     /// Find one cached handle with a present content file.
-    ///
-    /// - Unparseable index text is a miss.
-    /// - Absent content is a miss.
     fn lookup(&self) -> Option<ResourceHandle> {
         let stored = std::fs::read_to_string(self.cache.index_path(self.url)).ok()?;
         let wanted = Sha::new(stored.trim()).ok()?;
@@ -173,15 +161,11 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Status`] for failing statuses.
-    /// - [`FetchError::Timeout`] for timeouts.
-    /// - [`FetchError::Read`] for unreadable cache entries.
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
-    /// - [`FetchError::Unscripted`] for unscripted test urls.
-    /// - [`FetchError::DigestMismatch`] for sha mismatches.
+    /// - [`confit_core::error::FetchError`] for failing downloads.
+    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     fn download(&mut self) -> Result<ResourceHandle> {
-        let (reader, total) = transport::download(self.url, BODY_LIMIT_BYTES)?;
+        let (reader, total) = driver::http::download(self.url, BODY_LIMIT_BYTES)?;
         self.total = total;
         let resources = self.cache.resources.clone();
         let metered = Meter {
@@ -191,16 +175,11 @@ impl<'a> Fetch<'a> {
                 self.report();
             },
         };
-        let handle = resources
-            .store(metered)
-            .map_err(|error| FetchError::from_resource(self.url, error))?;
+        let handle = resources.store(metered)?;
         let sha = match handle {
             ResourceHandle::Cache(sha) => sha,
             ResourceHandle::Project(..) => {
-                return Err(FetchError::WriteUnknown {
-                    url: self.url.to_owned(),
-                    message: "cache lands project handles".to_owned(),
-                });
+                return fail(ContentError::ProjectHandleInCache);
             }
         };
         self.check(&sha)?;
@@ -228,30 +207,27 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`FetchError::Write`] for cache write faults.
-    /// - [`FetchError::WriteUnknown`] for other cache write failures.
+    /// - [`confit_core::error::FilesystemError`] for cache write faults.
     fn write_index(&self, digest: &Sha) -> Result<()> {
         let index = self.cache.index_path(self.url);
-        driver::fs::create_parent(&index)
-            .map_err(|error| FetchError::from_write_io(self.url, error))?;
-        std::fs::write(&index, digest.hex().as_bytes())
-            .map_err(|error| FetchError::from_write_io(self.url, error))
+        driver::fs::create_parent(&index)?;
+        std::fs::write(&index, digest.hex().as_bytes())?;
+        Ok(())
     }
 
     /// Check one digest against the user sha.
     ///
     /// # Errors
     ///
-    /// - [`FetchError::DigestMismatch`] for mismatches.
+    /// - [`confit_core::error::ErrorCause`] for mismatches.
     fn check(&self, actual: &Sha) -> Result<()> {
         let Some(wanted) = self.expected else {
             return Ok(());
         };
         if actual != wanted {
-            return Err(FetchError::DigestMismatch {
-                url: self.url.to_owned(),
-                want: wanted.clone(),
-                got: actual.clone(),
+            return fail(ErrorCause::ContentHashMismatch {
+                expected: wanted.clone(),
+                found: actual.clone(),
             });
         }
         Ok(())
@@ -264,8 +240,8 @@ mod tests {
     use std::path::Path;
 
     use crate::StoreRoots;
-    use crate::faults::AccessFault;
     use crate::pool::PoolStore;
+    use confit_core::error::ErrorCause;
     use confit_driver as driver;
 
     const URL: &str = "https://example.com/tool.bin";
@@ -583,13 +559,21 @@ mod tests {
         let wrong = "0".repeat(64);
         match cache.fetch(URL, Some(Sha::new(wrong.clone()).unwrap()), false) {
             Ok(_) => panic!("bad user sha passes"),
-            Err(FetchError::DigestMismatch { .. }) => {}
-            Err(error) => panic!("wrong mismatch variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    "mismatch keeps the cause: {error}"
+                );
+            }
         }
         match cache.fetch(FILE_URL, Some(Sha::new(wrong.clone()).unwrap()), false) {
             Ok(_) => panic!("bad user sha passes"),
-            Err(FetchError::DigestMismatch { .. }) => {}
-            Err(error) => panic!("wrong mismatch variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    "mismatch keeps the cause: {error}"
+                );
+            }
         }
         assert_eq!(
             driver::http::calls(URL),
@@ -752,8 +736,12 @@ mod tests {
         let wrong = Sha::new("0".repeat(64)).unwrap();
         match cache.fetch(URL, Some(wrong), false) {
             Ok(_) => panic!("bad user sha passes"),
-            Err(FetchError::DigestMismatch { .. }) => {}
-            Err(error) => panic!("wrong mismatch variant: {error}"),
+            Err(error) => {
+                assert!(
+                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    "mismatch keeps the cause: {error}"
+                );
+            }
         }
         assert_eq!(
             driver::http::calls(URL),
@@ -792,21 +780,6 @@ mod tests {
         assert!(seen.len() >= 2, "chunks report twice: {}", seen.len());
         for pair in seen.windows(2) {
             assert!(pair[0] < pair[1], "bytes climb: {}", seen.len());
-        }
-    }
-
-    #[test]
-    fn fetch_maps_write_too_large() {
-        let error = std::io::Error::new(std::io::ErrorKind::FileTooLarge, "oversized");
-        match FetchError::from_write_io(URL, error) {
-            FetchError::Write { url, fault } => {
-                assert_eq!(url, URL, "mapping keeps the url");
-                assert!(
-                    matches!(fault, AccessFault::FileTooLarge),
-                    "mapping keeps the fault"
-                );
-            }
-            error => panic!("wrong mapping variant: {error}"),
         }
     }
 }

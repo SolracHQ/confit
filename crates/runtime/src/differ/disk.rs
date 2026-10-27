@@ -2,16 +2,17 @@
 
 use std::path::{Path, PathBuf};
 
+use confit_core::error::FilesystemError;
+use confit_core::error::Result;
+use confit_core::error::locate::Locate;
+use confit_core::sha::Sha;
 use confit_driver as driver;
-use confit_driver::sha::Sha;
 use confit_model::document::{Data, Document};
 use confit_model::routes::Route;
-use confit_store::faults::AccessFault;
 
 use super::Difference;
-use crate::error::{Result, RuntimeError};
 
-/// Content hash with its byte count.
+/// Content hash.
 pub(crate) struct Digest {
     /// The content hash.
     pub(crate) sha: Sha,
@@ -26,14 +27,14 @@ impl Digest {
     }
 }
 
-/// Disk read outcome with its present payload.
+/// Disk read outcome.
 enum DiskOutcome<T> {
     /// Missing destination.
     Absent,
     /// Unreadable destination.
     Unreadable {
         /// The fault cause for the failed read.
-        fault: AccessFault,
+        fault: FilesystemError,
     },
     /// Directory blocks the destination.
     Blocked,
@@ -41,7 +42,7 @@ enum DiskOutcome<T> {
     Present(T),
 }
 
-/// Present bytes with their disk mode.
+/// Present bytes.
 pub(crate) struct FileBytes {
     /// The destination bytes.
     pub(crate) bytes: Vec<u8>,
@@ -49,7 +50,7 @@ pub(crate) struct FileBytes {
     pub(crate) mode: Option<u32>,
 }
 
-/// Present digest with its disk mode.
+/// Present digest.
 pub(crate) struct FileDigest {
     /// The content digest.
     pub(crate) digest: Digest,
@@ -63,11 +64,9 @@ pub(crate) struct DiskReader;
 impl DiskReader {
     /// Read one document destination into bytes, mapping terminal states.
     ///
-    /// - Only present destinations reach the closure.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub(crate) fn read_bytes(
         document: &Document,
         on_present: impl FnOnce(FileBytes) -> Result<Vec<Difference>>,
@@ -92,11 +91,9 @@ impl DiskReader {
 
     /// Digest one document destination into its hash, mapping terminal states.
     ///
-    /// - Only present destinations reach the closure.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub(crate) fn digest(
         document: &Document,
         on_present: impl FnOnce(FileDigest) -> Result<Vec<Difference>>,
@@ -129,10 +126,6 @@ impl DiskReader {
     }
 
     /// Probe one tree member path under its expanded base.
-    ///
-    /// - Symlink members hash their target path.
-    /// - Directories of any size block the member path.
-    /// - Only present members reach the closure.
     pub(crate) fn probe_member(
         base: &Path,
         relative: &str,
@@ -154,7 +147,7 @@ impl DiskReader {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
                 Err(error) => DiskOutcome::Unreadable {
-                    fault: Self::interpret_fault(error),
+                    fault: FilesystemError::from(error),
                 },
             }
         } else if full.is_dir() {
@@ -186,22 +179,16 @@ impl DiskReader {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::Expand`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     fn expanded(document: &Document) -> Result<PathBuf> {
-        document
-            .path
-            .expand()
-            .map_err(|source| RuntimeError::Expand {
-                route: document.path.clone(),
-                source,
-            })
+        document.path.expand().route(document.path.display())
     }
 
     /// Show one unreadable fault for difference lines.
-    pub(crate) fn reason(fault: &AccessFault) -> String {
+    pub(crate) fn reason(fault: &FilesystemError) -> String {
         match fault {
-            AccessFault::Unknown { .. } => "unknown failure, see log".to_owned(),
-            known => known.cause().to_owned(),
+            FilesystemError::FileUnknown { message } => message.clone(),
+            known => known.to_string(),
         }
     }
 
@@ -222,7 +209,7 @@ impl DiskReader {
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
             Err(error) => DiskOutcome::Unreadable {
-                fault: Self::interpret_fault(error),
+                fault: FilesystemError::from(error),
             },
         }
     }
@@ -237,20 +224,17 @@ impl DiskReader {
                     mode,
                 }),
                 Err(error) => DiskOutcome::Unreadable {
-                    fault: Self::interpret_fault(error),
+                    fault: FilesystemError::from(error),
                 },
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
             Err(error) => DiskOutcome::Unreadable {
-                fault: Self::interpret_fault(error),
+                fault: FilesystemError::from(error),
             },
         }
     }
 
     /// Join a link target against the link parent.
-    ///
-    /// - Relative targets resolve beside the link.
-    /// - Parent segments pop lexically. They stay put past the root.
     fn join_target(link: &Path, target: &Path) -> PathBuf {
         if target.is_absolute() {
             return target.to_path_buf();
@@ -277,16 +261,5 @@ impl DiskReader {
             return None;
         }
         driver::fs::mode(path).ok()
-    }
-
-    /// Interpret one disk read failure into its fault cause.
-    fn interpret_fault(error: std::io::Error) -> AccessFault {
-        let kind = error.kind();
-        let message = error.to_string();
-        log::error!("disk read failed: {message}");
-        match AccessFault::interpret(kind) {
-            Some(fault) => fault,
-            None => AccessFault::Unknown { message },
-        }
     }
 }

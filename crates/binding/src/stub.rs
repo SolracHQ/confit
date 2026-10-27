@@ -1,17 +1,12 @@
-//! Stub
 //! Emit LuaLS stub text for bound namespaces.
 
 use std::borrow::Cow;
 
-use crate::error::Result;
 use crate::face::{FaceData, FieldDescriptor, FunctionParameter, FunctionReturn, UnionArm};
 use crate::registry::Registry;
 use crate::userdata::MethodDescriptor;
 
 /// One rendered stub file.
-///
-/// One namespace with its complete
-/// stub text for freshness comparison.
 pub struct StubDocument {
     /// The dotted namespace path.
     pub namespace: String,
@@ -20,9 +15,6 @@ pub struct StubDocument {
 }
 
 /// Stub emitter with a file header.
-///
-/// Registry blocks under one header
-/// and one document per namespace.
 pub struct StubEmitter {
     /// The file header lines.
     header: String,
@@ -49,9 +41,6 @@ impl StubEmitter {
 }
 
 /// Emit one field line for one class block.
-///
-/// Faces carry nullability, so optional fields render the
-/// `?` suffix through the face expression alone.
 pub fn emit_field(field: &FieldDescriptor) -> String {
     let mut line = String::from("--- @field ");
     line.push_str(field.name);
@@ -189,38 +178,56 @@ pub fn emit(name: &str, data: &FaceData) -> Option<String> {
     }
 }
 
-/// Collect every inlined field face into its registry.
-///
-/// # Errors
-///
-/// - [`crate::error::BindingError`] for repeated registration.
-fn collect_inlined(registry: &mut Registry, fields: &[FieldDescriptor]) -> Result<()> {
-    for field in fields {
-        (field.collect)(registry)?;
+/// Build the return line for one verb list.
+pub fn return_line(verbs: &[&str]) -> String {
+    match verbs {
+        [single] => format!("return {single}"),
+        _ => {
+            let entries: Vec<String> = verbs
+                .iter()
+                .map(|verb| format!("{verb} = {verb}"))
+                .collect();
+            format!("return {{{}}}", entries.join(", "))
+        }
     }
-    Ok(())
 }
 
-/// Collect one crossed holder with its inlined faces.
-///
-/// - Repeated holders keep the first entry.
-/// - Crossed classes hold holder fields beside arm fields.
-///
-/// # Errors
-///
-/// - [`crate::error::BindingError`] for repeated registration.
+/// Build one module stub document.
+pub fn module_document(namespace: &str, verbs: &[&str], registry: &Registry) -> StubDocument {
+    let emitter = StubEmitter::new(format!("--- @meta {namespace}"));
+    let mut document = emitter.emit(namespace, registry);
+    document.text.push('\n');
+    document.text.push_str(&return_line(verbs));
+    document.text.push('\n');
+    document
+}
+
+/// Build one globals stub document.
+pub fn globals_document(namespace: &str, registry: &Registry) -> StubDocument {
+    let emitter = StubEmitter::new("--- @meta _");
+    emitter.emit(namespace, registry)
+}
+
+/// Collect every inlined field face into its registry.
+fn collect_inlined(registry: &mut Registry, fields: &[FieldDescriptor]) {
+    for field in fields {
+        (field.collect)(registry);
+    }
+}
+
+/// Collect one crossed holder.
 pub fn register_crossed(
     registry: &mut Registry,
     name: &str,
     holder: &FaceData,
     inner: &FaceData,
-) -> Result<bool> {
+) -> bool {
     let FaceData::Class {
         documentation,
         fields: holder_fields,
     } = holder
     else {
-        return Ok(false);
+        return false;
     };
     match inner {
         FaceData::Class {
@@ -228,19 +235,19 @@ pub fn register_crossed(
             ..
         } => {
             if registry.contains(name) {
-                return Ok(false);
+                return false;
             }
             let mut fields = holder_fields.clone();
             fields.extend(inner_fields.iter().cloned());
             let inserted = registry.register_class(name.to_owned(), documentation, fields.clone());
             if inserted {
-                collect_inlined(registry, &fields)?;
+                collect_inlined(registry, &fields);
             }
-            Ok(inserted)
+            inserted
         }
         FaceData::Union { arms, .. } => {
             if registry.contains(name) {
-                return Ok(false);
+                return false;
             }
             let mut members = Vec::new();
             let mut backed = 0;
@@ -255,7 +262,7 @@ pub fn register_crossed(
                     arm.documentation,
                     crossed.clone(),
                 );
-                collect_inlined(registry, &crossed)?;
+                collect_inlined(registry, &crossed);
                 members.push(UnionArm {
                     name: arm.name,
                     documentation: arm.documentation,
@@ -270,22 +277,22 @@ pub fn register_crossed(
                 let inserted =
                     registry.register_class(name.to_owned(), documentation, holder_fields.clone());
                 if inserted {
-                    collect_inlined(registry, holder_fields)?;
+                    collect_inlined(registry, holder_fields);
                 }
-                return Ok(inserted);
+                return inserted;
             }
-            Ok(registry.register_alias(name.to_owned(), documentation, members))
+            registry.register_alias(name.to_owned(), documentation, members)
         }
         _ => {
             if registry.contains(name) {
-                return Ok(false);
+                return false;
             }
             let inserted =
                 registry.register_class(name.to_owned(), documentation, holder_fields.clone());
             if inserted {
-                collect_inlined(registry, holder_fields)?;
+                collect_inlined(registry, holder_fields);
             }
-            Ok(inserted)
+            inserted
         }
     }
 }
@@ -406,7 +413,7 @@ mod tests {
             }],
         };
         let mut registry = Registry::new();
-        assert!(register_crossed(&mut registry, "Holder", &holder, &inner).unwrap());
+        assert!(register_crossed(&mut registry, "Holder", &holder, &inner));
         assert!(registry.contains("Holder"));
         let union_inner = FaceData::Union {
             documentation: "One body.",
@@ -436,11 +443,21 @@ mod tests {
             ],
         };
         let mut crossed = Registry::new();
-        assert!(register_crossed(&mut crossed, "Document", &holder, &union_inner).unwrap());
+        assert!(register_crossed(
+            &mut crossed,
+            "Document",
+            &holder,
+            &union_inner
+        ));
         assert!(crossed.contains("Document_Text"));
         assert!(!crossed.contains("Document_Nothing"));
         assert!(crossed.contains("Document"));
-        assert!(!register_crossed(&mut crossed, "Document", &holder, &union_inner).unwrap());
+        assert!(!register_crossed(
+            &mut crossed,
+            "Document",
+            &holder,
+            &union_inner
+        ));
     }
 
     #[test]

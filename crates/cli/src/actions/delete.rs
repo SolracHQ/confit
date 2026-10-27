@@ -1,14 +1,12 @@
 //! Delete run
 //! Named state removal with unreferenced pruning.
 
-use confit_runtime::error::RuntimeError;
+use confit_core::error::{Error, ErrorCause, Outcome};
 use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
-use confit_store::state::error::StateError;
 
 use crate::cli::DeleteArgs;
-use crate::error::{CliError, Result};
 
 /// Outcome of one delete run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,38 +23,41 @@ pub struct DeleteReport {
 ///
 /// # Errors
 ///
-/// - [`CliError::BadName`] for non-`@name` values.
-/// - [`CliError::BadPicker`] for malformed pickers.
-/// - [`CliError::Runtime`] for state removals.
-/// - [`CliError::Pool`] for unreferenced prunes.
-pub fn run(args: &DeleteArgs, stores: Stores) -> Result<DeleteReport> {
-    let picker: Picker = args.name.parse().map_err(|_| CliError::BadPicker {
-        input: args.name.clone(),
-    })?;
+/// - [`confit_core::error::kind::ErrorKind::DeleteNonNamed`] for non named inputs.
+/// - [`confit_core::error::kind::ErrorKind::DeleteSlot`] for malformed slots.
+/// - [`confit_core::error::kind::ErrorKind::DeleteState`] for state removals.
+/// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for unreferenced prunes.
+pub fn run(args: &DeleteArgs, stores: Stores) -> Outcome<DeleteReport> {
+    if !args.name.starts_with('@') {
+        return Err(Error::delete_non_named(args.name.clone()));
+    }
+    let picker: Picker = match args.name.parse() {
+        Ok(picker) => picker,
+        Err(error) => match error.root_cause() {
+            ErrorCause::SlotReason(reason) => {
+                return Err(Error::delete_slot(args.name.clone(), reason.clone()));
+            }
+            _ => return Err(Error::delete_state(error)),
+        },
+    };
     let Picker::Named(name) = &picker else {
-        return Err(CliError::BadName {
-            input: args.name.clone(),
-        });
+        return Err(Error::delete_non_named(args.name.clone()));
     };
     let store = stores.states();
-    let handle = store.resolve(&picker).map_err(from_state)?;
-    store.remove(&handle).map_err(from_state)?;
-    let keep = stored::keep_set(&store)?;
-    let pruned = stores.pool().prune(&keep)?;
+    let handle = match store.resolve(&picker) {
+        Ok(handle) => handle,
+        Err(error) => match error.root_cause() {
+            ErrorCause::SlotReason(reason) => {
+                return Err(Error::delete_slot(args.name.clone(), reason.clone()));
+            }
+            _ => return Err(Error::delete_state(error)),
+        },
+    };
+    store.remove(&handle).map_err(Error::delete_state)?;
+    let keep = stored::keep_set(&store).map_err(Error::delete_state)?;
+    let pruned = stores.pool().prune(&keep).map_err(Error::prune_blobs)?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,
     })
-}
-
-/// Map one state failure into runtime language.
-fn from_state(error: StateError) -> RuntimeError {
-    match error {
-        StateError::Read { path, fault } => RuntimeError::StateRead { path, fault },
-        StateError::Write { path, fault } => RuntimeError::Write { path, fault },
-        StateError::WriteUnknown { path, message } => {
-            RuntimeError::StateWriteUnknown { path, message }
-        }
-        StateError::BadPick { input } => RuntimeError::BadPick { input },
-    }
 }

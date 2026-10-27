@@ -5,15 +5,20 @@ use proc_macro2::TokenStream as Tokens;
 use quote::quote;
 use syn::{FnArg, ImplItem, ItemImpl, Type, ext::IdentExt};
 
-use super::collect::{has_receiver, parse_method, parse_static};
-use super::emit::{descriptor_of, method_of, static_function_of, static_stub_block};
+use super::attribute::{ImplMode, parse_face_meta};
+use super::collect::{check_meta, has_receiver, parse_method, parse_static};
+use super::emit::{
+    descriptor_of, meta_method_of, method_of, static_function_of, static_stub_block,
+};
 
 /// Strip face markers from one impl block for output.
 fn strip_face_attrs(block: &ItemImpl) -> ItemImpl {
     let mut clean = block.clone();
     for item in &mut clean.items {
         if let ImplItem::Fn(method) = item {
-            method.attrs.retain(|attr| !attr.path().is_ident("face"));
+            method
+                .attrs
+                .retain(|attr| !attr.path().is_ident("face") && !attr.path().is_ident("face_meta"));
             for input in &mut method.sig.inputs {
                 if let FnArg::Typed(typed) = input {
                     typed.attrs.retain(|attr| !attr.path().is_ident("face"));
@@ -25,10 +30,7 @@ fn strip_face_attrs(block: &ItemImpl) -> ItemImpl {
 }
 
 /// Build the collection expansion for one checked block.
-pub(crate) fn expand_block(
-    block: &ItemImpl,
-    namespace: Option<String>,
-) -> Result<Tokens, syn::Error> {
+pub(crate) fn expand_block(block: &ItemImpl, mode: ImplMode) -> Result<Tokens, syn::Error> {
     if !block.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &block.generics,
@@ -66,13 +68,14 @@ pub(crate) fn expand_block(
         ));
     }
     let class_name = last.ident.to_string();
-    match namespace {
-        None => expand_userdata_block(block, &class_name),
-        Some(space) => expand_namespace_block(block, &class_name, &space),
+    match mode {
+        ImplMode::Userdata => expand_userdata_block(block, &class_name),
+        ImplMode::Namespace(space) => expand_namespace_block(block, &class_name, &space),
+        ImplMode::Global => expand_global_block(block, &class_name),
     }
 }
 
-/// Build userdata collection for one block without a namespace.
+/// Build userdata collection for one receiver block.
 fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, syn::Error> {
     let self_ty = &block.self_ty;
     let mut faces = Vec::new();
@@ -80,18 +83,34 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
     for item in &block.items {
         match item {
             ImplItem::Fn(method) => {
-                if !has_receiver(method) {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        format!(
-                            "{class_name}.{}: static methods read a namespace; add namespace to #[face_impl]",
-                            method.sig.ident.unraw()
-                        ),
-                    ));
+                let hook = parse_face_meta(class_name, method)?;
+                if let Some(hook) = hook {
+                    if method.attrs.iter().any(|attr| attr.path().is_ident("face")) {
+                        return Err(syn::Error::new_spanned(
+                            &method.sig.ident,
+                            format!(
+                                "{class_name}.{}: face options stay apart from face_meta methods",
+                                method.sig.ident.unraw()
+                            ),
+                        ));
+                    }
+                    let face = parse_method(class_name, method)?;
+                    check_meta(class_name, &face)?;
+                    registrations.push(meta_method_of(&face, &hook));
+                } else {
+                    if !has_receiver(method) {
+                        return Err(syn::Error::new_spanned(
+                            &method.sig.ident,
+                            format!(
+                                "{class_name}.{}: static methods read a namespace; add namespace to #[face_impl]",
+                                method.sig.ident.unraw()
+                            ),
+                        ));
+                    }
+                    let face = parse_method(class_name, method)?;
+                    registrations.push(method_of(&face));
+                    faces.push(descriptor_of(&face));
                 }
-                let face = parse_method(class_name, method)?;
-                registrations.push(method_of(&face));
-                faces.push(descriptor_of(&face));
             }
             _ => {
                 return Err(syn::Error::new_spanned(
@@ -123,7 +142,7 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let methods = Self::methods();
                 let face = <Self as ::confit_binding::face::Face>::face();
                 if collector.register_userdata(
@@ -132,10 +151,9 @@ fn expand_userdata_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, s
                     methods.clone(),
                 ) {
                     for method in &methods {
-                        method.collect_referenced(collector)?;
+                        method.collect_referenced(collector);
                     }
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -154,6 +172,15 @@ fn expand_namespace_block(
     for item in &block.items {
         match item {
             ImplItem::Fn(method) => {
+                if parse_face_meta(class_name, method)?.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        format!(
+                            "{class_name}.{}: face_meta methods need userdata blocks alone",
+                            method.sig.ident.unraw()
+                        ),
+                    ));
+                }
                 if has_receiver(method) {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
@@ -221,15 +248,100 @@ fn expand_namespace_block(
             #register
 
             /// Collect every static face with all referenced faces.
+            pub fn stubs(
+                collector: &mut ::confit_binding::registry::Registry,
+            ) {
+                #(#stubs)*
+            }
+
+            /// Build the stub document for this namespace.
+            pub fn stub_document() -> ::confit_binding::stub::StubDocument {
+                let mut collector = ::confit_binding::registry::Registry::new();
+                Self::stubs(&mut collector);
+                ::confit_binding::stub::module_document(Self::NAMESPACE, Self::VERBS, &collector)
+            }
+        }
+
+        #clean
+    })
+}
+
+/// Build global collection for one static-only block.
+fn expand_global_block(block: &ItemImpl, class_name: &str) -> Result<Tokens, syn::Error> {
+    let self_ty = &block.self_ty;
+    let mut statics = Vec::new();
+    for item in &block.items {
+        match item {
+            ImplItem::Fn(method) => {
+                if parse_face_meta(class_name, method)?.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        format!(
+                            "{class_name}.{}: face_meta methods need userdata blocks alone",
+                            method.sig.ident.unraw()
+                        ),
+                    ));
+                }
+                if has_receiver(method) {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        format!(
+                            "{class_name} types hold &self method {} inside a namespace block; namespace blocks hold statics alone",
+                            method.sig.ident.unraw()
+                        ),
+                    ));
+                }
+                statics.push(parse_static(class_name, method)?);
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    item,
+                    format!(
+                        "{class_name}: `#[face_impl]` registers every method \
+                         in its block; move non-method items out"
+                    ),
+                ));
+            }
+        }
+    }
+    let globals: Vec<String> = statics.iter().map(|entry| entry.name.clone()).collect();
+    let mut builders = Vec::new();
+    let mut stubs = Vec::new();
+    for face in &statics {
+        builders.push(static_function_of(face));
+        stubs.push(static_stub_block(face));
+    }
+    let clean = strip_face_attrs(block);
+    Ok(quote! {
+        impl #self_ty {
+            /// The global names in registration order.
+            pub const GLOBALS: &[&str] = &[#(#globals),*];
+
+            /// Install every global into one chunk environment.
             ///
             /// # Errors
             ///
-            /// - [`::confit_binding::error::BindingError`] for repeated registration.
+            /// - [`::mlua::Error`] for Lua failures.
+            pub fn install(
+                lua: &::mlua::Lua,
+                env: &::mlua::Table,
+            ) -> ::mlua::Result<()> {
+                #(env.set(#globals, #builders?)?;)*
+                ::std::result::Result::Ok(())
+            }
+
+            /// Collect every static face with all referenced faces.
             pub fn stubs(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 #(#stubs)*
-                ::std::result::Result::Ok(())
+            }
+
+            /// Build the globals stub document.
+            pub fn stub_document() -> ::confit_binding::stub::StubDocument {
+                let mut collector = ::confit_binding::registry::Registry::new();
+                Self::stubs(&mut collector);
+                ::confit_binding::stub::globals_document("confit", &collector)
             }
         }
 

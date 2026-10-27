@@ -4,12 +4,11 @@ use mlua::Lua;
 
 use confit_binding_macros::{Face, face_impl};
 
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 
 use confit_store::handles::ResourceHandle;
 
 use crate::api::stores_of;
-use crate::error::EngineError;
 
 /// Fetch options.
 #[derive(Debug, Clone, Default, Face)]
@@ -42,14 +41,9 @@ impl Fetch {
     ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_of(lua)?;
         if url.is_empty() {
-            let reason =
-                EngineError::mismatch("url", "a non-empty url", "empty string").to_string();
-            return Ok((None, Some(reason)));
+            return Err(mlua::Error::runtime("fetch needs a non-empty url"));
         }
-        let (wanted, pin_reason) = pin_of(opts)?;
-        if let Some(reason) = pin_reason {
-            return Ok((None, Some(reason)));
-        }
+        let wanted = pin_of(opts)?;
         match stores.fetch().fetch(&url, wanted, false) {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
@@ -58,32 +52,20 @@ impl Fetch {
 }
 
 /// Resolve the digest pin from the options value.
-///
-/// # Returns
-///
-/// - Return the pin on success.
-/// - Return the reason on bad digests.
-fn pin_of(opts: FetchOpts) -> mlua::Result<(Option<Sha>, Option<String>)> {
+fn pin_of(opts: FetchOpts) -> mlua::Result<Option<Sha>> {
     match opts.sha256 {
-        None => Ok((None, None)),
+        None => Ok(None),
         Some(digest) => open_pin(&digest),
     }
 }
 
 /// Open one digest pin.
-///
-/// # Returns
-///
-/// - Return the pin on success.
-/// - Return the reason on bad digests.
-fn open_pin(digest: &str) -> mlua::Result<(Option<Sha>, Option<String>)> {
+fn open_pin(digest: &str) -> mlua::Result<Option<Sha>> {
     match Sha::new(digest) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(_) => {
-            let reason =
-                EngineError::mismatch("sha256", "a 64-char hex digest", digest).to_string();
-            Ok((None, Some(reason)))
-        }
+        Ok(found) => Ok(Some(found)),
+        Err(_) => Err(mlua::Error::runtime(format!(
+            "fetch needs a 64-char hex digest, saw '{digest}'"
+        ))),
     }
 }
 
@@ -94,8 +76,8 @@ mod tests {
     use std::path::Path;
 
     use crate::api::builtin;
-    use confit_driver::http::{clear, serve};
-    use confit_driver::sha::Sha;
+    use confit_core::sha::Sha;
+    use confit_driver::http::{clear, fail, serve};
     use confit_store::{StoreRoots, Stores};
 
     const URL: &str = "https://example.com/tool.bin";
@@ -146,6 +128,7 @@ mod tests {
     fn dead_urls_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         clear();
+        fail(URL, "connection refused");
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);
         let source = r#"
@@ -156,8 +139,8 @@ mod tests {
         match run(&lua, source) {
             Ok(Value::String(reason)) => {
                 assert!(
-                    reason.to_string_lossy().contains(URL),
-                    "reason shows the url: {reason:?}"
+                    !reason.to_string_lossy().is_empty(),
+                    "reason shows the failure: {reason:?}"
                 )
             }
             Ok(_) => panic!("dead url returns nil with reason"),

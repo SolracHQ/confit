@@ -4,13 +4,13 @@
 use std::path::{Path, PathBuf};
 
 use confit_binding_macros::{Face, face_impl};
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use mlua::{Lua, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::Stores;
 
-/// Handle to a project or cached resource.
+/// Handle to a trusted resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Face)]
 #[face(userdata)]
 pub enum ResourceHandle {
@@ -22,8 +22,6 @@ pub enum ResourceHandle {
 
 impl Serialize for ResourceHandle {
     /// Serialize one handle as its content hash.
-    ///
-    /// - Project handles write the carried sha without reading the file.
     ///
     /// # Errors
     ///
@@ -205,8 +203,8 @@ fn stores_of(lua: &Lua) -> mlua::Result<Stores> {
 mod tests {
     use super::*;
     use crate::StoreRoots;
+    use confit_core::progress::Event;
     use confit_driver::archive::{Algorithm, Builder, Level};
-    use confit_driver::progress::Event;
     use mlua::Value;
 
     fn fixture_sha() -> Sha {
@@ -473,7 +471,7 @@ mod tests {
 
     #[test]
     fn member_reread_reuses_unpack() {
-        use confit_driver::progress::Event;
+        use confit_core::progress::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let (stores, receiver) = test_stores_with_events(dir.path());

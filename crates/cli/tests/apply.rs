@@ -9,7 +9,7 @@ use std::path::Path;
 use common::{seed_file, test_sinks, test_stores};
 use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::ApplyArgs;
-use confit_cli::error::CliError;
+use confit_core::error::Outcome;
 use confit_driver::paths::BaseDirs;
 
 /// Build one profile with a single text document at the relative path.
@@ -19,7 +19,7 @@ fn profile_text(relative: &str) -> String {
 return {{
     configs = {{
         {{
-            name = "note",
+            name = id("note"),
             documents = {{ {{ path = {{ base = "home", relative = "{relative}" }}, text = "hello" }} }},
         }},
     }},
@@ -34,8 +34,8 @@ fn seed_project(dir: &Path, relative: &str) {
     seed_file(&site.join("main.lua"), profile_text(relative).as_bytes());
 }
 
-/// Run one apply with the input answer and the force flag.
-fn run_apply(dir: &Path, answer: &[u8], force: bool) -> Result<usize, CliError> {
+/// Run one apply with the input bytes and the force flag.
+fn run_apply(dir: &Path, input: &[u8], force: bool) -> Outcome<usize> {
     let site = dir.join("site");
     let stores = test_stores(dir, "site");
     let args = ApplyArgs {
@@ -43,7 +43,7 @@ fn run_apply(dir: &Path, answer: &[u8], force: bool) -> Result<usize, CliError> 
         profile: None,
         force,
     };
-    let mut input = std::io::BufReader::new(answer);
+    let mut input = std::io::BufReader::new(input);
     let hooks = dir.join("hooks");
     ApplyRunner::from_args(&args, &mut input, stores, test_sinks(), hooks)
         .and_then(ApplyRunner::execute)
@@ -97,9 +97,8 @@ fn apply_no_leaves_disk_alone() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-no-note");
     match run_apply(dir.path(), b"no\n", false) {
-        Err(CliError::Aborted) => {}
-        Err(other) => panic!("refused apply flattens: {other}"),
-        Ok(_) => panic!("refused apply passes"),
+        Ok(written) => assert_eq!(written, 0, "refused apply writes nothing"),
+        Err(error) => panic!("refused apply stays quiet: {error}"),
     }
     assert!(
         home_absent("confit-no-note"),

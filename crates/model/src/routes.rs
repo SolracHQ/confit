@@ -3,13 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_binding::value::{Decode, Mismatch};
+use confit_binding::fault::FaceFault;
+use confit_binding::value::Decode;
 use confit_binding_macros::Face;
+use confit_core::error::{DocumentError, ErrorContext, Require, Result, fail};
 use confit_driver::paths::BaseDirs;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
-
-use crate::error::{Error, Result};
 
 /// Portable standard folders enum.
 #[derive(
@@ -46,8 +46,8 @@ pub struct Route {
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside the string shape.
-fn decode_relative(lua: &Lua, value: &Value) -> std::result::Result<PathBuf, Mismatch> {
+/// - [`FaceFault`] for values outside the string shape.
+fn decode_relative(lua: &Lua, value: &Value) -> std::result::Result<PathBuf, FaceFault> {
     String::decode(value, lua).map(PathBuf::from)
 }
 
@@ -69,21 +69,19 @@ impl Route {
     ///
     /// # Errors
     ///
-    /// - [`Error::Parse`] for empty paths.
+    /// - [`DocumentError::ParseFailed`] for empty paths.
     pub fn new(base: RouteBase, relative: impl Into<PathBuf>) -> Result<Self> {
         let relative = relative.into();
         if relative.as_os_str().is_empty() {
-            return Err(Error::Parse {
+            return fail(DocumentError::ParseFailed {
                 input: relative.display().to_string(),
-                want: "non-empty route path".to_owned(),
+                require: Require::RoutePath,
             });
         }
         Ok(Self { base, relative })
     }
 
     /// Join one member segment onto the route.
-    ///
-    /// - Empty segments keep the route unchanged.
     pub fn join(&self, segment: &str) -> Self {
         if segment.is_empty() {
             return self.clone();
@@ -114,11 +112,9 @@ impl Route {
 
     /// Expand one destination route to its host path.
     ///
-    /// - Literal passes its path unchanged.
-    ///
     /// # Errors
     ///
-    /// - [`Error::Base`] for unresolvable base folders.
+    /// - [`DocumentError::ParseFailed`] for unresolvable base folders.
     pub fn expand(&self) -> Result<PathBuf> {
         let bases = BaseDirs::new();
         let base = match self.base {
@@ -136,15 +132,20 @@ impl Route {
 ///
 /// # Errors
 ///
-/// - [`Error::Base`] for missing base folders.
+/// - [`DocumentError::ParseFailed`] for missing base folders.
 fn dir_or_fail(base: RouteBase, found: Option<PathBuf>) -> Result<PathBuf> {
-    found.ok_or(Error::Base { base })
+    found.ok_or_else(|| {
+        ErrorContext::from(DocumentError::ParseFailed {
+            input: base.name().to_owned(),
+            require: Require::BaseFolder,
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
+    use confit_core::error::{DocumentError, ErrorCause, ErrorContext};
 
     #[test]
     fn route_built_for_every_base() {
@@ -167,7 +168,10 @@ mod tests {
             Ok(_) => panic!("empty route passes"),
             Err(error) => error,
         };
-        assert!(matches!(error, Error::Parse { .. }));
+        assert!(matches!(
+            error,
+            ErrorContext::Leaf(ErrorCause::DocumentError(DocumentError::ParseFailed { .. }))
+        ));
     }
 
     #[test]

@@ -53,7 +53,6 @@ pub(crate) fn expand_probe_enum(
         }
         let payload = payload_of(&outer, variant, "probe")?;
         let docs = doc_lines(&variant.attrs).join(" ");
-        let path = format!("{outer}.{variant_name}");
         arms.push(quote! {
             ::confit_binding::face::UnionArm {
                 name: stringify!(#ident),
@@ -83,17 +82,14 @@ pub(crate) fn expand_probe_enum(
                             &::mlua::Value::Table(table),
                             lua,
                         )
-                        .map(Self::#ident)
-                        .map_err(|error| ::confit_binding::value::Mismatch {
-                            path: #path.to_owned(),
-                            want: error.want,
-                            found: error.found,
-                        })?;
+                        .map(Self::#ident)?;
                         #hook(&result).map_err(|error: ::mlua::Error| {
-                            ::confit_binding::value::Mismatch {
-                                path: #outer.to_owned(),
-                                want: ::std::format!("valid {}", #outer),
-                                found: error.to_string(),
+                            ::confit_binding::fault::FaceFault {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                    require: ::std::format!("valid {}", #outer),
+                                    found: error.to_string(),
+                                },
                             }
                         })?;
                         return ::std::result::Result::Ok(result);
@@ -104,12 +100,7 @@ pub(crate) fn expand_probe_enum(
                         &::mlua::Value::Table(table),
                         lua,
                     )
-                    .map(Self::#ident)
-                    .map_err(|error| ::confit_binding::value::Mismatch {
-                        path: #path.to_owned(),
-                        want: error.want,
-                        found: error.found,
-                    });
+                    .map(Self::#ident);
                 }),
             }
         } else {
@@ -133,17 +124,14 @@ pub(crate) fn expand_probe_enum(
                                 #table_value,
                                 lua,
                             )
-                            .map(Self::#ident)
-                            .map_err(|error| ::confit_binding::value::Mismatch {
-                                path: #path.to_owned(),
-                                want: error.want,
-                                found: error.found,
-                            })?;
+                            .map(Self::#ident)?;
                         #hook(&result).map_err(|error: ::mlua::Error| {
-                            ::confit_binding::value::Mismatch {
-                                path: #outer.to_owned(),
-                                want: ::std::format!("valid {}", #outer),
-                                found: error.to_string(),
+                            ::confit_binding::fault::FaceFault {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                                    require: ::std::format!("valid {}", #outer),
+                                    found: error.to_string(),
+                                },
                             }
                         })?;
                         return ::std::result::Result::Ok(result);
@@ -176,12 +164,11 @@ pub(crate) fn expand_probe_enum(
 
             fn collect(
                 collector: &mut ::confit_binding::registry::Registry,
-            ) -> ::confit_binding::error::Result<()> {
+            ) {
                 let data = Self::face();
                 if collector.register(Self::face_name(), &data) {
-                    data.collect_referenced(collector)?;
+                    data.collect_referenced(collector);
                 }
-                ::std::result::Result::Ok(())
             }
         }
 
@@ -189,16 +176,18 @@ pub(crate) fn expand_probe_enum(
             fn decode(
                 value: &::mlua::Value,
                 lua: &::mlua::Lua,
-            ) -> ::std::result::Result<Self, ::confit_binding::value::Mismatch> {
+            ) -> ::std::result::Result<Self, ::confit_binding::fault::FaceFault> {
                 let table = <::mlua::Table as ::mlua::FromLua>::from_lua(
                     value.clone(),
                     lua,
                 )
                 .map_err(|_| {
-                    ::confit_binding::value::Mismatch {
-                        path: stringify!(#name).to_owned(),
-                        want: "a table".to_owned(),
-                        found: value.type_name().to_owned(),
+                    ::confit_binding::fault::FaceFault {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                            require: "a table".to_owned(),
+                            found: value.type_name().to_owned(),
+                        },
                     }
                 })?;
                 let probe = |key: &str| -> bool {
@@ -207,10 +196,12 @@ pub(crate) fn expand_probe_enum(
                         .is_ok_and(|item| !matches!(item, ::mlua::Value::Nil))
                 };
                 #(#dispatch)*
-                ::std::result::Result::Err(::confit_binding::value::Mismatch {
-                    path: stringify!(#name).to_owned(),
-                    want: [#(#faces),*].join(" | "),
-                    found: "an unknown shape".to_owned(),
+                ::std::result::Result::Err(::confit_binding::fault::FaceFault {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::confit_binding::fault::FaultReason::ShapeMismatch {
+                        require: [#(#faces),*].join(" | "),
+                        found: "an unknown shape".to_owned(),
+                    },
                 })
             }
         }

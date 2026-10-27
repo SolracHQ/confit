@@ -8,34 +8,9 @@ use confit_runtime::Unmet;
 
 use crate::presentation::summary::Sigil;
 
-/// Render one condition in compact form for condition text.
-pub fn describe_condition(cond: &Condition) -> String {
-    fn render(cond: &Condition) -> String {
-        match cond {
-            Condition::EnvEq { key, value } => format!("env_eq({key}={value})"),
-            Condition::EnvSet { key } => format!("env_set({key})"),
-            Condition::InPath { name } => format!("in_path({name})"),
-            Condition::Exists { route } => format!("exists({})", route.display()),
-            Condition::Changed { route } => format!("changed({})", route.display()),
-            Condition::All(items) if items.is_empty() => "true".to_string(),
-            Condition::Any(items) if items.is_empty() => "false".to_string(),
-            Condition::All(items) => format!(
-                "({})",
-                items.iter().map(render).collect::<Vec<_>>().join(" and ")
-            ),
-            Condition::Any(items) => format!(
-                "({})",
-                items.iter().map(render).collect::<Vec<_>>().join(" or ")
-            ),
-            Condition::Not(inner) => format!("(not {})", render(inner)),
-        }
-    }
-    render(&cond.simplified())
-}
-
 /// Render one unmet condition with its failing member.
 pub fn describe_unmet(fault: &Unmet) -> String {
-    let head = describe_condition(&fault.member);
+    let head = fault.member.describe();
     if fault.cause.is_empty() {
         return head;
     }
@@ -56,11 +31,7 @@ pub fn describe_blocked(condition: &Condition, fault: &Unmet) -> String {
     if fault.member == *condition {
         return describe_unmet(fault);
     }
-    format!(
-        "{} [{}]",
-        describe_condition(condition),
-        describe_unmet(fault)
-    )
+    format!("{} [{}]", condition.describe(), describe_unmet(fault))
 }
 
 /// Render plan hook lines from lifecycle diff data.
@@ -123,7 +94,7 @@ fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
         out.push(format!(
             "  {} {key} ({})",
             Sigil::Add.mark(),
-            describe_condition(condition)
+            condition.describe()
         ));
     }
 }
@@ -144,8 +115,8 @@ fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String
         out.push(format!(
             "  {} {key} ({}) -> ({})",
             Sigil::Update.mark(),
-            describe_condition(&change.before),
-            describe_condition(&change.after)
+            change.before.describe(),
+            change.after.describe()
         ));
     }
 }
@@ -213,7 +184,7 @@ mod tests {
             condition(),
         ]);
         assert_eq!(
-            describe_condition(&merged).as_str(),
+            merged.describe().as_str(),
             "(in_path(mise) and changed(~/.config/mise/config.toml))"
         );
     }
@@ -225,7 +196,7 @@ mod tests {
             Condition::Not(Box::new(in_path("c"))),
         ]);
         assert_eq!(
-            describe_condition(&condition).as_str(),
+            condition.describe().as_str(),
             "((in_path(a) and in_path(b)) or (not in_path(c)))"
         );
     }

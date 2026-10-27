@@ -1,25 +1,16 @@
-//! Face
 //! Bound face traits for Lua tables and userdata.
 
 use std::borrow::Cow;
 
-use confit_driver::sha::Sha;
-
-use crate::error::Result as BindingResult;
 use crate::registry::Registry;
 
 /// Collect one face with every referenced face.
-pub type CollectFn = fn(&mut Registry) -> BindingResult<()>;
+pub type CollectFn = fn(&mut Registry);
 
 /// Collect none.
-pub fn no_collect(_collector: &mut Registry) -> BindingResult<()> {
-    Ok(())
-}
+pub fn no_collect(_collector: &mut Registry) {}
 
 /// One documented table field.
-///
-/// The optional marker from
-/// the shape declaration to stub emission.
 #[derive(Clone, Debug)]
 pub struct FieldDescriptor {
     /// The field name.
@@ -45,9 +36,6 @@ impl PartialEq for FieldDescriptor {
 }
 
 /// One documented function parameter.
-///
-/// The optional marker from
-/// the static declaration to stub emission.
 #[derive(Clone, Debug)]
 pub struct FunctionParameter {
     /// The parameter name.
@@ -73,8 +61,6 @@ impl PartialEq for FunctionParameter {
 }
 
 /// One documented function return.
-///
-/// Runs from static declaration to stub emission.
 #[derive(Clone, Debug)]
 pub struct FunctionReturn {
     /// The return face expression.
@@ -93,7 +79,7 @@ impl PartialEq for FunctionReturn {
     }
 }
 
-/// One union arm with its payload fields.
+/// One union arm.
 #[derive(Clone, Debug)]
 pub struct UnionArm {
     /// The variant name.
@@ -129,21 +115,21 @@ pub enum FaceData {
         /// The holder documentation.
         documentation: &'static str,
     },
-    /// Table shape with fields.
+    /// Table shape.
     Class {
         /// The holder documentation.
         documentation: &'static str,
         /// The table fields.
         fields: Vec<FieldDescriptor>,
     },
-    /// Union shape with folded arm fields.
+    /// Union shape.
     Union {
         /// The holder documentation.
         documentation: &'static str,
         /// The union arms with fields.
         arms: Vec<UnionArm>,
     },
-    /// Function shape with params and returns.
+    /// Function shape.
     Function {
         /// The holder documentation.
         documentation: &'static str,
@@ -159,32 +145,24 @@ pub enum FaceData {
     },
 }
 
-/// Bound type face: Lua name, stub data, and registry collection.
+/// Bound type face.
 pub trait Face {
     /// Return the Lua name.
     fn face_name() -> String;
     /// Return the stub snapshot.
     fn face() -> FaceData;
     /// Register the face with every referenced face.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> BindingResult<()>;
+    fn collect(collector: &mut Registry);
 }
 
-/// Bound namespace face: dotted Lua path and member collection.
+/// Bound namespace face.
 pub trait Namespace {
     /// Return the dotted Lua path.
     fn namespace() -> &'static str;
     /// Return the documentation text.
     fn documentation() -> &'static str;
     /// Register the namespace with every member face.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    fn collect(collector: &mut Registry) -> BindingResult<()>;
+    fn collect(collector: &mut Registry);
 }
 
 macro_rules! primitive_face {
@@ -196,9 +174,7 @@ macro_rules! primitive_face {
             fn face() -> FaceData {
                 FaceData::Scalar { documentation: "" }
             }
-            fn collect(_collector: &mut Registry) -> BindingResult<()> {
-                Ok(())
-            }
+            fn collect(_collector: &mut Registry) {}
         }
     };
 }
@@ -213,7 +189,6 @@ primitive_face!(mlua::Function, "fun()");
 primitive_face!(mlua::Table, "table");
 primitive_face!(mlua::Value, "any");
 primitive_face!(serde_json::Value, "any");
-primitive_face!(Sha, "string");
 
 impl Face for () {
     fn face_name() -> String {
@@ -222,9 +197,7 @@ impl Face for () {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(_collector: &mut Registry) -> BindingResult<()> {
-        Ok(())
-    }
+    fn collect(_collector: &mut Registry) {}
 }
 
 impl<First: Face, Second: Face> Face for (First, Second) {
@@ -234,9 +207,9 @@ impl<First: Face, Second: Face> Face for (First, Second) {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        First::collect(collector)?;
-        Second::collect(collector)
+    fn collect(collector: &mut Registry) {
+        First::collect(collector);
+        Second::collect(collector);
     }
 }
 
@@ -247,8 +220,8 @@ impl<T: Face> Face for Option<T> {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        T::collect(collector)
+    fn collect(collector: &mut Registry) {
+        T::collect(collector);
     }
 }
 
@@ -259,8 +232,8 @@ impl<T: Face> Face for Vec<T> {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        T::collect(collector)
+    fn collect(collector: &mut Registry) {
+        T::collect(collector);
     }
 }
 
@@ -271,8 +244,8 @@ impl<T: Face> Face for Box<T> {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        T::collect(collector)
+    fn collect(collector: &mut Registry) {
+        T::collect(collector);
     }
 }
 
@@ -283,9 +256,9 @@ impl<K: Face, V: Face> Face for std::collections::HashMap<K, V> {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        K::collect(collector)?;
-        V::collect(collector)
+    fn collect(collector: &mut Registry) {
+        K::collect(collector);
+        V::collect(collector);
     }
 }
 
@@ -296,9 +269,9 @@ impl<K: Face, V: Face> Face for std::collections::BTreeMap<K, V> {
     fn face() -> FaceData {
         FaceData::Scalar { documentation: "" }
     }
-    fn collect(collector: &mut Registry) -> BindingResult<()> {
-        K::collect(collector)?;
-        V::collect(collector)
+    fn collect(collector: &mut Registry) {
+        K::collect(collector);
+        V::collect(collector);
     }
 }
 
@@ -315,33 +288,21 @@ impl FaceData {
     }
 
     /// Collect every referenced face.
-    ///
-    /// - Scalar faces collect none.
-    /// - Class faces collect every field face.
-    /// - Union faces collect every kept arm face.
-    /// - Function faces collect every param with every return face.
-    /// - Userdata faces collect none.
-    ///
-    /// # Errors
-    ///
-    /// - [`crate::error::BindingError`] for repeated registration.
-    pub fn collect_referenced(&self, collector: &mut Registry) -> BindingResult<()> {
+    pub fn collect_referenced(&self, collector: &mut Registry) {
         match self {
-            Self::Scalar { .. } | Self::Userdata { .. } => Ok(()),
+            Self::Scalar { .. } | Self::Userdata { .. } => {}
             Self::Class { fields, .. } => {
                 for field in fields {
-                    (field.collect)(collector)?;
+                    (field.collect)(collector);
                 }
-                Ok(())
             }
             Self::Union { arms, .. } => {
                 for arm in arms {
                     if arm.skipped {
                         continue;
                     }
-                    (arm.collect)(collector)?;
+                    (arm.collect)(collector);
                 }
-                Ok(())
             }
             Self::Function {
                 parameters,
@@ -349,12 +310,11 @@ impl FaceData {
                 ..
             } => {
                 for parameter in parameters {
-                    (parameter.collect)(collector)?;
+                    (parameter.collect)(collector);
                 }
                 for returned in returns {
-                    (returned.collect)(collector)?;
+                    (returned.collect)(collector);
                 }
-                Ok(())
             }
         }
     }
@@ -375,7 +335,8 @@ mod tests {
     use mlua::{Lua, Value};
     use std::collections::{BTreeMap, HashMap};
 
-    use crate::value::{Decode, Encode, Mismatch};
+    use crate::fault::FaceFault;
+    use crate::value::{Decode, Encode};
 
     /// Holder face for map convert tests.
     #[derive(Debug, Face)]
@@ -387,12 +348,12 @@ mod tests {
     }
 
     /// Read one map key into its uppercase shape.
-    fn upper_key(lua: &Lua, value: &Value) -> Result<String, Mismatch> {
+    fn upper_key(lua: &Lua, value: &Value) -> Result<String, FaceFault> {
         String::decode(value, lua).map(|key| key.to_uppercase())
     }
 
     /// Read one map value into its exclaimed shape.
-    fn exclaim_value(lua: &Lua, value: &Value) -> Result<String, Mismatch> {
+    fn exclaim_value(lua: &Lua, value: &Value) -> Result<String, FaceFault> {
         String::decode(value, lua).map(|item| format!("{item}!"))
     }
 
@@ -496,7 +457,7 @@ mod tests {
             _ => panic!("expected union data for union"),
         }
         let mut collector = Registry::new();
-        Condition::collect(&mut collector).unwrap();
+        Condition::collect(&mut collector);
         assert!(collector.contains("Condition"));
         assert!(collector.contains("Condition_EnvEq"));
         assert!(collector.stub_text().contains("Condition_EnvEq"));
@@ -542,7 +503,7 @@ mod tests {
             _ => panic!("expected union data for tagged"),
         }
         let mut collector = Registry::new();
-        TaggedCond::collect(&mut collector).unwrap();
+        TaggedCond::collect(&mut collector);
         let text = collector.stub_text();
         assert!(text.contains("TaggedCond_EnvEq"));
         assert!(text.contains("env_eq"));
@@ -573,7 +534,7 @@ mod tests {
             "{[string]: NoDocs}".to_owned()
         );
         let mut collector = Registry::new();
-        MapHolder::collect(&mut collector).unwrap();
+        MapHolder::collect(&mut collector);
         assert!(collector.contains("MapHolder"));
         assert!(collector.stub_text().contains("{[string]: string}"));
     }
@@ -690,7 +651,7 @@ mod tests {
 
     #[face_impl]
     impl Handle {
-        /// Answer the seed.
+        /// Return the seed.
         ///
         /// # Returns
         ///

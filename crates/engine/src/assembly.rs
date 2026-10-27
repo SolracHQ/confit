@@ -1,4 +1,3 @@
-//! Assembly
 //! Assemble validated profiles into finished documents.
 
 mod collect;
@@ -8,13 +7,12 @@ mod merge;
 pub(crate) mod owned;
 mod patches;
 
+use confit_core::error::Outcome;
 use mlua::Lua;
 
 use crate::api::profile::Profile;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
-
-use crate::error::Result;
 
 /// Validated profile assembly into finished documents.
 pub struct Assembler<'a> {
@@ -34,25 +32,14 @@ impl<'a> Assembler<'a> {
 
     /// Collect one profile into documents in destination order.
     ///
-    /// - Patches merge in rank-descending level order over structured maps
-    ///   and rc sections with first writes winning.
-    /// - Groups follow first-seen declaration order.
-    /// - Filters fan out over matched destinations in destination order.
-    /// - Callbacks run over live documents.
-    /// - Unknown targets fail the plan.
-    /// - Unknown requirement names fail the plan with the hint.
-    ///
     /// # Errors
     ///
-    /// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
-    /// - [`crate::error::EngineError::Defined`] for repeated config names.
-    /// - [`crate::error::EngineError::Require`] for requirements showing unknown names.
-    /// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
-    /// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
-    /// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
-    ///   hooks-only changed leaves.
-    /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-    pub fn assemble(&self, profile: &Profile) -> Result<Vec<Document>> {
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents, missing
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated documents, missing
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
+    ///   requirements and targets, foreign bases, bad shapes, and Lua failures.
+    pub fn assemble(&self, profile: &Profile) -> Outcome<Vec<Document>> {
         collect::check_names(profile)?;
         collect::check_requirements(profile)?;
         let placed = collect::dedupe(profile)?;
@@ -81,42 +68,25 @@ impl<'a> Assembler<'a> {
 
     /// Collect one profile's hooks in first-seen order.
     ///
-    /// - Hook patches mutate live hooks in return order.
-    /// - Unknown hook targets and repeated ids fail the plan.
-    ///
     /// # Errors
     ///
-    /// - [`crate::error::EngineError::DuplicateHook`] for repeated hook ids.
-    /// - [`crate::error::EngineError::UnknownHookTarget`] for patches with
-    ///   unknown ids.
-    /// - [`crate::error::EngineError::ChangedUnknown`] for conditions with
-    ///   unbuilt routes.
-    /// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-    pub fn collect_hooks(&self, profile: &Profile, documents: &[Document]) -> Result<Vec<Hook>> {
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids, unknown targets,
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated ids, unknown targets,
+    ///   unbuilt routes, and Lua failures.
+    pub fn collect_hooks(&self, profile: &Profile, documents: &[Document]) -> Outcome<Vec<Hook>> {
         hooks::collect_hooks(self.lua, profile, documents)
     }
 }
 
 /// Collect one profile into documents in destination order.
 ///
-/// - Patches merge in rank-descending level order over structured maps and rc
-///   sections with first writes winning.
-/// - Groups follow first-seen declaration order.
-/// - Filters fan out over matched destinations in destination order.
-/// - Callbacks run over live documents.
-/// - Unknown targets fail the plan.
-/// - Unknown requirement names fail the plan with the hint.
-///
 /// # Errors
 ///
-/// - [`crate::error::EngineError::Duplicate`] for repeated destinations.
-/// - [`crate::error::EngineError::Defined`] for repeated config names.
-/// - [`crate::error::EngineError::Require`] for requirements showing unknown names.
-/// - [`crate::error::EngineError::UnknownTarget`] for missing targets.
-/// - [`crate::error::EngineError::Structured`] for foreign bases with gaps.
-/// - [`crate::error::EngineError::ChangedInRc`] for rc guards with
-///   hooks-only changed leaves.
-/// - [`crate::error::EngineError::Lua`] for bridge and callback failures.
-pub fn assemble(lua: &Lua, profile: &Profile) -> Result<Vec<Document>> {
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents, missing
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated documents, missing
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
+///   requirements and targets, foreign bases, bad shapes, and Lua failures.
+pub fn assemble(lua: &Lua, profile: &Profile) -> Outcome<Vec<Document>> {
     Assembler::new(lua).assemble(profile)
 }

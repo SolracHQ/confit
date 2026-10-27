@@ -3,7 +3,7 @@
 
 use syn::{Pat, Type};
 
-/// One collected method parameter with its stub face.
+/// One collected method parameter.
 pub(crate) struct ParamFace {
     /// The parameter label.
     pub(crate) label: String,
@@ -15,7 +15,7 @@ pub(crate) struct ParamFace {
     pub(crate) documentation: String,
 }
 
-/// One collected method with its stub faces.
+/// One collected method.
 pub(crate) struct MethodFace {
     /// The method ident.
     pub(crate) ident: syn::Ident,
@@ -35,7 +35,7 @@ pub(crate) struct MethodFace {
     pub(crate) fallible: bool,
 }
 
-/// One collected static parameter with its stub face.
+/// One collected static parameter.
 pub(crate) struct StaticParam {
     /// The parameter label.
     pub(crate) label: String,
@@ -49,7 +49,7 @@ pub(crate) struct StaticParam {
     pub(crate) optional: bool,
 }
 
-/// One collected static with its stub faces.
+/// One collected static.
 pub(crate) struct StaticFace {
     /// The method ident.
     pub(crate) ident: syn::Ident,

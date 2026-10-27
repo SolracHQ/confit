@@ -3,15 +3,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use confit_core::error::{Outcome, Result, Terminal};
+use confit_core::sha::Sha;
 use confit_driver as driver;
-use confit_driver::sha::Sha;
 use confit_store::handles::ResourceHandle;
-use confit_store::resources::error::ResourceError;
 
 use super::BUNDLE_MANIFEST;
 use super::Bundler;
 use super::ensure_bundle_extension;
-use crate::error::{Result, RuntimeError};
 use crate::manifest::Manifest;
 
 /// Entry mode for bundle members.
@@ -20,27 +19,18 @@ const BUNDLE_ENTRY_MODE: u32 = 0o644;
 impl Bundler {
     /// Write one portable bundle with the manifest and the contents.
     ///
-    /// - Destinations carry the bundle extension.
-    /// - Members sort manifest-first in content-hash order.
-    ///
-    /// # Returns
-    ///
-    /// - The ensured destination path.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for unreadable bundles.
-    /// - [`RuntimeError::BundleCorrupt`] for missing contents.
-    /// - [`RuntimeError::BundleWrite`] for write faults.
-    /// - [`RuntimeError::BundleWriteUnknown`] for other write
-    ///   failures.
-    /// - [`RuntimeError::BundleManifest`] for manifest render failures.
-    pub fn write(&self, manifest: &Manifest, dest: &Path) -> Result<PathBuf> {
-        Pack::new(self, manifest, dest)?.run()
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for failed bundle writes with the log chain.
+    pub fn write(&self, manifest: &Manifest, dest: &Path) -> Outcome<PathBuf> {
+        let dest = ensure_bundle_extension(dest);
+        Pack::new(self, manifest, &dest)
+            .and_then(|pack| pack.run())
+            .write_bundle(&dest)
     }
 }
 
-/// One bundle build with its staged contents.
+/// One bundle build.
 struct Pack<'a> {
     /// The bundler under writing.
     bundler: &'a Bundler,
@@ -67,15 +57,10 @@ impl<'a> Pack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleManifest`] for manifest render failures.
+    /// - [`confit_core::error::DocumentError`] for manifest render failures.
     fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> Result<Self> {
-        let dest = ensure_bundle_extension(dest);
-        let text = manifest
-            .json()
-            .map_err(|error| RuntimeError::BundleManifest {
-                path: dest.clone(),
-                source: error,
-            })?;
+        let dest = dest.to_path_buf();
+        let text = manifest.json()?;
         let mut seen: BTreeMap<Sha, ResourceHandle> = BTreeMap::new();
         for handle in manifest.handles() {
             seen.entry(handle.sha().clone())
@@ -94,11 +79,8 @@ impl<'a> Pack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleRead`] for unreadable contents.
-    /// - [`RuntimeError::BundleCorrupt`] for missing contents.
-    /// - [`RuntimeError::BundleWrite`] for write faults.
-    /// - [`RuntimeError::BundleWriteUnknown`] for other write
-    ///   failures.
+    /// - [`FilesystemError`] for unreadable contents and write faults.
+    /// - [`BundleError`] for missing contents and failed members.
     fn run(mut self) -> Result<PathBuf> {
         self.collect()?;
         self.build()
@@ -106,34 +88,15 @@ impl<'a> Pack<'a> {
 
     /// Open every unique content outside the atomic write.
     ///
-    /// - Project entries open the live path direct.
-    /// - Cache entries open from the cache.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleCorrupt`] for missing contents.
-    /// - [`RuntimeError::BundleRead`] for other unreadable contents.
+    /// - [`confit_core::error::ErrorCause`] for missing contents and unreadable entries.
+    /// - [`confit_core::error::FilesystemError`] for other unreadable contents.
     fn collect(&mut self) -> Result<()> {
-        let dest = self.dest.clone();
         for handle in &self.contents {
-            let sha = handle.sha().clone();
             let file = match handle {
-                ResourceHandle::Cache(_) => self
-                    .bundler
-                    .resources
-                    .open(handle)
-                    .map_err(|error| from_resource(&dest, &sha, error))?,
-                ResourceHandle::Project(path, _) => match std::fs::File::open(path) {
-                    Ok(file) => file,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        log::error!(
-                            "bundle '{}' corrupt: content '{sha}' is missing from the project",
-                            dest.display()
-                        );
-                        return Err(RuntimeError::BundleCorrupt { path: dest.clone() });
-                    }
-                    Err(error) => return Err(RuntimeError::from_bundle_io(&dest, error)),
-                },
+                ResourceHandle::Cache(_) => self.bundler.resources.open(handle)?,
+                ResourceHandle::Project(path, _) => std::fs::File::open(path)?,
             };
             self.staged.push(Staged {
                 handle: handle.clone(),
@@ -145,13 +108,10 @@ impl<'a> Pack<'a> {
 
     /// Write the staged bundle into its destination file.
     ///
-    /// - Member order is manifest-first in content-hash order.
-    ///
     /// # Errors
     ///
-    /// - [`RuntimeError::BundleWrite`] for write faults.
-    /// - [`RuntimeError::BundleWriteUnknown`] for other build and hash
-    ///   failures.
+    /// - [`confit_core::error::FilesystemError`] for write faults.
+    /// - [`confit_core::error::ArchiveError`] for failed members.
     fn build(self) -> Result<PathBuf> {
         use confit_driver::archive::{Algorithm, Builder, Level};
 
@@ -162,8 +122,10 @@ impl<'a> Pack<'a> {
             contents: _,
             mut staged,
         } = self;
-        driver::StagedFile::write(&dest, |file| {
-            let mut builder = Builder::create(file, Algorithm::TarGz, Level::default());
+        let scratch = driver::StagedFile::stage(&dest)?;
+        {
+            let sink = std::fs::File::create(scratch.path())?;
+            let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
             let mut manifest_reader = std::io::Cursor::new(text.as_bytes());
             builder.member(
                 BUNDLE_MANIFEST,
@@ -172,50 +134,28 @@ impl<'a> Pack<'a> {
                 &mut manifest_reader,
             )?;
             for entry in &mut staged {
-                let sha = entry.handle.sha().clone();
                 let len = entry.file.metadata()?.len();
-                builder.member(&sha.hex(), BUNDLE_ENTRY_MODE, len, &mut entry.file)?;
+                builder.member(
+                    &entry.handle.sha().hex(),
+                    BUNDLE_ENTRY_MODE,
+                    len,
+                    &mut entry.file,
+                )?;
             }
-            builder.finish()?;
-            Ok(())
-        })
-        .map_err(|error| RuntimeError::from_bundle_write_io(&dest, error))?;
-        Ok(dest)
-    }
-}
-
-/// Map one resource failure at the bundle destination into bundle language.
-fn from_resource(dest: &Path, sha: &Sha, error: ResourceError) -> RuntimeError {
-    use confit_store::faults::AccessFault;
-
-    match error {
-        ResourceError::Read {
-            fault: AccessFault::Missing,
-            ..
-        } => {
-            log::error!(
-                "bundle '{}' corrupt: content '{sha}' is missing from the cache",
-                dest.display()
-            );
-            RuntimeError::BundleCorrupt {
-                path: dest.to_path_buf(),
-            }
+            let sink = builder.finish()?;
+            drop(sink);
         }
-        ResourceError::Mismatch {
-            expected, found, ..
-        } => RuntimeError::BundleRead {
-            path: dest.to_path_buf(),
-            fault: AccessFault::Corrupt { expected, found },
-        },
-        other => RuntimeError::from_resource(dest, other),
+        scratch.persist(&dest)?;
+        Ok(dest)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::Read as _;
 
-    use super::*;
+    use confit_core::error::ErrorCause;
     use confit_driver as driver;
     use confit_model::document::{Data, Document, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
@@ -270,7 +210,7 @@ mod tests {
 
         let file = std::fs::File::open(path).unwrap();
         let mut bodies = Vec::new();
-        driver::archive::uncompress(file, |entry| -> std::io::Result<()> {
+        driver::archive::uncompress(file, |entry| -> Result<()> {
             let name = entry.name;
             let mut body = entry.reader;
             if name == BUNDLE_MANIFEST {
@@ -331,14 +271,17 @@ mod tests {
         let dest = locked.join("plan");
         match store.write(&manifest, &dest) {
             Ok(_) => panic!("denied disk passes"),
-            Err(RuntimeError::BundleWrite { path, fault }) => {
-                assert!(
-                    matches!(fault, confit_store::faults::AccessFault::Denied),
-                    "write keeps the fault"
-                );
-                assert_eq!(path, locked.join("plan.cb"), "write keeps the destination");
-            }
-            Err(error) => panic!("wrong write variant: {error}"),
+            Err(error) => match error.root_cause() {
+                Some(ErrorCause::FilesystemError(_)) | Some(ErrorCause::ArchiveError(_)) => {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains(&locked.join("plan.cb").display().to_string()),
+                        "write keeps the destination"
+                    );
+                }
+                other => panic!("wrong write cause: {other:?}"),
+            },
         }
         driver::fs::set_mode(&locked, Some(0o755)).unwrap();
     }

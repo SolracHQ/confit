@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+confit-core = { version = "0.9.0", path = "../core" }
 crossbeam-channel.workspace = true
 dirs.workspace = true
 flate2.workspace = true

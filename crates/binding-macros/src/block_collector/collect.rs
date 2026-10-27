@@ -8,11 +8,36 @@ use crate::parse::doc_lines;
 use super::attribute::param_optional;
 use super::docs::{document_params, document_returns, split_sections};
 use super::faces::{MethodFace, ParamFace, StaticFace, StaticParam};
-use super::shapes::{is_lua_ref, is_result, names_lua, return_arity, unwrap_result};
+use super::shapes::{
+    is_lua_ref, is_option, is_result, is_tuple, names_lua, return_arity, unwrap_result,
+};
 
 /// Report whether one method carries a receiver.
 pub(crate) fn has_receiver(method: &syn::ImplItemFn) -> bool {
     matches!(method.sig.inputs.first(), Some(FnArg::Receiver(_)))
+}
+
+/// Check one flagged method holds the fixed hook signature.
+pub(crate) fn check_meta(class_name: &str, face: &MethodFace) -> Result<(), syn::Error> {
+    if face.takes_lua || !face.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &face.ident,
+            format!(
+                "{class_name}.{}: face_meta methods hold no params alone",
+                face.name
+            ),
+        ));
+    }
+    match &face.returns {
+        Some(shape) if !is_tuple(shape) => Ok(()),
+        _ => Err(syn::Error::new_spanned(
+            &face.ident,
+            format!(
+                "{class_name}.{}: face_meta methods hold one return alone",
+                face.name
+            ),
+        )),
+    }
 }
 
 /// Collect one method with its stub faces.
@@ -206,13 +231,22 @@ pub(crate) fn parse_static(
                 ));
             }
         };
-        let optional = param_optional(
+        let marked = param_optional(
             class_name,
             &method_name,
             &label,
             &typed.attrs,
             &method.sig.ident,
         )?;
+        if marked && is_option(&typed.ty) {
+            return Err(syn::Error::new_spanned(
+                typed.ty.as_ref(),
+                format!(
+                    "{class_name}.{method_name}.{label}: optional is inferred for Option params; drop #[face(optional)]"
+                ),
+            ));
+        }
+        let optional = marked || is_option(&typed.ty);
         params.push(StaticParam {
             label,
             binding: typed.pat.as_ref().clone(),

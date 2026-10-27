@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use confit_core::error::ErrorContext;
+
 #[cfg(not(any(test, feature = "test-support")))]
 mod host;
 #[cfg(any(test, feature = "test-support"))]
@@ -30,105 +32,22 @@ pub struct ProcessCall {
     pub timeout_secs: u64,
 }
 
-/// Process fault cause.
-///
-/// One cause covers spawn and wait failures. Unmapped kinds carry
-/// their message along.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProcessFault {
-    /// Unknown binary.
-    UnknownBinary,
-    /// Denied execution.
-    DeniedExecution,
-    /// Unmapped failure with raw text.
-    Unknown {
-        /// The raw failure text.
-        message: String,
-    },
-}
-
-impl ProcessFault {
-    /// Interpret one io kind into its fault.
-    pub fn interpret(kind: std::io::ErrorKind) -> Option<Self> {
-        match kind {
-            std::io::ErrorKind::NotFound => Some(Self::UnknownBinary),
-            std::io::ErrorKind::PermissionDenied => Some(Self::DeniedExecution),
-            _ => None,
-        }
-    }
-
-    /// Return the fault cause for display shells.
-    ///
-    /// Unknown faults echo their raw text.
-    pub fn cause(&self) -> &str {
-        match self {
-            Self::UnknownBinary => "unknown binary",
-            Self::DeniedExecution => "denied execution",
-            Self::Unknown { message } => message,
-        }
-    }
-}
-
-impl std::fmt::Display for ProcessFault {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.cause())
-    }
-}
-
-/// Process failure shapes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProcessError {
-    /// Empty argv.
-    Empty,
-    /// Failed spawn.
-    Spawn {
-        /// The spawn fault cause.
-        fault: ProcessFault,
-    },
-    /// Failed wait.
-    Wait {
-        /// The wait fault cause.
-        fault: ProcessFault,
-    },
-    /// Timed-out run.
-    Timeout {
-        /// The run cap in seconds.
-        timeout_secs: u64,
-    },
-    /// Failed output join.
-    Output,
-}
-
-impl std::fmt::Display for ProcessError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(formatter, "argv is empty"),
-            Self::Spawn { fault } => write!(formatter, "{fault}"),
-            Self::Wait { fault } => write!(formatter, "{fault}"),
-            Self::Timeout { timeout_secs } => {
-                write!(formatter, "timed out after {timeout_secs}s")
-            }
-            Self::Output => write!(formatter, "cannot read output"),
-        }
-    }
-}
-
-impl std::error::Error for ProcessError {}
-
 /// Run one argv with extended PATH and a timeout.
 ///
 /// # Errors
 ///
-/// - [ProcessError::Empty] for empty argv.
-/// - [ProcessError::Spawn] for spawn failures.
-/// - [ProcessError::Wait] for wait failures.
-/// - [ProcessError::Timeout] for timed-out runs.
-/// - [ProcessError::Output] for output join failures.
+/// - [`confit_core::error::HookRunError::BinaryUnresolved`] for empty argv and
+///   missing binaries.
+/// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for denied execution.
+/// - [`confit_core::error::FilesystemError::FileUnknown`] for unknown spawn and wait
+///   faults.
+/// - [`confit_core::error::HookRunError::TimedOut`] for timed-out runs.
+/// - [`confit_core::error::HookRunError::OutputUnreadable`] for output join failures.
 pub fn run(
     argv: &[String],
     path_dirs: &[PathBuf],
     timeout_secs: u64,
-) -> Result<ProcessOutput, ProcessError> {
+) -> Result<ProcessOutput, ErrorContext> {
     #[cfg(any(test, feature = "test-support"))]
     {
         mem::run(argv, path_dirs, timeout_secs)

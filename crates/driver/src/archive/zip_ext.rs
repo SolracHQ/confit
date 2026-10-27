@@ -1,32 +1,26 @@
 //! Zip member reading.
-//!
-//! Readers visit zip members under names and modes.
 
 use std::io;
 
-use super::Error;
-use super::Result;
+use confit_core::error::Result as CoreResult;
+
+use super::{Result, zip_error};
 
 /// Return zip member names in archive order.
 ///
-/// - Every returned name is a file with a non-empty name.
-///
 /// # Errors
 ///
-/// - [`Error::Locked`] for locked archives.
-/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
-/// - [`Error::Unknown`] for unexpected failures.
-/// - [`Error::Corrupt`] for corrupt archives.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
+/// - [`confit_core::error::ArchiveError::PasswordLocked`] for locked archives.
+/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] for unknown features and methods.
+/// - [`confit_core::error::ArchiveError::BackendCorrupt`] for corrupt archives.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
-    let mut archive = zip::ZipArchive::new(reader)?;
+    let mut archive = zip::ZipArchive::new(reader).map_err(zip_error)?;
     let total = archive.len();
     let mut found = Vec::with_capacity(total);
     let mut index = 0;
     while index < total {
-        let entry = archive.by_index(index)?;
+        let entry = archive.by_index(index).map_err(zip_error)?;
         index += 1;
         if !entry.is_file() {
             continue;
@@ -42,28 +36,21 @@ pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
 
 /// Walk zip members with one visitor.
 ///
-/// - Every visited member is a file with a non-empty name.
-/// - Modes mask toward 0o777 with 0o644 fallback.
-///
 /// # Errors
 ///
-/// - [`Error::Locked`] for locked archives.
-/// - [`Error::UnknownAlgorithm`] for unknown features and methods.
-/// - [`Error::Unknown`] for unexpected failures.
-/// - [`Error::Corrupt`] for corrupt archives and missing entries.
-/// - [`Error::Denied`] for denied access.
-/// - [`Error::Missing`] for missing input.
-/// - [`Error::Io`] for failed streams and entries.
-/// - [`Error::Visit`] for failing visitors.
-pub(super) fn walk<R: io::Read + io::Seek, E>(
+/// - [`confit_core::error::ArchiveError::PasswordLocked`] for locked archives.
+/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] for unknown features and methods.
+/// - [`confit_core::error::ArchiveError::BackendCorrupt`] for corrupt archives and missing entries.
+/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+pub(super) fn walk<R: io::Read + io::Seek>(
     reader: R,
-    mut visit: impl FnMut(super::Entry<'_>) -> std::result::Result<(), E>,
-) -> Result<(), E> {
-    let mut archive = zip::ZipArchive::new(reader)?;
+    mut visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
+) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(reader).map_err(zip_error)?;
     let total = archive.len();
     let mut index = 0;
     while index < total {
-        let entry = archive.by_index(index)?;
+        let entry = archive.by_index(index).map_err(zip_error)?;
         index += 1;
         if !entry.is_file() {
             continue;
@@ -81,7 +68,7 @@ pub(super) fn walk<R: io::Read + io::Seek, E>(
             mode,
             reader: Box::new(entry),
         };
-        visit(member).map_err(Error::Visit)?;
+        visit(member)?;
     }
     Ok(())
 }

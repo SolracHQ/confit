@@ -1,5 +1,4 @@
-//! Validate
-//! Shape checks over the decode cores returning bool with reason.
+//! Shape checks over the decode cores.
 
 use confit_binding::value::Decode;
 use confit_binding_macros::face_impl;
@@ -100,7 +99,7 @@ impl Validate {
     ///
     /// # Arguments
     ///
-    /// - [value] The entry table under checking.
+    /// - [value] The rc entry table under checking.
     ///
     /// # Returns
     ///
@@ -134,6 +133,7 @@ mod tests {
         let lua = Lua::new();
         let validate = Validate::register(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
+        crate::api::global::Global::install(&lua, &lua.globals()).unwrap();
         lua
     }
 
@@ -184,7 +184,7 @@ mod tests {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
-                name = "tools/test",
+                name = id("tools/test"),
                 documents = { { path = { base = "home", relative = ".bashrc" }, text = "hi" } },
             })
             assert(found ~= nil and reason == nil)
@@ -200,7 +200,7 @@ mod tests {
     fn config_gave_false_with_reason_on_bad_shapes() {
         let lua = test_lua();
         let source = r#"
-            local found, reason = validate.config({ name = "tools/test", nope = 1 })
+            local found, reason = validate.config({ name = id("tools/test"), nope = 1 })
             assert(found == nil and reason ~= nil)
             return reason
         "#;

@@ -6,12 +6,15 @@ use std::path::{Path, PathBuf};
 
 use mlua::{Lua, Table, Value};
 
+use confit_core::error::{
+    Error, ErrorCause, ErrorContext, EvalDetail, EvalError, FilesystemError, Outcome,
+    RequireNameRule, Result, Terminal, fail,
+};
 use confit_store::Stores;
 
 use crate::api::builtin;
+use crate::api::global::Global;
 use crate::project::PluginRoot;
-
-use crate::error::{EngineError, Result};
 
 const AUDITED: &[&str] = &[
     "assert", "error", "ipairs", "next", "pairs", "pcall", "select", "tonumber", "tostring", "type",
@@ -64,30 +67,31 @@ impl Session {
         let _ = self.loading.borrow_mut().pop();
     }
 
-    fn cycle(&self, key: &str) -> Option<String> {
+    fn cycle(&self, key: &str) -> Option<Vec<String>> {
         let stack = self.loading.borrow();
         stack.iter().position(|held| held == key).map(|start| {
-            let mut loop_ = stack[start..].join(" -> ");
-            loop_.push_str(" -> ");
-            loop_.push_str(key);
-            loop_
+            let mut chain = stack[start..].to_vec();
+            chain.push(key.to_owned());
+            chain
         })
     }
 }
 
-/// Install the scoped require function on the globals.
-///
-/// - The global form resolves project relative as a project caller.
+/// Install the scoped require function.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for failed app data and global writes.
-pub fn install(lua: &Lua) -> Result<()> {
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for failed app data and global writes.
+pub fn install(lua: &Lua) -> Outcome<()> {
     lua.set_app_data(Session::new());
-    let require = lua.create_function(|lua, name: String| {
-        run_require(lua, &name, None).map_err(mlua::Error::from)
-    })?;
-    lua.globals().set("require", require)?;
+    let require = lua
+        .create_function(|lua, name: String| {
+            run_require(lua, &name, None).map_err(mlua::Error::external)
+        })
+        .map_err(|error| Error::lua_failed(error.to_string()))?;
+    lua.globals()
+        .set("require", require)
+        .map_err(|error| Error::lua_failed(error.to_string()))?;
     Ok(())
 }
 
@@ -95,80 +99,89 @@ pub fn install(lua: &Lua) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Read`] for unreadable files.
-/// - [`EngineError::Utf8`] for non-UTF8 files.
-/// - [`EngineError::Lua`] for Lua syntax and runtime failures.
-pub fn load_chunk(lua: &Lua, path: &Path) -> Result<Value> {
-    let text = read_text(path)?;
+/// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable profiles and Lua failures.
+pub fn load_chunk(lua: &Lua, path: &Path) -> Outcome<Value> {
+    let text = read_text(path).open_profile(path)?;
     let caller = path.parent().map(Path::to_path_buf);
     let env = environment(lua, caller)?;
     let label = format!("@{}", path.display());
-    Ok(compile(lua, &text, label, env)?.call::<Value>(())?)
+    match compile(lua, &text, label, env).call::<Value>(()) {
+        Ok(found) => Ok(found),
+        Err(error) => {
+            if let Some(terminal) = error.downcast_ref::<Error>() {
+                return Err(terminal.clone());
+            }
+            Err(Error::lua_failed(error.to_string()))
+        }
+    }
 }
 
 /// Read one chunk file as text.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Read`] for unreadable files.
-/// - [`EngineError::Utf8`] for non-UTF8 files.
+/// - [`confit_core::error::FilesystemError`] for unreadable files.
+/// - [`confit_core::error::DocumentError::ParseFailed`] for non-UTF8 files.
 fn read_text(path: &Path) -> Result<String> {
-    let display = path.display().to_string();
-    let bytes = std::fs::read(path).map_err(|error| EngineError::Read {
-        path: display.clone(),
-        reason: error.to_string(),
-    })?;
-    String::from_utf8(bytes).map_err(|_| EngineError::Utf8 { path: display })
+    let bytes = std::fs::read(path)?;
+    Ok(String::from_utf8(bytes)?)
 }
 
-/// Build one sandboxed environment with audited globals and require.
-///
-/// - Unknown globals are nil.
+/// Build one sandboxed environment.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for unreadable globals and unwritable tables.
-fn environment(lua: &Lua, caller: Option<PathBuf>) -> Result<Table> {
-    let env = lua.create_table()?;
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable globals and unwritable tables.
+fn environment(lua: &Lua, caller: Option<PathBuf>) -> Outcome<Table> {
+    let env = lua
+        .create_table()
+        .map_err(|error| Error::lua_failed(error.to_string()))?;
     let globals = lua.globals();
     for name in AUDITED {
-        env.set(*name, globals.get::<Value>(*name)?)?;
+        let held: Value = globals
+            .get(*name)
+            .map_err(|error| Error::lua_failed(error.to_string()))?;
+        env.set(*name, held)
+            .map_err(|error| Error::lua_failed(error.to_string()))?;
     }
     for name in LIBRARIES {
-        env.set(*name, globals.get::<Value>(*name)?)?;
+        let held: Value = globals
+            .get(*name)
+            .map_err(|error| Error::lua_failed(error.to_string()))?;
+        env.set(*name, held)
+            .map_err(|error| Error::lua_failed(error.to_string()))?;
     }
-    let require = lua.create_function(move |lua, name: String| {
-        run_require(lua, &name, caller.as_deref()).map_err(mlua::Error::from)
-    })?;
-    env.set("require", require)?;
+    let require = lua
+        .create_function(move |lua, name: String| {
+            run_require(lua, &name, caller.as_deref()).map_err(mlua::Error::external)
+        })
+        .map_err(|error| Error::lua_failed(error.to_string()))?;
+    env.set("require", require)
+        .map_err(|error| Error::lua_failed(error.to_string()))?;
+    Global::install(lua, &env).map_err(|error| Error::lua_failed(error.to_string()))?;
     Ok(env)
 }
 
 /// Compile one source text.
-///
-/// # Errors
-///
-/// - [`EngineError::Lua`] for Lua syntax failures.
 fn compile<'chunk>(
     lua: &'chunk Lua,
     source: &'chunk str,
     name: String,
     env: Table,
-) -> Result<mlua::chunk::Chunk<'chunk>> {
-    Ok(lua.load(source).set_name(name).set_environment(env))
+) -> mlua::chunk::Chunk<'chunk> {
+    lua.load(source).set_name(name).set_environment(env)
 }
 
 /// Run one require call for builtins with file modules.
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownModule`] for unknown names.
-/// - [`EngineError::Escape`] for escaping names.
-/// - [`EngineError::Cycle`] for require cycles.
-/// - [`EngineError::Read`] for unreadable files.
-/// - [`EngineError::Utf8`] for non-UTF8 files.
-/// - [`EngineError::Lua`] for loader and chunk failures.
-fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown names, bad names, escapes,
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names, bad names, escapes,
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names, bad names, escapes,
+///   cycles, unreadable files, and Lua failures.
+fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Outcome<Value> {
     if name.starts_with("confit.") {
         return builtin_require(lua, name);
     }
@@ -179,16 +192,21 @@ fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownModule`] for unknown names.
-/// - [`EngineError::Cycle`] for require cycles.
-/// - [`EngineError::Lua`] for module build failures.
-fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown names, cycles, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names, cycles, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names, cycles, and Lua failures.
+fn builtin_require(lua: &Lua, name: &str) -> Outcome<Value> {
     let key = CacheKey::Builtin(name.to_owned());
     if let Some(hit) = with_session(lua, |session| session.cached(&key))? {
         return Ok(hit);
     }
-    if let Some(loop_) = with_session(lua, |session| session.cycle(name))? {
-        return Err(EngineError::Cycle { loop_ });
+    if let Some(chain) = with_session(lua, |session| session.cycle(name))? {
+        let detail = EvalDetail::Eval(EvalError::CycleDetected {
+            cycle: chain.clone(),
+        });
+        return Err(Error::evaluate(detail, None).with_chain(ErrorContext::from(
+            EvalError::CycleDetected { cycle: chain },
+        )));
     }
     with_session(lua, |session| session.push(name.to_owned()))?;
     let built = builtin(lua, name);
@@ -200,43 +218,88 @@ fn builtin_require(lua: &Lua, name: &str) -> Result<Value> {
 
 /// Run one file require.
 ///
-/// - Names resolve project relative with entry fallback.
-/// - Plugin callers hold inside the plugin tree.
-///
 /// # Errors
 ///
-/// - [`EngineError::Escape`] for escaping names.
-/// - [`EngineError::Escape`] for plugin callers outside the tree.
-/// - [`EngineError::Cycle`] for require cycles.
-/// - [`EngineError::UnknownModule`] for missing files.
-/// - [`EngineError::Read`] for unreadable files.
-/// - [`EngineError::Utf8`] for non-UTF8 files.
-/// - [`EngineError::Lua`] for read and chunk failures.
-fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for bad names, escapes, cycles, missing
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for bad names, escapes, cycles, missing
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for bad names, escapes, cycles, missing
+///   files, unreadable files, and Lua failures.
+fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Outcome<Value> {
     let root = stored_root(lua)?;
-    let root_real = canonical_root(&root)?;
+    let root_real = canonical_root(&root).open_module(name)?;
     let held = stored_plugins(lua);
     let fallback = root_real.join(PLUGIN_ROOT);
     let plugins = held.as_ref().map(|scope| &scope.dir).unwrap_or(&fallback);
-    let parts = map_name(name)?;
+    let parts = match map_name(name) {
+        Ok(parts) => parts,
+        Err(chain) => match chain.root_cause() {
+            ErrorCause::EvalError(EvalError::BadRequireName { input, rule }) => {
+                let (input, rule) = (input.clone(), rule.clone());
+                return Err(Error::evaluate(
+                    EvalDetail::Eval(EvalError::BadRequireName { input, rule }),
+                    None,
+                ));
+            }
+            _ => unreachable!("require names fail malformed alone"),
+        },
+    };
     if parts.is_empty() {
-        return Err(EngineError::UnknownModule {
-            name: name.to_owned(),
-        });
+        return Err(Error::open_module(
+            name,
+            ErrorContext::from(FilesystemError::FileMissing),
+        ));
     }
     let (base, scope, rest) = match parts.first() {
         Some(first) if first == PLUGIN_ROOT => (plugins.as_path(), plugins.as_path(), &parts[1..]),
         _ => (root.as_path(), root_real.as_path(), &parts[..]),
     };
-    let path = resolve(base, scope, rest, name)?;
-    audit(plugins, caller, &path, name)?;
+    let path = match resolve(base, scope, rest, name) {
+        Ok(found) => found,
+        Err(chain) => {
+            let escape = match chain.root_cause() {
+                ErrorCause::EvalError(EvalError::RequireEscapesScope { input }) => {
+                    Some(input.clone())
+                }
+                ErrorCause::FilesystemError(_) => None,
+                _ => unreachable!("require paths fail escaping or missing alone"),
+            };
+            match escape {
+                Some(input) => {
+                    return Err(Error::evaluate(
+                        EvalDetail::Eval(EvalError::RequireEscapesScope { input }),
+                        None,
+                    )
+                    .with_chain(chain));
+                }
+                None => return Err(Error::open_module(name, chain)),
+            }
+        }
+    };
+    if let Err(chain) = audit(plugins, caller, &path, name) {
+        match chain.root_cause() {
+            ErrorCause::EvalError(EvalError::RequireEscapesScope { input }) => {
+                let input = input.clone();
+                return Err(Error::evaluate(
+                    EvalDetail::Eval(EvalError::RequireEscapesScope { input }),
+                    None,
+                )
+                .with_chain(chain.path(path.clone())));
+            }
+            _ => unreachable!("plugin audits fail escaping alone"),
+        }
+    }
     let key = CacheKey::File(path.clone());
     if let Some(hit) = with_session(lua, |session| session.cached(&key))? {
         return Ok(hit);
     }
     let tag = path.display().to_string();
-    if let Some(loop_) = with_session(lua, |session| session.cycle(&tag))? {
-        return Err(EngineError::Cycle { loop_ });
+    if let Some(chain) = with_session(lua, |session| session.cycle(&tag))? {
+        let detail = EvalDetail::Eval(EvalError::CycleDetected {
+            cycle: chain.clone(),
+        });
+        return Err(Error::evaluate(detail, None).with_chain(ErrorContext::from(
+            EvalError::CycleDetected { cycle: chain },
+        )));
     }
     with_session(lua, |session| session.push(tag))?;
     let loaded = load_file(lua, &path, name);
@@ -252,24 +315,21 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Read`] for unreadable roots.
+/// - [`confit_core::error::FilesystemError`] for unreadable roots.
 fn canonical_root(root: &Path) -> Result<PathBuf> {
-    std::fs::canonicalize(root).map_err(|error| EngineError::Read {
-        path: root.display().to_string(),
-        reason: error.to_string(),
-    })
+    use confit_core::error::locate::Locate;
+    std::fs::canonicalize(root).path(root)
 }
 
 /// Resolve path parts to their contained canonical path.
 ///
-/// - Parts resolve under the base with entry fallback.
-///
 /// # Errors
 ///
-/// - [`EngineError::Escape`] for escaping names.
-/// - [`EngineError::UnknownModule`] for missing files.
-/// - [`EngineError::Read`] for unreadable files.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] for escaping names.
+/// - [`confit_core::error::FilesystemError::FileMissing`] for missing files.
+/// - [`confit_core::error::FilesystemError`] for unreadable files.
 fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<PathBuf> {
+    use confit_core::error::locate::Locate;
     let mut direct = base.to_path_buf();
     for part in parts {
         direct.push(part);
@@ -282,21 +342,11 @@ fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<Pa
     entry.push(INIT_ENTRY);
     let found = match std::fs::canonicalize(&direct) {
         Ok(hit) => hit,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::canonicalize(&entry)
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => EngineError::UnknownModule {
-                    name: name.to_owned(),
-                },
-                _ => EngineError::Read {
-                    path: entry.display().to_string(),
-                    reason: error.to_string(),
-                },
-            })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::canonicalize(&entry).path(&entry)?
+        }
         Err(error) => {
-            return Err(EngineError::Read {
-                path: direct.display().to_string(),
-                reason: error.to_string(),
-            });
+            return fail(error).path(&direct);
         }
     };
     scoped(scope, found, name)
@@ -304,20 +354,27 @@ fn resolve(base: &Path, scope: &Path, parts: &[String], name: &str) -> Result<Pa
 
 /// Map one require name to its path parts.
 ///
-/// - Every dot becomes a slash with empty components collapsing.
-///
 /// # Errors
 ///
-/// - [`EngineError::Escape`] for escaping names.
+/// - [`confit_core::error::EvalError::BadRequireName`] for malformed names.
 fn map_name(name: &str) -> Result<Vec<String>> {
     if name.contains('\\') {
-        return Err(refuse(name, "backslashes are not supported"));
+        return fail(EvalError::BadRequireName {
+            input: name.to_owned(),
+            rule: RequireNameRule::Backslash,
+        });
     }
     if name.len() >= 2 && name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[1] == b':' {
-        return Err(refuse(name, "drive prefixes are not supported"));
+        return fail(EvalError::BadRequireName {
+            input: name.to_owned(),
+            rule: RequireNameRule::DrivePrefix,
+        });
     }
     if name.starts_with('/') {
-        return Err(refuse(name, "expected a relative path"));
+        return fail(EvalError::BadRequireName {
+            input: name.to_owned(),
+            rule: RequireNameRule::AbsolutePath,
+        });
     }
     Ok(name
         .replace('.', "/")
@@ -329,13 +386,11 @@ fn map_name(name: &str) -> Result<Vec<String>> {
 
 /// Hold one plugin caller inside the plugin tree.
 ///
-/// - Project callers require anything under the project root.
-///
 /// # Errors
 ///
-/// - [`EngineError::Escape`] for plugin callers outside the tree.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] for plugin callers outside the tree.
 fn audit(plugins: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Result<()> {
-    const CALLER: &str = "require";
+    use confit_core::error::locate::Locate;
     let Some(caller) = caller else {
         return Ok(());
     };
@@ -343,37 +398,27 @@ fn audit(plugins: &Path, caller: Option<&Path>, target: &Path, name: &str) -> Re
         return Ok(());
     };
     if caller_real.starts_with(plugins) && !target.starts_with(plugins) {
-        return Err(EngineError::Escape {
-            caller: CALLER.to_owned(),
+        return fail(EvalError::RequireEscapesScope {
             input: name.to_owned(),
-            reason: format!("'{name}' escapes '{}'", plugins.display()),
-        });
+        })
+        .path(plugins);
     }
     Ok(())
-}
-
-/// Refuse one require name with its scope reason.
-fn refuse(name: &str, reason: &str) -> EngineError {
-    EngineError::Escape {
-        caller: "require".to_owned(),
-        input: name.to_owned(),
-        reason: reason.to_owned(),
-    }
 }
 
 /// Hold one canonical path inside its canonical scope.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Escape`] for escaping names.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] for escaping names.
 fn scoped(scope: &Path, full: PathBuf, name: &str) -> Result<PathBuf> {
-    const CALLER: &str = "require";
+    use confit_core::error::locate::Locate;
     if !full.starts_with(scope) {
-        return Err(EngineError::Escape {
-            caller: CALLER.to_owned(),
+        return fail(EvalError::RequireEscapesScope {
             input: name.to_owned(),
-            reason: format!("'{name}' is outside '{}'", scope.display()),
-        });
+        })
+        .path(scope)
+        .path(&full);
     }
     Ok(full)
 }
@@ -382,39 +427,36 @@ fn scoped(scope: &Path, full: PathBuf, name: &str) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::UnknownModule`] for missing files.
-/// - [`EngineError::Read`] for unreadable files.
-/// - [`EngineError::Utf8`] for non-UTF8 files.
-/// - [`EngineError::Lua`] for Lua syntax and runtime failures.
-fn load_file(lua: &Lua, path: &Path, name: &str) -> Result<Value> {
-    let display = path.display().to_string();
-    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => EngineError::UnknownModule {
-            name: name.to_owned(),
-        },
-        _ => EngineError::Read {
-            path: display.clone(),
-            reason: error.to_string(),
-        },
-    })?;
-    let text = String::from_utf8(bytes).map_err(|_| EngineError::Utf8 { path: display })?;
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for missing files, unreadable files,
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing files, unreadable files,
+///   non-UTF8 files, and Lua failures.
+fn load_file(lua: &Lua, path: &Path, name: &str) -> Outcome<Value> {
+    use confit_core::error::locate::Locate;
+    let bytes = std::fs::read(path).path(path).open_module(name)?;
+    let text = String::from_utf8(bytes).path(path).open_module(name)?;
     let caller = path.parent().map(Path::to_path_buf);
     let env = environment(lua, caller)?;
     let label = format!("@{}", path.display());
-    Ok(compile(lua, &text, label, env)?.call::<Value>(())?)
+    match compile(lua, &text, label, env).call::<Value>(()) {
+        Ok(found) => Ok(found),
+        Err(error) => {
+            if let Some(terminal) = error.downcast_ref::<Error>() {
+                return Err(terminal.clone());
+            }
+            Err(Error::lua_failed(error.to_string()))
+        }
+    }
 }
 
 /// Run one closure against shared loader state.
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for an uninstalled loader.
-fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> Result<T> {
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for an uninstalled loader.
+fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> Outcome<T> {
     match lua.app_data_ref::<Session>() {
         Some(session) => Ok(op(&session)),
-        None => Err(EngineError::Lua(mlua::Error::RuntimeError(
-            "confit loader is not installed".to_owned(),
-        ))),
+        None => Err(Error::lua_failed("confit loader is not installed")),
     }
 }
 
@@ -427,13 +469,11 @@ fn stored_plugins(lua: &Lua) -> Option<PluginRoot> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Lua`] for an uninstalled api.
-fn stored_root(lua: &Lua) -> Result<PathBuf> {
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for an uninstalled api.
+fn stored_root(lua: &Lua) -> Outcome<PathBuf> {
     match lua.app_data_ref::<Stores>() {
         Some(stores) => Ok(stores.resources().roots.project_root.clone()),
-        None => Err(EngineError::Lua(mlua::Error::RuntimeError(
-            "confit api is not installed".to_owned(),
-        ))),
+        None => Err(Error::lua_failed("confit api is not installed")),
     }
 }
 
@@ -468,12 +508,14 @@ mod tests {
     }
 
     fn run(lua: &Lua, source: &str) -> mlua::Result<Value> {
-        let env = environment(lua, None)?;
-        compile(lua, source, "@test".to_owned(), env)?.call(())
+        let env = environment(lua, None).map_err(mlua::Error::external)?;
+        compile(lua, source, "@test".to_owned(), env).call(())
     }
 
     #[test]
     fn missing_profiles_fail_structured() {
+        use confit_core::error::{ErrorCause, FilesystemError};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
@@ -481,18 +523,26 @@ mod tests {
         let missing = root.join("absent.lua");
         match load_chunk(&lua, &missing) {
             Ok(_) => panic!("missing profile passes"),
-            Err(EngineError::Read { path, .. }) => {
+            Err(error) => {
                 assert!(
-                    path.contains("absent.lua"),
-                    "the path shows the file: {path}"
+                    matches!(
+                        error.root_cause(),
+                        Some(ErrorCause::FilesystemError(FilesystemError::FileMissing))
+                    ),
+                    "the cause shows the miss: {error}"
+                );
+                assert!(
+                    error.to_string().contains("absent.lua"),
+                    "the line shows the file: {error}"
                 );
             }
-            Err(other) => panic!("missing profile flattens: {other}"),
         }
     }
 
     #[test]
     fn encoded_profiles_fail_structured() {
+        use confit_core::error::{DocumentError, ErrorCause, Require};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
@@ -501,18 +551,29 @@ mod tests {
         let lua = test_lua(&stores);
         match load_chunk(&lua, &profile) {
             Ok(_) => panic!("encoded profile passes"),
-            Err(EngineError::Utf8 { path }) => {
+            Err(error) => {
                 assert!(
-                    path.contains("profile.lua"),
-                    "the path shows the file: {path}"
+                    matches!(
+                        error.root_cause(),
+                        Some(ErrorCause::DocumentError(DocumentError::ParseFailed {
+                            require: Require::Utf8Text,
+                            ..
+                        }))
+                    ),
+                    "the cause shows the encoding: {error}"
+                );
+                assert!(
+                    error.to_string().contains("profile.lua"),
+                    "the line shows the file: {error}"
                 );
             }
-            Err(other) => panic!("encoded profile flattens: {other}"),
         }
     }
 
     #[test]
     fn encoded_modules_fail_structured() {
+        use confit_core::error::{DocumentError, ErrorCause, Require};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
@@ -520,27 +581,63 @@ mod tests {
         let lua = test_lua(&stores);
         match run(&lua, "return require(\"broken\")") {
             Ok(_) => panic!("encoded module passes"),
-            Err(error) => match EngineError::from(error) {
-                EngineError::Utf8 { path } => {
+            Err(error) => match error.downcast_ref::<Error>() {
+                Some(terminal) => {
                     assert!(
-                        path.contains("broken.lua"),
-                        "the path shows the file: {path}"
+                        matches!(
+                            terminal.root_cause(),
+                            Some(ErrorCause::DocumentError(DocumentError::ParseFailed {
+                                require: Require::Utf8Text,
+                                ..
+                            }))
+                        ),
+                        "the cause shows the encoding: {terminal}"
+                    );
+                    assert!(
+                        terminal.to_string().contains("broken"),
+                        "the line shows the module: {terminal}"
+                    );
+                    assert!(
+                        terminal
+                            .chain()
+                            .is_some_and(|chain| chain.to_string().contains("broken.lua")),
+                        "the chain shows the file: {terminal}"
                     );
                 }
-                other => panic!("encoded module flattens: {other}"),
+                None => panic!("encoded module stays terminal: {error}"),
             },
         }
     }
 
     #[test]
     fn unknown_names_fail() {
+        use confit_core::error::{ErrorCause, FilesystemError};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
         let lua = test_lua(&stores);
         for name in ["confit.nope", "absent"] {
             let source = format!("return require({name:?})");
-            assert!(run(&lua, &source).is_err(), "unknown module fails: {name}");
+            match run(&lua, &source) {
+                Ok(_) => panic!("unknown module passes: {name}"),
+                Err(error) => match error.downcast_ref::<Error>() {
+                    Some(terminal) => {
+                        assert!(
+                            matches!(
+                                terminal.root_cause(),
+                                Some(ErrorCause::FilesystemError(FilesystemError::FileMissing))
+                            ),
+                            "the cause shows the miss: {terminal}"
+                        );
+                        assert!(
+                            terminal.to_string().contains(name),
+                            "the line shows the module: {terminal}"
+                        );
+                    }
+                    None => panic!("unknown module stays terminal: {error}"),
+                },
+            }
         }
     }
 
@@ -629,6 +726,8 @@ mod tests {
 
     #[test]
     fn cycles_name_the_loop() {
+        use confit_core::error::{ErrorCause, EvalError, Segment};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
@@ -643,9 +742,54 @@ mod tests {
         )
         .unwrap();
         let lua = test_lua(&stores);
-        assert!(
-            run(&lua, "return require(\"loop_a\")").is_err(),
-            "require cycle fails"
+        match run(&lua, "return require(\"loop_a\")") {
+            Ok(_) => panic!("require cycle passes"),
+            Err(error) => match error.downcast_ref::<Error>() {
+                Some(terminal) => {
+                    let chain = match terminal.root_cause() {
+                        Some(ErrorCause::EvalError(EvalError::CycleDetected { cycle })) => {
+                            cycle.clone()
+                        }
+                        other => panic!("the cause shows the cycle: {terminal} ({other:?})"),
+                    };
+                    assert_eq!(chain.len(), 3, "the chain closes the loop: {terminal}");
+                    assert_eq!(
+                        chain.first(),
+                        chain.last(),
+                        "the chain returns to its start: {terminal}"
+                    );
+                    let pieces = match terminal.chain() {
+                        Some(chain_error) => chain_error.segments(),
+                        None => panic!("the chain keeps its layers: {terminal}"),
+                    };
+                    assert!(
+                        matches!(pieces.last(), Some(Segment::Cycle { chain: found }) if found.len() == 3),
+                        "the log keeps the ordered chain: {terminal}"
+                    );
+                }
+                None => panic!("require cycle stays terminal: {error}"),
+            },
+        }
+    }
+
+    #[test]
+    fn session_cycle_keeps_ordered_names() {
+        let session = Session::new();
+        session.push("loop_a".to_owned());
+        session.push("loop_b".to_owned());
+        assert_eq!(
+            session.cycle("loop_a"),
+            Some(vec![
+                "loop_a".to_owned(),
+                "loop_b".to_owned(),
+                "loop_a".to_owned(),
+            ]),
+            "the cycle closes over the stack"
+        );
+        assert_eq!(
+            session.cycle("absent"),
+            None,
+            "names outside the stack stay clean"
         );
     }
 

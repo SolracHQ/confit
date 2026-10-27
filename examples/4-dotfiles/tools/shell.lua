@@ -8,7 +8,7 @@ end
 
 ---@return Config Shell config for the profile configs array.
 return {
-	name = "shell",
+	name = id("shell"),
 	patches = {
 		{
 			filter = is_shell,

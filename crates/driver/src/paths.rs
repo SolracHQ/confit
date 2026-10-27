@@ -24,12 +24,6 @@ impl Default for BaseDirs {
 
 impl BaseDirs {
     /// Read base folders.
-    ///
-    /// - Test builds share the calling thread temp root.
-    ///
-    /// # Panics
-    ///
-    /// - Temp failure panics on test builds.
     pub fn new() -> Self {
         #[cfg(any(test, feature = "test-support"))]
         {

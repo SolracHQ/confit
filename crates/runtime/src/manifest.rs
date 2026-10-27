@@ -6,17 +6,16 @@ pub mod stored;
 
 use std::collections::BTreeMap;
 
-use confit_driver::sha::Sha;
-use confit_model::document::{Data, Document, StructuredFormat};
-use confit_model::error::{Error, Result};
+use confit_core::error::ManifestError;
+use confit_core::error::Result as CoreResult;
+use confit_core::error::{DocumentError, ErrorCause, ErrorContext, fail};
+use confit_core::sha::Sha;
+use confit_model::document::{Data, Document};
 use confit_model::hook::Hook;
 use confit_store::Stores;
 use confit_store::handles::ResourceHandle;
-use confit_store::pool::error::PoolError;
-use confit_store::resources::error::ResourceError;
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error as ThisError;
 
 /// Manifest format version for bundle builds.
 pub const MANIFEST_VERSION: u32 = 9;
@@ -34,23 +33,6 @@ pub struct Manifest {
     /// Plan hooks in first-seen order.
     #[serde(default)]
     pub hooks: Vec<Hook>,
-}
-
-/// Manifest codec failure shapes.
-#[derive(Debug, ThisError)]
-pub enum CodecError {
-    /// Corrupt payload.
-    #[error("cannot read manifest: {message}")]
-    Corrupt {
-        /// The parse reason.
-        message: String,
-    },
-    /// Unsupported version.
-    #[error("manifest version {got} is unsupported")]
-    Version {
-        /// The seen version.
-        got: u64,
-    },
 }
 
 impl Manifest {
@@ -75,20 +57,46 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`ResourceError::Read`] for unreadable entries.
-    /// - [`ResourceError::Write`] for pool write faults.
-    /// - [`ResourceError::WriteUnknown`] for other pool write failures.
-    /// - [`ResourceError::Mismatch`] for streams failing the carried sha.
-    pub fn persist(&self, stores: &Stores) -> std::result::Result<(), ResourceError> {
+    /// - [`Cause::ContentHashMismatch`] for streams failing the carried sha.
+    /// - [`confit_core::error::FilesystemError`] for unreadable entries and pool write faults.
+    pub fn persist(&self, stores: &Stores) -> CoreResult<()> {
+        use confit_core::error::FilesystemError;
+
         for handle in self.handles() {
             match handle {
                 ResourceHandle::Cache(sha) => {
                     stores.resources().persist(sha)?;
                 }
                 ResourceHandle::Project(path, sha) => {
-                    let file = std::fs::File::open(path)
-                        .map_err(|error| ResourceError::from_io(path, error))?;
-                    stores.pool().store_checked(sha, file).map_err(from_pool)?;
+                    let file = std::fs::File::open(path).map_err(|error| -> ErrorContext {
+                        let kind = error.kind();
+                        let message = error.to_string();
+                        let cause = match kind {
+                            std::io::ErrorKind::NotFound => {
+                                ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                            }
+                            std::io::ErrorKind::PermissionDenied => {
+                                ErrorCause::FilesystemError(FilesystemError::FilePermissionDenied)
+                            }
+                            std::io::ErrorKind::StorageFull => {
+                                ErrorCause::FilesystemError(FilesystemError::DiskFull)
+                            }
+                            std::io::ErrorKind::ReadOnlyFilesystem => {
+                                ErrorCause::FilesystemError(FilesystemError::DiskReadOnly)
+                            }
+                            std::io::ErrorKind::QuotaExceeded => {
+                                ErrorCause::FilesystemError(FilesystemError::DiskQuotaExceeded)
+                            }
+                            std::io::ErrorKind::FileTooLarge => {
+                                ErrorCause::FilesystemError(FilesystemError::FileTooLarge)
+                            }
+                            _ => ErrorCause::FilesystemError(FilesystemError::FileUnknown {
+                                message,
+                            }),
+                        };
+                        ErrorContext::from(cause).path(path.clone())
+                    })?;
+                    stores.pool().store_checked(sha, file)?;
                 }
             }
         }
@@ -99,11 +107,12 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`Error::Render`] for serializer failures.
-    pub fn json(&self) -> Result<String> {
-        serde_json::to_string_pretty(self).map_err(|source| Error::Render {
-            format: StructuredFormat::Json,
-            reason: source.to_string(),
+    /// - [`DocumentError::RenderFailed`] for serializer failures.
+    pub fn json(&self) -> CoreResult<String> {
+        serde_json::to_string_pretty(self).map_err(|source| -> ErrorContext {
+            ErrorContext::from(DocumentError::RenderFailed {
+                reason: source.to_string(),
+            })
         })
     }
 
@@ -111,28 +120,30 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`CodecError::Corrupt`] for bad payloads.
-    /// - [`CodecError::Version`] for stale versions.
-    pub fn decode(bytes: &[u8]) -> std::result::Result<Self, CodecError> {
+    /// - [`ManifestError::Invalid`] for bad payloads.
+    /// - [`ManifestError::MissingVersion`] for absent versions.
+    /// - [`ManifestError::VersionUnsupported`] for stale versions.
+    pub fn decode(bytes: &[u8]) -> CoreResult<Self> {
         let value: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|error| CodecError::Corrupt {
-                message: error.to_string(),
+            serde_json::from_slice(bytes).map_err(|error| -> ErrorContext {
+                ErrorContext::from(ManifestError::Invalid {
+                    detail: error.to_string(),
+                })
             })?;
         if value
             .get("version")
             .and_then(serde_json::Value::as_u64)
             .is_none()
         {
-            return Err(CodecError::Corrupt {
-                message: "missing version".to_owned(),
-            });
+            return fail(ManifestError::MissingVersion);
         }
-        let manifest: Self =
-            serde_json::from_value(value).map_err(|error| CodecError::Corrupt {
-                message: error.to_string(),
-            })?;
+        let manifest: Self = serde_json::from_value(value).map_err(|error| -> ErrorContext {
+            ErrorContext::from(ManifestError::Invalid {
+                detail: error.to_string(),
+            })
+        })?;
         if manifest.version != MANIFEST_VERSION {
-            return Err(CodecError::Version {
+            return fail(ManifestError::VersionUnsupported {
                 got: u64::from(manifest.version),
             });
         }
@@ -140,27 +151,10 @@ impl Manifest {
     }
 }
 
-/// Map one pool failure into resource language.
-fn from_pool(error: PoolError) -> ResourceError {
-    match error {
-        PoolError::Write { path, fault } => ResourceError::Write { path, fault },
-        PoolError::WriteUnknown { path, message } => ResourceError::WriteUnknown { path, message },
-        PoolError::Mismatch {
-            path,
-            expected,
-            found,
-        } => ResourceError::Mismatch {
-            path,
-            expected,
-            found,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_driver::sha::Sha;
+    use confit_core::sha::Sha;
     use confit_model::document::{Data, Document, OpaqueDocument, TreeDocument, TreeMember};
     use confit_model::routes::{Route, RouteBase};
 
@@ -184,8 +178,15 @@ mod tests {
         let bytes = serde_json::to_vec(&raw).unwrap();
         match Manifest::decode(&bytes) {
             Ok(_) => panic!("stale manifest passes"),
-            Err(CodecError::Version { got }) => assert_eq!(got, 0, "the error keeps the version"),
-            Err(error) => panic!("wrong stale variant: {error}"),
+            Err(error) => match &error {
+                ErrorContext::Leaf(ErrorCause::ManifestError(
+                    ManifestError::VersionUnsupported { got },
+                )) => {
+                    assert_eq!(*got, 0, "the error keeps the version");
+                    assert!(error.inner().is_none(), "decode stays location-free");
+                }
+                other => panic!("wrong stale variant: {other}"),
+            },
         }
     }
 
@@ -300,6 +301,8 @@ mod tests {
 
     #[test]
     fn persist_reports_vanished_handles() {
+        use confit_core::error::{ErrorCause, FilesystemError};
+
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = dir.path().join("project");
@@ -325,8 +328,15 @@ mod tests {
         };
         match manifest.persist(&stores) {
             Ok(()) => panic!("vanished handles persist"),
-            Err(ResourceError::Read { .. }) => {}
-            Err(error) => panic!("wrong persist variant: {error}"),
+            Err(error) => match &error {
+                ErrorContext::AtPath { inner, .. } => match inner.as_ref() {
+                    ErrorContext::Leaf(ErrorCause::FilesystemError(
+                        FilesystemError::FileMissing,
+                    )) => {}
+                    other => panic!("wrong persist cause: {other}"),
+                },
+                other => panic!("wrong persist cause: {other}"),
+            },
         }
     }
 }

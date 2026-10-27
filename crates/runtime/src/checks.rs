@@ -10,7 +10,7 @@ use confit_model::routes::Route;
 /// Default hook timeout in seconds for the `10m` opt default.
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
-/// One unmet condition with its failing member.
+/// One unmet condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unmet {
     /// The failing member index in its parent conjunction.
@@ -32,9 +32,6 @@ pub struct Checks {
 
 impl Checks {
     /// Snapshot the host environment and PATH dirs.
-    ///
-    /// - Non-Unicode entries drop.
-    /// - Missing PATH is empty.
     pub fn current() -> Self {
         let mut vars = BTreeMap::new();
         for (key, value) in std::env::vars_os() {
@@ -163,11 +160,19 @@ impl Checks {
     }
 }
 
+/// Collect failing leaf member strings under one unmet fault.
+pub fn unmet_names(fault: &Unmet) -> Vec<String> {
+    if fault.cause.is_empty() {
+        return vec![fault.member.describe()];
+    }
+    let mut out = Vec::new();
+    for nested in &fault.cause {
+        out.extend(unmet_names(nested));
+    }
+    out
+}
+
 /// Find one executable across dirs through the driver.
-///
-/// - Ordered dirs win.
-/// - Symlinked entries count as present.
-/// - Modeless backends count presence as a hit.
 pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     const EXEC_BIT: u32 = 0o111;
 

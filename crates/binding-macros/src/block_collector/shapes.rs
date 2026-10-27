@@ -65,6 +65,16 @@ pub(crate) fn is_tuple(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(_))
 }
 
+/// Report whether one type is Option with inner content.
+pub(crate) fn is_option(ty: &Type) -> bool {
+    if let Type::Path(path) = ty
+        && let Some(last) = path.path.segments.last()
+    {
+        return last.ident == "Option";
+    }
+    false
+}
+
 /// Build the element indices of one tuple return.
 pub(crate) fn tuple_indices(ty: &Type) -> Vec<syn::Index> {
     let Type::Tuple(tuple) = ty else {

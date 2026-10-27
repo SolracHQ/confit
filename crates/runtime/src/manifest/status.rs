@@ -3,9 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_binding::value::{Decode, Mismatch};
+use confit_binding::fault::FaceFault;
+use confit_binding::value::Decode;
 use confit_binding_macros::Face;
-use confit_driver::sha::Sha;
+use confit_core::sha::Sha;
 use confit_model::document::Data;
 use mlua::{Lua, Value};
 
@@ -39,8 +40,6 @@ pub struct Summary {
 }
 
 /// Report the lifecycle status against previous documents.
-///
-/// - Hashes arrive keyed by path display from both manifests.
 pub fn status(
     document: &Document,
     previous: &[Document],
@@ -67,8 +66,6 @@ pub fn status(
 }
 
 /// Report whether a recorded document yields to desired documents.
-///
-/// The flag is true while an opaque same-destination sibling exists in desired.
 pub fn superseded_by(document: &Document, desired: &[Document]) -> bool {
     find_opaque_sibling(desired, document).is_some()
 }
@@ -113,10 +110,6 @@ pub fn find_opaque_sibling<'a>(
 }
 
 /// Count lifecycle states against previous documents.
-///
-/// - Opaque kind changes count as updates, other kind changes count as create
-///   and delete.
-/// - Hashes arrive keyed by path display from both manifests.
 pub fn summary(
     built: &[Document],
     built_hashes: &BTreeMap<String, Sha>,
@@ -149,13 +142,15 @@ pub fn summary(
 ///
 /// # Errors
 ///
-/// - [`Mismatch`] for values outside the count shape.
-fn decode_count(lua: &Lua, value: &Value) -> std::result::Result<usize, Mismatch> {
+/// - [`FaceFault`] for values outside the count shape.
+fn decode_count(lua: &Lua, value: &Value) -> std::result::Result<usize, FaceFault> {
     let found = u64::decode(value, lua)?;
-    usize::try_from(found).map_err(|_| Mismatch {
-        path: "count".to_owned(),
-        want: "a small non-negative integer".to_owned(),
-        found: found.to_string(),
+    usize::try_from(found).map_err(|_| FaceFault {
+        segments: Vec::new(),
+        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            require: "a small non-negative integer".to_owned(),
+            found: found.to_string(),
+        },
     })
 }
 

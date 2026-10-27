@@ -4,10 +4,12 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use super::{ProcessCall, ProcessError, ProcessOutput};
+use confit_core::error::ErrorContext;
+
+use super::{ProcessCall, ProcessOutput};
 
 struct Scripts {
-    outcomes: VecDeque<Result<ProcessOutput, ProcessError>>,
+    outcomes: VecDeque<Result<ProcessOutput, ErrorContext>>,
     calls: Vec<ProcessCall>,
 }
 
@@ -19,12 +21,12 @@ thread_local! {
 }
 
 /// Script one process outcome for the next run.
-pub fn serve(outcome: Result<ProcessOutput, ProcessError>) {
+pub fn serve(outcome: Result<ProcessOutput, ErrorContext>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes.push_back(outcome));
 }
 
 /// Script process outcomes and replace the waiting queue.
-pub fn script(outcomes: VecDeque<Result<ProcessOutput, ProcessError>>) {
+pub fn script(outcomes: VecDeque<Result<ProcessOutput, ErrorContext>>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes = outcomes);
 }
 
@@ -47,7 +49,7 @@ pub(super) fn run(
     argv: &[String],
     path_dirs: &[PathBuf],
     timeout_secs: u64,
-) -> Result<ProcessOutput, ProcessError> {
+) -> Result<ProcessOutput, ErrorContext> {
     SCRIPTS.with(|cell| {
         let mut scripts = cell.borrow_mut();
         scripts.calls.push(ProcessCall {
