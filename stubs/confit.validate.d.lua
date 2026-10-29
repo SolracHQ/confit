@@ -13,8 +13,19 @@ function document(body) end
 
 --- Portable route over standard folders.
 --- @class Route
---- @field base RouteBase The destination base.
---- @field relative string The relative path.
+Route = {}
+
+--- Return the destination base.
+--- @return RouteBase The destination base.
+function Route:base() end
+
+--- Return the relative path text.
+--- @return string The relative path text.
+function Route:relative() end
+
+--- Render the portable route display in sugar call form.
+--- @return string The sugar call display.
+function Route:display() end
 
 --- Portable standard folders enum.
 --- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
@@ -234,7 +245,7 @@ function HookPatch.apply(hook) end
 --- @class Hook
 --- @field argv Arg[] Command for the subprocess.
 --- @field path Arg[]? PATH entries for the subprocess alone.
---- @field id Id? The hook identifier.
+--- @field id Id The hook identifier.
 --- @field requires Condition? The capability condition.
 --- @field when Condition? The need condition.
 --- @field check Condition? The run condition.
@@ -264,8 +275,8 @@ function condition(value) end
 --- @return string? The failure reason, else nil.
 function entry(value) end
 
---- Check one route table, else nil with reason.
---- @param value any The route table under checking.
+--- Check one route handle, else nil with reason.
+--- @param value any The route handle under checking.
 --- @return Route? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function route(value) end

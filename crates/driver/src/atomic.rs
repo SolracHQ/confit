@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::fs::create_parent;
+use confit_core::error::ContextualResult;
+
+use crate::fs::{create_parent, io_context};
 
 /// Staged scratch file under one destination folder.
 pub struct StagedFile {
@@ -15,27 +17,29 @@ impl StagedFile {
     ///
     /// # Errors
     ///
-    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
-    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
-    /// - [`std::io::ErrorKind::Other`] for scratch staging failures.
-    pub fn stage(dest: &Path) -> std::io::Result<Self> {
+    /// - [`confit_core::error::FilesystemError::FileMissing`] for missing parents.
+    /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for unwritable destinations.
+    /// - [`confit_core::error::FilesystemError::FileUnknown`] for scratch staging faults.
+    pub fn stage(dest: &Path) -> ContextualResult<Self> {
         create_parent(dest)?;
-        tempfile::NamedTempFile::new_in(scratch_dir(dest)).map(|file| Self { file })
+        tempfile::NamedTempFile::new_in(scratch_dir(dest))
+            .map(|file| Self { file })
+            .map_err(|error| io_context(error, dest))
     }
 
     /// Write one file atomically through a sibling rename.
     ///
     /// # Errors
     ///
-    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
-    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
-    /// - [`std::io::ErrorKind::Other`] for staging failures.
+    /// - [`confit_core::error::FilesystemError::FileMissing`] for missing parents.
+    /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for unwritable destinations.
+    /// - [`confit_core::error::FilesystemError::FileUnknown`] for staging and write faults.
     pub fn write(
         dest: &Path,
         write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
-    ) -> std::io::Result<()> {
+    ) -> ContextualResult<()> {
         let mut staged = Self::stage(dest)?;
-        write(staged.file.as_file_mut())?;
+        write(staged.file.as_file_mut()).map_err(|error| io_context(error, dest))?;
         staged.persist(dest)
     }
 
@@ -48,13 +52,13 @@ impl StagedFile {
     ///
     /// # Errors
     ///
-    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
-    /// - [`std::io::ErrorKind::Other`] for persist failures with an absent destination.
-    pub fn persist(self, dest: &Path) -> std::io::Result<()> {
+    /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for unwritable destinations.
+    /// - [`confit_core::error::FilesystemError::FileUnknown`] for persist faults with an absent destination.
+    pub fn persist(self, dest: &Path) -> ContextualResult<()> {
         match self.file.persist(dest) {
             Ok(_) => Ok(()),
             Err(_) if dest.exists() => Ok(()),
-            Err(error) => Err(error.error),
+            Err(error) => Err(io_context(error.error, dest)),
         }
     }
 }
@@ -70,12 +74,14 @@ impl StagedDir {
     ///
     /// # Errors
     ///
-    /// - [`std::io::ErrorKind::NotFound`] for missing parents.
-    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
-    /// - [`std::io::ErrorKind::Other`] for scratch staging failures.
-    pub fn stage(dest: &Path) -> std::io::Result<Self> {
+    /// - [`confit_core::error::FilesystemError::FileMissing`] for missing parents.
+    /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for unwritable destinations.
+    /// - [`confit_core::error::FilesystemError::FileUnknown`] for scratch staging faults.
+    pub fn stage(dest: &Path) -> ContextualResult<Self> {
         create_parent(dest)?;
-        tempfile::TempDir::new_in(scratch_dir(dest)).map(|dir| Self { dir })
+        tempfile::TempDir::new_in(scratch_dir(dest))
+            .map(|dir| Self { dir })
+            .map_err(|error| io_context(error, dest))
     }
 
     /// Return the scratch path for direct writes.
@@ -87,17 +93,17 @@ impl StagedDir {
     ///
     /// # Errors
     ///
-    /// - [`std::io::ErrorKind::NotFound`] for missing scratch entries.
-    /// - [`std::io::ErrorKind::PermissionDenied`] for unwritable destinations.
-    /// - [`std::io::ErrorKind::Other`] for rename failures with an absent destination.
-    pub fn persist(self, dest: &Path) -> std::io::Result<()> {
+    /// - [`confit_core::error::FilesystemError::FileMissing`] for missing scratch entries.
+    /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for unwritable destinations.
+    /// - [`confit_core::error::FilesystemError::FileUnknown`] for rename faults with an absent destination.
+    pub fn persist(self, dest: &Path) -> ContextualResult<()> {
         match std::fs::rename(self.path(), dest) {
             Ok(()) => {
                 let _ = self.dir.keep();
                 Ok(())
             }
             Err(_) if dest.exists() => Ok(()),
-            Err(error) => Err(error),
+            Err(error) => Err(io_context(error, dest)),
         }
     }
 }

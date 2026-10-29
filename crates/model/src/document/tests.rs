@@ -14,9 +14,10 @@ fn test_lua() -> Lua {
 
 /// Decode one flat document with the subject path beside the body.
 fn document_of(lua: &Lua, body: &str) -> Document {
+    subject_path(lua);
     let source = format!(
         r#"local body = {body}
-body.path = {{ base = "home", relative = "subject" }}
+body.path = subject_path
 return body"#
     );
     let value: Value = match lua.load(&source).call(()) {
@@ -31,9 +32,10 @@ return body"#
 
 /// Refuse one flat document with the subject path.
 fn reject_bad_body(lua: &Lua, body: &str) {
+    subject_path(lua);
     let source = format!(
         r#"local body = {body}
-body.path = {{ base = "home", relative = "subject" }}
+body.path = subject_path
 return body"#
     );
     let value: Value = match lua.load(&source).call(()) {
@@ -41,6 +43,13 @@ return body"#
         Err(error) => panic!("body loads: {error}"),
     };
     assert!(Document::decode(&value, lua).is_err(), "foreign body fails");
+}
+
+/// Publish one subject route as a Lua global handle.
+fn subject_path(lua: &Lua) {
+    let route = Route::new(RouteBase::Home, "subject").unwrap();
+    let encoded = route.encode(lua).unwrap();
+    lua.globals().set("subject_path", encoded).unwrap();
 }
 
 /// Open a project with two files and Lua state holding its stores.
@@ -99,11 +108,10 @@ fn document_flat_round_trips_path_beside_text() {
     let Value::Table(table) = encoded else {
         panic!("document encodes a table");
     };
-    let path: mlua::Table = table.get("path").unwrap();
-    let base: String = path.get("base").unwrap();
-    let relative: String = path.get("relative").unwrap();
-    assert_eq!(base.as_str(), "home");
-    assert_eq!(relative.as_str(), "subject");
+    let path: mlua::AnyUserData = table.get("path").unwrap();
+    let route = path.borrow::<Route>().unwrap();
+    assert_eq!(route.base(), RouteBase::Home);
+    assert_eq!(route.relative(), "subject");
     let content: String = table.get("text").unwrap();
     assert_eq!(content.as_str(), "hi");
     let back = Document::decode(&Value::Table(table), &lua).unwrap();
@@ -283,10 +291,18 @@ fn tree_mixed_members_keep_modes_without_writes() {
 #[test]
 fn rc_decodes_every_op() {
     let lua = test_lua();
+    let bin = Route::new(RouteBase::Home, "bin").unwrap();
+    lua.globals()
+        .set("bin_dir", bin.encode(&lua).unwrap())
+        .unwrap();
+    let extra = Route::new(RouteBase::Home, "extra.sh").unwrap();
+    lua.globals()
+        .set("extra_path", extra.encode(&lua).unwrap())
+        .unwrap();
     let body = r#"{
         profile = {
             { env = { name = "EDITOR", value = "hx", when = { env_eq = { key = "TERM", value = "xterm" } } } },
-            { path = { name = "PATH", dir = { base = "home", relative = "bin" } } },
+            { path = { name = "PATH", dir = bin_dir } },
         },
         config = {
             { alias = { name = "ll", expansion = "ls -l" } },
@@ -294,7 +310,7 @@ fn rc_decodes_every_op() {
         },
         final = {
             { cmd = { argv = { "echo", "hi" } } },
-            { source = { path = { base = "home", relative = "extra.sh" } } },
+            { source = { path = extra_path } },
         },
     }"#;
     let documents = document_of(&lua, body);

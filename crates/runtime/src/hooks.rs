@@ -3,22 +3,25 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
-    Error, ErrorCause, ErrorContext, HookReason, HookRunError, Outcome, Result, Terminal,
+    ContextualCause, ContextualResult, Error, ErrorCause, HookRunError, Terminal, TerminalResult,
+    WithContext, contextual, error,
 };
 use confit_core::progress::{Event, ProgressSender};
+use confit_core::sha::Sha;
 use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-use crate::checks::{Checks, Unmet, find_executable, unmet_names};
+use crate::checks::{Checks, Unmet, find_executable};
 
 /// One hook run decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// Blocked hook with its ready cause; apply pushes the argv location.
+    /// Blocked hook with its bare run failure.
     RequiresClosed(HookRunError),
     /// Unmet need condition with its fault.
     WhenClosed(Condition, Unmet),
@@ -33,10 +36,10 @@ pub enum HookDecision {
 pub struct Spawned {
     /// The joined argv under running.
     pub argv: String,
-    /// Captured stdout and stderr bytes in order.
-    pub output: Vec<u8>,
     /// The process exit code.
     pub code: i32,
+    /// The hook log holding the streamed output.
+    pub log: PathBuf,
 }
 
 /// One hook runner with spawns and post-checks.
@@ -59,7 +62,11 @@ impl HookRunner {
     /// # Errors
     ///
     /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unresolvable binaries and commands.
-    pub fn decide_all(&self, hooks: &[Hook], changed: &BTreeSet<Route>) -> Outcome<DecidedHooks> {
+    pub fn decide_all(
+        &self,
+        hooks: &[Hook],
+        changed: &BTreeSet<Route>,
+    ) -> TerminalResult<DecidedHooks> {
         let checks = Checks::current();
         let mut decisions = Vec::with_capacity(hooks.len());
         for hook in hooks {
@@ -78,14 +85,12 @@ impl HookRunner {
         hook: &Hook,
         checks: &Checks,
         changed: &BTreeSet<Route>,
-    ) -> Outcome<HookDecision> {
-        let argv = Arg::join(&hook.argv);
-        let scoped = scoped_checks(hook, checks).hook_failed(&argv, &HookReason::InvalidCommand)?;
-        if let Some(fault) = scoped.unmet(&hook.requires, changed) {
-            return Ok(HookDecision::RequiresClosed(HookRunError::Blocked {
-                condition: hook.requires.describe(),
-                unmet: unmet_names(&fault),
-            }));
+    ) -> TerminalResult<HookDecision> {
+        let scoped = scoped_checks(hook, checks)
+            .with_argv(Arg::join(&hook.argv))
+            .terminal(ErrorKind::RunHook)?;
+        if scoped.unmet(&hook.requires, changed).is_some() {
+            return Ok(HookDecision::RequiresClosed(HookRunError::Blocked));
         }
         if let Some(fault) = scoped.unmet(&hook.when, changed) {
             return Ok(HookDecision::WhenClosed(hook.when.clone(), fault));
@@ -93,22 +98,16 @@ impl HookRunner {
         if !hook.check.is_true() && scoped.unmet(&hook.check, changed).is_none() {
             return Ok(HookDecision::ChecksPass);
         }
-        let binary = match resolve_binary(hook, &scoped) {
-            Ok(Some(found)) => found,
-            Ok(None) => {
-                let leaf = HookRunError::BinaryUnresolved;
-                return Err(Error::hook_failed(
-                    argv.clone(),
-                    HookReason::of(&leaf),
-                    ErrorContext::from(leaf),
-                ));
-            }
-            Err(error) => {
-                return Err(Error::hook_failed(
-                    argv.clone(),
-                    HookReason::InvalidCommand,
-                    error,
-                ));
+        let binary = match resolve_binary(hook, &scoped)
+            .with_argv(Arg::join(&hook.argv))
+            .terminal(ErrorKind::RunHook)?
+        {
+            Some(found) => found,
+            None => {
+                return error(
+                    ErrorKind::RunHook,
+                    contextual(HookRunError::BinaryUnresolved).with_argv(Arg::join(&hook.argv)),
+                );
             }
         };
         Ok(HookDecision::Run(binary))
@@ -118,26 +117,29 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
-    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for failed hook runs with the log chain.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed arg materialization and hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for failed process spawns.
     pub fn spawn(
         &self,
         hook: &Hook,
         binary: &Path,
         position: usize,
         total: usize,
-    ) -> Outcome<Spawned> {
+        hooks_dir: &Path,
+    ) -> TerminalResult<Spawned> {
         let argv_text = Arg::join(&hook.argv);
         let mut spawn: Vec<String> = vec![binary.display().to_string()];
         for arg in hook.argv.iter().skip(1) {
-            let materialized =
-                materialize_arg(arg).hook_failed(&argv_text, &HookReason::InvalidCommand)?;
+            let materialized = materialize_arg(arg)
+                .with_argv(&argv_text)
+                .terminal(ErrorKind::RunHook)?;
             spawn.push(materialized.to_string_lossy().into_owned());
         }
         let mut path_dirs: Vec<PathBuf> = Vec::with_capacity(hook.path.len());
         for entry in &hook.path {
-            let materialized =
-                materialize_arg(entry).hook_failed(&argv_text, &HookReason::InvalidCommand)?;
+            let materialized = materialize_arg(entry)
+                .with_argv(&argv_text)
+                .terminal(ErrorKind::RunHook)?;
             path_dirs.push(materialized);
         }
         let _ = self.progress.send(Event::HookRunning {
@@ -145,25 +147,23 @@ impl HookRunner {
             total,
             argv: argv_text.clone(),
         });
-        let outcome = match driver::process::run(&spawn, &path_dirs, hook.timeout_secs) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                if let ErrorCause::HookRunError(leaf) = error.root_cause() {
-                    let leaf = leaf.clone();
-                    return Err(Error::hook_failed(
-                        argv_text.clone(),
-                        HookReason::of(&leaf),
-                        ErrorContext::from(leaf),
-                    ));
-                }
-                return Err(Error::spawn_hook(argv_text.clone(), error));
-            }
-        };
+        let log = hooks_dir.join(hook_file_name(hook.id.as_str()));
+        let header = format!("hook {position} of {total}: {argv_text}");
+        let file = open_hook_log(&log, &header)?;
+        let outcome = driver::process::run(&spawn, &path_dirs, hook.timeout_secs, &file).map_err(
+            |contextual| {
+                let kind = match contextual.cause() {
+                    ErrorCause::HookRunError(_) => ErrorKind::RunHook,
+                    _ => ErrorKind::SpawnHook,
+                };
+                Error::new(kind, contextual.with_argv(&argv_text).with_fs_path(&log))
+            },
+        )?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
         Ok(Spawned {
             argv: argv_text,
-            output: outcome.output,
             code: outcome.code,
+            log,
         })
     }
 
@@ -171,15 +171,14 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
-    pub fn confirm(&self, spawned: &Spawned) -> Outcome<()> {
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for nonzero exit codes.
+    pub fn confirm(&self, spawned: &Spawned) -> TerminalResult<()> {
         if spawned.code != 0 {
-            let leaf = HookRunError::ExitedNonzero { code: spawned.code };
-            return Err(Error::hook_failed(
-                spawned.argv.clone(),
-                HookReason::of(&leaf),
-                ErrorContext::from(leaf),
-            ));
+            return error(
+                ErrorKind::RunHook,
+                contextual(HookRunError::ExitedNonzero { code: spawned.code })
+                    .with_argv(&spawned.argv),
+            );
         }
         Ok(())
     }
@@ -188,27 +187,69 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed hook runs with the log chain.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unmet post-checks.
     pub fn verify(
         &self,
         hook: &Hook,
         checks: &Checks,
         changed: &BTreeSet<Route>,
         argv: &str,
-    ) -> Outcome<()> {
-        let scoped = scoped_checks(hook, checks).hook_failed(argv, &HookReason::InvalidCommand)?;
-        if let Some(fault) = scoped.unmet(&hook.check, changed) {
-            let leaf = HookRunError::ChecksUnmet {
-                failed: unmet_names(&fault),
-            };
-            return Err(Error::hook_failed(
-                argv.to_owned(),
-                HookReason::of(&leaf),
-                ErrorContext::from(leaf),
-            ));
+    ) -> TerminalResult<()> {
+        let scoped = scoped_checks(hook, checks)
+            .with_argv(argv.to_owned())
+            .terminal(ErrorKind::RunHook)?;
+        if scoped.unmet(&hook.check, changed).is_some() {
+            return error(
+                ErrorKind::RunHook,
+                contextual(HookRunError::ChecksUnmet).with_argv(argv.to_owned()),
+            );
         }
         Ok(())
     }
+}
+
+/// Open one hook log file with the header line written.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for failed log writes.
+fn open_hook_log(path: &Path, header: &str) -> TerminalResult<std::fs::File> {
+    use std::io::Write as _;
+
+    if let Some(parent) = path.parent() {
+        driver::fs::create_parent(parent).terminal(ErrorKind::WriteHookLog)?;
+    }
+    let mut file = std::fs::File::create(path)
+        .map_err(ContextualCause::from)
+        .with_fs_path(path)
+        .terminal(ErrorKind::WriteHookLog)?;
+    file.write_all(header.as_bytes())
+        .map_err(ContextualCause::from)
+        .with_fs_path(path)
+        .terminal(ErrorKind::WriteHookLog)?;
+    file.write_all(b"\n")
+        .map_err(ContextualCause::from)
+        .with_fs_path(path)
+        .terminal(ErrorKind::WriteHookLog)?;
+    Ok(file)
+}
+
+/// Build one hook log file name from its id slug plus short hash.
+fn hook_file_name(id: &str) -> String {
+    let mut slug = id
+        .split(|cell: char| !cell.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        slug = "hook".to_owned();
+    }
+    if slug.len() > 40 {
+        slug.truncate(40);
+    }
+    let hash = Sha::hash(id.as_bytes()).short();
+    format!("{slug}-{hash}.log")
 }
 
 /// Scope host facts to one hook with its path entries first.
@@ -216,7 +257,7 @@ impl HookRunner {
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
-fn scoped_checks(hook: &Hook, checks: &Checks) -> Result<Checks> {
+fn scoped_checks(hook: &Hook, checks: &Checks) -> ContextualResult<Checks> {
     let mut dirs = Vec::with_capacity(hook.path.len());
     for entry in &hook.path {
         dirs.push(materialize_arg(entry)?);
@@ -225,7 +266,7 @@ fn scoped_checks(hook: &Hook, checks: &Checks) -> Result<Checks> {
 }
 
 /// Resolve one hook binary with routes expanded inline.
-fn resolve_binary(hook: &Hook, scoped: &Checks) -> Result<Option<PathBuf>> {
+fn resolve_binary(hook: &Hook, scoped: &Checks) -> ContextualResult<Option<PathBuf>> {
     let Some(first) = hook.argv.first() else {
         return Ok(None);
     };
@@ -238,7 +279,7 @@ fn resolve_binary(hook: &Hook, scoped: &Checks) -> Result<Option<PathBuf>> {
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
-fn materialize_arg(arg: &Arg) -> Result<PathBuf> {
+fn materialize_arg(arg: &Arg) -> ContextualResult<PathBuf> {
     match arg {
         Arg::Text(text) => Ok(PathBuf::from(text)),
         Arg::Route(route) => route.expand(),
@@ -253,6 +294,7 @@ mod tests {
     use confit_model::document::Data;
     use confit_model::document::Document;
     use confit_model::document::TextDocument;
+    use confit_model::id::Id;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
@@ -303,7 +345,7 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("mise".into()), Arg::Text("install".into())],
             path: vec![Arg::Text(bindir.display().to_string())],
-            id: None,
+            id: Id::of("mise-install"),
             requires: Condition::default(),
             when: Condition::default(),
             check: Condition::default(),
@@ -315,7 +357,7 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("tool".into()), Arg::Text("run".into())],
             path: vec![Arg::Text(bindir.display().to_string())],
-            id: None,
+            id: Id::of("tool-run"),
             requires: Condition::default(),
             when: Condition::default(),
             check: Condition::default(),

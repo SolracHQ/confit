@@ -6,38 +6,34 @@ local sugar = {}
 local is = require("plugins._.is")
 
 
-local function route(base, relative)
-	return { base = base, relative = relative }
-end
-
 ---@param relative string Path under the home directory, e.g. ".bashrc".
----@return Route Route table with the home base.
+---@return Route Route handle with the home base.
 function sugar.home(relative)
 	return route("home", relative)
 end
 
 ---@param relative string Path under the config directory, e.g. "bat/config".
----@return Route Route table with the config base.
+---@return Route Route handle with the config base.
 function sugar.config(relative)
 	return route("config", relative)
 end
 
 ---@param relative string Path under the data directory.
----@return Route Route table with the data base.
+---@return Route Route handle with the data base.
 function sugar.data(relative)
 	return route("data", relative)
 end
 
 ---@param relative string Path under the cache directory.
----@return Route Route table with the cache base.
+---@return Route Route handle with the cache base.
 function sugar.cache(relative)
 	return route("cache", relative)
 end
 
 ---@param path string Absolute path kept as is.
----@return Route Route table with the literal base.
+---@return Route Route handle with the literal base.
 function sugar.literal(path)
-	return { base = "literal", relative = path }
+	return route("literal", path)
 end
 
 ---@param path Route Destination route for the shell document.

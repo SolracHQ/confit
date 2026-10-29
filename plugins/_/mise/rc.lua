@@ -10,16 +10,16 @@ local SHELL_PATTERN = "^%.(%a+)rc$"
 ---@param route Route Destination route with base and relative.
 ---@return boolean True for home dot-rc routes alone.
 local function is_shell(route)
-	return route.base == "home" and route.relative:match(SHELL_PATTERN) ~= nil
+	return route:base() == "home" and route:relative():match(SHELL_PATTERN) ~= nil
 end
 
 --- Derives the shell name from one shell route.
 ---@param route Route Shell route under reading.
 ---@return string Shell name without dots and rc.
 local function shell_of(route)
-	local shell = route.relative:match(SHELL_PATTERN)
+	local shell = route:relative():match(SHELL_PATTERN)
 	if not shell then
-		error("mise: route '" .. route.relative .. "' holds no shell name")
+		error("mise: route '" .. route:relative() .. "' holds no shell name")
 	end
 	return shell
 end

@@ -109,11 +109,11 @@ impl Validate {
         checked(lua, &value)
     }
 
-    /// Check one route table, else nil with reason.
+    /// Check one route handle, else nil with reason.
     ///
     /// # Arguments
     ///
-    /// - [value] The route table under checking.
+    /// - [value] The route handle under checking.
     ///
     /// # Returns
     ///
@@ -152,7 +152,7 @@ mod tests {
     fn document_gave_true_with_nil_on_good_shapes() {
         let lua = test_lua();
         let source = r#"
-            local found, reason = validate.document({ path = { base = "home", relative = "subject" }, text = "hi" })
+            local found, reason = validate.document({ path = route("home", "subject"), text = "hi" })
             assert(found ~= nil and reason == nil)
             return "ok"
         "#;
@@ -185,7 +185,7 @@ mod tests {
         let source = r#"
             local found, reason = validate.config({
                 name = id("tools/test"),
-                documents = { { path = { base = "home", relative = ".bashrc" }, text = "hi" } },
+                documents = { { path = route("home", ".bashrc"), text = "hi" } },
             })
             assert(found ~= nil and reason == nil)
             return "ok"
@@ -212,7 +212,7 @@ mod tests {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.config({
-                documents = { { path = { base = "home", relative = ".bashrc" }, text = "hi" } },
+                documents = { { path = route("home", ".bashrc"), text = "hi" } },
             })
             assert(found == nil and reason ~= nil)
             return reason
@@ -225,7 +225,7 @@ mod tests {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.patch({
-                target = { base = "home", relative = "app.json" },
+                target = route("home", "app.json"),
                 format = "json",
                 apply = function(d) return d end,
             })
@@ -243,7 +243,7 @@ mod tests {
         let lua = test_lua();
         let source = r#"
             local found, reason = validate.patch({
-                target = { base = "home", relative = "app.sh" },
+                target = route("home", "app.sh"),
                 apply = function(d) return d end,
             })
             assert(found ~= nil and reason == nil)
@@ -261,7 +261,7 @@ mod tests {
         let cases = [
             r#"
                 local found, reason = validate.patch({
-                    target = { base = "home", relative = "a" },
+                    target = route("home", "a"),
                     format = "xml",
                     apply = function(d) return d end,
                 })
@@ -279,7 +279,7 @@ mod tests {
                 "#,
             r#"
                 local found, reason = validate.patch({
-                    target = { base = "home", relative = "a" },
+                    target = route("home", "a"),
                     format = "json",
                     apply = 1,
                 })
@@ -298,7 +298,7 @@ mod tests {
         let cases = [
             r#"
                 local found, reason = validate.patch({
-                    target = { base = "home", relative = "a" },
+                    target = route("home", "a"),
                     apply = function(d) return d end,
                     nope = 1,
                 })
@@ -307,7 +307,7 @@ mod tests {
                 "#,
             r#"
                 local found, reason = validate.patch({
-                    target = { base = "home", relative = "a" },
+                    target = route("home", "a"),
                     format = "json",
                     apply = function(d) return d end,
                     nope = 1,
@@ -317,7 +317,7 @@ mod tests {
                 "#,
             r#"
                 local found, reason = validate.patch({
-                    target = { base = "home", relative = "a" },
+                    target = route("home", "a"),
                     apply = 1,
                 })
                 assert(found == nil and reason ~= nil)
@@ -353,10 +353,10 @@ mod tests {
     fn new_check_verbs_pass_good_shapes() {
         let lua = test_lua();
         for (verb, body) in [
-            ("hook", r#"{ argv = { "true" } }"#),
+            ("hook", r#"{ argv = { "true" }, id = id("tools/test") }"#),
             ("condition", r#"{ all = {} }"#),
             ("entry", r#"{ alias = { name = "x", expansion = "y" } }"#),
-            ("route", r#"{ base = "home", relative = ".bashrc" }"#),
+            ("route", r#"route("home", ".bashrc")"#),
         ] {
             let source = format!(
                 "local found, reason = validate.{verb}({body}) assert(found ~= nil and reason == nil) return 'ok'"

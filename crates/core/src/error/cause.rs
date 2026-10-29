@@ -1,4 +1,6 @@
 //! Unexpected results to required operations.
+//!
+//! Causes name the failed result. Location lives in [`ErrorContext`](super::ErrorContext).
 
 /// Unexpected filesystem result.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -6,6 +8,9 @@ pub enum FilesystemError {
     /// Vanished file.
     #[error("missing file")]
     FileMissing,
+    /// Present file.
+    #[error("file already exists")]
+    FileExists,
     /// Refused file.
     #[error("permission denied")]
     FilePermissionDenied,
@@ -22,23 +27,14 @@ pub enum FilesystemError {
     #[error("file too large")]
     FileTooLarge,
     /// Path escaping its root.
-    #[error("path '{input}' escapes the project root")]
-    OutsideRoot {
-        /// The offending input path.
-        input: String,
-    },
+    #[error("path escapes the project root")]
+    OutsideRoot,
     /// Malformed path shape.
-    #[error("malformed path '{input}'")]
-    MalformedPath {
-        /// The offending input path.
-        input: String,
-    },
-    /// Unmapped failure with raw text.
-    #[error("{message}")]
-    FileUnknown {
-        /// The raw failure text.
-        message: String,
-    },
+    #[error("malformed path")]
+    MalformedPath,
+    /// Unmapped failure.
+    #[error("unknown filesystem failure")]
+    FileUnknown,
 }
 
 impl From<std::io::Error> for FilesystemError {
@@ -46,23 +42,21 @@ impl From<std::io::Error> for FilesystemError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::NotFound => Self::FileMissing,
+            std::io::ErrorKind::AlreadyExists => Self::FileExists,
             std::io::ErrorKind::PermissionDenied => Self::FilePermissionDenied,
             std::io::ErrorKind::StorageFull => Self::DiskFull,
             std::io::ErrorKind::ReadOnlyFilesystem => Self::DiskReadOnly,
             std::io::ErrorKind::QuotaExceeded => Self::DiskQuotaExceeded,
             std::io::ErrorKind::FileTooLarge => Self::FileTooLarge,
-            _ => Self::FileUnknown {
-                message: error.to_string(),
-            },
+            _ => Self::FileUnknown,
         }
     }
 }
 
 impl From<std::string::FromUtf8Error> for DocumentError {
     /// Map one utf8 failure to its document cause.
-    fn from(error: std::string::FromUtf8Error) -> Self {
+    fn from(_error: std::string::FromUtf8Error) -> Self {
         Self::ParseFailed {
-            input: error.to_string(),
             require: Require::Utf8Text,
         }
     }
@@ -77,10 +71,8 @@ impl From<std::string::FromUtf8Error> for ErrorCause {
 
 impl From<std::time::SystemTimeError> for FilesystemError {
     /// Map one clock failure to its filesystem cause.
-    fn from(error: std::time::SystemTimeError) -> Self {
-        Self::FileUnknown {
-            message: error.to_string(),
-        }
+    fn from(_error: std::time::SystemTimeError) -> Self {
+        Self::FileUnknown
     }
 }
 
@@ -102,11 +94,8 @@ impl From<std::io::Error> for ErrorCause {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FetchError {
     /// Failed download.
-    #[error("download failed: {reason}")]
-    DownloadFailed {
-        /// The failure reason.
-        reason: String,
-    },
+    #[error("download failed")]
+    DownloadFailed,
     /// Rejected status code.
     #[error("status {code} rejected")]
     StatusRejected {
@@ -128,20 +117,14 @@ pub enum ArchiveError {
     #[error("password protected")]
     PasswordLocked,
     /// Unknown compression algorithm.
-    #[error("unknown algorithm: {detail}")]
-    AlgorithmUnknown {
-        /// The algorithm detail.
-        detail: String,
-    },
+    #[error("unknown algorithm")]
+    AlgorithmUnknown,
     /// Bare gzip stream without tar.
     #[error("bare gzip stream without tar")]
     BareGzip,
     /// Corrupt archive backend.
-    #[error("corrupt archive: {detail}")]
-    BackendCorrupt {
-        /// The corruption detail.
-        detail: String,
-    },
+    #[error("corrupt archive")]
+    BackendCorrupt,
 }
 
 /// Unexpected bundle result.
@@ -189,15 +172,14 @@ impl std::fmt::Display for SlotReason {
     }
 }
 
+impl std::error::Error for SlotReason {}
+
 /// Unexpected manifest result.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ManifestError {
     /// Invalid manifest payload.
-    #[error("invalid manifest: {detail}")]
-    Invalid {
-        /// The manifest detail.
-        detail: String,
-    },
+    #[error("invalid manifest")]
+    Invalid,
     /// Unsupported manifest version.
     #[error("manifest version {got} is unsupported")]
     VersionUnsupported {
@@ -216,8 +198,6 @@ pub enum Require {
     RoutePath,
     /// Resolvable base folder.
     BaseFolder,
-    /// Folder inside the project root.
-    ProjectFolder,
     /// Relative member path.
     MemberPath,
     /// Utf8 text.
@@ -230,7 +210,6 @@ impl std::fmt::Display for Require {
         match self {
             Self::RoutePath => write!(formatter, "non-empty route path"),
             Self::BaseFolder => write!(formatter, "resolvable base folder"),
-            Self::ProjectFolder => write!(formatter, "folder inside the project root"),
             Self::MemberPath => write!(formatter, "a relative member path"),
             Self::Utf8Text => write!(formatter, "utf8 text"),
         }
@@ -241,19 +220,14 @@ impl std::fmt::Display for Require {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DocumentError {
     /// Document failing its parse.
-    #[error("invalid '{input}', require {require}")]
+    #[error("invalid document, require {require}")]
     ParseFailed {
-        /// The offending input value.
-        input: String,
         /// The required shape.
         require: Require,
     },
     /// Document failing its render.
-    #[error("cannot render document: {reason}")]
-    RenderFailed {
-        /// The render reason.
-        reason: String,
-    },
+    #[error("cannot render document")]
+    RenderFailed,
     /// Opaque document refusing render.
     #[error("opaque document is not renderable")]
     OpaqueNotRenderable,
@@ -266,76 +240,49 @@ pub enum DocumentError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectError {
     /// Invalid project document.
-    #[error("invalid project config: {detail}")]
-    InvalidConfig {
-        /// The config detail.
-        detail: String,
-    },
+    #[error("invalid project config")]
+    InvalidConfig,
 }
 
 /// Unexpected eval result.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EvalError {
-    /// Eval require cycle.
-    #[error("require cycle: {}", cycle.join(" -> "))]
-    CycleDetected {
-        /// The ordered require chain.
-        cycle: Vec<String>,
-    },
     /// Repeated hook definition.
-    #[error("duplicate hook '{name}'")]
-    DuplicateHook {
-        /// The repeated hook name.
-        name: String,
-    },
+    #[error("duplicate hook")]
+    DuplicateHook,
+    /// Repeated document definition.
+    #[error("duplicate document")]
+    DuplicateDocument,
+    /// Require cycle.
+    #[error("require cycle")]
+    CycleDetected,
     /// Hook patch missing its target.
-    #[error("hook patch target '{id}' matches no hook")]
-    HookTargetUnknown {
-        /// The unknown hook identity.
-        id: String,
-    },
+    #[error("hook patch target matches no hook")]
+    HookTargetUnknown,
     /// Patch target matching no document.
-    #[error("patch target '{route}' matches no document")]
-    PatchTargetUnknown {
-        /// The unknown patch route.
-        route: String,
-    },
+    #[error("patch target matches no document")]
+    PatchTargetUnknown,
     /// Config require missing its target.
-    #[error("config '{config}' requires missing '{target}': {hint}")]
-    ConfigRequiresMissing {
-        /// The requiring config name.
-        config: String,
-        /// The missing target name.
-        target: String,
-        /// The profile hint text.
-        hint: String,
-    },
+    #[error("config requires missing document")]
+    ConfigRequiresMissing,
     /// Changed references missing their document.
-    #[error("changed references missing '{document}'")]
-    ChangedReferencesMissing {
-        /// The missing document name.
-        document: String,
-    },
+    #[error("changed references missing document")]
+    ChangedReferencesMissing,
     /// Require escaping its scope.
-    #[error("require '{input}' escapes scope")]
-    RequireEscapesScope {
-        /// The offending input name.
-        input: String,
-    },
+    #[error("require escapes scope")]
+    RequireEscapesScope,
     /// Bad require name.
-    #[error("bad require name '{input}': {rule}")]
+    #[error("bad require name: {rule}")]
     BadRequireName {
-        /// The offending input name.
-        input: String,
         /// The violated naming rule.
         rule: RequireNameRule,
     },
     /// Failed Lua evaluation.
-    #[error("lua failed: {message}")]
-    LuaFailed {
-        /// The Lua failure text.
-        message: String,
-    },
+    #[error("lua failed")]
+    LuaFailed,
+    /// Failed Face decode.
+    #[error("bad shape")]
+    BadShape,
 }
 
 /// Require name rule as a fixed fact.
@@ -364,14 +311,8 @@ impl std::fmt::Display for RequireNameRule {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HookRunError {
     /// Timed-out hook.
-    #[error("hook timed out after {secs}s")]
-    TimedOut {
-        /// The configured timeout seconds.
-        secs: u64,
-    },
-    /// Unreadable hook output.
-    #[error("hook output unreadable")]
-    OutputUnreadable,
+    #[error("hook timed out")]
+    TimedOut,
     /// Unresolved hook binary.
     #[error("hook binary unresolved")]
     BinaryUnresolved,
@@ -382,19 +323,11 @@ pub enum HookRunError {
         code: i32,
     },
     /// Hook run missing its checks.
-    #[error("hook checks unmet: {failed:?}")]
-    ChecksUnmet {
-        /// The failing leaf names.
-        failed: Vec<String>,
-    },
+    #[error("hook checks unmet")]
+    ChecksUnmet,
     /// Hook run blocked by its requires.
-    #[error("hook blocked on '{condition}': {unmet:?}")]
-    Blocked {
-        /// The blocking condition text.
-        condition: String,
-        /// The unmet leaf names.
-        unmet: Vec<String>,
-    },
+    #[error("hook blocked")]
+    Blocked,
 }
 
 /// Unexpected content result.
@@ -409,6 +342,14 @@ pub enum ContentError {
         /// The expected content hash.
         expected: crate::sha::Sha,
     },
+}
+
+/// Unexpected command line result.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UsageError {
+    /// Conflicting flags.
+    #[error("conflicting flags")]
+    FlagsConflict,
 }
 
 /// Unexpected result to a required operation.
@@ -452,135 +393,12 @@ pub enum ErrorCause {
     /// Hook run failure.
     #[error(transparent)]
     HookRunError(#[from] HookRunError),
+    /// Command line usage failure.
+    #[error(transparent)]
+    UsageError(#[from] UsageError),
     /// Store slot reason.
     #[error("invalid store slot: {0}")]
-    SlotReason(SlotReason),
-    /// Unreadable stdin prompt.
-    #[error("Stdin unreadable: {detail}")]
-    StdinUnreadable {
-        /// The unreadable stdin detail.
-        detail: String,
-    },
-}
-
-/// Hook failure reason as a fixed fact.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HookReason {
-    /// Timed-out hook.
-    TimedOut,
-    /// Unreadable hook output.
-    OutputUnreadable,
-    /// Unresolved hook binary.
-    BinaryUnresolved,
-    /// Hook exit with a nonzero code.
-    ExitedNonzero {
-        /// The process exit code.
-        code: i32,
-    },
-    /// Invalid hook command.
-    InvalidCommand,
-    /// Hook run missing its checks.
-    ChecksUnmet,
-    /// Hook run blocked by its requires.
-    Blocked,
-}
-
-impl std::fmt::Display for HookReason {
-    /// Render one hook failure reason.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TimedOut => write!(formatter, "timed out"),
-            Self::OutputUnreadable => write!(formatter, "output unreadable"),
-            Self::BinaryUnresolved => write!(formatter, "binary unresolved"),
-            Self::ExitedNonzero { code } => write!(formatter, "exited with status {code}"),
-            Self::InvalidCommand => write!(formatter, "invalid command"),
-            Self::ChecksUnmet => write!(formatter, "unmet conditions"),
-            Self::Blocked => write!(formatter, "blocked"),
-        }
-    }
-}
-
-impl HookReason {
-    /// Map one hook run failure to its fixed reason.
-    pub fn of(cause: &HookRunError) -> Self {
-        match cause {
-            HookRunError::TimedOut { .. } => Self::TimedOut,
-            HookRunError::OutputUnreadable => Self::OutputUnreadable,
-            HookRunError::BinaryUnresolved => Self::BinaryUnresolved,
-            HookRunError::ExitedNonzero { code } => Self::ExitedNonzero { code: *code },
-            HookRunError::ChecksUnmet { .. } => Self::ChecksUnmet,
-            HookRunError::Blocked { .. } => Self::Blocked,
-        }
-    }
-}
-
-/// Evaluation detail as a closed fact.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvalDetail {
-    /// Eval failure detail.
-    Eval(EvalError),
-    /// Shape mismatch detail.
-    Parse {
-        /// The offending input value.
-        input: String,
-        /// The required shape.
-        require: Require,
-    },
-    /// Face fault detail.
-    Face(confit_binding::fault::FaceFault),
-}
-
-impl std::fmt::Display for EvalDetail {
-    /// Render one evaluation detail.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Eval(cause) => write!(formatter, "{cause}"),
-            Self::Parse { input, require } => {
-                write!(formatter, "invalid '{input}', require {require}")
-            }
-            Self::Face(fault) => {
-                let path = render_face_path(&fault.segments);
-                let reason = render_face_reason(&fault.reason);
-                if path.is_empty() {
-                    write!(formatter, "{reason}")
-                } else {
-                    write!(formatter, "{path}: {reason}")
-                }
-            }
-        }
-    }
-}
-
-/// Render one face fault path from the profile root.
-fn render_face_path(segments: &[confit_binding::fault::Segment]) -> String {
-    let mut path = String::new();
-    for segment in segments {
-        match segment {
-            confit_binding::fault::Segment::Field(name) => {
-                if !path.is_empty() {
-                    path.push('.');
-                }
-                path.push_str(name);
-            }
-            confit_binding::fault::Segment::Index(position) => {
-                path.push_str(&format!("[{position}]"));
-            }
-        }
-    }
-    path
-}
-
-/// Render one face fault reason.
-fn render_face_reason(reason: &confit_binding::fault::FaultReason) -> String {
-    match reason {
-        confit_binding::fault::FaultReason::UnknownVariant { found, options } => format!(
-            "{found} is not a valid variant, choose one of {}",
-            options.join(", ")
-        ),
-        confit_binding::fault::FaultReason::ShapeMismatch { require, found } => {
-            format!("require {require}, found {found}")
-        }
-    }
+    SlotReason(#[from] SlotReason),
 }
 
 #[cfg(test)]
@@ -588,112 +406,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn face_detail_renders_mixed_bracket_path() {
-        let detail = EvalDetail::Face(confit_binding::fault::FaceFault {
-            segments: vec![
-                confit_binding::fault::Segment::Field("documents".to_owned()),
-                confit_binding::fault::Segment::Index(1),
-                confit_binding::fault::Segment::Field("path".to_owned()),
-                confit_binding::fault::Segment::Field("base".to_owned()),
-            ],
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
-                require: "a string".to_owned(),
-                found: "integer".to_owned(),
-            },
-        });
-        assert_eq!(
-            detail.to_string(),
-            "documents[1].path.base: require a string, found integer"
-        );
+    fn io_not_found_maps_to_file_missing() {
+        let failure = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert_eq!(FilesystemError::from(failure), FilesystemError::FileMissing);
     }
 
     #[test]
-    fn face_detail_lists_variant_options() {
-        let detail = EvalDetail::Face(confit_binding::fault::FaceFault {
-            segments: vec![
-                confit_binding::fault::Segment::Field("documents".to_owned()),
-                confit_binding::fault::Segment::Index(1),
-                confit_binding::fault::Segment::Field("path".to_owned()),
-                confit_binding::fault::Segment::Field("base".to_owned()),
-            ],
-            reason: confit_binding::fault::FaultReason::UnknownVariant {
-                found: "\"void\"".to_owned(),
-                options: vec![
-                    "home".to_owned(),
-                    "config".to_owned(),
-                    "data".to_owned(),
-                    "cache".to_owned(),
-                    "literal".to_owned(),
-                ],
-            },
-        });
-        assert_eq!(
-            detail.to_string(),
-            "documents[1].path.base: \"void\" is not a valid variant, choose one of home, config, data, cache, literal"
-        );
+    fn io_other_maps_to_file_unknown() {
+        let failure = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe");
+        assert_eq!(FilesystemError::from(failure), FilesystemError::FileUnknown);
     }
 
     #[test]
-    fn face_detail_names_shape_mismatch() {
-        let detail = EvalDetail::Face(confit_binding::fault::FaceFault {
-            segments: Vec::new(),
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
-                require: "a string".to_owned(),
-                found: "integer".to_owned(),
-            },
-        });
-        assert_eq!(detail.to_string(), "require a string, found integer");
+    fn status_rejected_keeps_code() {
+        let cause = FetchError::StatusRejected { code: 404 };
+        assert_eq!(cause.to_string(), "status 404 rejected");
     }
 
     #[test]
-    fn binding_display_matches_terminal_renderer() {
-        let fault = confit_binding::fault::FaceFault {
-            segments: vec![
-                confit_binding::fault::Segment::Field("documents".to_owned()),
-                confit_binding::fault::Segment::Index(1),
-                confit_binding::fault::Segment::Field("path".to_owned()),
-                confit_binding::fault::Segment::Field("base".to_owned()),
-            ],
-            reason: confit_binding::fault::FaultReason::UnknownVariant {
-                found: "\"void\"".to_owned(),
-                options: vec!["home".to_owned(), "literal".to_owned()],
-            },
+    fn bad_require_name_keeps_rule() {
+        let cause = EvalError::BadRequireName {
+            rule: RequireNameRule::Backslash,
         };
         assert_eq!(
-            fault.to_string(),
-            EvalDetail::Face(fault.clone()).to_string()
-        );
-    }
-
-    #[test]
-    fn face_detail_counts_indices_from_one() {
-        let first = EvalDetail::Face(confit_binding::fault::FaceFault {
-            segments: vec![
-                confit_binding::fault::Segment::Field("documents".to_owned()),
-                confit_binding::fault::Segment::Index(1),
-            ],
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
-                require: "a table".to_owned(),
-                found: "integer".to_owned(),
-            },
-        });
-        let second = EvalDetail::Face(confit_binding::fault::FaceFault {
-            segments: vec![
-                confit_binding::fault::Segment::Field("documents".to_owned()),
-                confit_binding::fault::Segment::Index(2),
-            ],
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
-                require: "a table".to_owned(),
-                found: "integer".to_owned(),
-            },
-        });
-        assert_eq!(
-            first.to_string(),
-            "documents[1]: require a table, found integer"
-        );
-        assert_eq!(
-            second.to_string(),
-            "documents[2]: require a table, found integer"
+            cause.to_string(),
+            "bad require name: backslashes are not allowed"
         );
     }
 }

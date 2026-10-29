@@ -3,10 +3,7 @@
 use std::io;
 use std::io::Read as _;
 
-use confit_core::error::Result as CoreResult;
-use confit_core::error::{ArchiveError, ErrorContext as CoreError};
-
-use super::Result;
+use confit_core::error::{ArchiveError, ContextualCause, ContextualResult};
 
 /// Gzip magic for deflated streams.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
@@ -48,7 +45,7 @@ enum Probed<R> {
 ///
 /// - [`ArchiveError::BareGzip`] for gzip singles without tar.
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
-pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
+pub(super) fn names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_names(stream),
         Probed::Gzipped(stream) => {
@@ -66,8 +63,8 @@ pub(super) fn names(reader: impl io::Read) -> Result<Vec<String>> {
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub(super) fn walk(
     reader: impl io::Read,
-    visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
-) -> Result<()> {
+    visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,
+) -> ContextualResult<()> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_walk(stream, visit),
         Probed::Gzipped(stream) => {
@@ -82,7 +79,7 @@ pub(super) fn walk(
 /// # Errors
 ///
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
-fn sniff<R: io::Read>(mut reader: R) -> Result<Probed<R>> {
+fn sniff<R: io::Read>(mut reader: R) -> ContextualResult<Probed<R>> {
     let mut prefix = Vec::with_capacity(GZIP_MAGIC.len());
     let mut byte = [0u8; 1];
     while prefix.len() < GZIP_MAGIC.len() {
@@ -109,14 +106,14 @@ fn sniff<R: io::Read>(mut reader: R) -> Result<Probed<R>> {
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 fn gunzip_window<R: io::Read>(
     reader: R,
-) -> Result<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>> {
+) -> ContextualResult<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>> {
     let mut decoder = flate2::read::GzDecoder::new(reader);
     let mut window = Vec::with_capacity(TAR_BLOCK as usize);
     decoder.by_ref().take(TAR_BLOCK).read_to_end(&mut window)?;
     if window.is_empty() || is_tar_tag(&window) {
         Ok(io::Cursor::new(window).chain(decoder))
     } else {
-        Err(CoreError::from(ArchiveError::BareGzip))
+        Err(ContextualCause::from(ArchiveError::BareGzip))
     }
 }
 
@@ -131,7 +128,7 @@ fn is_tar_tag(head: &[u8]) -> bool {
 /// # Errors
 ///
 /// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
-fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
+fn plain_names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
     let mut found = Vec::new();
@@ -154,8 +151,8 @@ fn plain_names(reader: impl io::Read) -> Result<Vec<String>> {
 /// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
 fn plain_walk(
     reader: impl io::Read,
-    mut visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
-) -> Result<()> {
+    mut visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,
+) -> ContextualResult<()> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
     for entry in entries {
@@ -179,7 +176,7 @@ fn plain_walk(
 /// # Errors
 ///
 /// - [`confit_core::error::FilesystemError`] for failed paths.
-fn file_head<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> Result<Option<NamedFile>> {
+fn file_head<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> ContextualResult<Option<NamedFile>> {
     let kind = entry.header().entry_type();
     if kind.is_dir() || !kind.is_file() {
         return Ok(None);

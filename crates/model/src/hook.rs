@@ -22,7 +22,7 @@ pub struct Hook {
     #[face(default)]
     pub path: Vec<Arg>,
     /// The hook identifier.
-    pub id: Option<Id>,
+    pub id: Id,
     /// The capability condition.
     #[serde(default)]
     #[face(default)]
@@ -186,9 +186,12 @@ pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<Hook
     out
 }
 
-/// Report whether two hooks share one lifecycle identity on argv and path.
+/// Report whether two hooks share one lifecycle identity on id with an argv and path fallback.
 fn same_identity(first: &Hook, second: &Hook) -> bool {
-    first.argv == second.argv && first.path == second.path
+    if first.id.as_str().is_empty() || second.id.as_str().is_empty() {
+        return first.argv == second.argv && first.path == second.path;
+    }
+    first.id == second.id
 }
 
 /// Find one recorded hook sharing identity with one desired hook.
@@ -357,7 +360,7 @@ mod tests {
             when,
             check,
             timeout_secs,
-            id: None,
+            id: Id::default(),
         }
     }
 

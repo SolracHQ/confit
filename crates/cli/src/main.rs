@@ -4,33 +4,32 @@ use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
 use confit_cli::presentation::spinner::Terminal;
 use confit_cli::sinks::Sinks;
-use confit_core::error::{Outcome, Segment};
+use confit_core::error::TerminalResult;
 use confit_store::{StoreRoots, Stores};
 
 fn main() {
     if let Err(error) = run() {
-        let pieces = match error.chain() {
-            Some(chain) => chain.segments(),
-            None => Vec::new(),
-        };
-        let reason: Vec<serde_json::Value> = pieces
-            .into_iter()
-            .map(|segment| match segment {
-                Segment::Route { route } => serde_json::json!({"kind": "route", "route": route}),
-                Segment::Path { path } => serde_json::json!({"kind": "path", "path": path}),
-                Segment::Leaf { detail } => serde_json::json!({"kind": "leaf", "detail": detail}),
-                Segment::Cycle { chain } => serde_json::json!({"kind": "cycle", "chain": chain}),
-            })
-            .collect();
+        let context = error.context();
+        let reason = context.log_value();
         let summary = error.summary();
-        let payload = match summary.split_once('\n') {
-            Some((first, rest)) => serde_json::json!({
-                "error": first,
-                "trace": rest.lines().collect::<Vec<_>>(),
-                "reason": reason,
-            }),
-            None => serde_json::json!({"error": summary, "reason": reason}),
+        let mut lines = summary.lines();
+        let first = lines.next().unwrap_or_default();
+        let rest: Vec<&str> = lines.collect();
+        let trace: Vec<&str> = if context.trace.is_empty() {
+            match context.detail.as_deref() {
+                Some(detail) if rest.len() == 1 && rest[0] == detail => Vec::new(),
+                _ => rest,
+            }
+        } else {
+            context.trace.iter().map(String::as_str).collect()
         };
+        let mut payload = serde_json::json!({
+            "error": first,
+            "reason": reason,
+        });
+        if !trace.is_empty() {
+            payload["trace"] = serde_json::json!(trace);
+        }
         log::error!(target: "confit:error", "{payload}");
         log::logger().flush();
         eprintln!("error: {}", error.summary());
@@ -43,7 +42,7 @@ fn main() {
 }
 
 /// Run the selected subcommand to completion.
-fn run() -> Outcome<()> {
+fn run() -> TerminalResult<()> {
     let mut cli = Cli::parse();
     confit_cli::cli::expand_command(&mut cli.command);
     let logs_dir = resolve_logs_dir(cli.logs_dir.as_deref());
@@ -114,7 +113,7 @@ fn run() -> Outcome<()> {
 }
 
 /// Run plan with summary output.
-fn run_plan(args: &confit_cli::cli::PlanArgs, log_path: &std::path::Path) -> Outcome<()> {
+fn run_plan(args: &confit_cli::cli::PlanArgs, log_path: &std::path::Path) -> TerminalResult<()> {
     let terminal = Terminal::new();
     let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
@@ -143,7 +142,7 @@ fn run_apply(
     args: &confit_cli::cli::ApplyArgs,
     log_path: &std::path::Path,
     hooks_dir: &std::path::Path,
-) -> Outcome<()> {
+) -> TerminalResult<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let terminal = Terminal::new();
     let sender = terminal.sink();
@@ -190,7 +189,7 @@ fn run_apply(
 }
 
 /// Run export and write a bundle file or print its manifest.
-fn run_export(args: &confit_cli::cli::ExportArgs) -> Outcome<()> {
+fn run_export(args: &confit_cli::cli::ExportArgs) -> TerminalResult<()> {
     let terminal = Terminal::new();
     let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
@@ -203,7 +202,7 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> Outcome<()> {
 }
 
 /// Run delete and drop one named state and unreferenced entries.
-fn run_delete(args: &confit_cli::cli::DeleteArgs) -> Outcome<()> {
+fn run_delete(args: &confit_cli::cli::DeleteArgs) -> TerminalResult<()> {
     let terminal = Terminal::new();
     let stores = Stores::new(StoreRoots::standard(), terminal.sink());
     let report = confit_cli::actions::delete::run(args, stores)?;
@@ -216,7 +215,7 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> Outcome<()> {
 }
 
 /// Run init with project scaffolding.
-fn run_init(args: &confit_cli::cli::InitArgs) -> Outcome<()> {
+fn run_init(args: &confit_cli::cli::InitArgs) -> TerminalResult<()> {
     let runner = confit_cli::actions::init::InitRunner { args };
     for outcome in runner.execute()? {
         match outcome {

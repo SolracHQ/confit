@@ -1,7 +1,7 @@
 //! Stub documents from live faces.
 
 use confit_binding::stub::StubDocument;
-use confit_core::error::{ErrorContext, EvalError, Result};
+use confit_core::error::{ContextualCause, ContextualResult};
 
 use crate::api::fact::Fact;
 use crate::api::fetch::Fetch;
@@ -15,7 +15,7 @@ use crate::api::validate::Validate;
 /// # Errors
 ///
 /// - [`confit_core::error::EvalError::LuaFailed`] for stub parse failures.
-pub fn generate_stubs() -> Result<Vec<StubDocument>> {
+pub fn generate_stubs() -> ContextualResult<Vec<StubDocument>> {
     let documents = vec![
         Global::stub_document(),
         Fetch::stub_document(),
@@ -35,16 +35,13 @@ pub fn generate_stubs() -> Result<Vec<StubDocument>> {
 /// # Errors
 ///
 /// - [`confit_core::error::EvalError::LuaFailed`] for stub parse failures.
-fn check_parse(namespace: &str, text: &str) -> Result<()> {
+fn check_parse(namespace: &str, text: &str) -> ContextualResult<()> {
     let lua = mlua::Lua::new();
     lua.load(text)
         .set_name(format!("@{namespace}"))
         .exec()
-        .map_err(|error| {
-            ErrorContext::from(EvalError::LuaFailed {
-                message: format!("stub '{namespace}' fails to parse: {error}"),
-            })
-        })
+        .map_err(ContextualCause::from)?;
+    Ok(())
 }
 
 #[cfg(test)]

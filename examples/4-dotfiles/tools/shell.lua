@@ -3,7 +3,7 @@ local sugar = require("plugins._.sugar")
 ---@param route Route Destination route under reading.
 ---@return boolean True for the managed shell documents alone.
 local function is_shell(route)
-	return route.base == "home" and (route.relative == ".bashrc" or route.relative == ".zshrc")
+	return route:base() == "home" and (route:relative() == ".bashrc" or route:relative() == ".zshrc")
 end
 
 ---@return Config Shell config for the profile configs array.

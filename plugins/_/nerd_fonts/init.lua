@@ -18,9 +18,9 @@ end
 
 --- Builds the destination route holding one font.
 ---@param name string Font name landing under the data fonts folder.
----@return Route Route table with the data base.
+---@return Route Route handle with the data base.
 local function font_route(name)
-	return { base = "data", relative = "fonts/" .. name }
+	return route("data", "fonts/" .. name)
 end
 
 --- Resolves the release backing one font zip.
@@ -68,11 +68,16 @@ local function ttf_members(archive)
 	return members
 end
 
+--- Refresh hook id prefix holding the font name.
+local HOOK_ID_PREFIX = "plugin:_/nerd_fonts:"
+
 --- Builds the cache refresh hook for one font folder.
+---@param name string Font name scoping the hook id.
 ---@param dest Route Font folder route refreshed alone.
 ---@return Hook Hook running fc-cache with conditions.
-local function refresh_hook(dest)
+local function refresh_hook(name, dest)
 	return {
+		id = id(HOOK_ID_PREFIX .. name),
 		argv = { "fc-cache", "-f", dest },
 		requires = { in_path = { name = "fc-cache" } },
 		when = { changed = { route = dest } },
@@ -100,7 +105,7 @@ function nerd_fonts.font(name, version)
 	local config = {
 		name = id(name),
 		documents = { { path = dest, members = ttf_members(archive) } },
-		hooks = { refresh_hook(dest) },
+		hooks = { refresh_hook(name, dest) },
 	}
 	check_config(config)
 	return config

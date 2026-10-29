@@ -14,9 +14,8 @@ use super::disk::{DiskReader, FileBytes, FileDigest};
 use super::ordered::Ordered;
 use crate::manifest::status::mode;
 use crate::render::render_document;
-use confit_core::error::Result;
-use confit_core::error::locate::Locate;
-use confit_core::error::{DiffWarning, ErrorContext};
+use confit_core::error::ContextualResult;
+use confit_core::error::{ContextualCause, DiffWarning, WithContext, contextual};
 
 /// Recorded against disk comparator.
 pub(crate) struct Comparator<'a> {
@@ -48,7 +47,7 @@ impl<'a> Comparator<'a> {
     pub(crate) fn run(
         &mut self,
         manifest: &crate::manifest::Manifest,
-    ) -> Result<(Vec<Difference>, Vec<DiffWarning>)> {
+    ) -> ContextualResult<(Vec<Difference>, Vec<DiffWarning>)> {
         let mut out = Vec::new();
         for document in &manifest.documents {
             out.extend(self.compare_one(document)?);
@@ -61,7 +60,7 @@ impl<'a> Comparator<'a> {
     /// # Errors
     ///
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
-    fn compare_one(&mut self, document: &Document) -> Result<Vec<Difference>> {
+    fn compare_one(&mut self, document: &Document) -> ContextualResult<Vec<Difference>> {
         if let Data::Tree(found) = &document.data {
             return self.compare_tree(&document.path, &found.members);
         }
@@ -72,10 +71,10 @@ impl<'a> Comparator<'a> {
             let recorded = match render_document(document) {
                 Ok(found) => found,
                 Err(leaf) => {
-                    let chain = ErrorContext::from(leaf);
-                    let reason = chain.root_cause().to_string();
+                    let contextual = contextual(leaf).with_document(document.path.display());
+                    let reason = contextual.cause().to_string();
                     self.warnings
-                        .push(DiffWarning::warn(document.path.display(), chain));
+                        .push(DiffWarning::warn(document.path.display(), contextual));
                     return Ok(vec![Difference::Unreadable {
                         path: document.path.clone(),
                         reason,
@@ -104,8 +103,8 @@ impl<'a> Comparator<'a> {
         &mut self,
         destination: &Route,
         members: &BTreeMap<String, TreeMember>,
-    ) -> Result<Vec<Difference>> {
-        let base = destination.expand().route(destination.display())?;
+    ) -> ContextualResult<Vec<Difference>> {
+        let base = destination.expand().with_document(destination.display())?;
         let mut out = Vec::new();
         for (relative, member) in members {
             out.extend(self.compare_member(destination, &base, relative, member)?);
@@ -120,7 +119,7 @@ impl<'a> Comparator<'a> {
         base: &Path,
         relative: &str,
         member: &TreeMember,
-    ) -> Result<Vec<Difference>> {
+    ) -> ContextualResult<Vec<Difference>> {
         let member_path = destination.join(relative);
         DiskReader::probe_member(
             base,
@@ -154,7 +153,7 @@ impl<'a> Comparator<'a> {
     /// # Errors
     ///
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
-    fn compare_digest_handle(&mut self, document: &Document) -> Result<Vec<Difference>> {
+    fn compare_digest_handle(&mut self, document: &Document) -> ContextualResult<Vec<Difference>> {
         let Data::Opaque(found) = &document.data else {
             return Ok(Vec::new());
         };
@@ -304,16 +303,16 @@ impl<'a> Comparator<'a> {
                 match reader.read_to_end(&mut body) {
                     Ok(_) => sha.label(body.len() as u64),
                     Err(fault) => {
-                        let chain = ErrorContext::from(fault).path(pool_path);
+                        let contextual = ContextualCause::from(fault).with_cache_path(pool_path);
                         self.warnings
-                            .push(DiffWarning::warn(route.display(), chain));
+                            .push(DiffWarning::warn(route.display(), contextual));
                         sha.hex()
                     }
                 }
             }
-            Err(chain) => {
+            Err(contextual) => {
                 self.warnings
-                    .push(DiffWarning::warn(route.display(), chain));
+                    .push(DiffWarning::warn(route.display(), contextual));
                 sha.hex()
             }
         }

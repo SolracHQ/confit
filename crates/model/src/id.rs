@@ -16,18 +16,6 @@ pub struct Id {
     pub trace: LuaTrace,
 }
 
-/// One identity kind suffix.
-#[derive(Clone, Debug, PartialEq, Eq, Face)]
-#[face(table, string)]
-pub enum IdKind {
-    /// Config scope.
-    Config,
-    /// Document scope.
-    Document,
-    /// Hook scope.
-    Hook,
-}
-
 impl PartialEq for Id {
     /// Report whole string equality.
     fn eq(&self, other: &Self) -> bool {

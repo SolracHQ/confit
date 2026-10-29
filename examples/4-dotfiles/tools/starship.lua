@@ -3,7 +3,7 @@ local sugar = require("plugins._.sugar")
 local open = require("confit.open")
 
 ---@type Route
-local STARSHIP_TOML = { base = "config", relative = "starship.toml" }
+local STARSHIP_TOML = route("config", "starship.toml")
 
 local base = assert(assert(open("resources/starship.toml")):load())
 local config = mise.package({

@@ -751,10 +751,7 @@ fn hook_patches_mutate_live_hooks_in_order() {
     match Assembler::new(&lua).collect_hooks(&profile, &documents) {
         Ok(hooks) => {
             assert_eq!(hooks.len(), 1);
-            assert_eq!(
-                hooks[0].id.as_ref().map(|id| id.as_str()),
-                Some("mise:install")
-            );
+            assert_eq!(hooks[0].id.as_str(), "mise:install");
             assert_eq!(
                 hooks[0].check,
                 Condition::InPath {
@@ -953,7 +950,7 @@ fn rc_changed_guards_fail() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SMUGGLED", value = "1", when = { changed = { route = { base = "home", relative = ".bashrc" } } } } } end"#,
+        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SMUGGLED", value = "1", when = { changed = { route = route("home", ".bashrc") } } } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
@@ -994,10 +991,10 @@ fn structured_filters_reach_every_match_in_order() {
         .unwrap();
     let patch = structured_filter_of(
         &lua,
-        r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
+        r#"return function(route) return string.find(route:relative(), "json") ~= nil end"#,
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) table.insert(order, document.path.relative) document.data.touched = true end"#,
+        r#"return function(document) table.insert(order, document.path:relative()) document.data.touched = true end"#,
     );
     let profile = profile_of(
         vec![
@@ -1042,9 +1039,9 @@ fn rc_filters_reach_every_match_in_order() {
         .unwrap();
     let patch = rc_filter_of(
         &lua,
-        r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
+        r#"return function(route) return string.find(route:relative(), "sh") ~= nil end"#,
         Level::Normal,
-        r#"return function(document) table.insert(order, document.path.relative) document.profile[#document.profile + 1] = { env = { name = "TOUCHED", value = "1" } } end"#,
+        r#"return function(document) table.insert(order, document.path:relative()) document.profile[#document.profile + 1] = { env = { name = "TOUCHED", value = "1" } } end"#,
     );
     let profile = profile_of(
         vec![
@@ -1083,7 +1080,7 @@ fn structured_apply_receives_document_path() {
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.seen_base = document.path.base document.data.seen_relative = document.path.relative end"#,
+        r#"return function(document) document.data.seen_base = document.path:base() document.data.seen_relative = document.path:relative() end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -1117,7 +1114,7 @@ fn rc_apply_receives_document_path() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SEEN", value = document.path.base .. ":" .. document.path.relative } } end"#,
+        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SEEN", value = document.path:base() .. ":" .. document.path:relative() } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],

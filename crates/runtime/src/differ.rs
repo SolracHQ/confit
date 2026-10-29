@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use compare::Comparator;
 
 use crate::manifest::Manifest;
-use confit_core::error::{DiffWarning, Result};
+use confit_core::error::{ContextualResult, DiffWarning};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -88,7 +88,7 @@ impl Differ {
         &self,
         manifest: &Manifest,
         order: DifferenceOrder,
-    ) -> Result<(Vec<Difference>, Vec<DiffWarning>)> {
+    ) -> ContextualResult<(Vec<Difference>, Vec<DiffWarning>)> {
         Comparator::new(&self.stores, order).run(manifest)
     }
 }

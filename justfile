@@ -53,3 +53,7 @@ set-version VERSION:
   sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/*/Cargo.toml
   cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
   grep -h '^version' crates/*/Cargo.toml
+
+# Format docs at width 80: `just format-docs` formats all of docs/, `just format-docs <file>` formats one file.
+format-docs FILE="":
+  @if [ -z "{{FILE}}" ]; then mdformat --wrap 80 docs; else mdformat --wrap 80 "{{FILE}}"; fi

@@ -75,18 +75,6 @@ impl RcEntry {
         }
     }
 
-    /// Return the collision log label for the entry.
-    pub fn log_label(&self) -> &'static str {
-        match self {
-            Self::Env { .. } => "env",
-            Self::Path { .. } => "path",
-            Self::Alias { .. } => "alias",
-            Self::Eval { .. } => "eval",
-            Self::Cmd { .. } => "cmd",
-            Self::Source { .. } => "source",
-        }
-    }
-
     /// Return the shell session guard.
     pub fn when(&self) -> Option<&Condition> {
         match self {

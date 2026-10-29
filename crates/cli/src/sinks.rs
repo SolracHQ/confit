@@ -2,7 +2,7 @@
 
 use std::io::BufRead;
 
-use confit_core::error::{Error, Outcome};
+use confit_core::error::{ContextualCause, Terminal, TerminalResult, kind::ErrorKind};
 use confit_core::progress::ProgressSender;
 
 use crate::presentation::spinner::{PrintSender, SuspendControl};
@@ -43,17 +43,19 @@ impl Sinks {
     /// # Errors
     ///
     /// - [`confit_core::error::kind::ErrorKind::ReadReply`] for prompt failures.
-    pub fn confirm(&self, input: &mut dyn BufRead) -> Outcome<bool> {
+    pub fn confirm(&self, input: &mut dyn BufRead) -> TerminalResult<bool> {
         if let Some(control) = self.suspend.clone() {
             return control
                 .ask("\nApply these changes? Type 'yes' to continue: ")
-                .map_err(|error| Error::read_reply(error.to_string()));
+                .map_err(ContextualCause::from)
+                .terminal(ErrorKind::ReadReply);
         }
         log::debug!("prompt waiting for input");
         let mut line = String::new();
         let got = input
             .read_line(&mut line)
-            .map_err(|error| Error::read_reply(error.to_string()))?;
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::ReadReply)?;
         log::debug!("prompt read {got} bytes");
         Ok(line.trim() == "yes")
     }

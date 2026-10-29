@@ -3,9 +3,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use confit_core::error::Terminal;
+use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
-    BundleError, DocumentError, Error, ErrorContext, Outcome, Require, Result, fail,
+    BundleError, ContextualCause, ContextualResult, DocumentError, Require, Terminal,
+    TerminalResult, WithContext, contextual, error,
 };
 use confit_core::sha::Sha;
 use confit_model::document::Data;
@@ -19,9 +20,9 @@ impl Bundler {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle and member reads with the log chain.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed bundle and member reads with the log chain.
-    pub fn read(&self, path: &Path) -> Outcome<Manifest> {
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle opens and foreign bytes.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed member bodies with the member slot.
+    pub fn read(&self, path: &Path) -> TerminalResult<Manifest> {
         Unpack::new(self, path).run()
     }
 }
@@ -34,8 +35,6 @@ struct Unpack<'a> {
     bundle: &'a Path,
     /// The buffered manifest bytes.
     raw: Option<Vec<u8>>,
-    /// The member under visiting while the walk runs.
-    pending: Option<String>,
 }
 
 impl<'a> Unpack<'a> {
@@ -45,7 +44,6 @@ impl<'a> Unpack<'a> {
             bundler,
             bundle,
             raw: None,
-            pending: None,
         }
     }
 
@@ -53,38 +51,49 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle and member reads with the log chain.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed bundle and member reads with the log chain.
-    fn run(mut self) -> Outcome<Manifest> {
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle opens and foreign bytes.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed member bodies with the member slot.
+    fn run(mut self) -> TerminalResult<Manifest> {
         let bundle: PathBuf = self.bundle.to_path_buf();
-        let file = std::fs::File::open(self.bundle).read_bundle(&bundle)?;
+        let file = std::fs::File::open(self.bundle)
+            .map_err(ContextualCause::from)
+            .with_bundle_path(&bundle)
+            .terminal(ErrorKind::ReadBundle)?;
         let walk = driver::archive::uncompress(file, |entry| self.visit(entry));
         match walk {
             Ok(()) => self.finish(),
-            Err(chain) => match self.pending.take() {
-                Some(member) => {
-                    let required_by = self.required_entry(&member);
-                    Err(Error::unpack_member(member, required_by, chain))
+            Err(contextual) => {
+                let kind = match contextual.context.member {
+                    Some(_) => ErrorKind::UnpackMember,
+                    None => ErrorKind::ReadBundle,
+                };
+                let document = if matches!(kind, ErrorKind::UnpackMember) {
+                    match &contextual.context.member {
+                        Some(member) => self.required_entry(member),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let mut contextual = contextual.with_bundle_path(bundle);
+                if let Some(route) = document {
+                    contextual = contextual.with_document(route);
                 }
-                None => Err(Error::read_bundle(bundle, chain)),
-            },
+                error(kind, contextual)
+            }
         }
     }
 
-    /// Visit one walk entry tracking the member under visiting.
+    /// Visit one walk entry with the member slot on faults.
     ///
     /// # Errors
     ///
     /// - [`confit_core::error::BundleError`] for doubled manifest entries.
-    /// - [`confit_core::error::DocumentError`] for bad entry names.
-    /// - [`confit_core::error::ErrorCause`] for failed contents.
-    fn visit(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
-        self.pending = Some(entry.name.clone());
-        let outcome = self.entry(entry);
-        if outcome.is_ok() {
-            self.pending = None;
-        }
-        outcome
+    /// - [`confit_core::error::DocumentError`] for bad entry names with the member slot.
+    /// - [`confit_core::error::ErrorCause`] for failed contents with the member slot.
+    fn visit(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
+        let name = entry.name.clone();
+        self.entry(entry).with_member(name)
     }
 
     /// Receive one walk entry into the manifest buffer or the cache.
@@ -94,7 +103,7 @@ impl<'a> Unpack<'a> {
     /// - [`confit_core::error::BundleError::DuplicateManifest`] for doubled manifest entries.
     /// - [`confit_core::error::DocumentError::ParseFailed`] for bad entry names.
     /// - [`confit_core::error::ErrorCause`] for failed contents.
-    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
+    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
         if entry.name == BUNDLE_MANIFEST {
             return self.receive_manifest(entry.reader);
         }
@@ -107,9 +116,9 @@ impl<'a> Unpack<'a> {
     ///
     /// - [`confit_core::error::BundleError::DuplicateManifest`] for doubled manifest entries.
     /// - [`confit_core::error::FilesystemError`] for cut manifest bodies.
-    fn receive_manifest(&mut self, mut reader: impl std::io::Read) -> Result<()> {
+    fn receive_manifest(&mut self, mut reader: impl std::io::Read) -> ContextualResult<()> {
         if self.raw.is_some() {
-            return fail(BundleError::DuplicateManifest);
+            return Err(contextual(BundleError::DuplicateManifest));
         }
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
@@ -123,14 +132,17 @@ impl<'a> Unpack<'a> {
     ///
     /// - [`confit_core::error::DocumentError::ParseFailed`] for bad entry names.
     /// - [`confit_core::error::ErrorCause`] for failed contents.
-    fn receive_content(&mut self, name: String, reader: impl std::io::Read) -> Result<()> {
+    fn receive_content(
+        &mut self,
+        name: String,
+        reader: impl std::io::Read,
+    ) -> ContextualResult<()> {
         let sha = match Sha::new(name.as_str()) {
             Ok(sha) => sha,
             Err(_) => {
-                return fail(DocumentError::ParseFailed {
-                    input: name,
+                return Err(contextual(DocumentError::ParseFailed {
                     require: Require::MemberPath,
-                });
+                }));
             }
         };
         self.bundler.resources.store_checked(&sha, reader)?;
@@ -149,18 +161,20 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle and member reads with the log chain.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed bundle and member reads with the log chain.
-    fn finish(self) -> Outcome<Manifest> {
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for absent manifests and bad payloads.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for absent contents with bundle and member slots.
+    fn finish(self) -> TerminalResult<Manifest> {
         let bundle: PathBuf = self.bundle.to_path_buf();
         let manifest = match self.raw {
             None => {
-                return Err(Error::read_bundle(
-                    bundle,
-                    ErrorContext::from(BundleError::ManifestMissing),
-                ));
+                return error(
+                    ErrorKind::ReadBundle,
+                    contextual(BundleError::ManifestMissing).with_bundle_path(bundle),
+                );
             }
-            Some(bytes) => Manifest::decode(&bytes).read_bundle(&bundle)?,
+            Some(bytes) => Manifest::decode(&bytes)
+                .with_bundle_path(&bundle)
+                .terminal(ErrorKind::ReadBundle)?,
         };
         let mut shas: BTreeSet<Sha> = BTreeSet::new();
         for handle in manifest.handles() {
@@ -168,11 +182,13 @@ impl<'a> Unpack<'a> {
         }
         for sha in &shas {
             if !self.bundler.resources.cache_path(sha).exists() {
-                return Err(Error::unpack_member(
-                    sha.hex(),
-                    required_by(&manifest, sha),
-                    ErrorContext::from(BundleError::ContentMissing),
-                ));
+                let mut contextual = contextual(BundleError::ContentMissing)
+                    .with_bundle_path(&bundle)
+                    .with_member(sha.hex());
+                if let Some(route) = required_by(&manifest, sha) {
+                    contextual = contextual.with_document(route);
+                }
+                return error(ErrorKind::UnpackMember, contextual);
             }
         }
         Ok(manifest)
@@ -325,8 +341,8 @@ mod tests {
         build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
         match store.read(&stale_path) {
             Ok(_) => panic!("stale manifest passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::ManifestError(ManifestError::VersionUnsupported { got })) => {
+            Err(error) => match error.cause() {
+                ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
                     assert_eq!(*got, 0, "stale keeps version");
                     assert!(
                         error
@@ -372,8 +388,8 @@ mod tests {
         let store = Bundler::new(&stores);
         match store.read(&thin) {
             Ok(_) => panic!("thin manifest passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::BundleError(BundleError::ContentMissing)) => {
+            Err(error) => match error.cause() {
+                ErrorCause::BundleError(BundleError::ContentMissing) => {
                     assert!(
                         error.to_string().contains("home('bin')"),
                         "missing keeps the requiring document"
@@ -406,8 +422,8 @@ mod tests {
         );
         match store.read(&dup_path) {
             Ok(_) => panic!("duplicate manifest passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::BundleError(BundleError::DuplicateManifest)) => {
+            Err(error) => match error.cause() {
+                ErrorCause::BundleError(BundleError::DuplicateManifest) => {
                     assert!(
                         error.to_string().contains(BUNDLE_MANIFEST),
                         "duplicate names the manifest"
@@ -427,9 +443,12 @@ mod tests {
         );
         match store.read(&bad_path) {
             Ok(_) => panic!("bad id passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::DocumentError(DocumentError::ParseFailed { input, .. })) => {
-                    assert_eq!(input, "short", "bad id keeps its input");
+            Err(error) => match error.cause() {
+                ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
+                    match &error.context().member {
+                        Some(member) => assert_eq!(member, "short", "bad id keeps its input"),
+                        None => panic!("bad id keeps its input: {error}"),
+                    }
                     assert!(
                         error.to_string().contains("short"),
                         "bad id names the entry"
@@ -449,9 +468,14 @@ mod tests {
         );
         match store.read(&odd_path) {
             Ok(_) => panic!("unexpected entry passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::DocumentError(DocumentError::ParseFailed { input, .. })) => {
-                    assert_eq!(input, "other.txt", "unexpected keeps its input");
+            Err(error) => match error.cause() {
+                ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
+                    match &error.context().member {
+                        Some(member) => {
+                            assert_eq!(member, "other.txt", "unexpected keeps its input")
+                        }
+                        None => panic!("unexpected keeps its input: {error}"),
+                    }
                     assert!(
                         error.to_string().contains("other.txt"),
                         "unexpected names the entry"
@@ -487,9 +511,14 @@ mod tests {
         );
         match store.read(&mixed_path) {
             Ok(_) => panic!("mixed bundle passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::DocumentError(DocumentError::ParseFailed { input, .. })) => {
-                    assert_eq!(input, "nope", "first bad entry keeps its input");
+            Err(error) => match error.cause() {
+                ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
+                    match &error.context().member {
+                        Some(member) => {
+                            assert_eq!(member, "nope", "first bad entry keeps its input")
+                        }
+                        None => panic!("first bad entry keeps its input: {error}"),
+                    }
                     assert!(
                         error.to_string().contains("nope"),
                         "first bad entry names itself"
@@ -524,8 +553,8 @@ mod tests {
         );
         match store.read(&drift_path) {
             Ok(_) => panic!("drifted bytes pass"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::ContentHashMismatch { .. }) => {
+            Err(error) => match error.cause() {
+                ErrorCause::ContentHashMismatch { .. } => {
                     assert!(
                         error.to_string().contains("home('bin')"),
                         "drifted bytes name the requiring document"
@@ -550,8 +579,8 @@ mod tests {
         std::fs::write(&foreign_path, b"not an archive").unwrap();
         match store.read(&foreign_path) {
             Ok(_) => panic!("foreign bytes pass"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::ArchiveError(_)) => {
+            Err(error) => match error.cause() {
+                ErrorCause::ArchiveError(_) => {
                     assert!(
                         error
                             .to_string()
@@ -568,8 +597,8 @@ mod tests {
         std::fs::write(&cut_path, &raw[..raw.len() / 2]).unwrap();
         match store.read(&cut_path) {
             Ok(_) => panic!("cut envelope passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::FilesystemError(_)) => {
+            Err(error) => match error.cause() {
+                ErrorCause::FilesystemError(_) => {
                     assert!(
                         error.to_string().contains(BUNDLE_MANIFEST),
                         "cut manifest names the manifest entry"

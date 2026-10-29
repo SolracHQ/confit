@@ -3,8 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use confit_binding::fault::FaceFault;
+use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
-    DiffWarning, DocumentError, Error, ErrorContext, EvalDetail, Failure, Mixed, Outcome, Require,
+    ContextualResult, DiffWarning, DocumentError, ErrorCause, Require, Terminal, TerminalResult,
+    contextual, error,
 };
 use confit_core::sha::Sha;
 use confit_model::document::{Data, Document, TreeMember};
@@ -40,19 +42,19 @@ pub struct Prepared {
 ///
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for failed renders and member key shapes.
 /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for failed renders and member key shapes.
-pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> Outcome<Manifest> {
+pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> TerminalResult<Manifest> {
     let mut placed: Vec<Document> = documents;
     for document in &placed {
         if let Data::Tree(found) = &document.data {
             for relative in found.members.keys() {
                 if check_member_key(relative).is_err() {
-                    return Err(Error::evaluate(
-                        EvalDetail::Parse {
-                            input: relative.clone(),
+                    return error(
+                        ErrorKind::Evaluate,
+                        contextual(DocumentError::ParseFailed {
                             require: Require::MemberPath,
-                        },
-                        Some(document.path.display()),
-                    ));
+                        })
+                        .with_document(document.path.display()),
+                    );
                 }
             }
         }
@@ -73,24 +75,25 @@ pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> Outcome<Manifest> {
 ///
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for failed renders and member shapes.
 /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for failed renders and member shapes.
-fn fill_hashes(documents: &[Document]) -> Outcome<BTreeMap<String, Sha>> {
+fn fill_hashes(documents: &[Document]) -> TerminalResult<BTreeMap<String, Sha>> {
     let mut hashes = BTreeMap::new();
     for document in documents {
-        let hash = document_hash(document).map_err(|leaf| complete(document, leaf))?;
+        let hash = match document_hash(document) {
+            Ok(hash) => hash,
+            Err(contextual) => {
+                let contextual = contextual.with_document(document.path.display());
+                let kind = match contextual.cause() {
+                    ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
+                        ErrorKind::Evaluate
+                    }
+                    _ => ErrorKind::RenderManifest,
+                };
+                return error(kind, contextual);
+            }
+        };
         hashes.insert(document.path.display(), hash);
     }
     Ok(hashes)
-}
-
-/// Map one document hash failure to its terminal shape.
-fn complete(document: &Document, leaf: DocumentError) -> Error {
-    match leaf {
-        DocumentError::ParseFailed { input, require } => Error::evaluate(
-            EvalDetail::Parse { input, require },
-            Some(document.path.display()),
-        ),
-        other => Error::render_manifest(ErrorContext::from(other).route(document.path.display())),
-    }
 }
 
 /// Hash one document over rendered bytes.
@@ -99,18 +102,12 @@ fn complete(document: &Document, leaf: DocumentError) -> Error {
 ///
 /// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
 /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable rc route bases.
-fn document_hash(document: &Document) -> std::result::Result<Sha, DocumentError> {
+fn document_hash(document: &Document) -> ContextualResult<Sha> {
     match &document.data {
         Data::Opaque(found) => Ok(found.handle.sha().clone()),
         Data::Tree(found) => Ok(Sha::hash(&tree_manifest_bytes(&found.members))),
-        Data::Rc(_) => render_document(document).map(|bytes| Sha::hash(&bytes)),
-        Data::Structured(found) => found
-            .bytes()
-            .map(|bytes| Sha::hash(&bytes))
-            .map_err(|error| match error.root_cause() {
-                confit_core::error::ErrorCause::DocumentError(leaf) => leaf.clone(),
-                _ => unreachable!("structured bytes fail rendering alone"),
-            }),
+        Data::Rc(_) => Ok(Sha::hash(&render_document(document)?)),
+        Data::Structured(found) => found.bytes().map(|bytes| Sha::hash(&bytes)),
         Data::Text(found) => Ok(Sha::hash(&found.bytes())),
         Data::Link(found) => Ok(Sha::hash(&found.bytes())),
     }
@@ -159,10 +156,9 @@ fn check_member_key(relative: &str) -> std::result::Result<(), FaceFault> {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::Failure::Mid`] for unreadable states.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable stored states.
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation terminals from differences.
-pub fn prepare(stores: &Stores, desired: Manifest) -> Mixed<Prepared> {
+pub fn prepare(stores: &Stores, desired: Manifest) -> TerminalResult<Prepared> {
     let previous = load(&stores.states())?;
     log_processed(&desired, &previous);
     let first_run = stores.states().is_first_run();
@@ -182,10 +178,11 @@ pub fn prepare(stores: &Stores, desired: Manifest) -> Mixed<Prepared> {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::Failure::Mid`] for unmapped difference faults.
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation terminals from differences.
-pub fn refresh(stores: &Stores, prepared: &Prepared) -> Mixed<(Vec<Difference>, Vec<DiffWarning>)> {
+pub fn refresh(
+    stores: &Stores,
+    prepared: &Prepared,
+) -> TerminalResult<(Vec<Difference>, Vec<DiffWarning>)> {
     let found = difference_with(
         stores,
         stores.states().is_first_run(),
@@ -199,15 +196,13 @@ pub fn refresh(stores: &Stores, prepared: &Prepared) -> Mixed<(Vec<Difference>, 
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::Failure::Mid`] for unmapped difference faults.
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation terminals from differences.
 fn difference_with(
     stores: &Stores,
     first_run: bool,
     built: &Manifest,
     previous: &Manifest,
-) -> Mixed<(Vec<Difference>, Vec<DiffWarning>)> {
+) -> TerminalResult<(Vec<Difference>, Vec<DiffWarning>)> {
     let reference = if first_run { built } else { previous };
     let order = if first_run {
         DifferenceOrder::DiskFirst
@@ -217,13 +212,9 @@ fn difference_with(
     let differ = Differ {
         stores: stores.clone(),
     };
-    match differ.differences(reference, order) {
-        Ok(found) => Ok(found),
-        Err(chain) => match Error::evaluate_chain(chain) {
-            Ok(terminal) => Err(Failure::Terminal(terminal)),
-            Err(mid) => Err(Failure::Mid(mid)),
-        },
-    }
+    differ
+        .differences(reference, order)
+        .terminal(ErrorKind::Evaluate)
 }
 
 /// Compute the changed destination routes for one apply run.
@@ -276,8 +267,10 @@ fn changed_paths(
 /// Report whether one tree member route nests under its destination.
 fn tree_member_of(destination: &Route, path: &Route) -> bool {
     path.base() == destination.base()
-        && path.relative() != destination.relative()
-        && path.relative().starts_with(destination.relative())
+        && path.relative_path() != destination.relative_path()
+        && path
+            .relative_path()
+            .starts_with(destination.relative_path())
 }
 
 /// Log finished documents with lifecycle status.
@@ -529,10 +522,18 @@ mod tests {
                 Ok(_) => panic!("bad key hashes: {key}"),
                 Err(error) => {
                     let line = error.to_string();
-                    assert!(line.contains(key), "bad key keeps its input: {line}");
                     assert!(
                         line.contains("home('tree')"),
                         "bad key keeps its route: {line}"
+                    );
+                    assert!(
+                        matches!(
+                            error.cause(),
+                            confit_core::error::ErrorCause::DocumentError(
+                                DocumentError::ParseFailed { .. }
+                            )
+                        ),
+                        "bad key keeps its require: {line}"
                     );
                 }
             }

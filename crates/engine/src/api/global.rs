@@ -4,7 +4,8 @@ use mlua::Lua;
 
 use confit_binding_macros::face_impl;
 
-use confit_model::id::{Id, IdKind};
+use confit_model::id::Id;
+use confit_model::routes::{Route, RouteBase};
 
 /// Global constructors.
 pub struct Global;
@@ -15,27 +16,37 @@ impl Global {
     ///
     /// # Arguments
     ///
-    /// - [name] The id text under tracing.
-    /// - [kind] The id scope suffix.
+    /// - [name] The id text.
     ///
     /// # Returns
     ///
-    /// - The traced id.
+    /// - The new id.
     #[allow(clippy::self_named_constructors)]
-    pub fn id(lua: &Lua, name: String, kind: Option<IdKind>) -> mlua::Result<Id> {
-        let full = match kind {
-            None => name,
-            Some(IdKind::Config) => format!("{name}/config"),
-            Some(IdKind::Document) => format!("{name}/document"),
-            Some(IdKind::Hook) => format!("{name}/hook"),
-        };
+    pub fn id(lua: &Lua, name: String) -> mlua::Result<Id> {
         Ok(Id::traced(
             lua,
             Id {
-                id: full,
+                id: name,
                 ..Default::default()
             },
         ))
+    }
+
+    /// Build one route.
+    ///
+    /// # Arguments
+    ///
+    /// - [base] The destination base.
+    /// - [relative] The relative path.
+    ///
+    /// # Returns
+    ///
+    /// - The new route.
+    #[allow(clippy::self_named_constructors)]
+    pub fn route(lua: &Lua, base: RouteBase, relative: String) -> mlua::Result<Route> {
+        let built =
+            Route::new(base, relative).map_err(|cause| mlua::Error::external(cause.to_string()))?;
+        Ok(Route::traced(lua, built))
     }
 }
 
@@ -75,19 +86,6 @@ mod tests {
         lua.set_app_data(stores.clone());
         install(&lua).unwrap();
         lua
-    }
-
-    #[test]
-    fn id_unknown_kind_fails() {
-        let lua = Lua::new();
-        let globals = lua.globals();
-        Global::install(&lua, &globals).unwrap();
-        assert!(
-            lua.load("return id('x', 'bogus')")
-                .call::<Value>(())
-                .is_err(),
-            "unknown kind fails"
-        );
     }
 
     #[test]
@@ -199,8 +197,8 @@ mod tests {
             br#"
                 return {
                     configs = {
-                        { name = id("same"), documents = { { path = { base = "home", relative = "a" }, text = "one" } } },
-                        { name = id("same"), documents = { { path = { base = "home", relative = "b" }, text = "two" } } },
+                        { name = id("same"), documents = { { path = route("home", "a"), text = "one" } } },
+                        { name = id("same"), documents = { { path = route("home", "b"), text = "two" } } },
                     },
                 }
             "#,

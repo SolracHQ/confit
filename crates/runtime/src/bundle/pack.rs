@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use confit_core::error::{Outcome, Result, Terminal};
+use confit_core::error::kind::ErrorKind;
+use confit_core::error::{
+    ContextualCause, ContextualResult, Terminal, TerminalResult, WithContext,
+};
 use confit_core::sha::Sha;
 use confit_driver as driver;
 use confit_store::handles::ResourceHandle;
@@ -21,12 +24,14 @@ impl Bundler {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for failed bundle writes with the log chain.
-    pub fn write(&self, manifest: &Manifest, dest: &Path) -> Outcome<PathBuf> {
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for render faults, unreadable contents,
+    ///   and write faults with the bundle path slot.
+    pub fn write(&self, manifest: &Manifest, dest: &Path) -> TerminalResult<PathBuf> {
         let dest = ensure_bundle_extension(dest);
         Pack::new(self, manifest, &dest)
             .and_then(|pack| pack.run())
-            .write_bundle(&dest)
+            .with_bundle_path(dest)
+            .terminal(ErrorKind::WriteBundle)
     }
 }
 
@@ -57,8 +62,8 @@ impl<'a> Pack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError`] for manifest render failures.
-    fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> Result<Self> {
+    /// - [`confit_core::error::DocumentError::RenderFailed`] for manifest render failures.
+    fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> ContextualResult<Self> {
         let dest = dest.to_path_buf();
         let text = manifest.json()?;
         let mut seen: BTreeMap<Sha, ResourceHandle> = BTreeMap::new();
@@ -79,9 +84,9 @@ impl<'a> Pack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for unreadable contents and write faults.
-    /// - [`BundleError`] for missing contents and failed members.
-    fn run(mut self) -> Result<PathBuf> {
+    /// - [`confit_core::error::FilesystemError`] for unreadable contents and write faults.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] for contents failing the carried sha.
+    fn run(mut self) -> ContextualResult<PathBuf> {
         self.collect()?;
         self.build()
     }
@@ -90,13 +95,15 @@ impl<'a> Pack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ErrorCause`] for missing contents and unreadable entries.
-    /// - [`confit_core::error::FilesystemError`] for other unreadable contents.
-    fn collect(&mut self) -> Result<()> {
+    /// - [`confit_core::error::FilesystemError`] for unreadable contents with the attempted path.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] for contents failing the carried sha.
+    fn collect(&mut self) -> ContextualResult<()> {
         for handle in &self.contents {
             let file = match handle {
                 ResourceHandle::Cache(_) => self.bundler.resources.open(handle)?,
-                ResourceHandle::Project(path, _) => std::fs::File::open(path)?,
+                ResourceHandle::Project(path, _) => std::fs::File::open(path)
+                    .map_err(ContextualCause::from)
+                    .with_fs_path(path)?,
             };
             self.staged.push(Staged {
                 handle: handle.clone(),
@@ -112,7 +119,7 @@ impl<'a> Pack<'a> {
     ///
     /// - [`confit_core::error::FilesystemError`] for write faults.
     /// - [`confit_core::error::ArchiveError`] for failed members.
-    fn build(self) -> Result<PathBuf> {
+    fn build(self) -> ContextualResult<PathBuf> {
         use confit_driver::archive::{Algorithm, Builder, Level};
 
         let Pack {
@@ -210,7 +217,7 @@ mod tests {
 
         let file = std::fs::File::open(path).unwrap();
         let mut bodies = Vec::new();
-        driver::archive::uncompress(file, |entry| -> Result<()> {
+        driver::archive::uncompress(file, |entry| -> ContextualResult<()> {
             let name = entry.name;
             let mut body = entry.reader;
             if name == BUNDLE_MANIFEST {
@@ -271,8 +278,8 @@ mod tests {
         let dest = locked.join("plan");
         match store.write(&manifest, &dest) {
             Ok(_) => panic!("denied disk passes"),
-            Err(error) => match error.root_cause() {
-                Some(ErrorCause::FilesystemError(_)) | Some(ErrorCause::ArchiveError(_)) => {
+            Err(error) => match error.cause() {
+                ErrorCause::FilesystemError(_) | ErrorCause::ArchiveError(_) => {
                     assert!(
                         error
                             .to_string()

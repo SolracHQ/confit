@@ -4,7 +4,7 @@ local sugar = require("plugins._.sugar")
 local open = require("confit.open")
 
 ---@type Route
-local STARSHIP_TOML = { base = "config", relative = "starship.toml" }
+local STARSHIP_TOML = route("config", "starship.toml")
 
 ---@param user_config table User keys winning over the base data.
 ---@return Config Starship config for the profile configs array.

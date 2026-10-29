@@ -2,9 +2,9 @@
 
 use std::io;
 
-use confit_core::error::Result as CoreResult;
+use confit_core::error::ContextualResult;
 
-use super::{Result, zip_error};
+use super::zip_error;
 
 /// Return zip member names in archive order.
 ///
@@ -14,7 +14,7 @@ use super::{Result, zip_error};
 /// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] for unknown features and methods.
 /// - [`confit_core::error::ArchiveError::BackendCorrupt`] for corrupt archives.
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
-pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
+pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> ContextualResult<Vec<String>> {
     let mut archive = zip::ZipArchive::new(reader).map_err(zip_error)?;
     let total = archive.len();
     let mut found = Vec::with_capacity(total);
@@ -44,8 +44,8 @@ pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> Result<Vec<String>> {
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub(super) fn walk<R: io::Read + io::Seek>(
     reader: R,
-    mut visit: impl FnMut(super::Entry<'_>) -> CoreResult<()>,
-) -> Result<()> {
+    mut visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,
+) -> ContextualResult<()> {
     let mut archive = zip::ZipArchive::new(reader).map_err(zip_error)?;
     let total = archive.len();
     let mut index = 0;

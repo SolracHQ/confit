@@ -13,8 +13,10 @@ use confit_model::routes::Route;
 
 use super::owned::{OwnedPatch, assemble_config};
 use confit_core::error::{
-    DocumentError, Error, ErrorContext, EvalDetail, EvalError, Outcome, Result,
+    ContextualCause, ContextualResult, DocumentError, Error, EvalError, TerminalResult, contextual,
+    error, kind::ErrorKind,
 };
+use confit_core::suggest;
 
 /// Split one profile's patches into owned patches in return order.
 pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
@@ -36,7 +38,7 @@ pub(super) fn grouped_structured<'a>(
     lua: &Lua,
     placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Outcome<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+) -> TerminalResult<Vec<(Route, Vec<&'a OwnedPatch>)>> {
     let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
     let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
@@ -45,8 +47,8 @@ pub(super) fn grouped_structured<'a>(
         };
         let target = match join_destination(found.target.clone(), found.filter.clone()) {
             Ok(target) => target,
-            Err(mismatch) => {
-                return Err(Error::evaluate(EvalDetail::Face(mismatch), None));
+            Err(_) => {
+                return error(ErrorKind::Evaluate, contextual(EvalError::LuaFailed));
             }
         };
         for destination in expanded_destinations(lua, placed, &target, is_structured)? {
@@ -70,7 +72,7 @@ pub(super) fn grouped_rc<'a>(
     lua: &Lua,
     placed: &[Document],
     patches: &'a [OwnedPatch],
-) -> Outcome<Vec<(Route, Vec<&'a OwnedPatch>)>> {
+) -> TerminalResult<Vec<(Route, Vec<&'a OwnedPatch>)>> {
     let mut grouped: Vec<(Route, Vec<&OwnedPatch>)> = Vec::new();
     let mut index: HashMap<Route, usize> = HashMap::new();
     for patch in patches {
@@ -79,8 +81,8 @@ pub(super) fn grouped_rc<'a>(
         };
         let target = match join_destination(found.target.clone(), found.filter.clone()) {
             Ok(target) => target,
-            Err(mismatch) => {
-                return Err(Error::evaluate(EvalDetail::Face(mismatch), None));
+            Err(_) => {
+                return error(ErrorKind::Evaluate, contextual(EvalError::LuaFailed));
             }
         };
         for destination in expanded_destinations(lua, placed, &target, is_rc)? {
@@ -128,7 +130,7 @@ fn expanded_destinations(
     placed: &[Document],
     target: &PatchTarget,
     area_matches: fn(&Document) -> bool,
-) -> Outcome<Vec<Route>> {
+) -> TerminalResult<Vec<Route>> {
     match target {
         PatchTarget::Target(route) => Ok(vec![route.clone()]),
         PatchTarget::Filter(filter) => matched_destinations(lua, placed, filter, area_matches),
@@ -145,7 +147,7 @@ fn matched_destinations(
     placed: &[Document],
     filter: &Callback<FilterArgs>,
     area_matches: fn(&Document) -> bool,
-) -> Outcome<Vec<Route>> {
+) -> TerminalResult<Vec<Route>> {
     let mut matched = Vec::new();
     for document in placed {
         if !area_matches(document) {
@@ -153,11 +155,11 @@ fn matched_destinations(
         }
         let keep = match filter.call::<bool>(lua, (&document.path,)) {
             Ok(found) => found,
-            Err(error) => {
-                if let Some(terminal) = error.downcast_ref::<Error>() {
+            Err(fault) => {
+                if let Some(terminal) = fault.downcast_ref::<Error>() {
                     return Err(terminal.clone());
                 }
-                return Err(Error::lua_failed(error.to_string()));
+                return error(ErrorKind::LuaFailed, fault);
             }
         };
         if keep {
@@ -186,15 +188,11 @@ fn is_rc(document: &Document) -> bool {
 pub(super) fn structured_base_of(
     placed: &[Document],
     target: &Route,
-    first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
+) -> ContextualResult<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match placed.iter().find(|document| document.path == *target) {
-        Some(document) => {
-            let display = target.display();
-            structured_declared_base(&document.data, &display, first, patches)
-        }
-        None => Err(unknown_target(target)),
+        Some(document) => structured_declared_base(&document.data, patches),
+        None => Err(unknown_target(target, placed)),
     }
 }
 
@@ -205,44 +203,22 @@ pub(super) fn structured_base_of(
 /// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
 fn structured_declared_base(
     body: &Data,
-    display: &str,
-    first: &StructuredPatch,
     patches: &[&StructuredPatch],
-) -> Result<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
+) -> ContextualResult<(StructuredFormat, BTreeMap<String, serde_json::Value>)> {
     match body {
         Data::Structured(found) => {
             for patch in patches {
                 if patch.format != found.format {
-                    return Err(ErrorContext::from(gap(
-                        display,
-                        found.format.name(),
-                        patch.format.name(),
-                    )));
+                    return Err(contextual(DocumentError::RenderFailed));
                 }
             }
             Ok((found.format, found.data.clone()))
         }
-        Data::Rc(_) => Err(ErrorContext::from(gap(display, "rc", first.format.name()))),
-        Data::Text(_) => Err(ErrorContext::from(gap(
-            display,
-            "text",
-            first.format.name(),
-        ))),
-        Data::Link(_) => Err(ErrorContext::from(gap(
-            display,
-            "link",
-            first.format.name(),
-        ))),
-        Data::Opaque(_) => Err(ErrorContext::from(gap(
-            display,
-            "opaque",
-            first.format.name(),
-        ))),
-        Data::Tree(_) => Err(ErrorContext::from(gap(
-            display,
-            "tree",
-            first.format.name(),
-        ))),
+        Data::Rc(_) => Err(contextual(DocumentError::RenderFailed)),
+        Data::Text(_) => Err(contextual(DocumentError::RenderFailed)),
+        Data::Link(_) => Err(contextual(DocumentError::RenderFailed)),
+        Data::Opaque(_) => Err(contextual(DocumentError::RenderFailed)),
+        Data::Tree(_) => Err(contextual(DocumentError::RenderFailed)),
     }
 }
 
@@ -252,35 +228,32 @@ fn structured_declared_base(
 ///
 /// - [`confit_core::error::EvalError::PatchTargetUnknown`] for missing targets.
 /// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
-pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> Result<RcData> {
+pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> ContextualResult<RcData> {
     match placed.iter().find(|document| document.path == *target) {
         Some(document) => match &document.data {
             Data::Rc(found) => Ok(found.clone()),
-            Data::Structured(found) => Err(ErrorContext::from(gap(
-                &target.display(),
-                found.format.name(),
-                "rc",
-            ))),
-            Data::Text(_) => Err(ErrorContext::from(gap(&target.display(), "text", "rc"))),
-            Data::Link(_) => Err(ErrorContext::from(gap(&target.display(), "link", "rc"))),
-            Data::Opaque(_) => Err(ErrorContext::from(gap(&target.display(), "opaque", "rc"))),
-            Data::Tree(_) => Err(ErrorContext::from(gap(&target.display(), "tree", "rc"))),
+            Data::Structured(_)
+            | Data::Text(_)
+            | Data::Link(_)
+            | Data::Opaque(_)
+            | Data::Tree(_) => Err(contextual(DocumentError::RenderFailed)),
         },
-        None => Err(unknown_target(target)),
+        None => Err(unknown_target(target, placed)),
     }
 }
 
-/// Build one missing patch target error keeping the destination route.
-fn unknown_target(target: &Route) -> ErrorContext {
-    let display = target.display();
-    ErrorContext::from(EvalError::PatchTargetUnknown { route: display })
-}
-
-/// Build one patch gap cause over its base with patch names.
-fn gap(display: &str, base: &str, patch: &str) -> DocumentError {
-    DocumentError::RenderFailed {
-        reason: format!("patch targets '{display}' hold '{base}' under '{patch}' patches"),
-    }
+/// Build one missing patch target error naming near documents.
+fn unknown_target(target: &Route, placed: &[Document]) -> ContextualCause {
+    let wanted = target.display();
+    let candidates: Vec<String> = placed
+        .iter()
+        .map(|document| document.path.display())
+        .collect();
+    let suggestions = suggest::nearby(&wanted, &candidates);
+    contextual(EvalError::PatchTargetUnknown)
+        .with_document(wanted)
+        .with_suggestions(suggestions)
+        .with_trace(target.trace.0.iter().map(|site| site.to_string()).collect())
 }
 
 #[cfg(test)]
@@ -473,7 +446,7 @@ mod tests {
         ];
         let patch = structured_filter_of(
             &lua,
-            r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
+            r#"return function(route) return string.find(route:relative(), "json") ~= nil end"#,
             r#"return function(document) return end"#,
         );
         match grouped_structured(&lua, &placed, &[patch]) {
@@ -528,7 +501,7 @@ mod tests {
         ];
         let patch = rc_filter_of(
             &lua,
-            r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
+            r#"return function(route) return string.find(route:relative(), "sh") ~= nil end"#,
             r#"return function(document) return end"#,
         );
         match grouped_rc(&lua, &placed, &[patch]) {

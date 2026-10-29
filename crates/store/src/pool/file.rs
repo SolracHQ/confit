@@ -6,8 +6,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use bytemuck::{Pod, Zeroable};
-use confit_core::error::locate::Locate;
-use confit_core::error::{ContentError, ErrorCause, Result, fail};
+use confit_core::error::{
+    ContentError, ContextualCause, ContextualResult, ErrorCause, WithContext, contextual,
+};
 use confit_core::sha::Sha;
 
 /// Object identity prefix.
@@ -61,35 +62,37 @@ impl PoolFile {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ContentError`] for short and undecodable objects.
-    /// - [`confit_core::error::ErrorCause`] for header hash mismatches.
+    /// - [`ContentError::CorruptObject`] for short and undecodable objects.
+    /// - [`ErrorCause::ContentHashMismatch`] for header hash mismatches.
     /// - [`confit_core::error::FilesystemError`] for missing and unreadable pool files.
-    pub fn open(path: PathBuf, expected: &Sha) -> Result<Self> {
-        let mut file = std::fs::File::open(&path).path(path.clone())?;
+    pub fn open(path: PathBuf, expected: &Sha) -> ContextualResult<Self> {
+        let mut file = std::fs::File::open(&path)
+            .map_err(ContextualCause::from)
+            .with_cache_path(&path)?;
         let mut raw = [0u8; std::mem::size_of::<ObjectHeader>()];
         if let Err(error) = file.read_exact(&mut raw) {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                return fail(ContentError::CorruptObject {
+                return Err(contextual(ContentError::CorruptObject {
                     expected: expected.clone(),
                 })
-                .path(path);
+                .with_cache_path(path));
             }
-            return fail(error).path(path);
+            return Err(ContextualCause::from(error).with_cache_path(path));
         }
         match decode_header(&raw) {
             Some(header) if header.sha() == *expected => Ok(Self {
                 path,
                 size: header.size(),
             }),
-            Some(header) => fail(ErrorCause::ContentHashMismatch {
+            Some(header) => Err(contextual(ErrorCause::ContentHashMismatch {
                 expected: expected.clone(),
                 found: header.sha(),
             })
-            .path(path),
-            None => fail(ContentError::CorruptObject {
+            .with_cache_path(path)),
+            None => Err(contextual(ContentError::CorruptObject {
                 expected: expected.clone(),
             })
-            .path(path),
+            .with_cache_path(path)),
         }
     }
 
@@ -119,12 +122,15 @@ impl PoolFile {
     /// # Errors
     ///
     /// - [`confit_core::error::FilesystemError`] for missing and unreadable pool files.
-    pub fn body(&self) -> Result<flate2::read::GzDecoder<std::fs::File>> {
-        let mut file = std::fs::File::open(&self.path).path(&self.path)?;
+    pub fn body(&self) -> ContextualResult<flate2::read::GzDecoder<std::fs::File>> {
+        let mut file = std::fs::File::open(&self.path)
+            .map_err(ContextualCause::from)
+            .with_cache_path(&self.path)?;
         file.seek(std::io::SeekFrom::Start(
             std::mem::size_of::<ObjectHeader>() as u64,
         ))
-        .path(&self.path)?;
+        .map_err(ContextualCause::from)
+        .with_cache_path(&self.path)?;
         Ok(flate2::read::GzDecoder::new(file))
     }
 }

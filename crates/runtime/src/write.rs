@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 
-use confit_core::error::Terminal;
-use confit_core::error::{DocumentError, Error, ErrorCause, ErrorContext, EvalDetail, Outcome};
+use confit_core::error::kind::ErrorKind;
+use confit_core::error::{ContextualCause, Terminal, TerminalResult, WithContext};
 use confit_core::progress::{Event, ProgressSender};
 use confit_driver as driver;
 use confit_model::document::{Data, Document, TreeMember};
@@ -37,7 +37,7 @@ impl Writer {
         &self,
         documents: &[Document],
         changed: &BTreeSet<Route>,
-    ) -> Outcome<usize> {
+    ) -> TerminalResult<usize> {
         let total = documents.len();
         let mut done = 0;
         let mut written = 0;
@@ -62,20 +62,21 @@ impl Writer {
             if let Data::Opaque(found) = &document.data {
                 use std::io::Write as _;
 
-                driver::fs::remove_link(&expanded).write_destination(&expanded)?;
+                driver::fs::remove_link(&expanded).terminal(ErrorKind::WriteDestination)?;
                 let handle = &found.handle;
                 let mut reader = self
                     .stores
                     .resources()
                     .open(handle)
-                    .map_err(|error| error.route(document.path.display()))
-                    .write_destination(&expanded)?;
+                    .with_document(document.path.display())
+                    .terminal(ErrorKind::WriteDestination)?;
                 driver::StagedFile::write(&expanded, |file| {
                     std::io::copy(&mut reader, file)?;
                     file.flush()
                 })
-                .write_destination(&expanded)?;
-                driver::fs::set_mode(&expanded, Some(found.mode)).write_destination(&expanded)?;
+                .terminal(ErrorKind::WriteDestination)?;
+                driver::fs::set_mode(&expanded, Some(found.mode))
+                    .terminal(ErrorKind::WriteDestination)?;
                 done += 1;
                 self.emit_written(&document.path, done, total);
                 written += 1;
@@ -84,18 +85,21 @@ impl Writer {
             let outcome = match &document.data {
                 Data::Link(found) => {
                     let link = found.target.display();
-                    driver::fs::write_link(&expanded, Path::new(&link)).write_destination(&expanded)
+                    driver::fs::write_link(&expanded, Path::new(&link))
+                        .terminal(ErrorKind::WriteDestination)
                 }
                 Data::Text(_) | Data::Structured(_) | Data::Rc(_) => {
-                    driver::fs::remove_link(&expanded).write_destination(&expanded)?;
-                    let bytes = render_document(document).map_err(|leaf| {
-                        Error::write_destination(
-                            expanded.clone(),
-                            ErrorContext::from(leaf).route(document.path.display()),
-                        )
-                    })?;
-                    driver::fs::create_parent(&expanded).write_destination(&expanded)?;
-                    std::fs::write(&expanded, &bytes).write_destination(&expanded)
+                    driver::fs::remove_link(&expanded).terminal(ErrorKind::WriteDestination)?;
+                    let bytes = render_document(document)
+                        .map_err(ContextualCause::from)
+                        .with_fs_path(&expanded)
+                        .with_document(document.path.display())
+                        .terminal(ErrorKind::WriteDestination)?;
+                    driver::fs::create_parent(&expanded).terminal(ErrorKind::WriteDestination)?;
+                    std::fs::write(&expanded, &bytes)
+                        .map_err(ContextualCause::from)
+                        .with_fs_path(&expanded)
+                        .terminal(ErrorKind::WriteDestination)
                 }
                 Data::Tree(_) | Data::Opaque(_) => {
                     continue;
@@ -107,7 +111,7 @@ impl Writer {
                 Data::Opaque(found) => Some(found.mode),
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
             };
-            driver::fs::set_mode(&expanded, mode).write_destination(&expanded)?;
+            driver::fs::set_mode(&expanded, mode).terminal(ErrorKind::WriteDestination)?;
             done += 1;
             self.emit_written(&document.path, done, total);
             written += 1;
@@ -133,7 +137,7 @@ impl Writer {
         dest: &Path,
         route: &str,
         members: &BTreeMap<String, TreeMember>,
-    ) -> Outcome<usize> {
+    ) -> TerminalResult<usize> {
         use std::io::Write as _;
 
         for (relative, member) in members {
@@ -143,14 +147,15 @@ impl Writer {
                 .stores
                 .resources()
                 .open(handle)
-                .map_err(|error| error.route(route))
-                .write_destination(&path)?;
+                .with_document(route.to_owned())
+                .terminal(ErrorKind::WriteDestination)?;
             driver::StagedFile::write(&path, |file| {
                 std::io::copy(&mut reader, file)?;
                 file.flush()
             })
-            .write_destination(&path)?;
-            driver::fs::set_mode(&path, Some(member.mode())).write_destination(&path)?;
+            .terminal(ErrorKind::WriteDestination)?;
+            driver::fs::set_mode(&path, Some(member.mode()))
+                .terminal(ErrorKind::WriteDestination)?;
         }
         Ok(1)
     }
@@ -161,18 +166,12 @@ impl Writer {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable base folders.
-fn expand_destination(document: &Document) -> Outcome<PathBuf> {
-    match document.path.expand() {
-        Ok(found) => Ok(found),
-        Err(ErrorContext::Leaf(ErrorCause::DocumentError(DocumentError::ParseFailed {
-            input,
-            require,
-        }))) => Err(Error::evaluate(
-            EvalDetail::Parse { input, require },
-            Some(document.path.display()),
-        )),
-        Err(_) => unreachable!("route expand fails parsing alone"),
-    }
+fn expand_destination(document: &Document) -> TerminalResult<PathBuf> {
+    document
+        .path
+        .expand()
+        .with_document(document.path.display())
+        .terminal(ErrorKind::Evaluate)
 }
 
 /// Remove one backend path and report whether anything remains.
@@ -191,7 +190,11 @@ impl Writer {
     ///
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases and removal faults.
     /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for unresolvable bases and removal faults.
-    pub fn remove_deleted(&self, recorded: &[Document], desired: &[Document]) -> Outcome<usize> {
+    pub fn remove_deleted(
+        &self,
+        recorded: &[Document],
+        desired: &[Document],
+    ) -> TerminalResult<usize> {
         let total = recorded.len();
         let mut done = 0;
         let mut removed = 0;
@@ -204,7 +207,11 @@ impl Writer {
                 continue;
             }
             let expanded = expand_destination(old)?;
-            if remove(&expanded).remove_destination(&expanded)? {
+            if remove(&expanded)
+                .map_err(ContextualCause::from)
+                .with_fs_path(&expanded)
+                .terminal(ErrorKind::RemoveDestination)?
+            {
                 done += 1;
                 self.emit_removed(&old.path, done, total);
                 removed += 1;
@@ -223,7 +230,7 @@ impl Writer {
         &self,
         recorded: &[Document],
         desired: &[Document],
-    ) -> Outcome<usize> {
+    ) -> TerminalResult<usize> {
         let total: usize = recorded
             .iter()
             .filter_map(|old| match &old.data {
@@ -262,7 +269,11 @@ impl Writer {
                     continue;
                 }
                 let path = dest.join(relative);
-                if remove(&path).remove_destination(&path)? {
+                if remove(&path)
+                    .map_err(ContextualCause::from)
+                    .with_fs_path(&path)
+                    .terminal(ErrorKind::RemoveDestination)?
+                {
                     done += 1;
                     self.emit_removed(&old.path.join(relative), done, total);
                     removed += 1;

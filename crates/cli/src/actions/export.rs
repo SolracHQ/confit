@@ -3,8 +3,9 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::Terminal;
-use confit_core::error::{Error, ErrorCause, Failure, Outcome};
+use confit_core::error::{
+    ErrorCause, Terminal, TerminalResult, WithContext, error, kind::ErrorKind,
+};
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::stored;
 use confit_store::Stores;
@@ -49,7 +50,7 @@ impl<'a> ExportRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
     /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
-    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> Outcome<ExportReport> {
+    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> TerminalResult<ExportReport> {
         Self {
             args,
             stores,
@@ -64,11 +65,11 @@ impl<'a> ExportRunner<'a> {
     ///
     /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] for malformed slots.
     /// - [`confit_core::error::kind::ErrorKind::ExportState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
-    pub fn execute(self) -> Outcome<ExportReport> {
+    pub fn execute(self) -> TerminalResult<ExportReport> {
         let args = self.args;
         let stores = self.stores;
         let bundles = Bundler::new(&stores);
@@ -76,29 +77,17 @@ impl<'a> ExportRunner<'a> {
             None => Picker::Applied,
             Some(raw) => match raw.parse::<Picker>() {
                 Ok(picker) => picker,
-                Err(error) => match error.root_cause() {
-                    ErrorCause::SlotReason(reason) => {
-                        return Err(Error::export_slot(raw.to_owned(), reason.clone()));
+                Err(contextual) => match contextual.cause() {
+                    ErrorCause::SlotReason(_) => {
+                        return Err(contextual
+                            .with_slot(raw.to_owned())
+                            .terminal(ErrorKind::ExportSlot));
                     }
-                    _ => return Err(Error::export_state(error)),
+                    _ => return error(ErrorKind::ExportState, contextual),
                 },
             },
         };
-        let manifest = match stored::resolve(&stores.states(), &picker) {
-            Ok(found) => found,
-            Err(Failure::Terminal(terminal)) => return Err(terminal),
-            Err(Failure::Mid(error)) => match error.root_cause() {
-                ErrorCause::SlotReason(reason) => {
-                    let raw = match &picker {
-                        Picker::Applied => "applied".to_owned(),
-                        Picker::Named(name) => format!("@{name}"),
-                        Picker::History(pick) => format!("%{pick}"),
-                    };
-                    return Err(Error::export_slot(raw, reason.clone()));
-                }
-                _ => return Err(Error::export_state(error)),
-            },
-        };
+        let manifest = stored::resolve(&stores.states(), &picker)?;
         let stem = match &picker {
             Picker::Applied => APPLIED_STEM.to_owned(),
             Picker::Named(name) => name.clone(),
@@ -106,7 +95,10 @@ impl<'a> ExportRunner<'a> {
         };
         let auto = PathBuf::from(stem);
         if args.manifest {
-            let text = manifest.json().write_bundle(&auto)?;
+            let text = manifest
+                .json()
+                .with_bundle_path(&auto)
+                .terminal(ErrorKind::WriteBundle)?;
             return Ok(ExportReport {
                 dest: None,
                 manifest: Some(text),

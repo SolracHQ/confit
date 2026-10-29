@@ -280,7 +280,9 @@ dependencies = [
  "crossbeam-channel",
  "mlua",
  "serde",
+ "serde_json",
  "sha2",
+ "strsim",
  "thiserror",
 ]
 

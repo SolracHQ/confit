@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::ErrorContext;
+use confit_core::error::ContextualCause;
 
 #[cfg(not(any(test, feature = "test-support")))]
 mod host;
@@ -10,15 +10,13 @@ mod host;
 mod mem;
 
 #[cfg(any(test, feature = "test-support"))]
-pub use mem::{calls, clear, script, serve};
+pub use mem::{ScriptedRun, calls, clear, script, serve};
 
 /// Outcome of one process run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessOutput {
     /// The process exit code.
     pub code: i32,
-    /// Captured stdout and stderr bytes in order.
-    pub output: Vec<u8>,
 }
 
 /// One recorded process run call.
@@ -42,18 +40,18 @@ pub struct ProcessCall {
 /// - [`confit_core::error::FilesystemError::FileUnknown`] for unknown spawn and wait
 ///   faults.
 /// - [`confit_core::error::HookRunError::TimedOut`] for timed-out runs.
-/// - [`confit_core::error::HookRunError::OutputUnreadable`] for output join failures.
 pub fn run(
     argv: &[String],
     path_dirs: &[PathBuf],
     timeout_secs: u64,
-) -> Result<ProcessOutput, ErrorContext> {
+    log: &std::fs::File,
+) -> Result<ProcessOutput, ContextualCause> {
     #[cfg(any(test, feature = "test-support"))]
     {
-        mem::run(argv, path_dirs, timeout_secs)
+        mem::run(argv, path_dirs, timeout_secs, log)
     }
     #[cfg(not(any(test, feature = "test-support")))]
     {
-        host::spawn(argv, path_dirs, timeout_secs)
+        host::spawn(argv, path_dirs, timeout_secs, log)
     }
 }

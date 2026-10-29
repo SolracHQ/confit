@@ -43,9 +43,7 @@ pub fn render_document(document: &Document) -> std::result::Result<Vec<u8>, Docu
 fn render_toml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
-    toml::to_string(value).map_err(|source| DocumentError::RenderFailed {
-        reason: source.to_string(),
-    })
+    toml::to_string(value).map_err(|_| DocumentError::RenderFailed)
 }
 
 /// Render one map to pretty JSON text.
@@ -56,9 +54,7 @@ fn render_toml(
 fn render_json(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
-    serde_json::to_string_pretty(value).map_err(|source| DocumentError::RenderFailed {
-        reason: source.to_string(),
-    })
+    serde_json::to_string_pretty(value).map_err(|_| DocumentError::RenderFailed)
 }
 
 /// Render one map to YAML text.
@@ -69,9 +65,7 @@ fn render_json(
 fn render_yaml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
-    noyalib::to_string(value).map_err(|source| DocumentError::RenderFailed {
-        reason: source.to_string(),
-    })
+    noyalib::to_string(value).map_err(|_| DocumentError::RenderFailed)
 }
 
 /// Render rc data to shell text with trailing newline.
@@ -264,7 +258,7 @@ fn expand_field(found: &Route) -> std::result::Result<String, DocumentError> {
     found
         .expand()
         .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|error| match error.root_cause() {
+        .map_err(|contextual| match contextual.cause() {
             ErrorCause::DocumentError(leaf) => leaf.clone(),
             _ => unreachable!("route expansion fails parsing alone"),
         })

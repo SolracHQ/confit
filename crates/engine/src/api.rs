@@ -12,7 +12,9 @@ pub mod validate;
 
 use mlua::{Lua, Value};
 
-use confit_core::error::{Error, FilesystemError, Outcome};
+use confit_core::error::{
+    ContextualCause, FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
+};
 use confit_store::Stores;
 
 use crate::api::fact::Fact;
@@ -27,27 +29,27 @@ use crate::api::validate::Validate;
 ///
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names and module build failures.
 /// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names and module build failures.
-pub fn builtin(lua: &Lua, name: &str) -> Outcome<Value> {
+pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
     match name {
-        Fetch::NAMESPACE => {
-            Fetch::register(lua).map_err(|error| Error::lua_failed(error.to_string()))
-        }
-        Open::NAMESPACE => {
-            Open::register(lua).map_err(|error| Error::lua_failed(error.to_string()))
-        }
-        Validate::NAMESPACE => {
-            Validate::register(lua).map_err(|error| Error::lua_failed(error.to_string()))
-        }
-        Fact::NAMESPACE => {
-            Fact::register(lua).map_err(|error| Error::lua_failed(error.to_string()))
-        }
-        Template::NAMESPACE => {
-            Template::register(lua).map_err(|error| Error::lua_failed(error.to_string()))
-        }
-        _ => Err(Error::open_module(
-            name,
-            confit_core::error::ErrorContext::from(FilesystemError::FileMissing),
-        )),
+        Fetch::NAMESPACE => Fetch::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        Open::NAMESPACE => Open::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        Validate::NAMESPACE => Validate::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        Fact::NAMESPACE => Fact::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        Template::NAMESPACE => Template::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        _ => error(
+            ErrorKind::OpenModule,
+            contextual(FilesystemError::FileMissing).with_module(name),
+        ),
     }
 }
 

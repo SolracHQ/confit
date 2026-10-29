@@ -32,11 +32,11 @@ pub const PAIR: &str = r#"
             configs = {
                 {
                     name = id("first"),
-                    documents = { { path = { base = "home", relative = "zebra" }, text = "z" } },
+                    documents = { { path = route("home", "zebra"), text = "z" } },
                 },
                 {
                     name = id("second"),
-                    documents = { { path = { base = "home", relative = "apple" }, text = "a" } },
+                    documents = { { path = route("home", "apple"), text = "a" } },
                 },
             },
         }
@@ -46,8 +46,8 @@ pub const PAIR: &str = r#"
 pub const DUPLICATE: &str = r#"
         return {
             configs = {
-                { name = id("first"), documents = { { path = { base = "home", relative = ".bashrc" }, text = "one" } } },
-                { name = id("second"), documents = { { path = { base = "home", relative = ".bashrc" }, text = "two" } } },
+                { name = id("first"), documents = { { path = route("home", ".bashrc"), text = "one" } } },
+                { name = id("second"), documents = { { path = route("home", ".bashrc"), text = "two" } } },
             },
         }
     "#;
@@ -60,7 +60,7 @@ pub const STRUCTURED: &str = r#"
                     name = id("tools/bat"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.toml" },
+                            path = route("home", "config.toml"),
                             format = "toml",
                             data = { profile = { shell = "bash" } },
                         },
@@ -74,8 +74,8 @@ pub const STRUCTURED: &str = r#"
 pub const DUPLICATE_NAMES: &str = r#"
         return {
             configs = {
-                { name = id("same"), documents = { { path = { base = "home", relative = "a" }, text = "one" } } },
-                { name = id("same"), documents = { { path = { base = "home", relative = "b" }, text = "two" } } },
+                { name = id("same"), documents = { { path = route("home", "a"), text = "one" } } },
+                { name = id("same"), documents = { { path = route("home", "b"), text = "two" } } },
             },
         }
     "#;
@@ -88,19 +88,19 @@ pub const MERGED_PATCHES: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) d.data.alpha = "one" end,
                         },
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) d.data.beta = "two" end,
                         },
@@ -118,7 +118,7 @@ pub const MISSING_TARGET: &str = r#"
                     name = id("tools/app"),
                     patches = {
                         {
-                            target = { base = "home", relative = "fresh.json" },
+                            target = route("home", "fresh.json"),
                             format = "json",
                             apply = function(d) d.data.made = "yes" end,
                         },
@@ -134,10 +134,10 @@ pub const TEXT_BASE: &str = r#"
             configs = {
                 {
                     name = id("tools/app"),
-                    documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
+                    documents = { { path = route("home", "note.txt"), text = "hi" } },
                     patches = {
                         {
-                            target = { base = "home", relative = "note.txt" },
+                            target = route("home", "note.txt"),
                             format = "json",
                             apply = function(d) d.data.x = 1 end,
                         },
@@ -155,14 +155,14 @@ pub const FAILING_CALLBACK: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) error("patch boom") end,
                         },
@@ -180,17 +180,17 @@ pub const RC_MERGED: &str = r#"
                     name = id("tools/shell"),
                     documents = {
                         {
-                            path = { base = "home", relative = ".bashrc" },
+                            path = route("home", ".bashrc"),
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             apply = function(d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
                         },
                     },
@@ -207,7 +207,7 @@ pub const RC_MISSING: &str = r#"
                     name = id("tools/shell"),
                     patches = {
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
@@ -222,10 +222,10 @@ pub const RC_TEXT_BASE: &str = r#"
             configs = {
                 {
                     name = id("tools/shell"),
-                    documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
+                    documents = { { path = route("home", "note.txt"), text = "hi" } },
                     patches = {
                         {
-                            target = { base = "home", relative = "note.txt" },
+                            target = route("home", "note.txt"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
@@ -242,13 +242,13 @@ pub const RC_FAILING: &str = r#"
                     name = id("tools/shell"),
                     documents = {
                         {
-                            path = { base = "home", relative = ".bashrc" },
+                            path = route("home", ".bashrc"),
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             apply = function(d) error("rc boom") end,
                         },
                     },
@@ -265,13 +265,13 @@ pub const RC_FORMAT_GAP: &str = r#"
                     name = id("tools/shell"),
                     documents = {
                         {
-                            path = { base = "home", relative = ".bashrc" },
+                            path = route("home", ".bashrc"),
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             format = "json",
                             apply = function(d) d.data.x = 1 end,
                         },
@@ -289,14 +289,14 @@ pub const FORMAT_GAP: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "toml",
                             apply = function(d) d.data.x = 1 end,
                         },
@@ -314,7 +314,7 @@ pub const PROJECT_TEXT: &str = r#"
             configs = {
                 {
                     name = id("tools/bat"),
-                    documents = { { path = { base = "home", relative = ".bashrc" }, text = assert(handle:text()) } },
+                    documents = { { path = route("home", ".bashrc"), text = assert(handle:text()) } },
                 },
             },
         }
@@ -328,14 +328,14 @@ pub const PATCHED: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { count = 1 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) d.data.count = 2 d.data.extra = "yes" end,
                         },
@@ -353,23 +353,23 @@ pub const MIXED_SPLIT: &str = r#"
                     name = id("tools/both"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                         {
-                            path = { base = "home", relative = ".bashrc" },
+                            path = route("home", ".bashrc"),
                             profile = { { env = { name = "SEED", value = "0" } } },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) d.data.alpha = "one" end,
                         },
                         {
-                            target = { base = "home", relative = ".bashrc" },
+                            target = route("home", ".bashrc"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
                         },
                     },
@@ -386,14 +386,14 @@ pub const RC_OVER_STRUCTURED: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
@@ -410,19 +410,19 @@ pub const MIXED_FORMATS: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "fresh.json" },
+                            path = route("home", "fresh.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "fresh.json" },
+                            target = route("home", "fresh.json"),
                             format = "json",
                             apply = function(d) d.data.a = 1 end,
                         },
                         {
-                            target = { base = "home", relative = "fresh.json" },
+                            target = route("home", "fresh.json"),
                             format = "toml",
                             apply = function(d) d.data.b = 2 end,
                         },
@@ -440,19 +440,19 @@ pub const MIXED_SAME_TARGET: &str = r#"
                     name = id("tools/app"),
                     documents = {
                         {
-                            path = { base = "home", relative = "config.json" },
+                            path = route("home", "config.json"),
                             format = "json",
                             data = { seed = 0 },
                         },
                     },
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) d.data.alpha = "one" end,
                         },
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
                         },
                     },
@@ -469,7 +469,7 @@ pub const FOREIGN_PATCH_KEY: &str = r#"
                     name = id("tools/app"),
                     patches = {
                         {
-                            target = { base = "home", relative = "config.json" },
+                            target = route("home", "config.json"),
                             format = "json",
                             apply = function(d) return d end,
                             nope = 1,
@@ -486,11 +486,11 @@ pub const HOOKS_THROUGH: &str = r#"
                 configs = {
                     {
                         name = id("tools/app"),
-                        documents = { { path = { base = "home", relative = "note.txt" }, text = "hi" } },
+                        documents = { { path = route("home", "note.txt"), text = "hi" } },
                         hooks = {
-                            { argv = { "mise", "install" } },
-                            { argv = { "mise", "install" }, timeout = "90" },
-                            { argv = { "fc-cache" }, timeout = "10m" },
+                            { id = id("tools/mise-install"), argv = { "mise", "install" } },
+                            { id = id("tools/mise-install-quick"), argv = { "mise", "install" }, timeout = "90" },
+                            { id = id("tools/fc-cache"), argv = { "fc-cache" }, timeout = "10m" },
                         },
                     },
                 },
@@ -674,7 +674,7 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
             .map(|item| Arg::Text((*item).to_owned()))
             .collect(),
         path: Vec::new(),
-        id: None,
+        id: Id::of(format!("{}:{timeout_secs}", argv.join(" "))),
         requires: Condition::default(),
         when: Condition::default(),
         check: Condition::default(),
@@ -685,7 +685,7 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
 /// Build one identified hook with argv words and a timeout.
 pub fn identified_hook_of(id: &str, argv: &[&str], timeout_secs: u64) -> Hook {
     let mut hook = hook_of(argv, timeout_secs);
-    hook.id = Some(Id::of(id));
+    hook.id = Id::of(id);
     hook
 }
 

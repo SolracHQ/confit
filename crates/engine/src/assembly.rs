@@ -7,7 +7,7 @@ mod merge;
 pub(crate) mod owned;
 mod patches;
 
-use confit_core::error::Outcome;
+use confit_core::error::TerminalResult;
 use mlua::Lua;
 
 use crate::api::profile::Profile;
@@ -39,7 +39,7 @@ impl<'a> Assembler<'a> {
     /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
     ///   requirements and targets, foreign bases, bad shapes, and Lua failures.
-    pub fn assemble(&self, profile: &Profile) -> Outcome<Vec<Document>> {
+    pub fn assemble(&self, profile: &Profile) -> TerminalResult<Vec<Document>> {
         collect::check_names(profile)?;
         collect::check_requirements(profile)?;
         let placed = collect::dedupe(profile)?;
@@ -73,7 +73,11 @@ impl<'a> Assembler<'a> {
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids, unknown targets,
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated ids, unknown targets,
     ///   unbuilt routes, and Lua failures.
-    pub fn collect_hooks(&self, profile: &Profile, documents: &[Document]) -> Outcome<Vec<Hook>> {
+    pub fn collect_hooks(
+        &self,
+        profile: &Profile,
+        documents: &[Document],
+    ) -> TerminalResult<Vec<Hook>> {
         hooks::collect_hooks(self.lua, profile, documents)
     }
 }
@@ -87,6 +91,6 @@ impl<'a> Assembler<'a> {
 /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
 ///   requirements and targets, foreign bases, bad shapes, and Lua failures.
-pub fn assemble(lua: &Lua, profile: &Profile) -> Outcome<Vec<Document>> {
+pub fn assemble(lua: &Lua, profile: &Profile) -> TerminalResult<Vec<Document>> {
     Assembler::new(lua).assemble(profile)
 }

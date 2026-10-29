@@ -76,6 +76,7 @@ mod tests {
     use std::path::Path;
 
     use crate::api::builtin;
+    use confit_core::error::FetchError;
     use confit_core::sha::Sha;
     use confit_driver::http::{clear, fail, serve};
     use confit_store::{StoreRoots, Stores};
@@ -128,7 +129,7 @@ mod tests {
     fn dead_urls_return_nil_with_reason() {
         let dir = tempfile::tempdir().unwrap();
         clear();
-        fail(URL, "connection refused");
+        fail(URL, FetchError::DownloadFailed);
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);
         let source = r#"

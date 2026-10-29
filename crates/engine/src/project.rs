@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use confit_core::error::{
-    DocumentError, Error, ErrorContext, EvalDetail, Outcome, ProjectError, Require, Result,
+    ContextualCause, ContextualResult, DocumentError, FilesystemError, ProjectError,
+    TerminalResult, contextual, error, kind::ErrorKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -80,18 +81,28 @@ impl Project {
     /// # Errors
     ///
     /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable and malformed files.
-    pub fn read(root: &Path) -> Outcome<Self> {
+    pub fn read(root: &Path) -> TerminalResult<Self> {
         let path = root.join(FILE);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
-            Err(error) => return Err(Error::load_project(path, ErrorContext::from(error))),
+            Err(fault) => {
+                return error(
+                    ErrorKind::LoadProject,
+                    ContextualCause::from(fault).with_fs_path(&path),
+                );
+            }
         };
         let text = match String::from_utf8(bytes) {
             Ok(text) => text,
-            Err(error) => return Err(Error::load_project(path, ErrorContext::from(error))),
+            Err(fault) => {
+                return error(
+                    ErrorKind::LoadProject,
+                    ContextualCause::from(fault).with_fs_path(&path),
+                );
+            }
         };
         Self::parse(&text, &path)
     }
@@ -101,15 +112,15 @@ impl Project {
     /// # Errors
     ///
     /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for malformed text.
-    pub fn parse(text: &str, path: &Path) -> Outcome<Self> {
+    pub fn parse(text: &str, path: &Path) -> TerminalResult<Self> {
         match toml::from_str(text) {
             Ok(found) => Ok(found),
-            Err(error) => Err(Error::load_project(
-                path.to_path_buf(),
-                ErrorContext::from(ProjectError::InvalidConfig {
-                    detail: error.to_string(),
-                }),
-            )),
+            Err(fault) => error(
+                ErrorKind::LoadProject,
+                contextual(ProjectError::InvalidConfig)
+                    .with_fs_path(path)
+                    .with_detail(fault.to_string()),
+            ),
         }
     }
 
@@ -118,13 +129,9 @@ impl Project {
     /// # Errors
     ///
     /// - [`confit_core::error::DocumentError::RenderFailed`] for unrenderable projects.
-    pub fn render(&self) -> Result<String> {
-        toml::to_string_pretty(self).map_err(|error| {
-            ErrorContext::from(DocumentError::RenderFailed {
-                reason: error.to_string(),
-            })
-            .path(PathBuf::from(FILE))
-        })
+    pub fn render(&self) -> ContextualResult<String> {
+        toml::to_string_pretty(self)
+            .map_err(|_| contextual(DocumentError::RenderFailed).with_fs_path(PathBuf::from(FILE)))
     }
 
     /// Resolve the plugin tree against one project root.
@@ -133,35 +140,34 @@ impl Project {
     ///
     /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable roots and outside folders.
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable roots and outside folders.
-    pub fn plugin_root(&self, root: &Path) -> Outcome<PluginRoot> {
+    pub fn plugin_root(&self, root: &Path) -> TerminalResult<PluginRoot> {
         let joined = root.join(&self.plugins.folder);
         let root_real = match std::fs::canonicalize(root) {
             Ok(found) => found,
-            Err(error) => {
-                return Err(Error::load_project(
-                    root.join(FILE),
-                    ErrorContext::from(error),
-                ));
+            Err(fault) => {
+                return error(
+                    ErrorKind::LoadProject,
+                    ContextualCause::from(fault).with_fs_path(root.join(FILE)),
+                );
             }
         };
         let dir = match std::fs::canonicalize(&joined) {
             Ok(dir) => dir,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => joined,
-            Err(error) => {
-                return Err(Error::load_project(
-                    root.join(FILE),
-                    ErrorContext::from(error),
-                ));
+            Err(fault) => {
+                return error(
+                    ErrorKind::LoadProject,
+                    ContextualCause::from(fault).with_fs_path(root.join(FILE)),
+                );
             }
         };
         if !dir.starts_with(&root_real) && !self.plugins.allow_external_folders {
-            return Err(Error::evaluate(
-                EvalDetail::Parse {
-                    input: self.plugins.folder.display().to_string(),
-                    require: Require::ProjectFolder,
-                },
-                None,
-            ));
+            return error(
+                ErrorKind::Evaluate,
+                contextual(FilesystemError::OutsideRoot)
+                    .with_project(root)
+                    .with_scope(&dir),
+            );
         }
         Ok(PluginRoot { dir })
     }
@@ -196,9 +202,27 @@ mod tests {
 
     #[test]
     fn malformed_text_fails_showing_path() {
-        assert!(
-            Project::parse("[plugins", Path::new("some/project.toml")).is_err(),
-            "malformed text fails"
-        );
+        use confit_core::error::{ErrorCause, ProjectError};
+
+        match Project::parse("[plugins", Path::new("some/project.toml")) {
+            Ok(_) => panic!("malformed text passes"),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.cause(),
+                        ErrorCause::ProjectError(ProjectError::InvalidConfig)
+                    ),
+                    "the cause shows the config: {error}"
+                );
+                match &error.context().fs_path {
+                    Some(found) => assert_eq!(
+                        found,
+                        &Path::new("some/project.toml"),
+                        "the fs slot shows the file: {error}"
+                    ),
+                    None => panic!("the fs slot shows the file: {error}"),
+                }
+            }
+        }
     }
 }

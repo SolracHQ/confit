@@ -11,11 +11,11 @@ local rc_lib = require("plugins._.mise.rc")
 local release = require("plugins._.mise.release")
 
 ---@type Route
-local MISE_TOML = { base = "config", relative = "mise/config.toml" }
+local MISE_TOML = route("config", "mise/config.toml")
 ---@type Route
-local MISE_BIN = { base = "home", relative = ".local/bin/mise" }
+local MISE_BIN = route("home", ".local/bin/mise")
 ---@type Route
-local MISE_BINDIR = { base = "home", relative = ".local/bin" }
+local MISE_BINDIR = route("home", ".local/bin")
 
 --- Installer config name.
 local INSTALLER_NAME = "plugin:_/mise:install"
@@ -127,7 +127,7 @@ local function shim_patch(bin)
 		---@param hook Hook Live install hook under patching.
 		apply = function(hook)
 			hook.check =
-				join_check(hook.check, { exists = { route = { base = "data", relative = "mise/shims/" .. bin } } })
+				join_check(hook.check, { exists = { route = route("data", "mise/shims/" .. bin) } })
 		end,
 	}
 end

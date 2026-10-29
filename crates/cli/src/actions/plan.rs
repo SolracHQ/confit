@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use confit_core::error::{Error, ErrorCause, Failure, Outcome};
+use confit_core::error::{
+    ErrorCause, FilesystemError, SlotReason, TerminalResult, contextual, error, kind::ErrorKind,
+};
 use confit_engine::Engine;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::stored;
@@ -40,40 +42,35 @@ impl PlanRunner<'_> {
     ///
     /// - [`confit_core::error::kind::ErrorKind::BundleSlot`] for malformed slots.
     /// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
+    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable projects.
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for render failures.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states.
     /// - [`confit_core::error::kind::ErrorKind::PlanState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for state faults.
-    pub fn execute(self) -> Outcome<PlanReport> {
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for state writes.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    pub fn execute(self) -> TerminalResult<PlanReport> {
         let path = plan_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {
-            return Err(Error::missing_project(self.args.project.clone()));
+            return error(
+                ErrorKind::MissingProject,
+                contextual(FilesystemError::FileMissing).with_project(&self.args.project),
+            );
         }
         let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
         let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
-        let raw = self
-            .args
-            .output
-            .as_deref()
-            .and_then(|path| path.to_str())
-            .map(str::to_owned);
-        let prepared = match prepare(&self.stores, desired) {
-            Ok(found) => found,
-            Err(Failure::Terminal(terminal)) => return Err(terminal),
-            Err(Failure::Mid(error)) => match error.root_cause() {
-                ErrorCause::SlotReason(reason) => {
-                    return Err(Error::bundle_slot(raw.unwrap_or_default(), reason.clone()));
-                }
-                _ => return Err(Error::plan_state(error)),
-            },
-        };
+        let prepared = prepare(&self.stores, desired)?;
         for warning in &prepared.warnings {
             self.sinks.print_line(warning.summary());
             log::warn!(
-                "diff warning: {} chain: {:?}",
+                "diff warning: {} context: {}",
                 warning.summary(),
-                warning.chain()
+                warning.context()
             );
         }
         let text = render_prepared(&prepared);
@@ -82,18 +79,20 @@ impl PlanRunner<'_> {
                 let raw = output.to_str().unwrap_or("");
                 let picker: Picker = match raw.parse() {
                     Ok(picker) => picker,
-                    Err(error) => match error.root_cause() {
-                        ErrorCause::SlotReason(reason) => {
-                            return Err(Error::bundle_slot(raw.to_owned(), reason.clone()));
+                    Err(contextual) => match contextual.cause() {
+                        ErrorCause::SlotReason(_) => {
+                            return Err(contextual
+                                .with_slot(raw.to_owned())
+                                .terminal(ErrorKind::BundleSlot));
                         }
-                        _ => return Err(Error::plan_state(error)),
+                        _ => return error(ErrorKind::PlanState, contextual),
                     },
                 };
                 let Picker::Named(_) = picker else {
-                    return Err(Error::bundle_slot(
-                        raw.to_owned(),
-                        confit_core::error::SlotReason::BareSlot,
-                    ));
+                    return error(
+                        ErrorKind::BundleSlot,
+                        contextual(SlotReason::BareSlot).with_slot(raw.to_owned()),
+                    );
                 };
                 stored::store_named(&self.stores.states(), &picker, &prepared.desired)?;
             } else {

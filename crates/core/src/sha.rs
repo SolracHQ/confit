@@ -28,7 +28,7 @@ impl std::fmt::Display for ShaError {
 impl std::error::Error for ShaError {}
 
 /// Verified hash result alias.
-pub type Result<T> = std::result::Result<T, ShaError>;
+pub type ShaResult<T> = std::result::Result<T, ShaError>;
 
 /// Byte count for a SHA-256 digest.
 pub const SHA_BYTE_LEN: usize = 32;
@@ -51,7 +51,7 @@ impl Sha {
     /// # Errors
     ///
     /// - [`ShaError::Parse`] for malformed hashes.
-    pub fn new(sha: impl Into<String>) -> Result<Self> {
+    pub fn new(sha: impl Into<String>) -> ShaResult<Self> {
         let sha = sha.into();
         check_sha_hex(&sha)?;
         let bytes = sha.as_bytes();
@@ -205,7 +205,7 @@ impl<W: std::io::Write> std::io::Write for ShaWriter<W> {
 }
 
 /// Decode one hex character into its value.
-fn hex_value(byte: u8, sha: &str) -> Result<u8> {
+fn hex_value(byte: u8, sha: &str) -> ShaResult<u8> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
@@ -218,7 +218,7 @@ fn hex_value(byte: u8, sha: &str) -> Result<u8> {
 }
 
 /// Reject malformed content hashes.
-fn check_sha_hex(sha: &str) -> Result<()> {
+fn check_sha_hex(sha: &str) -> ShaResult<()> {
     if sha.len() == SHA_HEX_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Ok(());
     }

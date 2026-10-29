@@ -1,7 +1,10 @@
 //! Delete run
 //! Named state removal with unreferenced pruning.
 
-use confit_core::error::{Error, ErrorCause, Outcome};
+use confit_core::error::{
+    ContextualCause, Error, ErrorCause, SlotReason, Terminal, TerminalResult, contextual, error,
+    kind::ErrorKind,
+};
 use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
@@ -27,37 +30,41 @@ pub struct DeleteReport {
 /// - [`confit_core::error::kind::ErrorKind::DeleteSlot`] for malformed slots.
 /// - [`confit_core::error::kind::ErrorKind::DeleteState`] for state removals.
 /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for unreferenced prunes.
-pub fn run(args: &DeleteArgs, stores: Stores) -> Outcome<DeleteReport> {
+pub fn run(args: &DeleteArgs, stores: Stores) -> TerminalResult<DeleteReport> {
     if !args.name.starts_with('@') {
-        return Err(Error::delete_non_named(args.name.clone()));
+        return error(
+            ErrorKind::DeleteNonNamed,
+            contextual(SlotReason::BareSlot).with_slot(&args.name),
+        );
     }
     let picker: Picker = match args.name.parse() {
         Ok(picker) => picker,
-        Err(error) => match error.root_cause() {
-            ErrorCause::SlotReason(reason) => {
-                return Err(Error::delete_slot(args.name.clone(), reason.clone()));
-            }
-            _ => return Err(Error::delete_state(error)),
-        },
+        Err(contextual) => return Err(map_slot(contextual.with_slot(&args.name))),
     };
     let Picker::Named(name) = &picker else {
-        return Err(Error::delete_non_named(args.name.clone()));
+        return error(
+            ErrorKind::DeleteNonNamed,
+            contextual(SlotReason::BareSlot).with_slot(&args.name),
+        );
     };
     let store = stores.states();
     let handle = match store.resolve(&picker) {
         Ok(handle) => handle,
-        Err(error) => match error.root_cause() {
-            ErrorCause::SlotReason(reason) => {
-                return Err(Error::delete_slot(args.name.clone(), reason.clone()));
-            }
-            _ => return Err(Error::delete_state(error)),
-        },
+        Err(contextual) => return Err(map_slot(contextual.with_slot(&args.name))),
     };
-    store.remove(&handle).map_err(Error::delete_state)?;
-    let keep = stored::keep_set(&store).map_err(Error::delete_state)?;
-    let pruned = stores.pool().prune(&keep).map_err(Error::prune_blobs)?;
+    store.remove(&handle).terminal(ErrorKind::DeleteState)?;
+    let keep = stored::keep_set(&store).terminal(ErrorKind::DeleteState)?;
+    let pruned = stores.pool().prune(&keep).terminal(ErrorKind::PruneBlobs)?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,
     })
+}
+
+/// Map one slot fault to its delete terminal.
+fn map_slot(contextual: ContextualCause) -> Error {
+    match contextual.cause() {
+        ErrorCause::SlotReason(_) => contextual.terminal(ErrorKind::DeleteSlot),
+        _ => contextual.terminal(ErrorKind::DeleteState),
+    }
 }

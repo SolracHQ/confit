@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use confit_core::error::{ContentError, ErrorCause, Result, fail};
+use confit_core::error::{
+    ContentError, ContextualCause, ContextualResult, ErrorCause, WithContext, contextual,
+};
 use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::Sha;
 
@@ -49,14 +51,14 @@ impl FetchCache {
     /// # Errors
     ///
     /// - [`confit_core::error::FetchError`] for failing downloads.
-    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
+    /// - [`ErrorCause::ContentHashMismatch`] for sha mismatches.
+    /// - [`FilesystemError`] for cache write faults.
     pub fn fetch(
         &self,
         url: &str,
         expected_sha: Option<Sha>,
         re_fetch: bool,
-    ) -> Result<ResourceHandle> {
+    ) -> ContextualResult<ResourceHandle> {
         Fetch::new(self, url, expected_sha.as_ref()).run(re_fetch)
     }
 }
@@ -111,9 +113,9 @@ impl<'a> Fetch<'a> {
     /// # Errors
     ///
     /// - [`confit_core::error::FetchError`] for failing downloads.
-    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
-    fn run(&mut self, re_fetch: bool) -> Result<ResourceHandle> {
+    /// - [`ErrorCause::ContentHashMismatch`] for sha mismatches.
+    /// - [`FilesystemError`] for cache write faults.
+    fn run(&mut self, re_fetch: bool) -> ContextualResult<ResourceHandle> {
         let _ = self.cache.progress.send(Event::FetchStarted {
             url: self.url.to_owned(),
         });
@@ -127,8 +129,8 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ErrorCause`] for hits failing the user sha.
-    fn hit(&self) -> Option<Result<ResourceHandle>> {
+    /// - [`ErrorCause::ContentHashMismatch`] for hits failing the user sha.
+    fn hit(&self) -> Option<ContextualResult<ResourceHandle>> {
         let hit = self.lookup()?;
         let ResourceHandle::Cache(sha) = &hit else {
             return None;
@@ -162,9 +164,9 @@ impl<'a> Fetch<'a> {
     /// # Errors
     ///
     /// - [`confit_core::error::FetchError`] for failing downloads.
-    /// - [`confit_core::error::ErrorCause`] for sha mismatches.
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
-    fn download(&mut self) -> Result<ResourceHandle> {
+    /// - [`ErrorCause::ContentHashMismatch`] for sha mismatches.
+    /// - [`FilesystemError`] for cache write faults.
+    fn download(&mut self) -> ContextualResult<ResourceHandle> {
         let (reader, total) = driver::http::download(self.url, BODY_LIMIT_BYTES)?;
         self.total = total;
         let resources = self.cache.resources.clone();
@@ -175,11 +177,11 @@ impl<'a> Fetch<'a> {
                 self.report();
             },
         };
-        let handle = resources.store(metered)?;
+        let handle = resources.store(metered).with_url(self.url)?;
         let sha = match handle {
             ResourceHandle::Cache(sha) => sha,
             ResourceHandle::Project(..) => {
-                return fail(ContentError::ProjectHandleInCache);
+                return Err(contextual(ContentError::ProjectHandleInCache).with_url(self.url));
             }
         };
         self.check(&sha)?;
@@ -207,11 +209,13 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
-    fn write_index(&self, digest: &Sha) -> Result<()> {
+    /// - [`FilesystemError`] for cache write faults.
+    fn write_index(&self, digest: &Sha) -> ContextualResult<()> {
         let index = self.cache.index_path(self.url);
-        driver::fs::create_parent(&index)?;
-        std::fs::write(&index, digest.hex().as_bytes())?;
+        driver::fs::create_parent(&index).with_cache_path(&index)?;
+        std::fs::write(&index, digest.hex().as_bytes())
+            .map_err(ContextualCause::from)
+            .with_cache_path(&index)?;
         Ok(())
     }
 
@@ -219,16 +223,17 @@ impl<'a> Fetch<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ErrorCause`] for mismatches.
-    fn check(&self, actual: &Sha) -> Result<()> {
+    /// - [`ErrorCause::ContentHashMismatch`] for mismatches.
+    fn check(&self, actual: &Sha) -> ContextualResult<()> {
         let Some(wanted) = self.expected else {
             return Ok(());
         };
         if actual != wanted {
-            return fail(ErrorCause::ContentHashMismatch {
-                expected: wanted.clone(),
+            return Err(contextual(ErrorCause::ContentHashMismatch {
+                expected: (*wanted).clone(),
                 found: actual.clone(),
-            });
+            })
+            .with_url(self.url));
         }
         Ok(())
     }
@@ -561,8 +566,12 @@ mod tests {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => {
                 assert!(
-                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    matches!(error.cause(), ErrorCause::ContentHashMismatch { .. }),
                     "mismatch keeps the cause: {error}"
+                );
+                assert!(
+                    matches!(error.context.url.as_deref(), Some(URL)),
+                    "mismatch keeps the url: {error}"
                 );
             }
         }
@@ -570,8 +579,12 @@ mod tests {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => {
                 assert!(
-                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    matches!(error.cause(), ErrorCause::ContentHashMismatch { .. }),
                     "mismatch keeps the cause: {error}"
+                );
+                assert!(
+                    matches!(error.context.url.as_deref(), Some(FILE_URL)),
+                    "mismatch keeps the url: {error}"
                 );
             }
         }
@@ -650,14 +663,25 @@ mod tests {
 
     #[test]
     fn scripted_failure_parsed_as_download_error_showing_url() {
+        use confit_core::error::FetchError;
+
         let dir = tempfile::tempdir().unwrap();
         driver::http::clear();
         let cache = file_cache(dir.path());
-        driver::http::fail(URL, "boom");
-        assert!(
-            cache.fetch(URL, None, false).is_err(),
-            "scripted failure fails"
-        );
+        driver::http::fail(URL, FetchError::DownloadFailed);
+        match cache.fetch(URL, None, false) {
+            Ok(_) => panic!("scripted failure passes"),
+            Err(error) => {
+                assert!(matches!(
+                    error.cause(),
+                    confit_core::error::ErrorCause::FetchError(FetchError::DownloadFailed)
+                ));
+                assert!(
+                    matches!(error.context.url.as_deref(), Some(URL)),
+                    "failure keeps the url: {error}"
+                );
+            }
+        }
         assert_eq!(driver::http::calls(URL), 1, "one download attempt per miss");
         assert!(
             cache.fetch(URL, None, false).is_err(),
@@ -738,8 +762,12 @@ mod tests {
             Ok(_) => panic!("bad user sha passes"),
             Err(error) => {
                 assert!(
-                    matches!(error.root_cause(), ErrorCause::ContentHashMismatch { .. }),
+                    matches!(error.cause(), ErrorCause::ContentHashMismatch { .. }),
                     "mismatch keeps the cause: {error}"
+                );
+                assert!(
+                    matches!(error.context.url.as_deref(), Some(URL)),
+                    "mismatch keeps the url: {error}"
                 );
             }
         }

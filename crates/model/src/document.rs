@@ -11,7 +11,7 @@ use crate::routes::Route;
 use confit_binding::fault::FaceFault;
 use confit_binding::value::Decode;
 use confit_binding_macros::Face;
-use confit_core::error::{DocumentError, ErrorContext, Result};
+use confit_core::error::{ContextualResult, DocumentError, contextual};
 use confit_store::handles::ResourceHandle;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
@@ -132,7 +132,7 @@ impl StructuredDocument {
     /// # Errors
     ///
     /// - [`DocumentError::RenderFailed`] for serializer failures.
-    pub fn bytes(&self) -> Result<Vec<u8>> {
+    pub fn bytes(&self) -> ContextualResult<Vec<u8>> {
         match self.format {
             StructuredFormat::Toml => Ok(render_toml(&self.data)?.into_bytes()),
             StructuredFormat::Json => Ok(render_json(&self.data)?.into_bytes()),
@@ -328,12 +328,8 @@ fn parse_mode_bits(text: &str) -> Option<u32> {
 /// # Errors
 ///
 /// - [`DocumentError::RenderFailed`] for serializer failures.
-fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    toml::to_string(value).map_err(|source| {
-        ErrorContext::from(DocumentError::RenderFailed {
-            reason: source.to_string(),
-        })
-    })
+fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
+    toml::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }
 
 /// Render one map to pretty JSON text.
@@ -341,12 +337,8 @@ fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
 /// # Errors
 ///
 /// - [`DocumentError::RenderFailed`] for serializer failures.
-fn render_json(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    serde_json::to_string_pretty(value).map_err(|source| {
-        ErrorContext::from(DocumentError::RenderFailed {
-            reason: source.to_string(),
-        })
-    })
+fn render_json(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
+    serde_json::to_string_pretty(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }
 
 /// Render one map to YAML text.
@@ -354,10 +346,6 @@ fn render_json(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
 /// # Errors
 ///
 /// - [`DocumentError::RenderFailed`] for serializer failures.
-fn render_yaml(value: &BTreeMap<String, serde_json::Value>) -> Result<String> {
-    noyalib::to_string(value).map_err(|source| {
-        ErrorContext::from(DocumentError::RenderFailed {
-            reason: source.to_string(),
-        })
-    })
+fn render_yaml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
+    noyalib::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }

@@ -130,6 +130,7 @@ fn timeout_text(secs: u64) -> String {
 mod tests {
     use super::*;
     use confit_model::hook::diff_lifecycle;
+    use confit_model::id::Id;
     use confit_model::routes::{Route, RouteBase};
 
     fn hook(
@@ -139,6 +140,7 @@ mod tests {
         check: Condition,
         timeout_secs: u64,
     ) -> Hook {
+        let id = Id::of(argv.join(" "));
         Hook {
             argv: argv
                 .iter()
@@ -148,7 +150,7 @@ mod tests {
                 .iter()
                 .map(|item| Arg::Text(item.to_string()))
                 .collect(),
-            id: None,
+            id,
             requires: Condition::default(),
             when,
             check,

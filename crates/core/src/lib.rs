@@ -9,3 +9,5 @@ pub mod error;
 pub mod progress;
 /// Verified content hashes.
 pub mod sha;
+/// Near-match suggestions for unknown names.
+pub mod suggest;

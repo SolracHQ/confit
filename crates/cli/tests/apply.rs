@@ -9,7 +9,7 @@ use std::path::Path;
 use common::{seed_file, test_sinks, test_stores};
 use confit_cli::actions::apply::ApplyRunner;
 use confit_cli::cli::ApplyArgs;
-use confit_core::error::Outcome;
+use confit_core::error::TerminalResult;
 use confit_driver::paths::BaseDirs;
 
 /// Build one profile with a single text document at the relative path.
@@ -20,7 +20,7 @@ return {{
     configs = {{
         {{
             name = id("note"),
-            documents = {{ {{ path = {{ base = "home", relative = "{relative}" }}, text = "hello" }} }},
+            documents = {{ {{ path = route("home", "{relative}"), text = "hello" }} }},
         }},
     }},
 }}
@@ -35,7 +35,7 @@ fn seed_project(dir: &Path, relative: &str) {
 }
 
 /// Run one apply with the input bytes and the force flag.
-fn run_apply(dir: &Path, input: &[u8], force: bool) -> Outcome<usize> {
+fn run_apply(dir: &Path, input: &[u8], force: bool) -> TerminalResult<usize> {
     let site = dir.join("site");
     let stores = test_stores(dir, "site");
     let args = ApplyArgs {

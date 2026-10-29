@@ -7,7 +7,7 @@ local render = require("confit.template")
 local TEMPLATE = "resources/starship.toml.j2"
 
 ---@type Route
-local STARSHIP_TOML = { base = "config", relative = "starship.toml" }
+local STARSHIP_TOML = route("config", "starship.toml")
 
 ---@param opts table User vars for the template.
 ---@return Config Starship config for the profile configs array.

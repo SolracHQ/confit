@@ -2,9 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_core::error::FilesystemError;
-use confit_core::error::Result;
-use confit_core::error::locate::Locate;
+use confit_core::error::ContextualResult;
+use confit_core::error::{ContextualCause, ErrorCause, FilesystemError, WithContext};
 use confit_core::sha::Sha;
 use confit_driver as driver;
 use confit_model::document::{Data, Document};
@@ -31,10 +30,10 @@ impl Digest {
 enum DiskOutcome<T> {
     /// Missing destination.
     Absent,
-    /// Unreadable destination.
+    /// Unreadable destination with its boxed located fault.
     Unreadable {
         /// The fault cause for the failed read.
-        fault: FilesystemError,
+        fault: Box<ContextualCause>,
     },
     /// Directory blocks the destination.
     Blocked,
@@ -69,8 +68,8 @@ impl DiskReader {
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub(crate) fn read_bytes(
         document: &Document,
-        on_present: impl FnOnce(FileBytes) -> Result<Vec<Difference>>,
-    ) -> Result<Vec<Difference>> {
+        on_present: impl FnOnce(FileBytes) -> ContextualResult<Vec<Difference>>,
+    ) -> ContextualResult<Vec<Difference>> {
         let expanded = Self::expanded(document)?;
         let outcome = if matches!(document.data, Data::Link(_)) {
             match driver::fs::read_link_bytes(&expanded) {
@@ -96,8 +95,8 @@ impl DiskReader {
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub(crate) fn digest(
         document: &Document,
-        on_present: impl FnOnce(FileDigest) -> Result<Vec<Difference>>,
-    ) -> Result<Vec<Difference>> {
+        on_present: impl FnOnce(FileDigest) -> ContextualResult<Vec<Difference>>,
+    ) -> ContextualResult<Vec<Difference>> {
         let expanded = Self::expanded(document)?;
         let outcome = if matches!(document.data, Data::Link(_)) {
             match driver::fs::read_link_bytes(&expanded) {
@@ -130,8 +129,8 @@ impl DiskReader {
         base: &Path,
         relative: &str,
         path: &Route,
-        on_present: impl FnOnce(FileDigest) -> Result<Vec<Difference>>,
-    ) -> Result<Vec<Difference>> {
+        on_present: impl FnOnce(FileDigest) -> ContextualResult<Vec<Difference>>,
+    ) -> ContextualResult<Vec<Difference>> {
         let full = base.join(relative);
         let outcome = if full.is_symlink() {
             match driver::fs::read_link_bytes(&full) {
@@ -145,9 +144,16 @@ impl DiskReader {
                         mode: None,
                     })
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
-                Err(error) => DiskOutcome::Unreadable {
-                    fault: FilesystemError::from(error),
+                Err(contextual)
+                    if matches!(
+                        contextual.cause(),
+                        ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                    ) =>
+                {
+                    DiskOutcome::Absent
+                }
+                Err(contextual) => DiskOutcome::Unreadable {
+                    fault: Box::new(contextual),
                 },
             }
         } else if full.is_dir() {
@@ -162,13 +168,13 @@ impl DiskReader {
     fn mapped<T>(
         outcome: DiskOutcome<T>,
         path: &Route,
-        on_present: impl FnOnce(T) -> Result<Vec<Difference>>,
-    ) -> Result<Vec<Difference>> {
+        on_present: impl FnOnce(T) -> ContextualResult<Vec<Difference>>,
+    ) -> ContextualResult<Vec<Difference>> {
         Ok(match outcome {
             DiskOutcome::Absent => vec![Difference::Missing { path: path.clone() }],
             DiskOutcome::Unreadable { fault } => vec![Difference::Unreadable {
                 path: path.clone(),
-                reason: Self::reason(&fault),
+                reason: fault.cause().to_string(),
             }],
             DiskOutcome::Blocked => vec![Difference::Blocked { path: path.clone() }],
             DiskOutcome::Present(payload) => return on_present(payload),
@@ -180,16 +186,11 @@ impl DiskReader {
     /// # Errors
     ///
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
-    fn expanded(document: &Document) -> Result<PathBuf> {
-        document.path.expand().route(document.path.display())
-    }
-
-    /// Show one unreadable fault for difference lines.
-    pub(crate) fn reason(fault: &FilesystemError) -> String {
-        match fault {
-            FilesystemError::FileUnknown { message } => message.clone(),
-            known => known.to_string(),
-        }
+    fn expanded(document: &Document) -> ContextualResult<PathBuf> {
+        document
+            .path
+            .expand()
+            .with_document(document.path.display())
     }
 
     /// Resolve one expanded path through its symlink target.
@@ -209,7 +210,7 @@ impl DiskReader {
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
             Err(error) => DiskOutcome::Unreadable {
-                fault: FilesystemError::from(error),
+                fault: Box::new(ContextualCause::from(error).with_fs_path(path)),
             },
         }
     }
@@ -224,12 +225,12 @@ impl DiskReader {
                     mode,
                 }),
                 Err(error) => DiskOutcome::Unreadable {
-                    fault: FilesystemError::from(error),
+                    fault: Box::new(ContextualCause::from(error).with_fs_path(path)),
                 },
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskOutcome::Absent,
             Err(error) => DiskOutcome::Unreadable {
-                fault: FilesystemError::from(error),
+                fault: Box::new(ContextualCause::from(error).with_fs_path(path)),
             },
         }
     }

@@ -3,16 +3,19 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use confit_core::error::{ContextualCause, ContextualResult, FilesystemError};
+
 /// Build the parent folder for one file path.
 ///
 /// # Errors
 ///
-/// - Parent build failures fail as io errors.
-pub fn create_parent(path: &Path) -> io::Result<()> {
+/// - [`FilesystemError::FileMissing`] for missing parents.
+/// - [`FilesystemError::FilePermissionDenied`] for unwritable parents.
+pub fn create_parent(path: &Path) -> ContextualResult<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|error| io_context(error, path))?;
     }
     Ok(())
 }
@@ -21,13 +24,13 @@ pub fn create_parent(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [`std::io::ErrorKind::NotFound`] for missing folders.
-/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable folders.
-/// - [`std::io::ErrorKind::NotADirectory`] when the path is a file.
-pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
+/// - [`FilesystemError::FileMissing`] for missing folders.
+/// - [`FilesystemError::FilePermissionDenied`] for unreadable folders.
+/// - [`FilesystemError::FileUnknown`] for file paths passed as folders.
+pub fn read_dir(path: &Path) -> ContextualResult<Vec<PathBuf>> {
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(path)? {
-        entries.push(entry?.path());
+    for entry in std::fs::read_dir(path).map_err(|error| io_context(error, path))? {
+        entries.push(entry.map_err(|error| io_context(error, path))?.path());
     }
     entries.sort();
     Ok(entries)
@@ -37,25 +40,25 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<PathBuf>> {
 ///
 /// # Errors
 ///
-/// - [`std::io::ErrorKind::NotFound`] for missing parents.
-/// - [`std::io::ErrorKind::PermissionDenied`] for unwritable folders.
-/// - [`std::io::ErrorKind::InvalidInput`] when link paths carry bad bytes.
-pub fn write_link(link: &Path, target: &Path) -> io::Result<()> {
+/// - [`FilesystemError::FileMissing`] for missing parents.
+/// - [`FilesystemError::FilePermissionDenied`] for unwritable folders.
+pub fn write_link(link: &Path, target: &Path) -> ContextualResult<()> {
     create_parent(link)?;
     if std::fs::symlink_metadata(link).is_ok() {
-        std::fs::remove_file(link)?;
+        std::fs::remove_file(link).map_err(|error| io_context(error, link))?;
     }
-    std::os::unix::fs::symlink(target, link)
+    std::os::unix::fs::symlink(target, link).map_err(|error| io_context(error, link))
 }
 
 /// Remove one symlink without touching other entries.
 ///
 /// # Errors
 ///
-/// - Link check and removal failures fail as io errors.
-pub fn remove_link(path: &Path) -> io::Result<()> {
+/// - [`FilesystemError::FileMissing`] for missing links.
+/// - [`FilesystemError::FilePermissionDenied`] for unwritable folders.
+pub fn remove_link(path: &Path) -> ContextualResult<()> {
     if path.is_symlink() {
-        std::fs::remove_file(path)?;
+        std::fs::remove_file(path).map_err(|error| io_context(error, path))?;
     }
     Ok(())
 }
@@ -64,11 +67,11 @@ pub fn remove_link(path: &Path) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// - [`std::io::ErrorKind::NotFound`] for missing paths.
-/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable paths.
-/// - [`std::io::ErrorKind::InvalidInput`] for non-link paths.
-pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
-    Ok(std::fs::read_link(path)?
+/// - [`FilesystemError::FileMissing`] for missing paths.
+/// - [`FilesystemError::FilePermissionDenied`] for unreadable paths.
+pub fn read_link_bytes(path: &Path) -> ContextualResult<Vec<u8>> {
+    Ok(std::fs::read_link(path)
+        .map_err(|error| io_context(error, path))?
         .as_os_str()
         .as_encoded_bytes()
         .to_vec())
@@ -81,9 +84,9 @@ const DEFAULT_MODE: u32 = 0o644;
 ///
 /// # Errors
 ///
-/// - [`std::io::ErrorKind::NotFound`] for missing paths.
-/// - [`std::io::ErrorKind::PermissionDenied`] for unwritable paths.
-pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
+/// - [`FilesystemError::FileMissing`] for missing paths.
+/// - [`FilesystemError::FilePermissionDenied`] for unwritable paths.
+pub fn set_mode(path: &Path, mode: Option<u32>) -> ContextualResult<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let bits = match mode {
@@ -91,19 +94,25 @@ pub fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
         None => DEFAULT_MODE,
     };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits))
+        .map_err(|error| io_context(error, path))
 }
 
 /// Read unix permission bits for one path.
 ///
 /// # Errors
 ///
-/// - [`std::io::ErrorKind::NotFound`] for missing paths.
-/// - [`std::io::ErrorKind::PermissionDenied`] for unreadable paths.
-pub fn mode(path: &Path) -> io::Result<u32> {
+/// - [`FilesystemError::FileMissing`] for missing paths.
+/// - [`FilesystemError::FilePermissionDenied`] for unreadable paths.
+pub fn mode(path: &Path) -> ContextualResult<u32> {
     use std::os::unix::fs::PermissionsExt;
 
-    let facts = std::fs::symlink_metadata(path)?;
+    let facts = std::fs::symlink_metadata(path).map_err(|error| io_context(error, path))?;
     Ok(facts.permissions().mode() & 0o777)
+}
+
+/// Map one io failure to its context with the attempted path.
+pub(crate) fn io_context(error: io::Error, path: &Path) -> ContextualCause {
+    ContextualCause::from(FilesystemError::from(error)).with_fs_path(path)
 }
 
 #[cfg(test)]

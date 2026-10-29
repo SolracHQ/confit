@@ -484,8 +484,10 @@ fn first_run_entries<'a>(
 /// Report whether one tree member route nests under its destination.
 fn member_of(destination: &Route, path: &Route) -> bool {
     path.base() == destination.base()
-        && path.relative() != destination.relative()
-        && path.relative().starts_with(destination.relative())
+        && path.relative_path() != destination.relative_path()
+        && path
+            .relative_path()
+            .starts_with(destination.relative_path())
 }
 
 /// Report whether one first-run group is whole.
@@ -595,8 +597,8 @@ fn member_rel(document: &Document, entry: &Difference) -> String {
         | Difference::Missing { path }
         | Difference::Blocked { path }
         | Difference::Unreadable { path, .. } => path
-            .relative()
-            .strip_prefix(document.path.relative())
+            .relative_path()
+            .strip_prefix(document.path.relative_path())
             .map_or_else(|_| path.display(), |rel| rel.display().to_string()),
     }
 }
@@ -865,6 +867,7 @@ mod tests {
     use confit_model::condition::Condition;
     use confit_model::document::{TreeDocument, TreeMember};
     use confit_model::hook::Hook;
+    use confit_model::id::Id;
     use confit_runtime::manifest::MANIFEST_VERSION;
     use confit_runtime::manifest::Manifest;
 
@@ -872,7 +875,7 @@ mod tests {
         Hook {
             argv: vec![Arg::Text("absent-probe".into()), Arg::Text("run".into())],
             path: Vec::new(),
-            id: None,
+            id: Id::of("absent-probe"),
             requires: Condition::InPath {
                 name: "absent-probe".into(),
             },

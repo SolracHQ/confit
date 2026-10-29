@@ -596,6 +596,7 @@ lists read false.
 
 ```lua
 confit.hook.run({ "mise", "install" }, {
+  id = id("mise-install"),
   path = { confit.path.home(".local/bin") },
   requires = confit.runtime.in_path("mise"),
   when = confit.runtime.changed("~/.config/mise/config.toml"),
@@ -606,8 +607,10 @@ confit.hook.run({ "mise", "install" }, {
 
 The call takes an argv array plus optional opts. Argv
 holds a dense non-empty string array. Argv executes
-directly with no shell in between. Opts holds `path`
-, `requires`, `when`, `checks` and `timeout`.
+directly with no shell in between. Opts holds `id`
+, `path`, `requires`, `when`, `checks` and `timeout`.
+`id` names the hook for merges, patches, and logs.
+Hooks need it.
 
 `path` extends PATH for the hook subprocess alone. Hook
 path dirs search first. Runtime dirs follow. The preview

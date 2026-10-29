@@ -5,10 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_core::error::locate::Locate;
 use confit_core::error::{
-    ArchiveError, ContentError, DocumentError, ErrorCause, ErrorContext, FilesystemError, Result,
-    fail,
+    ArchiveError, ContentError, ContextualCause, ContextualResult, DocumentError, ErrorCause,
+    FilesystemError, WithContext, contextual,
 };
 use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::Sha;
@@ -47,7 +46,7 @@ impl ArchiveStore {
     ///
     /// - [`confit_core::error::ArchiveError`] for non-archives.
     /// - [`confit_core::error::FilesystemError`] for unreadable sources.
-    pub fn archive(&self, source: &ResourceHandle) -> Result<ArchiveHandle> {
+    pub fn archive(&self, source: &ResourceHandle) -> ContextualResult<ArchiveHandle> {
         match source {
             ResourceHandle::Project(path, sha) => {
                 self.probe(path)?;
@@ -66,18 +65,22 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for non-archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable sources.
-    fn probe(&self, path: &Path) -> Result<()> {
+    /// - [`ArchiveError::NotArchive`] for non-archives.
+    /// - [`FilesystemError`] for unreadable sources.
+    fn probe(&self, path: &Path) -> ContextualResult<()> {
         use std::io::Read as _;
 
-        let file = std::fs::File::open(path).path(path)?;
+        let file = std::fs::File::open(path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)?;
         let mut head = Vec::new();
-        std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head).path(path)?;
+        std::io::Read::read_to_end(&mut file.take(HEAD_LEN), &mut head)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)?;
         if driver::archive::supported(&head) {
             return Ok(());
         }
-        fail(ArchiveError::NotArchive).path(path)
+        Err(contextual(ArchiveError::NotArchive).with_fs_path(path))
     }
 
     /// List member names from the archive index.
@@ -86,7 +89,7 @@ impl ArchiveStore {
     ///
     /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
     /// - [`confit_core::error::FilesystemError`] for unreadable and missing archives.
-    pub fn members(&self, archive: &ArchiveHandle) -> Result<Vec<String>> {
+    pub fn members(&self, archive: &ArchiveHandle) -> ContextualResult<Vec<String>> {
         if let Some(map) = self.read_map(archive.sha256()) {
             return Ok(map.keys().cloned().collect());
         }
@@ -97,9 +100,9 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable, missing, and absent members.
-    pub fn member(&self, archive: &ArchiveHandle, name: &str) -> Result<ResourceHandle> {
+    /// - [`ArchiveError`] for unreadable and corrupt archives.
+    /// - [`FilesystemError`] for unreadable, missing, and absent members.
+    pub fn member(&self, archive: &ArchiveHandle, name: &str) -> ContextualResult<ResourceHandle> {
         let archive_path = archive.path().to_path_buf();
         if let Some(map) = self.read_map(archive.sha256()) {
             match map.get(name) {
@@ -109,29 +112,29 @@ impl ArchiveStore {
                         Ok(_) => return Ok(handle),
                         Err(error)
                             if matches!(
-                                error.root_cause(),
+                                error.cause(),
                                 ErrorCause::FilesystemError(FilesystemError::FileMissing)
                             ) => {}
                         Err(error) => return Err(error),
                     }
                 }
                 None => {
-                    return Err(member_missing(&archive_path));
+                    return Err(member_missing(&archive_path, name));
                 }
             }
         }
         match self.unpack_all(archive) {
             Ok(map) => match map.get(name) {
                 Some((sha, _)) => Ok(ResourceHandle::Cache(sha.clone())),
-                None => Err(member_missing(&archive_path)),
+                None => Err(member_missing(&archive_path, name)),
             },
             Err(error)
                 if matches!(
-                    error.root_cause(),
+                    error.cause(),
                     ErrorCause::FilesystemError(FilesystemError::FileMissing)
                 ) =>
             {
-                Err(member_missing(&archive_path))
+                Err(member_missing(&archive_path, name))
             }
             Err(error) => Err(error),
         }
@@ -161,21 +164,15 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError`] for index encode faults.
-    /// - [`confit_core::error::FilesystemError`] for index write faults.
-    fn write_map(&self, archive: &ArchiveHandle, map: &Map) -> Result<()> {
+    /// - [`DocumentError::RenderFailed`] for index encode faults.
+    /// - [`FilesystemError`] for index write faults.
+    fn write_map(&self, archive: &ArchiveHandle, map: &Map) -> ContextualResult<()> {
         let archive_path = archive.path().to_path_buf();
+        let map_path = self.map_path(archive.sha256());
         let bytes = serde_json::to_vec(map)
-            .map_err(|error| {
-                ErrorContext::from(DocumentError::RenderFailed {
-                    reason: error.to_string(),
-                })
-            })
-            .path(archive_path.clone())?;
-        driver::StagedFile::write(&self.map_path(archive.sha256()), |file| {
-            std::io::Write::write_all(file, &bytes)
-        })
-        .path(&archive_path)?;
+            .map_err(|_| contextual(DocumentError::RenderFailed).with_fs_path(&archive_path))?;
+        driver::StagedFile::write(&map_path, |file| std::io::Write::write_all(file, &bytes))
+            .with_cache_path(&map_path)?;
         if let Ok(mut guard) = self.maps.write() {
             guard.insert(archive.sha256().clone(), map.clone());
         }
@@ -186,11 +183,13 @@ impl ArchiveStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable archives and cache write faults.
-    fn unpack_all(&self, archive: &ArchiveHandle) -> Result<Map> {
+    /// - [`ArchiveError`] for unreadable and corrupt archives.
+    /// - [`FilesystemError`] for unreadable archives and cache write faults.
+    fn unpack_all(&self, archive: &ArchiveHandle) -> ContextualResult<Map> {
         let archive_path = archive.path().to_path_buf();
-        let file = std::fs::File::open(&archive_path).path(archive_path.clone())?;
+        let file = std::fs::File::open(&archive_path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(&archive_path)?;
         let map = Unpack::new(&self.resources, &archive_path).run(file)?;
         self.write_map(archive, &map)?;
         let total = map.len();
@@ -226,11 +225,16 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable archives and cache write faults.
-    fn run(mut self, file: std::fs::File) -> Result<Map> {
+    /// - [`ArchiveError`] for unreadable and corrupt archives.
+    /// - [`FilesystemError`] for unreadable archives and cache write faults.
+    fn run(mut self, file: std::fs::File) -> ContextualResult<Map> {
         let archive_path = self.archive_path.clone();
-        driver::archive::uncompress(file, |entry| self.entry(entry)).path(archive_path)?;
+        driver::archive::uncompress(file, |entry| self.entry(entry)).map_err(
+            |error| match error.context.fs_path {
+                Some(_) => error,
+                None => error.with_fs_path(&archive_path),
+            },
+        )?;
         Ok(self.entries)
     }
 
@@ -239,7 +243,7 @@ impl<'a> Unpack<'a> {
     /// # Errors
     ///
     /// - [`confit_core::error::FilesystemError`] for cache write faults.
-    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> Result<()> {
+    fn entry(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
         let driver::archive::Entry { name, mode, reader } = entry;
         self.land(name, mode, reader)
     }
@@ -248,23 +252,30 @@ impl<'a> Unpack<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ContentError`] for project handles landing in cache.
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
-    fn land(&mut self, name: String, mode: u32, reader: impl std::io::Read) -> Result<()> {
+    /// - [`ContentError::ProjectHandleInCache`] for project handles landing in cache.
+    /// - [`FilesystemError`] for cache write faults.
+    fn land(
+        &mut self,
+        name: String,
+        mode: u32,
+        reader: impl std::io::Read,
+    ) -> ContextualResult<()> {
         let handle = self.resources.store(reader)?;
         match handle {
             ResourceHandle::Cache(sha) => {
                 self.entries.insert(name, (sha, mode));
                 Ok(())
             }
-            ResourceHandle::Project(..) => fail(ContentError::ProjectHandleInCache),
+            ResourceHandle::Project(..) => Err(contextual(ContentError::ProjectHandleInCache)),
         }
     }
 }
 
 /// Build one unknown member error with its archive path.
-fn member_missing(archive_path: &Path) -> ErrorContext {
-    ErrorContext::from(FilesystemError::FileMissing).path(archive_path)
+fn member_missing(archive_path: &Path, name: &str) -> ContextualCause {
+    contextual(FilesystemError::FileMissing)
+        .with_fs_path(archive_path)
+        .with_member(name)
 }
 
 #[cfg(test)]
@@ -398,15 +409,15 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::NotArchive)
                     ),
                     "plain keeps not-archive: {error}"
                 );
-                assert!(
-                    error.to_string().contains(&path.display().to_string()),
-                    "plain keeps the path"
-                );
+                match &error.context.fs_path {
+                    Some(found) => assert_eq!(found, &path, "plain keeps the archive path"),
+                    None => panic!("plain keeps the archive path: {error}"),
+                };
             }
         }
         let missing = dir.path().join("absent.tar.gz");
@@ -416,7 +427,7 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
                     "absent keeps missing: {error}"
@@ -556,17 +567,23 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
                     "absent keeps missing: {error}"
                 );
-                assert!(
-                    error
-                        .to_string()
-                        .contains(&dir.path().join("fonts.tar.gz").display().to_string()),
-                    "absent keeps the path"
-                );
+                match &error.context.fs_path {
+                    Some(found) => assert_eq!(
+                        found,
+                        &dir.path().join("fonts.tar.gz"),
+                        "absent keeps the archive path"
+                    ),
+                    None => panic!("absent keeps the archive path: {error}"),
+                }
+                match &error.context.member {
+                    Some(member) => assert_eq!(member, "a.txt", "absent keeps the member"),
+                    None => panic!("absent keeps the member: {error}"),
+                }
             }
         }
         match store.member(&archive, "absent.txt") {
@@ -574,17 +591,23 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
                     "absent keeps missing: {error}"
                 );
-                assert!(
-                    error
-                        .to_string()
-                        .contains(&dir.path().join("fonts.tar.gz").display().to_string()),
-                    "absent keeps the path"
-                );
+                match &error.context.fs_path {
+                    Some(found) => assert_eq!(
+                        found,
+                        &dir.path().join("fonts.tar.gz"),
+                        "absent keeps the archive path"
+                    ),
+                    None => panic!("absent keeps the archive path: {error}"),
+                }
+                match &error.context.member {
+                    Some(member) => assert_eq!(member, "absent.txt", "absent keeps the member"),
+                    None => panic!("absent keeps the member: {error}"),
+                }
             }
         }
     }
@@ -650,7 +673,7 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::BareGzip)
                     ),
                     "bare keeps bare-gzip: {error}"
@@ -662,7 +685,7 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::BareGzip)
                     ),
                     "bare keeps bare-gzip: {error}"
@@ -681,7 +704,7 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
                     "absent keeps missing: {error}"
@@ -819,7 +842,7 @@ mod tests {
             Err(error) => {
                 assert!(
                     matches!(
-                        error.root_cause(),
+                        error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::NotArchive)
                     ),
                     "plain keeps not-archive: {error}"

@@ -4,8 +4,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use confit_core::error::locate::Locate;
-use confit_core::error::{ErrorCause, ErrorContext, Result, SlotReason, fail};
+use confit_core::error::{
+    ContextualCause, ContextualResult, ErrorCause, FilesystemError, SlotReason, WithContext,
+    contextual,
+};
 use confit_driver as driver;
 
 use crate::StoreRoots;
@@ -35,9 +37,9 @@ pub enum Picker {
 }
 
 impl FromStr for Picker {
-    type Err = ErrorContext;
+    type Err = ContextualCause;
 
-    fn from_str(raw: &str) -> Result<Self> {
+    fn from_str(raw: &str) -> ContextualResult<Self> {
         if let Some(name) = raw.strip_prefix('@') {
             check_state_name(name)?;
             return Ok(Self::Named(name.to_owned()));
@@ -45,11 +47,13 @@ impl FromStr for Picker {
         if let Some(rest) = raw.strip_prefix('%') {
             let pick: usize = match rest.parse() {
                 Ok(pick) => pick,
-                Err(_) => return fail(ErrorCause::SlotReason(SlotReason::NotNumber)),
+                Err(_) => {
+                    return Err(contextual(SlotReason::NotNumber));
+                }
             };
             return Ok(Self::History(pick));
         }
-        fail(ErrorCause::SlotReason(SlotReason::BareSlot))
+        Err(contextual(SlotReason::BareSlot))
     }
 }
 
@@ -75,8 +79,8 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for absent states.
-    pub fn applied(&self) -> Result<StateHandle> {
+    /// - [`SlotReason::MissingEntry`] for absent states.
+    pub fn applied(&self) -> ContextualResult<StateHandle> {
         checked(self.state.clone())
     }
 
@@ -84,8 +88,10 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for bad names and absent states.
-    pub fn named(&self, name: &str) -> Result<StateHandle> {
+    /// - [`SlotReason::EmptyName`] for empty names.
+    /// - [`SlotReason::NameChars`] for forbidden characters.
+    /// - [`SlotReason::MissingEntry`] for absent states.
+    pub fn named(&self, name: &str) -> ContextualResult<StateHandle> {
         let path = self.named_path(name)?;
         checked(path)
     }
@@ -94,9 +100,11 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for absent states and out-of-range picks.
-    /// - [`confit_core::error::FilesystemError`] for unreadable folders.
-    pub fn resolve(&self, picker: &Picker) -> Result<StateHandle> {
+    /// - [`SlotReason::MissingEntry`] for absent states.
+    /// - [`SlotReason::OutOfRange`] for out-of-range picks.
+    /// - [`FilesystemError::FileMissing`] for missing folders treated as empty.
+    /// - [`FilesystemError`] for unreadable folders.
+    pub fn resolve(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
             Picker::Applied => self.applied(),
             Picker::Named(name) => {
@@ -106,12 +114,10 @@ impl StateStore {
             Picker::History(pick) => {
                 let files = history_files(&self.history)?;
                 if *pick < 1 || *pick > files.len() {
-                    return fail(ErrorCause::SlotReason(SlotReason::OutOfRange))
-                        .path(self.history.clone());
+                    return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
                 }
                 let Some(path) = files.into_iter().rev().nth(pick - 1) else {
-                    return fail(ErrorCause::SlotReason(SlotReason::OutOfRange))
-                        .path(self.history.clone());
+                    return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
                 };
                 Ok(StateHandle::new(path))
             }
@@ -122,19 +128,23 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for unreadable states.
-    pub fn read(&self, handle: &StateHandle) -> Result<Vec<u8>> {
+    /// - [`FilesystemError`] for unreadable states.
+    pub fn read(&self, handle: &StateHandle) -> ContextualResult<Vec<u8>> {
         let path = handle.canonical();
-        std::fs::read(path).path(path)
+        std::fs::read(path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)
     }
 
     /// Create one state handle with an empty file.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for bad names and history variants.
-    /// - [`confit_core::error::FilesystemError`] for state write faults.
-    pub fn create(&self, picker: &Picker) -> Result<StateHandle> {
+    /// - [`SlotReason::BareSlot`] for history variants.
+    /// - [`SlotReason::EmptyName`] for empty names.
+    /// - [`SlotReason::NameChars`] for forbidden characters.
+    /// - [`FilesystemError`] for state write faults.
+    pub fn create(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
             Picker::Applied => {
                 if !self.state.exists() {
@@ -149,7 +159,7 @@ impl StateStore {
                 }
                 checked(path)
             }
-            Picker::History(_) => fail(ErrorCause::SlotReason(SlotReason::BareSlot)),
+            Picker::History(_) => Err(contextual(SlotReason::BareSlot)),
         }
     }
 
@@ -157,8 +167,8 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for state write faults.
-    pub fn write(&self, handle: &StateHandle, mut source: impl Read) -> Result<()> {
+    /// - [`FilesystemError`] for state write faults.
+    pub fn write(&self, handle: &StateHandle, mut source: impl Read) -> ContextualResult<()> {
         store_bytes(handle.canonical(), &mut source)
     }
 
@@ -166,18 +176,20 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for removal failures.
-    pub fn remove(&self, handle: &StateHandle) -> Result<()> {
+    /// - [`FilesystemError`] for removal failures.
+    pub fn remove(&self, handle: &StateHandle) -> ContextualResult<()> {
         let path = handle.canonical();
-        std::fs::remove_file(path).path(path)
+        std::fs::remove_file(path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)
     }
 
     /// List history handles newest first.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for unreadable folders beyond missing folders.
-    pub fn list(&self) -> Result<Vec<StateHandle>> {
+    /// - [`FilesystemError`] for unreadable folders beyond missing folders.
+    pub fn list(&self) -> ContextualResult<Vec<StateHandle>> {
         let mut files = history_files(&self.history)?;
         files.reverse();
         Ok(files.into_iter().map(StateHandle::new).collect())
@@ -187,8 +199,8 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for unreadable folders beyond missing folders.
-    pub fn list_named(&self) -> Result<Vec<StateHandle>> {
+    /// - [`FilesystemError`] for unreadable folders beyond missing folders.
+    pub fn list_named(&self) -> ContextualResult<Vec<StateHandle>> {
         Ok(history_files(&self.states)?
             .into_iter()
             .map(StateHandle::new)
@@ -199,10 +211,10 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for vanishing states.
-    /// - [`confit_core::error::FilesystemError`] for clock and other write failures.
-    pub fn rotate(&self, mut source: impl Read) -> Result<()> {
-        let mut stamp = system_nanos().path(self.history.clone())?;
+    /// - [`SlotReason::MissingEntry`] for vanishing states.
+    /// - [`FilesystemError`] for clock and other write failures.
+    pub fn rotate(&self, mut source: impl Read) -> ContextualResult<()> {
+        let mut stamp = system_nanos()?;
         let mut destination = self.history.join(format!("{stamp}.json"));
         while destination.exists() {
             stamp += 1;
@@ -213,7 +225,9 @@ impl StateStore {
         let files = history_files(&self.history)?;
         if files.len() > HISTORY_KEPT {
             for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-                std::fs::remove_file(stale).path(stale)?;
+                std::fs::remove_file(stale)
+                    .map_err(ContextualCause::from)
+                    .with_fs_path(stale)?;
             }
         }
         Ok(())
@@ -228,8 +242,9 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::SlotReason`] for bad names.
-    fn named_path(&self, name: &str) -> Result<PathBuf> {
+    /// - [`SlotReason::EmptyName`] for empty names.
+    /// - [`SlotReason::NameChars`] for forbidden characters.
+    fn named_path(&self, name: &str) -> ContextualResult<PathBuf> {
         check_state_name(name)?;
         Ok(self.states.join(format!("{name}.json")))
     }
@@ -239,10 +254,10 @@ impl StateStore {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::SlotReason`] for absent states.
-fn checked(path: PathBuf) -> Result<StateHandle> {
+/// - [`SlotReason::MissingEntry`] for absent states.
+fn checked(path: PathBuf) -> ContextualResult<StateHandle> {
     if !path.exists() {
-        return fail(ErrorCause::SlotReason(SlotReason::MissingEntry)).path(path);
+        return Err(contextual(SlotReason::MissingEntry).with_fs_path(path));
     }
     Ok(StateHandle::new(path))
 }
@@ -251,12 +266,19 @@ fn checked(path: PathBuf) -> Result<StateHandle> {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for unreadable folders beyond missing folders.
-fn history_files(directory: &Path) -> Result<Vec<PathBuf>> {
+/// - [`FilesystemError`] for unreadable folders beyond missing folders.
+fn history_files(directory: &Path) -> ContextualResult<Vec<PathBuf>> {
     match driver::fs::read_dir(directory) {
         Ok(files) => Ok(files),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => fail(error).path(directory),
+        Err(error)
+            if matches!(
+                error.cause(),
+                ErrorCause::FilesystemError(FilesystemError::FileMissing)
+            ) =>
+        {
+            Ok(Vec::new())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -264,33 +286,35 @@ fn history_files(directory: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// # Errors
 ///
-/// - [`std::time::SystemTimeError`] for clock readings before the epoch.
-fn system_nanos() -> std::result::Result<u128, std::time::SystemTimeError> {
+/// - [`FilesystemError::FileUnknown`] for clock readings before the epoch.
+fn system_nanos() -> ContextualResult<u128> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|span| span.as_nanos())
+        .map_err(ContextualCause::from)
 }
 
 /// Check one state name for a file stem.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::SlotReason`] for bad names.
-fn check_state_name(name: &str) -> Result<()> {
+/// - [`SlotReason::EmptyName`] for empty names.
+/// - [`SlotReason::NameChars`] for forbidden characters.
+fn check_state_name(name: &str) -> ContextualResult<()> {
     if name.is_empty() {
-        return fail(ErrorCause::SlotReason(SlotReason::EmptyName));
+        return Err(contextual(SlotReason::EmptyName));
     }
     if name.contains('/') || name.contains('\\') {
-        return fail(ErrorCause::SlotReason(SlotReason::NameChars));
+        return Err(contextual(SlotReason::NameChars));
     }
     if name == "." || name == ".." || name.contains('\0') {
-        return fail(ErrorCause::SlotReason(SlotReason::NameChars));
+        return Err(contextual(SlotReason::NameChars));
     }
     if Path::new(name)
         .components()
         .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
-        return fail(ErrorCause::SlotReason(SlotReason::NameChars));
+        return Err(contextual(SlotReason::NameChars));
     }
     Ok(())
 }
@@ -299,11 +323,10 @@ fn check_state_name(name: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for state write faults.
-fn store_bytes(path: &Path, source: &mut impl Read) -> Result<()> {
+/// - [`FilesystemError`] for state write faults.
+fn store_bytes(path: &Path, source: &mut impl Read) -> ContextualResult<()> {
     driver::StagedFile::write(path, |file| {
         std::io::copy(&mut *source, file)?;
         file.sync_all()
     })
-    .path(path)
 }

@@ -2,7 +2,7 @@
 
 use std::io::{self, Read as _};
 
-use confit_core::error::{ArchiveError, ErrorContext as CoreError};
+use confit_core::error::{ArchiveError, ContextualCause, ContextualResult};
 
 mod targz;
 mod zip_ext;
@@ -67,25 +67,19 @@ pub struct Entry<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Archive result alias.
-pub type Result<T> = confit_core::error::Result<T>;
-
-/// Map one zip backend failure to a bare core cause.
-fn zip_error(error: zip::result::ZipError) -> CoreError {
+/// Map one zip backend failure to its bare core cause.
+fn zip_error(error: zip::result::ZipError) -> ContextualCause {
     use zip::result::ZipError as Zip;
     let message = error.to_string();
     match error {
-        Zip::Io(cause) => CoreError::from(cause),
+        Zip::Io(cause) => ContextualCause::from(cause),
         Zip::InvalidPassword | Zip::UnsupportedArchive(Zip::PASSWORD_REQUIRED) => {
-            CoreError::from(ArchiveError::PasswordLocked)
+            ContextualCause::from(ArchiveError::PasswordLocked)
         }
         Zip::UnsupportedArchive(_) | Zip::CompressionMethodNotSupported(_) => {
-            CoreError::from(ArchiveError::AlgorithmUnknown { detail: message })
+            ContextualCause::from(ArchiveError::AlgorithmUnknown).with_detail(message)
         }
-        Zip::FileNotFound | Zip::InvalidArchive(_) => {
-            CoreError::from(ArchiveError::BackendCorrupt { detail: message })
-        }
-        _ => CoreError::from(ArchiveError::BackendCorrupt { detail: message }),
+        _ => ContextualCause::from(ArchiveError::BackendCorrupt).with_detail(message),
     }
 }
 
@@ -156,7 +150,7 @@ impl<W: io::Write + io::Seek> Builder<W> {
         mode: u32,
         len: u64,
         reader: &mut R,
-    ) -> Result<()> {
+    ) -> ContextualResult<()> {
         match &mut self.inner {
             Inner::Zip { writer, level } => {
                 let _ = len;
@@ -198,7 +192,7 @@ impl<W: io::Write + io::Seek> Builder<W> {
     ///
     /// - [`ArchiveError::BackendCorrupt`] for broken tails.
     /// - [`confit_core::error::FilesystemError`] for denied access and failed tails.
-    pub fn finish(self) -> Result<W> {
+    pub fn finish(self) -> ContextualResult<W> {
         match self.inner {
             Inner::Zip { writer, .. } => Ok((*writer).finish().map_err(zip_error)?),
             Inner::Tar { builder } => {
@@ -225,8 +219,8 @@ pub fn supported(head: &[u8]) -> bool {
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub fn uncompress<R: io::Read + io::Seek>(
     mut reader: R,
-    visit: impl FnMut(Entry<'_>) -> confit_core::error::Result<()>,
-) -> Result<()> {
+    visit: impl FnMut(Entry<'_>) -> confit_core::error::ContextualResult<()>,
+) -> ContextualResult<()> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
         return zip_ext::walk(reader, visit);
@@ -234,7 +228,7 @@ pub fn uncompress<R: io::Read + io::Seek>(
     if is_gzip(&head) || is_tar_tag(&head) {
         return targz::walk(reader, visit);
     }
-    Err(CoreError::from(ArchiveError::NotArchive))
+    Err(ContextualCause::from(ArchiveError::NotArchive))
 }
 
 /// Return member names in archive order.
@@ -246,7 +240,7 @@ pub fn uncompress<R: io::Read + io::Seek>(
 /// - [`ArchiveError::PasswordLocked`] for locked archives.
 /// - [`ArchiveError::AlgorithmUnknown`] for unknown features and methods.
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
-pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
+pub fn names<R: io::Read + io::Seek>(mut reader: R) -> ContextualResult<Vec<String>> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
         return zip_ext::names(reader);
@@ -254,7 +248,7 @@ pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
     if is_gzip(&head) || is_tar_tag(&head) {
         return targz::names(reader);
     }
-    Err(CoreError::from(ArchiveError::NotArchive))
+    Err(ContextualCause::from(ArchiveError::NotArchive))
 }
 
 /// Read one head window and restore the cursor.
@@ -262,7 +256,7 @@ pub fn names<R: io::Read + io::Seek>(mut reader: R) -> Result<Vec<String>> {
 /// # Errors
 ///
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
-fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> Result<Vec<u8>> {
+fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> ContextualResult<Vec<u8>> {
     let pos = reader.stream_position()?;
     let mut head = Vec::with_capacity(HEAD_LEN);
     reader

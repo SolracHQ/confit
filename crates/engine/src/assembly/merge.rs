@@ -15,7 +15,7 @@ use super::Assembler;
 use super::owned::OwnedPatch;
 use super::patches::{rc_base_of, structured_base_of};
 use confit_core::error::{
-    DocumentError, Error, ErrorCause, ErrorContext, EvalDetail, EvalError, Outcome,
+    DocumentError, Error, ErrorCause, EvalError, TerminalResult, contextual, error, kind::ErrorKind,
 };
 
 impl Assembler<'_> {
@@ -32,38 +32,29 @@ impl Assembler<'_> {
         placed: &[Document],
         grouped: &[(Route, Vec<&OwnedPatch>)],
         finished: &mut Vec<Document>,
-    ) -> Outcome<()> {
+    ) -> TerminalResult<()> {
         for (target, patches) in grouped {
             let inners: Vec<&StructuredPatch> = patches
                 .iter()
                 .filter_map(|patch| patch.structured())
                 .collect();
-            let Some(first) = inners.first().copied() else {
+            if inners.is_empty() {
                 continue;
             };
             let display = target.display();
-            let (format, data) = match structured_base_of(placed, target, first, &inners) {
+            let (format, data) = match structured_base_of(placed, target, &inners) {
                 Ok(found) => found,
-                Err(chain) => {
-                    let unknown = match chain.root_cause() {
-                        ErrorCause::EvalError(EvalError::PatchTargetUnknown { route }) => {
-                            Some(route.clone())
-                        }
-                        ErrorCause::DocumentError(_) => None,
-                        _ => unreachable!("patch bases fail unknown or gapped"),
-                    };
-                    match unknown {
-                        Some(route) => {
-                            return Err(Error::evaluate(
-                                EvalDetail::Eval(EvalError::PatchTargetUnknown { route }),
-                                None,
-                            ));
-                        }
-                        None => {
-                            return Err(Error::render_manifest(chain.route(target.display())));
-                        }
+                Err(contextual) => match contextual.cause() {
+                    ErrorCause::EvalError(EvalError::PatchTargetUnknown) => {
+                        return error(ErrorKind::Evaluate, contextual);
                     }
-                }
+                    _ => {
+                        return error(
+                            ErrorKind::RenderManifest,
+                            contextual.with_document(target.display()),
+                        );
+                    }
+                },
             };
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
             finished.push(Document::new(
@@ -87,30 +78,21 @@ impl Assembler<'_> {
         placed: &[Document],
         grouped: &[(Route, Vec<&OwnedPatch>)],
         finished: &mut Vec<Document>,
-    ) -> Outcome<()> {
+    ) -> TerminalResult<()> {
         for (target, patches) in grouped {
             let document = match rc_base_of(placed, target) {
                 Ok(found) => found,
-                Err(chain) => {
-                    let unknown = match chain.root_cause() {
-                        ErrorCause::EvalError(EvalError::PatchTargetUnknown { route }) => {
-                            Some(route.clone())
-                        }
-                        ErrorCause::DocumentError(_) => None,
-                        _ => unreachable!("patch bases fail unknown or gapped"),
-                    };
-                    match unknown {
-                        Some(route) => {
-                            return Err(Error::evaluate(
-                                EvalDetail::Eval(EvalError::PatchTargetUnknown { route }),
-                                None,
-                            ));
-                        }
-                        None => {
-                            return Err(Error::render_manifest(chain.route(target.display())));
-                        }
+                Err(contextual) => match contextual.cause() {
+                    ErrorCause::EvalError(EvalError::PatchTargetUnknown) => {
+                        return error(ErrorKind::Evaluate, contextual);
                     }
-                }
+                    _ => {
+                        return error(
+                            ErrorKind::RenderManifest,
+                            contextual.with_document(target.display()),
+                        );
+                    }
+                },
             };
             let display = target.display();
             let patched = self.run_rc_callbacks(target, &display, document, patches)?;
@@ -135,7 +117,7 @@ impl Assembler<'_> {
         format: &StructuredFormat,
         data: BTreeMap<String, serde_json::Value>,
         patches: &[&OwnedPatch],
-    ) -> Outcome<BTreeMap<String, serde_json::Value>> {
+    ) -> TerminalResult<BTreeMap<String, serde_json::Value>> {
         let mut data = data;
         let mut owners = seed_key_owners(&data);
         for patch in patches {
@@ -152,34 +134,28 @@ impl Assembler<'_> {
             let table = live_view(self.lua(), &live)?;
             match found.apply.call::<()>(self.lua(), (table.clone(),)) {
                 Ok(()) => {}
-                Err(error) => {
-                    if let Some(terminal) = error.downcast_ref::<Error>() {
+                Err(fault) => {
+                    if let Some(terminal) = fault.downcast_ref::<Error>() {
                         return Err(terminal.clone());
                     }
-                    return Err(Error::lua_failed(error.to_string()));
+                    return error(ErrorKind::LuaFailed, fault);
                 }
             }
             let back = match StructuredLiveDocument::decode(&Value::Table(table), self.lua()) {
                 Ok(found) => found,
-                Err(mismatch) => {
-                    return Err(Error::evaluate(
-                        EvalDetail::Face(mismatch),
-                        Some(display.to_owned()),
-                    ));
+                Err(_) => {
+                    return error(
+                        ErrorKind::Evaluate,
+                        contextual(EvalError::LuaFailed).with_document(display),
+                    );
                 }
             };
             check_live_path(destination, &back.path)?;
             if back.body.format != *format {
-                return Err(Error::render_manifest(
-                    ErrorContext::from(DocumentError::RenderFailed {
-                        reason: format!(
-                            "patch targets '{display}' hold '{}' under '{}' patches",
-                            format.name(),
-                            back.body.format.name()
-                        ),
-                    })
-                    .route(display),
-                ));
+                return error(
+                    ErrorKind::RenderManifest,
+                    contextual(DocumentError::RenderFailed).with_document(display),
+                );
             }
             data = merge(display, data, &mut owners, back.body.data, &patch.owner);
         }
@@ -199,7 +175,7 @@ impl Assembler<'_> {
         display: &str,
         document: RcData,
         patches: &[&OwnedPatch],
-    ) -> Outcome<RcData> {
+    ) -> TerminalResult<RcData> {
         let mut document = document;
         let mut owned = seed_collision_owners(&document);
         for patch in patches {
@@ -213,20 +189,20 @@ impl Assembler<'_> {
             let table = live_view(self.lua(), &live)?;
             match found.apply.call::<()>(self.lua(), (table.clone(),)) {
                 Ok(()) => {}
-                Err(error) => {
-                    if let Some(terminal) = error.downcast_ref::<Error>() {
+                Err(fault) => {
+                    if let Some(terminal) = fault.downcast_ref::<Error>() {
                         return Err(terminal.clone());
                     }
-                    return Err(Error::lua_failed(error.to_string()));
+                    return error(ErrorKind::LuaFailed, fault);
                 }
             }
             let back = match RcLiveDocument::decode(&Value::Table(table), self.lua()) {
                 Ok(found) => found,
-                Err(mismatch) => {
-                    return Err(Error::evaluate(
-                        EvalDetail::Face(mismatch),
-                        Some(display.to_owned()),
-                    ));
+                Err(_) => {
+                    return error(
+                        ErrorKind::Evaluate,
+                        contextual(EvalError::LuaFailed).with_document(display),
+                    );
                 }
             };
             check_live_path(destination, &back.path)?;
@@ -241,11 +217,11 @@ impl Assembler<'_> {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for faces outside the table shape.
-fn live_view(lua: &Lua, document: &impl Encode) -> Outcome<Table> {
+fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     match document.encode(lua) {
         Ok(Value::Table(table)) => Ok(table),
-        Ok(_) => Err(Error::lua_failed("patch live views hold tables")),
-        Err(error) => Err(Error::lua_failed(error.to_string())),
+        Ok(_) => error(ErrorKind::LuaFailed, contextual(EvalError::LuaFailed)),
+        Err(fault) => error(ErrorKind::LuaFailed, fault),
     }
 }
 
@@ -254,13 +230,9 @@ fn live_view(lua: &Lua, document: &impl Encode) -> Outcome<Table> {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for paths apart from the target.
-fn check_live_path(destination: &Route, back: &Route) -> Outcome<()> {
+fn check_live_path(destination: &Route, back: &Route) -> TerminalResult<()> {
     if back != destination {
-        return Err(Error::lua_failed(format!(
-            "patch target '{}' changed path to '{}'; patches keep the path fixed",
-            destination.display(),
-            back.display()
-        )));
+        return error(ErrorKind::LuaFailed, contextual(EvalError::LuaFailed));
     }
     Ok(())
 }

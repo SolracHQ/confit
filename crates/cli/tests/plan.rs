@@ -25,7 +25,7 @@ return {
     configs = {
         {
             name = id("alt"),
-            documents = { { path = { base = "home", relative = "alt-note" }, text = "alt" } },
+            documents = { { path = route("home", "alt-note"), text = "alt" } },
         },
     },
 }

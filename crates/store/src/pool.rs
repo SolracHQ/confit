@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use confit_core::error::locate::Locate;
-use confit_core::error::{ErrorCause, Result, fail};
+use confit_core::error::{
+    ContextualCause, ContextualResult, ErrorCause, FilesystemError, WithContext, contextual,
+};
 use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::{Sha, ShaWriter};
 
@@ -46,36 +47,50 @@ impl PoolStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ErrorCause`] for streams failing the expected hash.
-    /// - [`confit_core::error::FilesystemError`] for pool write faults.
-    pub fn store_checked(&self, sha: &Sha, mut reader: impl std::io::Read) -> Result<()> {
+    /// - [`ErrorCause::ContentHashMismatch`] for streams failing the expected hash.
+    /// - [`FilesystemError`] for pool write faults.
+    pub fn store_checked(&self, sha: &Sha, mut reader: impl std::io::Read) -> ContextualResult<()> {
         let dest = self.path(sha);
         if dest.exists() {
             return Ok(());
         }
-        let raw = driver::StagedFile::stage(&dest).path(dest.clone())?;
+        let raw = driver::StagedFile::stage(&dest).with_cache_path(&dest)?;
         let (found, size) = {
-            let sink = std::fs::File::create(raw.path()).path(dest.clone())?;
+            let sink = std::fs::File::create(raw.path())
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
             let mut writer = ShaWriter::new(sink);
-            let size = std::io::copy(&mut reader, &mut writer).path(dest.clone())?;
+            let size = std::io::copy(&mut reader, &mut writer)
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
             (writer.digest(), size)
         };
         if found != *sha {
-            return fail(ErrorCause::ContentHashMismatch {
+            return Err(contextual(ErrorCause::ContentHashMismatch {
                 expected: sha.clone(),
                 found,
             })
-            .path(dest);
+            .with_cache_path(dest));
         }
-        let staged = driver::StagedFile::stage(&dest).path(dest.clone())?;
+        let staged = driver::StagedFile::stage(&dest).with_cache_path(&dest)?;
         {
-            let sink = std::fs::File::create(staged.path()).path(dest.clone())?;
-            let mut body = PoolFile::create(sink, sha, size).path(dest.clone())?;
-            let mut source = std::fs::File::open(raw.path()).path(dest.clone())?;
-            std::io::copy(&mut source, &mut body).path(dest.clone())?;
-            body.finish().path(dest.clone())?;
+            let sink = std::fs::File::create(staged.path())
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
+            let mut body = PoolFile::create(sink, sha, size)
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
+            let mut source = std::fs::File::open(raw.path())
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
+            std::io::copy(&mut source, &mut body)
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
+            body.finish()
+                .map_err(ContextualCause::from)
+                .with_cache_path(&dest)?;
         }
-        staged.persist(&dest).path(dest.clone())?;
+        staged.persist(&dest).with_cache_path(&dest)?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.progress.send(Event::PoolStored { done });
         Ok(())
@@ -85,10 +100,10 @@ impl PoolStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ContentError`] for corrupt objects.
-    /// - [`confit_core::error::ErrorCause`] for header hash mismatches.
-    /// - [`confit_core::error::FilesystemError`] for missing and unreadable pool files.
-    pub fn open(&self, sha: &Sha) -> Result<flate2::read::GzDecoder<std::fs::File>> {
+    /// - [`confit_core::error::ContentError::CorruptObject`] for corrupt objects.
+    /// - [`ErrorCause::ContentHashMismatch`] for header hash mismatches.
+    /// - [`FilesystemError`] for missing and unreadable pool files.
+    pub fn open(&self, sha: &Sha) -> ContextualResult<flate2::read::GzDecoder<std::fs::File>> {
         let file = PoolFile::open(self.path(sha), sha)?;
         file.body()
     }
@@ -97,19 +112,26 @@ impl PoolStore {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for listing and removal failures.
-    pub fn prune(&self, keep: &BTreeSet<Sha>) -> Result<usize> {
+    /// - [`FilesystemError`] for listing and removal failures.
+    pub fn prune(&self, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
         prune_dir(&self.pool, keep)
     }
 }
 
 /// Drop files in one pool home outside the keep set.
-fn prune_dir(dir: &std::path::Path, keep: &BTreeSet<Sha>) -> Result<usize> {
+fn prune_dir(dir: &std::path::Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
     let entries = match driver::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error)
+            if matches!(
+                error.cause(),
+                ErrorCause::FilesystemError(FilesystemError::FileMissing)
+            ) =>
+        {
+            return Ok(0);
+        }
         Err(error) => {
-            return fail(error).path(dir);
+            return Err(error);
         }
     };
     let mut removed = 0;
@@ -117,7 +139,9 @@ fn prune_dir(dir: &std::path::Path, keep: &BTreeSet<Sha>) -> Result<usize> {
         if held(&path, keep) {
             continue;
         }
-        std::fs::remove_file(&path).path(&path)?;
+        std::fs::remove_file(&path)
+            .map_err(ContextualCause::from)
+            .with_cache_path(&path)?;
         removed += 1;
     }
     Ok(removed)
@@ -254,14 +278,10 @@ mod tests {
         let sha = Sha::hash(b"absent");
         match store.open(&sha) {
             Ok(_) => panic!("absent content opens"),
-            Err(error) => {
-                assert!(
-                    error
-                        .to_string()
-                        .contains(&store.path(&sha).display().to_string()),
-                    "open keeps the pool path"
-                );
-            }
+            Err(error) => match &error.context.cache_path {
+                Some(found) => assert_eq!(found, &store.path(&sha), "miss keeps the cache path"),
+                None => panic!("miss keeps the cache path: {error}"),
+            },
         }
     }
 
@@ -274,19 +294,17 @@ mod tests {
         match store.store_checked(&sha, &b"garbage"[..]) {
             Ok(()) => panic!("mismatched stream passes"),
             Err(error) => {
-                match error.root_cause() {
+                match error.cause() {
                     confit_core::error::ErrorCause::ContentHashMismatch { expected, found } => {
                         assert_eq!(expected, &sha, "mismatch keeps expected");
                         assert_eq!(found, &wrong, "mismatch keeps found");
                     }
                     other => panic!("wrong mismatch cause: {other}"),
                 }
-                assert!(
-                    error
-                        .to_string()
-                        .contains(&store.path(&sha).display().to_string()),
-                    "mismatch keeps the pool path"
-                );
+                match &error.context.cache_path {
+                    Some(found) => assert_eq!(found, &store.path(&sha), "mismatch keeps the path"),
+                    None => panic!("mismatch keeps the path: {error}"),
+                }
             }
         }
         assert!(!store.path(&sha).exists(), "mismatch leaves no file");

@@ -362,21 +362,29 @@ fn evaluation_carries_hooks_through() {
 
 #[test]
 fn bad_base_renders_face_line() {
+    use confit_core::error::{ErrorCause, EvalError};
+
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let source = r#"
         return {
             documents = {
-                { path = { base = "void", relative = "note.txt" }, text = "hi" },
+                { path = route("void", "note.txt"), text = "hi" },
             },
         }
     "#;
     let (_, profile) = profile_with(dir.path(), source);
     match engine.evaluate(&profile) {
         Ok(_) => panic!("bad base passes"),
-        Err(error) => assert_eq!(
-            error.to_string(),
-            "Cannot evaluate the profile, documents[1].path.base: \"void\" is not a valid variant, choose one of home, config, data, cache, literal"
-        ),
+        Err(error) => {
+            assert!(
+                matches!(error.cause(), ErrorCause::EvalError(EvalError::LuaFailed)),
+                "the cause shows the failure: {error}"
+            );
+            assert!(
+                error.to_string().contains("is not a valid variant"),
+                "the line shows the face failure: {error}"
+            );
+        }
     }
 }

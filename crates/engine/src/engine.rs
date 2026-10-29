@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use confit_core::error::{Error, EvalDetail, Outcome};
+use confit_core::error::{EvalError, TerminalResult, contextual, error, kind::ErrorKind};
 use mlua::Lua;
 
 use confit_binding::value::Decode;
@@ -52,7 +52,7 @@ impl Engine {
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable profiles and projects,
     ///   misshaped profiles, repeated documents, missing requirements and
     ///   targets, foreign bases, bad shapes, and Lua failures.
-    pub fn evaluate(&self, profile: &Path) -> Outcome<Evaluated> {
+    pub fn evaluate(&self, profile: &Path) -> TerminalResult<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
         let root = self.stores.resources().roots.project_root.clone();
         let project = Project::read(&root)?;
@@ -61,8 +61,11 @@ impl Engine {
         let value = load_chunk(&self.lua, profile)?;
         let decoded = match Profile::decode(&value, &self.lua) {
             Ok(found) => found,
-            Err(mismatch) => {
-                return Err(Error::evaluate(EvalDetail::Face(mismatch), None));
+            Err(fault) => {
+                return error(
+                    ErrorKind::Evaluate,
+                    contextual(EvalError::BadShape).with_detail(fault.to_string()),
+                );
             }
         };
         let assembler = Assembler::new(&self.lua);

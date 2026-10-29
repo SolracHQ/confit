@@ -6,9 +6,9 @@ pub mod stored;
 
 use std::collections::BTreeMap;
 
+use confit_core::error::ContextualResult;
 use confit_core::error::ManifestError;
-use confit_core::error::Result as CoreResult;
-use confit_core::error::{DocumentError, ErrorCause, ErrorContext, fail};
+use confit_core::error::{ContextualCause, DocumentError, WithContext, contextual};
 use confit_core::sha::Sha;
 use confit_model::document::{Data, Document};
 use confit_model::hook::Hook;
@@ -57,45 +57,18 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// - [`Cause::ContentHashMismatch`] for streams failing the carried sha.
-    /// - [`confit_core::error::FilesystemError`] for unreadable entries and pool write faults.
-    pub fn persist(&self, stores: &Stores) -> CoreResult<()> {
-        use confit_core::error::FilesystemError;
-
+    /// - [`confit_core::error::FilesystemError`] for unreadable entries with the attempted path.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] for streams failing the carried sha.
+    pub fn persist(&self, stores: &Stores) -> ContextualResult<()> {
         for handle in self.handles() {
             match handle {
                 ResourceHandle::Cache(sha) => {
                     stores.resources().persist(sha)?;
                 }
                 ResourceHandle::Project(path, sha) => {
-                    let file = std::fs::File::open(path).map_err(|error| -> ErrorContext {
-                        let kind = error.kind();
-                        let message = error.to_string();
-                        let cause = match kind {
-                            std::io::ErrorKind::NotFound => {
-                                ErrorCause::FilesystemError(FilesystemError::FileMissing)
-                            }
-                            std::io::ErrorKind::PermissionDenied => {
-                                ErrorCause::FilesystemError(FilesystemError::FilePermissionDenied)
-                            }
-                            std::io::ErrorKind::StorageFull => {
-                                ErrorCause::FilesystemError(FilesystemError::DiskFull)
-                            }
-                            std::io::ErrorKind::ReadOnlyFilesystem => {
-                                ErrorCause::FilesystemError(FilesystemError::DiskReadOnly)
-                            }
-                            std::io::ErrorKind::QuotaExceeded => {
-                                ErrorCause::FilesystemError(FilesystemError::DiskQuotaExceeded)
-                            }
-                            std::io::ErrorKind::FileTooLarge => {
-                                ErrorCause::FilesystemError(FilesystemError::FileTooLarge)
-                            }
-                            _ => ErrorCause::FilesystemError(FilesystemError::FileUnknown {
-                                message,
-                            }),
-                        };
-                        ErrorContext::from(cause).path(path.clone())
-                    })?;
+                    let file = std::fs::File::open(path)
+                        .map_err(ContextualCause::from)
+                        .with_fs_path(path)?;
                     stores.pool().store_checked(sha, file)?;
                 }
             }
@@ -108,12 +81,9 @@ impl Manifest {
     /// # Errors
     ///
     /// - [`DocumentError::RenderFailed`] for serializer failures.
-    pub fn json(&self) -> CoreResult<String> {
-        serde_json::to_string_pretty(self).map_err(|source| -> ErrorContext {
-            ErrorContext::from(DocumentError::RenderFailed {
-                reason: source.to_string(),
-            })
-        })
+    pub fn json(&self) -> ContextualResult<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|error| contextual(DocumentError::RenderFailed).with_detail(error.to_string()))
     }
 
     /// Decode one manifest with the version check first.
@@ -123,29 +93,22 @@ impl Manifest {
     /// - [`ManifestError::Invalid`] for bad payloads.
     /// - [`ManifestError::MissingVersion`] for absent versions.
     /// - [`ManifestError::VersionUnsupported`] for stale versions.
-    pub fn decode(bytes: &[u8]) -> CoreResult<Self> {
-        let value: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|error| -> ErrorContext {
-                ErrorContext::from(ManifestError::Invalid {
-                    detail: error.to_string(),
-                })
-            })?;
+    pub fn decode(bytes: &[u8]) -> ContextualResult<Self> {
+        let value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| contextual(ManifestError::Invalid).with_detail(error.to_string()))?;
         if value
             .get("version")
             .and_then(serde_json::Value::as_u64)
             .is_none()
         {
-            return fail(ManifestError::MissingVersion);
+            return Err(contextual(ManifestError::MissingVersion));
         }
-        let manifest: Self = serde_json::from_value(value).map_err(|error| -> ErrorContext {
-            ErrorContext::from(ManifestError::Invalid {
-                detail: error.to_string(),
-            })
-        })?;
+        let manifest: Self = serde_json::from_value(value)
+            .map_err(|error| contextual(ManifestError::Invalid).with_detail(error.to_string()))?;
         if manifest.version != MANIFEST_VERSION {
-            return fail(ManifestError::VersionUnsupported {
+            return Err(contextual(ManifestError::VersionUnsupported {
                 got: u64::from(manifest.version),
-            });
+            }));
         }
         Ok(manifest)
     }
@@ -154,6 +117,7 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_core::error::ErrorCause;
     use confit_core::sha::Sha;
     use confit_model::document::{Data, Document, OpaqueDocument, TreeDocument, TreeMember};
     use confit_model::routes::{Route, RouteBase};
@@ -178,12 +142,10 @@ mod tests {
         let bytes = serde_json::to_vec(&raw).unwrap();
         match Manifest::decode(&bytes) {
             Ok(_) => panic!("stale manifest passes"),
-            Err(error) => match &error {
-                ErrorContext::Leaf(ErrorCause::ManifestError(
-                    ManifestError::VersionUnsupported { got },
-                )) => {
+            Err(error) => match error.cause() {
+                ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
                     assert_eq!(*got, 0, "the error keeps the version");
-                    assert!(error.inner().is_none(), "decode stays location-free");
+                    assert!(error.context().is_empty(), "decode stays location-free");
                 }
                 other => panic!("wrong stale variant: {other}"),
             },
@@ -328,13 +290,13 @@ mod tests {
         };
         match manifest.persist(&stores) {
             Ok(()) => panic!("vanished handles persist"),
-            Err(error) => match &error {
-                ErrorContext::AtPath { inner, .. } => match inner.as_ref() {
-                    ErrorContext::Leaf(ErrorCause::FilesystemError(
-                        FilesystemError::FileMissing,
-                    )) => {}
-                    other => panic!("wrong persist cause: {other}"),
-                },
+            Err(error) => match error.cause() {
+                ErrorCause::FilesystemError(FilesystemError::FileMissing) => {
+                    match &error.context.fs_path {
+                        Some(_) => {}
+                        None => panic!("vanished keeps the attempted path: {error}"),
+                    }
+                }
                 other => panic!("wrong persist cause: {other}"),
             },
         }
