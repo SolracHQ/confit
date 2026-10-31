@@ -475,14 +475,6 @@ fn validate_check(outer: &str, validate: &Option<syn::Path>) -> Tokens {
     }
 }
 
-/// Render the encode refusal for one skipped variant arm.
-fn refusal(outer: &str, variant_name: &str) -> Tokens {
-    let message = format!("cannot encode {outer}::{variant_name} to Lua");
-    quote! {
-        ::std::result::Result::Err(::mlua::Error::RuntimeError(#message.to_owned()))
-    }
-}
-
 /// Render the decode dispatch for one key family.
 fn family_dispatch(index: usize, family: &Family, check: &Tokens) -> Tokens {
     let mut arms = Vec::new();
@@ -694,8 +686,6 @@ pub(crate) fn expand_untagged_enum(
             ));
         }
         let docs = doc_lines(&variant.attrs).join(" ");
-        let refused = refusal(&outer, &variant_name);
-        let variant_dropped = flags.skip_decode && flags.skip_encode;
         match &variant.fields {
             Fields::Unit => {
                 units += 1;
@@ -715,28 +705,19 @@ pub(crate) fn expand_untagged_enum(
                         face: ::std::borrow::Cow::Borrowed("nil"),
                         fields: ::std::vec::Vec::new(),
                         collect: ::confit_binding::face::no_collect,
-                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! { "nil".to_owned() });
-                if flags.skip_encode {
-                    encodes.push(quote! {
-                        Self::#ident => #refused,
-                    });
-                } else {
-                    encodes.push(quote! {
-                        Self::#ident => ::std::result::Result::Ok(::mlua::Value::Nil),
-                    });
-                }
-                if !flags.skip_decode {
-                    nil_attempt = Some(quote! {
-                        if matches!(value, ::mlua::Value::Nil) {
-                            let result = Self::#ident;
-                            #check
-                            return ::std::result::Result::Ok(result);
-                        }
-                    });
-                }
+                encodes.push(quote! {
+                    Self::#ident => ::std::result::Result::Ok(::mlua::Value::Nil),
+                });
+                nil_attempt = Some(quote! {
+                    if matches!(value, ::mlua::Value::Nil) {
+                        let result = Self::#ident;
+                        #check
+                        return ::std::result::Result::Ok(result);
+                    }
+                });
             }
             Fields::Named(named) => {
                 let payload = build_inline_payload(&display, variant, named)?;
@@ -778,7 +759,6 @@ pub(crate) fn expand_untagged_enum(
                         ),
                         fields: ::std::vec![#(#arm_fields),*],
                         collect: <#identifier as ::confit_binding::face::Face>::collect,
-                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! {
@@ -791,30 +771,22 @@ pub(crate) fn expand_untagged_enum(
                 } else {
                     quote! { #(#encode_idents),*, .. }
                 };
-                if flags.skip_encode {
-                    encodes.push(quote! {
-                        Self::#ident { .. } => #refused,
-                    });
-                } else {
-                    encodes.push(quote! {
-                        Self::#ident { #pattern } => {
-                            let table = lua.create_table()?;
-                            #(#arm_stmts)*
-                            ::std::result::Result::Ok(::mlua::Value::Table(table))
-                        },
-                    });
-                }
-                if !flags.skip_decode {
-                    place_arm(
-                        &mut families,
-                        payload.keys.clone(),
-                        Arm {
-                            variant: ident,
-                            payload: identifier,
-                            fields: field_idents,
-                        },
-                    );
-                }
+                encodes.push(quote! {
+                    Self::#ident { #pattern } => {
+                        let table = lua.create_table()?;
+                        #(#arm_stmts)*
+                        ::std::result::Result::Ok(::mlua::Value::Table(table))
+                    },
+                });
+                place_arm(
+                    &mut families,
+                    payload.keys.clone(),
+                    Arm {
+                        variant: ident,
+                        payload: identifier,
+                        fields: field_idents,
+                    },
+                );
             }
             Fields::Unnamed(_) => {
                 let payload = payload_of(&outer, variant, "untagged")?;
@@ -830,56 +802,47 @@ pub(crate) fn expand_untagged_enum(
                             _ => ::std::vec::Vec::new(),
                         },
                         collect: <#payload as ::confit_binding::face::Face>::collect,
-                        skipped: #variant_dropped,
                     }
                 });
                 faces.push(quote! {
                     <#payload as ::confit_binding::face::Face>::face_name()
                 });
-                if flags.skip_encode {
-                    encodes.push(quote! {
-                        Self::#ident(..) => #refused,
-                    });
-                } else {
-                    encodes.push(quote! {
-                        Self::#ident(inner) => {
-                            <#payload as ::confit_binding::value::Encode>::encode(inner, lua)
-                        },
-                    });
-                }
-                if !flags.skip_decode {
-                    fallback.push(quote! {
-                        match <#payload as ::confit_binding::value::Decode>::decode_ignored(
-                            &value.clone(),
-                            lua,
-                            ignored,
-                        ) {
-                            ::std::result::Result::Ok(inner) => {
-                                let result = Self::#ident(inner);
-                                #check
-                                return ::std::result::Result::Ok(result);
-                            }
-                            ::std::result::Result::Err(error) => {
-                                if !error.segments.is_empty() {
-                                    fallback_error = ::std::option::Option::Some(error);
-                                }
-                            }
-                        }
-                    });
-                    discarded.push(quote! {
-                        if let ::std::result::Result::Ok(inner) =
-                            <#payload as ::confit_binding::value::Decode>::decode_ignored(
-                                &value.clone(),
-                                lua,
-                                ignored,
-                            )
-                        {
+                encodes.push(quote! {
+                    Self::#ident(inner) => {
+                        <#payload as ::confit_binding::value::Encode>::encode(inner, lua)
+                    },
+                });
+                fallback.push(quote! {
+                    match <#payload as ::confit_binding::value::Decode>::decode_ignored(
+                        &value.clone(),
+                        lua,
+                        ignored,
+                    ) {
+                        ::std::result::Result::Ok(inner) => {
                             let result = Self::#ident(inner);
                             #check
                             return ::std::result::Result::Ok(result);
                         }
-                    });
-                }
+                        ::std::result::Result::Err(error) => {
+                            if !error.segments.is_empty() {
+                                fallback_error = ::std::option::Option::Some(error);
+                            }
+                        }
+                    }
+                });
+                discarded.push(quote! {
+                    if let ::std::result::Result::Ok(inner) =
+                        <#payload as ::confit_binding::value::Decode>::decode_ignored(
+                            &value.clone(),
+                            lua,
+                            ignored,
+                        )
+                    {
+                        let result = Self::#ident(inner);
+                        #check
+                        return ::std::result::Result::Ok(result);
+                    }
+                });
             }
         }
     }
@@ -1063,54 +1026,6 @@ mod tests {
         );
         assert!(expanded.contains("Document_Text"));
         assert!(!expanded.contains("Data_Text"));
-    }
-
-    #[test]
-    fn skipped_tuple_arm_rejected_encode_but_kept_its_descriptor() {
-        let expanded = expand(
-            r#"
-            #[face(table, untagged)]
-            pub enum MaybeSealed {
-                /// Live payload.
-                Live {
-                    /// The exact file text.
-                    content: String,
-                },
-                /// Sealed payload.
-                #[face(skip_decode, skip_encode)]
-                Sealed(Digest),
-            }
-            "#,
-        );
-        assert!(expanded.contains("cannot encode MaybeSealed::Sealed to Lua"));
-        assert!(expanded.contains("Sealed payload"));
-        assert!(expanded.contains("UnionArm"));
-        assert!(expanded.contains("skipped"));
-    }
-
-    #[test]
-    fn skipped_inline_arm_rejected_encode_but_kept_its_descriptor() {
-        let expanded = expand(
-            r#"
-            #[face(table, untagged)]
-            pub enum MaybeOld {
-                /// Live payload.
-                Live {
-                    /// The exact file text.
-                    content: String,
-                },
-                /// Retired payload.
-                #[face(skip_decode, skip_encode)]
-                Old {
-                    /// The retired text.
-                    retired: String,
-                },
-            }
-            "#,
-        );
-        assert!(expanded.contains("cannot encode MaybeOld::Old to Lua"));
-        assert!(expanded.contains("Retired payload"));
-        assert!(expanded.contains("UnionArm"));
     }
 
     #[test]

@@ -1,15 +1,14 @@
 //! Immediate host facts over closed names.
 
 use confit_binding_macros::{Face, face_impl};
-
-/// Api level of the Lua surface.
-pub const API_VERSION: i64 = 1;
+use confit_core::version::VERSION;
+use mlua::{Lua, Value};
 
 /// Closed host fact names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
 #[face(table, string)]
 pub enum FactName {
-    /// Api level of the Lua surface.
+    /// Binary version triplet.
     Version,
     /// Host operating system name.
     Os,
@@ -30,12 +29,15 @@ impl Fact {
     ///
     /// # Returns
     ///
-    /// - The host fact string.
-    pub fn fact(name: FactName) -> mlua::Result<(String,)> {
+    /// - The host fact value.
+    pub fn fact(lua: &Lua, name: FactName) -> mlua::Result<Value> {
         match name {
-            FactName::Version => Ok((API_VERSION.to_string(),)),
-            FactName::Os => Ok((std::env::consts::OS.to_owned(),)),
-            FactName::Arch => Ok((std::env::consts::ARCH.to_owned(),)),
+            FactName::Version => {
+                let version = lua.create_sequence_from(VERSION)?;
+                Ok(Value::Table(version))
+            }
+            FactName::Os => Ok(Value::String(lua.create_string(std::env::consts::OS)?)),
+            FactName::Arch => Ok(Value::String(lua.create_string(std::env::consts::ARCH)?)),
         }
     }
 }
@@ -63,6 +65,20 @@ mod tests {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), std::env::consts::OS),
             Ok(_) => panic!("fact names return strings"),
             Err(error) => panic!("fact names fold case: {error}"),
+        }
+    }
+
+    #[test]
+    fn version_reads_binary_triplet() {
+        let lua = test_lua();
+        match run(&lua, r#"return fact("version")"#) {
+            Ok(Value::Table(found)) => {
+                let major: u8 = found.get(1).unwrap();
+                let minor: u8 = found.get(2).unwrap();
+                let fix: u8 = found.get(3).unwrap();
+                assert_eq!([major, minor, fix], VERSION, "version matches the binary");
+            }
+            _ => panic!("version reads a table"),
         }
     }
 

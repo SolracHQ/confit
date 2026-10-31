@@ -230,7 +230,7 @@ impl Resources {
         Ok(())
     }
 
-    /// Fill the pool from one sealed digest.
+    /// Fill the pool from one stored digest.
     ///
     /// # Errors
     ///
@@ -730,6 +730,29 @@ mod tests {
         match driver::fs::mode(&landed) {
             Ok(mode) => assert_eq!(mode, 0o444, "promoted cache stays read-only"),
             Err(error) => panic!("promoted modes: {error}"),
+        }
+    }
+
+    #[test]
+    fn open_rejects_renamed_pool_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, pools) = test_pair(dir.path());
+        let sha = Sha::hash(b"pooled bytes");
+        match pools.store_checked(&sha, &b"pooled bytes"[..]) {
+            Ok(()) => {}
+            Err(error) => panic!("pool stores: {error}"),
+        }
+        let wrong = Sha::hash(b"other bytes");
+        std::fs::rename(pools.path(&sha), pools.path(&wrong)).unwrap();
+        let handle = ResourceHandle::Cache(wrong.clone());
+        match store.open(&handle) {
+            Ok(_) => panic!("renamed entry opens"),
+            Err(error) => match error.cause() {
+                ErrorCause::ContentHashMismatch { expected, .. } => {
+                    assert_eq!(expected, &wrong, "mismatch keeps expected");
+                }
+                other => panic!("wrong rename cause: {other}"),
+            },
         }
     }
 

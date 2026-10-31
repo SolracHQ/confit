@@ -1,7 +1,5 @@
 //! Content-addressed pool.
 
-pub mod file;
-
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,13 +10,16 @@ use confit_core::error::{
 };
 use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::{Sha, ShaWriter};
+use sha2::Digest as _;
 
 use crate::StoreRoots;
 use confit_driver as driver;
-use file::PoolFile;
 
 /// Pool folder name under the config base.
 const BLOBS_DIR: &str = "blobs";
+
+/// Pool gzip level.
+const POOL_GZIP_LEVEL: u32 = 6;
 
 /// Content-addressed pool.
 #[derive(Debug, Clone)]
@@ -55,15 +56,15 @@ impl PoolStore {
             return Ok(());
         }
         let raw = driver::StagedFile::stage(&dest).with_cache_path(&dest)?;
-        let (found, size) = {
+        let found = {
             let sink = std::fs::File::create(raw.path())
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
             let mut writer = ShaWriter::new(sink);
-            let size = std::io::copy(&mut reader, &mut writer)
+            std::io::copy(&mut reader, &mut writer)
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
-            (writer.digest(), size)
+            writer.digest()
         };
         if found != *sha {
             return Err(contextual(ErrorCause::ContentHashMismatch {
@@ -77,16 +78,16 @@ impl PoolStore {
             let sink = std::fs::File::create(staged.path())
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
-            let mut body = PoolFile::create(sink, sha, size)
-                .map_err(ContextualCause::from)
-                .with_cache_path(&dest)?;
+            let mut encoder =
+                flate2::write::GzEncoder::new(sink, flate2::Compression::new(POOL_GZIP_LEVEL));
             let mut source = std::fs::File::open(raw.path())
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
-            std::io::copy(&mut source, &mut body)
+            std::io::copy(&mut source, &mut encoder)
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
-            body.finish()
+            encoder
+                .finish()
                 .map_err(ContextualCause::from)
                 .with_cache_path(&dest)?;
         }
@@ -96,16 +97,23 @@ impl PoolStore {
         Ok(())
     }
 
-    /// Open a raw byte stream for one content hash.
+    /// Open a verified byte stream for one content hash.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ContentError::CorruptObject`] for corrupt objects.
-    /// - [`ErrorCause::ContentHashMismatch`] for header hash mismatches.
-    /// - [`FilesystemError`] for missing and unreadable pool files.
-    pub fn open(&self, sha: &Sha) -> ContextualResult<flate2::read::GzDecoder<std::fs::File>> {
-        let file = PoolFile::open(self.path(sha), sha)?;
-        file.body()
+    /// - [`FilesystemError`] for missing and unreadable pool entries.
+    pub fn open(
+        &self,
+        sha: &Sha,
+    ) -> ContextualResult<VerifiedRead<flate2::read::GzDecoder<std::fs::File>>> {
+        let path = self.path(sha);
+        let file = std::fs::File::open(&path)
+            .map_err(ContextualCause::from)
+            .with_cache_path(&path)?;
+        Ok(VerifiedRead::new(
+            flate2::read::GzDecoder::new(file),
+            sha.clone(),
+        ))
     }
 
     /// Drop pool files outside the keep set.
@@ -115,6 +123,45 @@ impl PoolStore {
     /// - [`FilesystemError`] for listing and removal failures.
     pub fn prune(&self, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
         prune_dir(&self.pool, keep)
+    }
+}
+
+/// Pool body reader verifying its content hash.
+pub struct VerifiedRead<R> {
+    inner: R,
+    hasher: sha2::Sha256,
+    expected: Sha,
+}
+
+impl<R: std::io::Read> VerifiedRead<R> {
+    /// Wrap one body stream with its expected digest.
+    pub fn new(inner: R, expected: Sha) -> Self {
+        Self {
+            inner,
+            hasher: sha2::Sha256::new(),
+            expected,
+        }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read == 0 {
+            let found = Sha::finish(self.hasher.clone());
+            if found != self.expected {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    ErrorCause::ContentHashMismatch {
+                        expected: self.expected.clone(),
+                        found,
+                    },
+                ));
+            }
+            return Ok(0);
+        }
+        self.hasher.update(&buf[..read]);
+        Ok(read)
     }
 }
 
@@ -191,6 +238,50 @@ mod tests {
                 found
             }
             Err(error) => panic!("pooled bytes open: {error}"),
+        }
+    }
+
+    #[test]
+    fn open_rejects_tampered_body() {
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(dir.path());
+        let sha = Sha::hash(b"original bytes");
+        match store.store_checked(&sha, &b"original bytes"[..]) {
+            Ok(()) => {}
+            Err(error) => panic!("pool stores: {error}"),
+        }
+        let dest = store.path(&sha);
+        let sink = std::fs::File::create(&dest).unwrap();
+        let mut body = flate2::write::GzEncoder::new(sink, flate2::Compression::default());
+        body.write_all(b"tampered bytes").unwrap();
+        body.finish().unwrap();
+        match store.open(&sha) {
+            Ok(mut reader) => {
+                let mut found = Vec::new();
+                match reader.read_to_end(&mut found) {
+                    Ok(_) => panic!("tampered body opens"),
+                    Err(error) => {
+                        let mismatch = error
+                            .get_ref()
+                            .and_then(|cause| cause.downcast_ref::<ErrorCause>())
+                            .unwrap_or_else(|| panic!("tampered keeps mismatch: {error}"));
+                        match mismatch {
+                            ErrorCause::ContentHashMismatch { expected, found } => {
+                                assert_eq!(expected, &sha, "mismatch keeps expected");
+                                assert_eq!(
+                                    found,
+                                    &Sha::hash(b"tampered bytes"),
+                                    "mismatch keeps found"
+                                );
+                            }
+                            other => panic!("wrong tamper cause: {other}"),
+                        }
+                    }
+                }
+            }
+            Err(error) => panic!("tampered open fails: {error}"),
         }
     }
 

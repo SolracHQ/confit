@@ -16,7 +16,7 @@ use crate::manifest::Manifest;
 use confit_driver as driver;
 
 impl Bundler {
-    /// Read one portable bundle into a sealed manifest.
+    /// Read one portable bundle into its manifest.
     ///
     /// # Errors
     ///
@@ -47,7 +47,7 @@ impl<'a> Unpack<'a> {
         }
     }
 
-    /// Run one walk into the sealed manifest.
+    /// Run one walk into its manifest.
     ///
     /// # Errors
     ///
@@ -217,8 +217,8 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use crate::manifest::MANIFEST_VERSION;
     use crate::prepare::build;
+    use confit_core::version::VERSION;
     use confit_model::document::{Data, Document, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -335,7 +335,7 @@ mod tests {
     fn read_rejects_stale_version() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
-        let stale = serde_json::json!({"version": 0u32, "documents": [], "hashes": {}});
+        let stale = serde_json::json!({"version": [0, 8, 0], "documents": [], "hashes": {}});
         let raw = serde_json::to_vec(&stale).unwrap();
         let stale_path = dir.path().join("stale.cb");
         build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
@@ -343,7 +343,7 @@ mod tests {
             Ok(_) => panic!("stale manifest passes"),
             Err(error) => match error.cause() {
                 ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
-                    assert_eq!(*got, 0, "stale keeps version");
+                    assert_eq!(got, "[0, 8, 0]", "stale keeps version");
                     assert!(
                         error
                             .to_string()
@@ -406,7 +406,7 @@ mod tests {
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
         let manifest = serde_json::to_vec(&Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents: Vec::new(),
             hashes: BTreeMap::new(),
             hooks: Vec::new(),
@@ -494,7 +494,7 @@ mod tests {
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
         let empty = serde_json::to_vec(&Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents: Vec::new(),
             hashes: BTreeMap::new(),
             hooks: Vec::new(),
@@ -530,7 +530,7 @@ mod tests {
 
         let sha = Sha::hash(b"alpha");
         let drift = serde_json::to_vec(&Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents: vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 Data::Opaque(OpaqueDocument {

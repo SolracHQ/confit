@@ -1,15 +1,15 @@
 [package]
 name = "confit-engine"
-version = "0.9.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 confit-binding = { version = "0.9.0", path = "../binding" }
 confit-binding-macros = { version = "0.9.0", path = "../binding-macros" }
-confit-core = { version = "0.9.0", path = "../core" }
-confit-driver = { version = "0.9.0", path = "../driver" }
-confit-model = { version = "0.9.0", path = "../model" }
-confit-store = { version = "0.9.0", path = "../store" }
+confit-core = { path = "../core" }
+confit-driver = { path = "../driver" }
+confit-model = { path = "../model" }
+confit-store = { path = "../store" }
 log.workspace = true
 minijinja = { version = "3.0.0", features = ["serde"] }
 mlua = { workspace = true, features = ["lua54", "vendored"] }
@@ -22,6 +22,6 @@ toml.workspace = true
 workspace = true
 
 [dev-dependencies]
-confit-driver = { version = "0.9.0", path = "../driver", features = ["test-support"] }
+confit-driver = { path = "../driver", features = ["test-support"] }
 crossbeam-channel = "0.5.17"
 tempfile.workspace = true

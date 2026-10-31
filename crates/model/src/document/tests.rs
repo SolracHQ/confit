@@ -224,20 +224,20 @@ fn handles_serialize_as_bare_sha() {
         Ok(_) => panic!("live keeps its opaque shape"),
         Err(error) => panic!("live decodes: {error}"),
     };
-    let blob = Sha::hash(b"sealed");
-    let sealed = Data::Opaque(OpaqueDocument {
+    let blob = Sha::hash(b"stored");
+    let stored = Data::Opaque(OpaqueDocument {
         handle: ResourceHandle::Cache(blob.clone()),
         mode: 0o644,
         unmanaged: false,
     });
-    let text = match serde_json::to_string(&sealed) {
+    let text = match serde_json::to_string(&stored) {
         Ok(found) => found,
-        Err(error) => panic!("sealed serializes: {error}"),
+        Err(error) => panic!("stored serializes: {error}"),
     };
-    assert!(text.contains(&blob.hex()), "sealed writes the bare sha");
+    assert!(text.contains(&blob.hex()), "stored writes the bare sha");
     match serde_json::from_str::<Data>(&text) {
-        Ok(back) => assert_eq!(back, sealed, "sealed survives serde"),
-        Err(error) => panic!("sealed decodes: {error}"),
+        Ok(back) => assert_eq!(back, stored, "stored survives serde"),
+        Err(error) => panic!("stored decodes: {error}"),
     }
 }
 

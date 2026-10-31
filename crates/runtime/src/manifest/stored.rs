@@ -14,7 +14,8 @@ use confit_store::handles::StateHandle;
 use confit_store::state::Picker;
 use confit_store::state::StateStore;
 
-use super::{MANIFEST_VERSION, Manifest};
+use super::Manifest;
+use confit_core::version::{VERSION, compatible};
 
 /// Load the applied manifest with missing states as empty.
 ///
@@ -51,7 +52,7 @@ pub fn store(states: &StateStore, manifest: &Manifest) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Resolve one picker to its sealed manifest.
+/// Resolve one picker to its stored manifest.
 ///
 /// # Errors
 ///
@@ -120,7 +121,7 @@ pub fn keep_set(states: &StateStore) -> ContextualResult<BTreeSet<Sha>> {
 /// Build one empty manifest at the current version.
 fn empty() -> Manifest {
     Manifest {
-        version: MANIFEST_VERSION,
+        version: VERSION,
         documents: Vec::new(),
         hashes: BTreeMap::new(),
         hooks: Vec::new(),
@@ -150,7 +151,7 @@ fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTre
         Ok(found) => found,
         Err(_) => return,
     };
-    if found.version != MANIFEST_VERSION {
+    if !compatible(found.version) {
         return;
     }
     for handle in found.handles() {

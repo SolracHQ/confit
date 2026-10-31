@@ -36,11 +36,15 @@ test-nuke:
 stubs:
   ./scripts/stubs.sh
 
-# Plan the basic_tool fixture (host smoke; writes only ./target).
-plan-example:
-  cargo run -- plan examples/0-basic_tool -o ./target/plan-example
+# Bundle the basic_tool fixture (host smoke; writes only ./target).
+bundle-example:
+  cargo run -- bundle examples/0-basic_tool -o ./target/bundle-example
 
-# Show the living spec as of a sealed tag.
+# Preview the basic_tool fixture (host smoke; writes nothing).
+check-example:
+  cargo run -- check examples/0-basic_tool
+
+# Show the living spec as of a released tag.
 show-spec VERSION="0.1":
   git show v{{VERSION}}:docs/book/src/spec/index.md
 
@@ -48,11 +52,11 @@ show-spec VERSION="0.1":
 check:
   cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 
-# Bump every crate manifest to one version.
+# Bump the workspace to one version.
 set-version VERSION:
-  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/*/Cargo.toml
+  sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"/version = "{{VERSION}}"/' Cargo.toml
   cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
-  grep -h '^version' crates/*/Cargo.toml
+  grep -A2 '^\[workspace\.package\]' Cargo.toml
 
 # Format docs at width 80: `just format-docs` formats all of docs/, `just format-docs <file>` formats one file.
 format-docs FILE="":

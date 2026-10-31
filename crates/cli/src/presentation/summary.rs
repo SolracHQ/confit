@@ -863,12 +863,12 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    use confit_core::version::VERSION;
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
     use confit_model::document::{TreeDocument, TreeMember};
     use confit_model::hook::Hook;
     use confit_model::id::Id;
-    use confit_runtime::manifest::MANIFEST_VERSION;
     use confit_runtime::manifest::Manifest;
 
     fn probe_hook() -> Hook {
@@ -920,7 +920,7 @@ mod tests {
         let prepared = Prepared {
             desired,
             previous: Manifest {
-                version: MANIFEST_VERSION,
+                version: VERSION,
                 documents: Vec::new(),
                 hashes: BTreeMap::new(),
                 hooks: Vec::new(),

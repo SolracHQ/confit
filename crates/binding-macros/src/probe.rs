@@ -33,12 +33,6 @@ pub(crate) fn expand_probe_enum(
         let variant_name = variant.ident.to_string();
         let ident = variant.ident.clone();
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
-        if flags.skip_decode || flags.skip_encode {
-            return Err(syn::Error::new_spanned(
-                &variant.ident,
-                format!("{outer}.{variant_name}: untagged faces are expected for skip options"),
-            ));
-        }
         if flags.rename.is_some() || flags.tag.is_some() {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
@@ -62,7 +56,6 @@ pub(crate) fn expand_probe_enum(
                 ),
                 fields: ::std::vec::Vec::new(),
                 collect: <#payload as ::confit_binding::face::Face>::collect,
-                skipped: false,
             }
         });
         faces.push(quote! {

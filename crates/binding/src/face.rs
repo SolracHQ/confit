@@ -92,8 +92,6 @@ pub struct UnionArm {
     pub fields: Vec<FieldDescriptor>,
     /// The face collector.
     pub collect: CollectFn,
-    /// The alias skip marker.
-    pub skipped: bool,
 }
 
 impl PartialEq for UnionArm {
@@ -102,7 +100,6 @@ impl PartialEq for UnionArm {
             && self.documentation == other.documentation
             && self.face == other.face
             && self.fields == other.fields
-            && self.skipped == other.skipped
             && std::ptr::fn_addr_eq(self.collect, other.collect)
     }
 }
@@ -298,9 +295,6 @@ impl FaceData {
             }
             Self::Union { arms, .. } => {
                 for arm in arms {
-                    if arm.skipped {
-                        continue;
-                    }
                     (arm.collect)(collector);
                 }
             }
@@ -661,21 +655,6 @@ mod tests {
         }
     }
 
-    /// Union with a skipped arm for data tests.
-    #[allow(dead_code)]
-    #[derive(Face)]
-    #[face(table, untagged)]
-    enum SkippedUnion {
-        /// Live payload.
-        Live {
-            /// The content.
-            content: String,
-        },
-        /// Sealed payload.
-        #[face(skip_decode, skip_encode)]
-        Sealed(String),
-    }
-
     #[test]
     fn ignored_inline_fields_skip_data_with_defaults() {
         match IgnoredUnion_Text::face() {
@@ -822,19 +801,6 @@ mod tests {
         assert!(matches!(bool::face(), FaceData::Scalar { .. }));
         assert!(matches!(Vec::<String>::face(), FaceData::Scalar { .. }));
         assert!(matches!(Option::<String>::face(), FaceData::Scalar { .. }));
-    }
-
-    #[test]
-    fn skipped_union_data_keeps_all_arms() {
-        match SkippedUnion::face() {
-            FaceData::Union { arms, .. } => {
-                assert_eq!(arms.len(), 2);
-                assert_eq!(arms[0].name, "Live");
-                assert_eq!(arms[1].name, "Sealed");
-                assert_eq!(arms[0].fields.len(), 1);
-            }
-            _ => panic!("skipped expected union data for union"),
-        }
     }
 
     #[test]

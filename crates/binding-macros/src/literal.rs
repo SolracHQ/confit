@@ -31,8 +31,7 @@ pub(crate) fn expand_string_enum(
             ));
         }
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
-        if flags.tag.is_some() || !flags.probe.is_empty() || flags.skip_decode || flags.skip_encode
-        {
+        if flags.tag.is_some() || !flags.probe.is_empty() {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
                 format!("{outer}.{variant_name}: string faces take rename alone"),
@@ -50,7 +49,6 @@ pub(crate) fn expand_string_enum(
                 face: ::std::borrow::Cow::Borrowed(#quoted),
                 fields: ::std::vec::Vec::new(),
                 collect: ::confit_binding::face::no_collect,
-                skipped: false,
             }
         });
         literals.push(literal);

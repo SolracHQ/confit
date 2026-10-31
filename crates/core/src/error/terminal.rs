@@ -220,12 +220,12 @@ impl Error {
                 None => "Cannot open profile at 'unknown'".to_owned(),
             },
             ErrorKind::DeleteSlot
-            | ErrorKind::ApplySlot
+            | ErrorKind::RestoreSlot
             | ErrorKind::ExportSlot
             | ErrorKind::BundleSlot => {
                 let verb = match &self.kind {
                     ErrorKind::DeleteSlot => "delete",
-                    ErrorKind::ApplySlot => "apply",
+                    ErrorKind::RestoreSlot => "restore",
                     ErrorKind::ExportSlot => "export",
                     _ => "bundle",
                 };
@@ -236,8 +236,9 @@ impl Error {
             }
             ErrorKind::DeleteState => "Cannot delete the state".to_owned(),
             ErrorKind::ApplyState => "Cannot apply the state".to_owned(),
-            ErrorKind::PlanState => "Cannot plan the state".to_owned(),
+            ErrorKind::BundleState => "Cannot bundle the state".to_owned(),
             ErrorKind::ExportState => "Cannot export the state".to_owned(),
+            ErrorKind::RestoreState => "Cannot restore the state".to_owned(),
             ErrorKind::RotateHistory => "Cannot rotate history".to_owned(),
             ErrorKind::PruneBlobs => {
                 "Cannot cleanup old blobs, unnecessary files can persist please check".to_owned()

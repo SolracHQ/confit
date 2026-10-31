@@ -105,7 +105,8 @@ mod tests {
     use confit_store::StoreRoots;
     use confit_store::handles::ResourceHandle;
 
-    use crate::manifest::MANIFEST_VERSION;
+    use crate::manifest::Manifest;
+    use confit_core::version::VERSION;
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
@@ -120,7 +121,7 @@ mod tests {
 
     fn manifest_of(documents: Vec<Document>) -> Manifest {
         Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents,
             hashes: BTreeMap::new(),
             hooks: Vec::new(),
@@ -240,7 +241,7 @@ mod tests {
         );
         std::fs::write(&dest, &recorded).unwrap();
         let manifest = Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents: vec![document.clone()],
             hashes: BTreeMap::new(),
             hooks: Vec::new(),

@@ -26,8 +26,6 @@ pub(crate) struct VariantFlags {
     pub(crate) rename: Option<String>,
     pub(crate) tag: Option<String>,
     pub(crate) probe: Vec<String>,
-    pub(crate) skip_decode: bool,
-    pub(crate) skip_encode: bool,
 }
 
 /// Container header reading on every derived type.
@@ -341,23 +339,13 @@ pub(crate) fn parse_variant_flags(
                         .get_ident()
                         .map(ToString::to_string)
                         .unwrap_or_default();
-                    match ident.as_str() {
-                        "skip_decode" => {
-                            flags.skip_decode = true;
-                        }
-                        "skip_encode" => {
-                            flags.skip_encode = true;
-                        }
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &item,
-                                format!(
-                                    "{outer}.{variant}: face option '{ident}' expected \
-                                     container-level alone"
-                                ),
-                            ));
-                        }
-                    }
+                    return Err(syn::Error::new_spanned(
+                        &item,
+                        format!(
+                            "{outer}.{variant}: face option '{ident}' expected \
+                             container-level alone"
+                        ),
+                    ));
                 }
                 Meta::NameValue(pair) => {
                     let key = pair

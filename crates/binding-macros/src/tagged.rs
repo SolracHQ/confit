@@ -331,12 +331,6 @@ pub(crate) fn expand_tagged_enum(
         let variant_name = variant.ident.to_string();
         let ident = variant.ident.clone();
         let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
-        if flags.skip_decode || flags.skip_encode {
-            return Err(syn::Error::new_spanned(
-                &variant.ident,
-                format!("{outer}.{variant_name}: untagged faces are expected for skip options"),
-            ));
-        }
         if flags.rename.is_some() || !flags.probe.is_empty() {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
@@ -363,7 +357,6 @@ pub(crate) fn expand_tagged_enum(
                     )),
                     fields: ::std::vec::Vec::new(),
                     collect: <#identifier as ::confit_binding::face::Face>::collect,
-                    skipped: false,
                 }
             });
             if let Some(hook) = validate {
@@ -443,7 +436,6 @@ pub(crate) fn expand_tagged_enum(
                 )),
                 fields: ::std::vec::Vec::new(),
                 collect: <#payload as ::confit_binding::face::Face>::collect,
-                skipped: false,
             }
         });
         encodes.push(quote! {
@@ -644,32 +636,5 @@ mod tests {
         assert!(!expanded.contains("TaggedCond_All"));
         assert!(expanded.contains("{}: {}"));
         assert!(!expanded.contains("{} = {}"));
-    }
-
-    #[test]
-    fn skip_options_fail_the_build() {
-        let input: syn::DeriveInput = syn::parse_str(
-            r#"
-            #[face(table, tagged)]
-            pub enum TaggedCond {
-                /// Equality check.
-                EnvEq {
-                    /// The variable name.
-                    key: String,
-                },
-                /// Sealed payload.
-                #[face(skip_decode)]
-                Sealed(Vec<String>),
-            }
-            "#,
-        )
-        .unwrap();
-        let syn::Data::Enum(data) = &input.data else {
-            panic!("want enum input");
-        };
-        assert!(
-            expand_tagged_enum(&input.ident, data, &input.attrs, &None, &None).is_err(),
-            "foreign shape fails the build"
-        );
     }
 }

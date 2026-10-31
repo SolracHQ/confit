@@ -86,6 +86,12 @@ impl From<std::time::SystemTimeError> for ErrorCause {
 impl From<std::io::Error> for ErrorCause {
     /// Map one io failure to its bare shared cause.
     fn from(error: std::io::Error) -> Self {
+        if let Some(cause) = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ErrorCause>())
+        {
+            return cause.clone();
+        }
         Self::from(FilesystemError::from(error))
     }
 }
@@ -183,8 +189,8 @@ pub enum ManifestError {
     /// Unsupported manifest version.
     #[error("manifest version {got} is unsupported")]
     VersionUnsupported {
-        /// The found version number.
-        got: u64,
+        /// The found version rendering.
+        got: String,
     },
     /// Missing manifest version.
     #[error("missing manifest version")]
@@ -409,6 +415,31 @@ mod tests {
     fn io_not_found_maps_to_file_missing() {
         let failure = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
         assert_eq!(FilesystemError::from(failure), FilesystemError::FileMissing);
+    }
+
+    #[test]
+    fn io_mismatch_maps_to_content_hash_mismatch() {
+        use crate::sha::Sha;
+
+        let expected = Sha::hash(b"want");
+        let found = Sha::hash(b"got");
+        let failure = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            ErrorCause::ContentHashMismatch {
+                expected: expected.clone(),
+                found: found.clone(),
+            },
+        );
+        match ErrorCause::from(failure) {
+            ErrorCause::ContentHashMismatch {
+                expected: got,
+                found: seen,
+            } => {
+                assert_eq!(got, expected, "mismatch keeps expected");
+                assert_eq!(seen, found, "mismatch keeps found");
+            }
+            other => panic!("wrong mismatch cause: {other}"),
+        }
     }
 
     #[test]

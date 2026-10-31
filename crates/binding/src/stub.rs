@@ -157,7 +157,6 @@ pub fn emit(name: &str, data: &FaceData) -> Option<String> {
             block.push(' ');
             let faces: Vec<String> = arms
                 .iter()
-                .filter(|arm| !arm.skipped)
                 .map(|arm| arm.face.clone().into_owned())
                 .collect();
             block.push_str(&faces.join(" | "));
@@ -269,7 +268,6 @@ pub fn register_crossed(
                     face: Cow::Owned(crossed_name(name, arm.name)),
                     fields: Vec::new(),
                     collect: arm.collect,
-                    skipped: arm.skipped,
                 });
                 backed += 1;
             }
@@ -372,7 +370,6 @@ mod tests {
                     face: Cow::Borrowed("TextDocument"),
                     fields: Vec::new(),
                     collect: no_collect,
-                    skipped: false,
                 },
                 UnionArm {
                     name: "Count",
@@ -380,7 +377,6 @@ mod tests {
                     face: Cow::Borrowed("CountDocument"),
                     fields: Vec::new(),
                     collect: no_collect,
-                    skipped: false,
                 },
             ],
         };
@@ -430,7 +426,6 @@ mod tests {
                         collect: no_collect,
                     }],
                     collect: no_collect,
-                    skipped: false,
                 },
                 UnionArm {
                     name: "Nothing",
@@ -438,7 +433,6 @@ mod tests {
                     face: Cow::Borrowed("nil"),
                     fields: Vec::new(),
                     collect: no_collect,
-                    skipped: false,
                 },
             ],
         };

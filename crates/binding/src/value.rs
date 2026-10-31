@@ -752,23 +752,6 @@ mod tests {
         data: FlatData,
     }
 
-    /// Union with one skipped arm.
-    #[derive(Debug, PartialEq, Face)]
-    #[face(table, untagged)]
-    enum MaybeSealed {
-        /// Live payload.
-        Live {
-            /// The exact file text.
-            content: String,
-        },
-        /// Sealed payload.
-        #[face(skip_decode, skip_encode)]
-        Sealed {
-            /// The content digest.
-            digest: String,
-        },
-    }
-
     #[test]
     fn flat_struct_round_trips_beside_sibling_keys() {
         let lua = Lua::new();
@@ -868,36 +851,6 @@ mod tests {
         assert_eq!(count, 3);
         let round = FlatUnionHolder::decode(&Value::Table(back), &lua).unwrap();
         assert_eq!(round, decoded);
-    }
-
-    #[test]
-    fn skipped_arms_stay_out_of_decode_and_encode() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-        table.set("content", "hello").unwrap();
-        let decoded = MaybeSealed::decode(&Value::Table(table), &lua).unwrap();
-        assert_eq!(
-            decoded,
-            MaybeSealed::Live {
-                content: "hello".to_owned(),
-            }
-        );
-        let sealed_table = lua.create_table().unwrap();
-        sealed_table.set("digest", "aa").unwrap();
-        assert!(
-            MaybeSealed::decode(&Value::Table(sealed_table), &lua).is_err(),
-            "sealed arm stays out of decode"
-        );
-        let encoded = decoded.encode(&lua).unwrap();
-        let Value::Table(back) = encoded else {
-            panic!("live arms encode a table");
-        };
-        let content: String = back.get("content").unwrap();
-        assert_eq!(content, "hello");
-        let sealed = MaybeSealed::Sealed {
-            digest: "aa".to_owned(),
-        };
-        assert!(sealed.encode(&lua).is_err(), "sealed arms refuse encode");
     }
 
     #[test]

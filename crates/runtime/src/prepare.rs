@@ -9,15 +9,16 @@ use confit_core::error::{
     contextual, error,
 };
 use confit_core::sha::Sha;
+use confit_core::version::VERSION;
 use confit_model::document::{Data, Document, TreeMember};
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
 use crate::differ::{Differ, Difference, DifferenceOrder};
+use crate::manifest::Manifest;
 use crate::manifest::status::{DocumentStatus, status};
 use crate::manifest::stored::load;
-use crate::manifest::{MANIFEST_VERSION, Manifest};
 use crate::render::render_document;
 
 /// Prepared manifests.
@@ -62,7 +63,7 @@ pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> TerminalResult<Manif
     placed.sort_by_key(|document| document.path.display());
     let hashes = fill_hashes(&placed)?;
     Ok(Manifest {
-        version: MANIFEST_VERSION,
+        version: VERSION,
         documents: placed,
         hashes,
         hooks,

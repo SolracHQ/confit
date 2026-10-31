@@ -24,10 +24,14 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// write the evaluated profile to a bundle file or named state
+    Bundle(BundleArgs),
     /// preview the profile evaluation with differences against previous state
-    Plan(PlanArgs),
-    /// confirm the manifest and create every document in place
+    Check(CheckArgs),
+    /// write the live project onto the machine
     Apply(ApplyArgs),
+    /// write one package onto the machine
+    Restore(RestoreArgs),
     /// scaffold a profile or rewrite stubs and plugins in the target folder
     Init(InitArgs),
     /// pack one state into a portable bundle file or print its manifest
@@ -39,27 +43,47 @@ pub enum Command {
 /// Default profile file under the project.
 pub const DEFAULT_PROFILE: &str = "main.lua";
 
-/// Evaluate the profile and preview the resulting plan.
+/// Evaluate the profile and write the resulting bundle.
 #[derive(Debug, Args)]
-pub struct PlanArgs {
+pub struct BundleArgs {
     /// project folder to evaluate
     pub project: PathBuf,
     /// profile file to evaluate (default: main.lua in the project)
     #[arg(short, long)]
     pub profile: Option<PathBuf>,
-    /// write the plan bundle to a file (preview only when omitted)
+    /// bundle file or named state to write (`.cb` path or `@name`)
     #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    pub output: PathBuf,
 }
 
-/// Apply one source.
+/// Evaluate the profile and preview the resulting differences.
 #[derive(Debug, Args)]
-pub struct ApplyArgs {
-    /// source to apply (`.lua`, `.cb`, `@name`, `%N` or project folder)
-    pub source: PathBuf,
+pub struct CheckArgs {
+    /// project folder to evaluate
+    pub project: PathBuf,
     /// profile file to evaluate (default: main.lua in the project)
     #[arg(short, long)]
     pub profile: Option<PathBuf>,
+}
+
+/// Apply one live project.
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// project folder to evaluate
+    pub project: PathBuf,
+    /// profile file to evaluate (default: main.lua in the project)
+    #[arg(short, long)]
+    pub profile: Option<PathBuf>,
+    /// skip the confirmation prompt
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// Restore one package.
+#[derive(Debug, Args)]
+pub struct RestoreArgs {
+    /// package to restore (`.cb`, `@name`, or `%N`)
+    pub source: PathBuf,
     /// skip the confirmation prompt
     #[arg(long)]
     pub force: bool,
@@ -131,18 +155,21 @@ pub fn expand_command(command: &mut Command) {
         }
     }
     match command {
-        Command::Plan(args) => {
+        Command::Bundle(args) => {
             args.project = expand_tilde(&args.project);
-            if let Some(profile) = args.profile.as_mut() {
-                *profile = expand_tilde(profile);
-            }
-            opt(&mut args.output);
+            opt(&mut args.profile);
+            args.output = expand_tilde(&args.output);
+        }
+        Command::Check(args) => {
+            args.project = expand_tilde(&args.project);
+            opt(&mut args.profile);
         }
         Command::Apply(args) => {
+            args.project = expand_tilde(&args.project);
+            opt(&mut args.profile);
+        }
+        Command::Restore(args) => {
             args.source = expand_tilde(&args.source);
-            if let Some(profile) = args.profile.as_mut() {
-                *profile = expand_tilde(profile);
-            }
         }
         Command::Init(args) => {
             opt(&mut args.dir);
@@ -174,20 +201,13 @@ pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
     std::env::temp_dir().join(format!("confit-{}", std::process::id()))
 }
 
-/// Resolve the plan profile against the project folder.
-pub fn plan_profile(project: &std::path::Path, profile: Option<&std::path::Path>) -> PathBuf {
+/// Resolve the profile against the project folder.
+pub fn resolve_profile(project: &std::path::Path, profile: Option<&std::path::Path>) -> PathBuf {
     match profile {
         Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
         Some(explicit) => project.join(explicit),
         None => project.join(DEFAULT_PROFILE),
     }
-}
-
-/// Resolve the apply require base from the source parent.
-pub fn apply_root(source: &std::path::Path) -> PathBuf {
-    source
-        .parent()
-        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
 }
 
 #[cfg(test)]
@@ -196,19 +216,19 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn plan_profile_pins_path_contract() {
+    fn resolve_profile_pins_path_contract() {
         assert_eq!(
-            plan_profile(Path::new("site"), None),
+            resolve_profile(Path::new("site"), None),
             PathBuf::from("site/main.lua"),
             "omitted profiles use the default"
         );
         assert_eq!(
-            plan_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
+            resolve_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
             PathBuf::from("site/laptop.lua"),
             "relative names stay project relative"
         );
         assert_eq!(
-            plan_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
+            resolve_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
             PathBuf::from("/elsewhere/laptop.lua"),
             "absolute names stay as is"
         );

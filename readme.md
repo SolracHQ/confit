@@ -109,23 +109,23 @@ Hooks: 2 to add, 0 to change, 0 to destroy.
 
 | Command | Does |
 |---|---|
-| `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
-| `apply SOURCE` | previews, prompts on literal `yes`, writes files |
+| `bundle PROJECT -o PATH\|@name` | writes a portable `.cb` bundle or named slot, prints the path |
+| `check PROJECT` | previews differences, writes nothing |
+| `apply PROJECT` | previews, prompts on literal `yes`, writes files |
+| `restore SOURCE` | previews, prompts, writes one `.cb`, `@name`, or `%N` |
 | `export [PICKER]` | packs one slot into a portable bundle, prints the path |
 | `delete @name` | drops one named slot and its orphaned entries |
 | `init [DIR]` | scaffolds a profile and stubs, default `.` |
 
-`--root` defaults to the profile file parent directory.
-`apply` reads SOURCE by shape. `.lua` and extensionless paths run
-a profile, `.cb` runs a bundle file, `@name` runs a named slot,
-`%N` runs history newest-first from 1.
-`-o @name` stores a slot manifest, `apply @name` replays it.
+`apply` reads a project folder. `bundle -o @name` stores a slot
+manifest, `restore @name` replays it. `.cb` files travel across
+machines, `%N` reads history newest-first from 1.
 Slots hold manifests, one pool holds entries, history reads newest-first.
 `export` packs `%N`, `@name` and the applied slot into `.cb`,
 `-m` prints the manifest. First runs diff desired state against disk
 and close with create and overwrite counts.
-`just plan-example` smokes the basic fixture and writes only to
-`./target`.
+`just bundle-example` smokes the basic fixture and writes only to
+`./target`. `just check-example` previews it and writes nothing.
 
 ## Build
 

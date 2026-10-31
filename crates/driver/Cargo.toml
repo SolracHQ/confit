@@ -1,13 +1,13 @@
 [package]
 name = "confit-driver"
-version = "0.9.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-confit-core = { version = "0.9.0", path = "../core" }
+confit-core = { path = "../core" }
 crossbeam-channel.workspace = true
 dirs.workspace = true
 flate2.workspace = true

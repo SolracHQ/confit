@@ -48,8 +48,8 @@ pub enum ErrorKind {
     OpenProfile,
     /// Failed slot delete.
     DeleteSlot,
-    /// Failed slot apply.
-    ApplySlot,
+    /// Failed slot parse for restore.
+    RestoreSlot,
     /// Failed slot export.
     ExportSlot,
     /// Failed slot bundle.
@@ -58,10 +58,12 @@ pub enum ErrorKind {
     DeleteState,
     /// Failed state apply.
     ApplyState,
-    /// Failed state plan.
-    PlanState,
+    /// Failed bundle-side state handling.
+    BundleState,
     /// Failed state export.
     ExportState,
+    /// Failed package handling for restore.
+    RestoreState,
     /// Failed history rotation.
     RotateHistory,
     /// Failed old blob cleanup.

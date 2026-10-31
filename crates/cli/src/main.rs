@@ -1,7 +1,7 @@
 use clap::Parser;
 
-use confit_cli::actions::apply::ApplyRunner;
-use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, apply_root, resolve_logs_dir};
+use confit_cli::actions::{apply, restore};
+use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, resolve_logs_dir};
 use confit_cli::presentation::spinner::Terminal;
 use confit_cli::sinks::Sinks;
 use confit_core::error::TerminalResult;
@@ -104,16 +104,35 @@ fn run() -> TerminalResult<()> {
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
     match &cli.command {
-        Command::Plan(args) => run_plan(args, &log_path),
+        Command::Bundle(args) => run_bundle(args),
+        Command::Check(args) => run_check(args, &log_path),
         Command::Apply(args) => run_apply(args, &log_path, &hooks_dir),
+        Command::Restore(args) => run_restore(args, &log_path, &hooks_dir),
         Command::Init(args) => run_init(args),
         Command::Export(args) => run_export(args),
         Command::Delete(args) => run_delete(args),
     }
 }
 
-/// Run plan with summary output.
-fn run_plan(args: &confit_cli::cli::PlanArgs, log_path: &std::path::Path) -> TerminalResult<()> {
+/// Run bundle and print the written artifact path.
+fn run_bundle(args: &confit_cli::cli::BundleArgs) -> TerminalResult<()> {
+    let terminal = Terminal::new();
+    let sender = terminal.sink();
+    let mut roots = StoreRoots::standard();
+    roots.project_root = args.project.clone();
+    let stores = Stores::new(roots, sender.clone());
+    let report = confit_cli::actions::bundle::BundleRunner {
+        args,
+        stores: stores.clone(),
+    }
+    .execute()?;
+    terminal.finish();
+    anstream::println!("bundle: {}", report.text);
+    Ok(())
+}
+
+/// Run check with summary output.
+fn run_check(args: &confit_cli::cli::CheckArgs, log_path: &std::path::Path) -> TerminalResult<()> {
     let terminal = Terminal::new();
     let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
@@ -124,7 +143,7 @@ fn run_plan(args: &confit_cli::cli::PlanArgs, log_path: &std::path::Path) -> Ter
         print: terminal.print_handle(),
         suspend: terminal.suspend_handle(),
     };
-    let prepared = confit_cli::actions::plan::PlanRunner {
+    let prepared = confit_cli::actions::check::CheckRunner {
         args,
         stores: stores.clone(),
         sinks,
@@ -147,26 +166,20 @@ fn run_apply(
     let terminal = Terminal::new();
     let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
-    roots.project_root = if args.source.is_dir() {
-        args.source.clone()
-    } else {
-        apply_root(&args.source)
-    };
+    roots.project_root = args.project.clone();
     let stores = Stores::new(roots, sender.clone());
     let sinks = Sinks {
         progress: sender.clone(),
         print: terminal.print_handle(),
         suspend: terminal.suspend_handle(),
     };
-    let report = match ApplyRunner::from_args(
+    let report = match apply::run(
         args,
         &mut input,
         stores.clone(),
         sinks,
         hooks_dir.to_path_buf(),
-    )
-    .and_then(ApplyRunner::execute)
-    {
+    ) {
         Ok(report) => report,
         Err(error) => {
             terminal.finish();
@@ -181,7 +194,50 @@ fn run_apply(
         report.removed
     );
     if report.written > 0 || report.removed > 0 {
-        anstream::println!("restore: confit apply %1");
+        anstream::println!("restore: confit restore %1");
+    }
+    anstream::eprintln!("log: {}", log_path.display());
+    log::logger().flush();
+    Ok(())
+}
+
+/// Run restore with preview and prompts.
+fn run_restore(
+    args: &confit_cli::cli::RestoreArgs,
+    log_path: &std::path::Path,
+    hooks_dir: &std::path::Path,
+) -> TerminalResult<()> {
+    let mut input = std::io::BufReader::new(std::io::stdin());
+    let terminal = Terminal::new();
+    let sender = terminal.sink();
+    let stores = Stores::new(StoreRoots::standard(), sender.clone());
+    let sinks = Sinks {
+        progress: sender.clone(),
+        print: terminal.print_handle(),
+        suspend: terminal.suspend_handle(),
+    };
+    let report = match restore::run(
+        args,
+        &mut input,
+        stores.clone(),
+        sinks,
+        hooks_dir.to_path_buf(),
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            terminal.finish();
+            anstream::eprintln!("log: {}", log_path.display());
+            return Err(error);
+        }
+    };
+    terminal.finish();
+    anstream::println!(
+        "restored: {} files, {} removed",
+        report.written,
+        report.removed
+    );
+    if report.written > 0 || report.removed > 0 {
+        anstream::println!("restore: confit restore %1");
     }
     anstream::eprintln!("log: {}", log_path.display());
     log::logger().flush();

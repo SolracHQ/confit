@@ -12,6 +12,10 @@ members = [
   "crates/binding-macros",
 ]
 
+[workspace.package]
+version = "0.9.0"
+edition = "2024"
+
 [workspace.dependencies]
 anstream = "1.0.0"
 clap = { version = "4.6.6", features = ["derive"] }

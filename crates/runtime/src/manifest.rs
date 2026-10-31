@@ -10,6 +10,7 @@ use confit_core::error::ContextualResult;
 use confit_core::error::ManifestError;
 use confit_core::error::{ContextualCause, DocumentError, WithContext, contextual};
 use confit_core::sha::Sha;
+use confit_core::version::compatible;
 use confit_model::document::{Data, Document};
 use confit_model::hook::Hook;
 use confit_store::Stores;
@@ -17,15 +18,12 @@ use confit_store::handles::ResourceHandle;
 
 use serde::{Deserialize, Serialize};
 
-/// Manifest format version for bundle builds.
-pub const MANIFEST_VERSION: u32 = 9;
-
 /// Persisted plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// The plan format version.
-    pub version: u32,
+    /// The plan format version triplet.
+    pub version: [u8; 3],
     /// Plan documents in path order.
     pub documents: Vec<Document>,
     /// Content hashes by path display.
@@ -92,24 +90,26 @@ impl Manifest {
     ///
     /// - [`ManifestError::Invalid`] for bad payloads.
     /// - [`ManifestError::MissingVersion`] for absent versions.
-    /// - [`ManifestError::VersionUnsupported`] for stale versions.
+    /// - [`ManifestError::VersionUnsupported`] for incompatible versions.
     pub fn decode(bytes: &[u8]) -> ContextualResult<Self> {
         let value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|error| contextual(ManifestError::Invalid).with_detail(error.to_string()))?;
-        if value
+        let raw = value
             .get("version")
-            .and_then(serde_json::Value::as_u64)
-            .is_none()
-        {
-            return Err(contextual(ManifestError::MissingVersion));
+            .cloned()
+            .ok_or_else(|| contextual(ManifestError::MissingVersion))?;
+        let found: [u8; 3] = serde_json::from_value(raw.clone()).map_err(|_| {
+            contextual(ManifestError::VersionUnsupported {
+                got: raw.to_string(),
+            })
+        })?;
+        if !compatible(found) {
+            return Err(contextual(ManifestError::VersionUnsupported {
+                got: format!("[{}, {}, {}]", found[0], found[1], found[2]),
+            }));
         }
         let manifest: Self = serde_json::from_value(value)
             .map_err(|error| contextual(ManifestError::Invalid).with_detail(error.to_string()))?;
-        if manifest.version != MANIFEST_VERSION {
-            return Err(contextual(ManifestError::VersionUnsupported {
-                got: u64::from(manifest.version),
-            }));
-        }
         Ok(manifest)
     }
 }
@@ -119,6 +119,7 @@ mod tests {
     use super::*;
     use confit_core::error::ErrorCause;
     use confit_core::sha::Sha;
+    use confit_core::version::VERSION;
     use confit_model::document::{Data, Document, OpaqueDocument, TreeDocument, TreeMember};
     use confit_model::routes::{Route, RouteBase};
 
@@ -137,17 +138,32 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejected_stale_version_with_got() {
-        let raw = serde_json::json!({"version": 0u32, "documents": [], "hashes": {}});
+    fn decode_rejects_foreign_triplet_with_got() {
+        let raw = serde_json::json!({"version": [0, 8, 0], "documents": [], "hashes": {}});
         let bytes = serde_json::to_vec(&raw).unwrap();
         match Manifest::decode(&bytes) {
             Ok(_) => panic!("stale manifest passes"),
             Err(error) => match error.cause() {
                 ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
-                    assert_eq!(*got, 0, "the error keeps the version");
+                    assert_eq!(got, "[0, 8, 0]", "the error keeps the version");
                     assert!(error.context().is_empty(), "decode stays location-free");
                 }
                 other => panic!("wrong stale variant: {other}"),
+            },
+        }
+    }
+
+    #[test]
+    fn decode_rejects_numeric_version_with_got() {
+        let raw = serde_json::json!({"version": 9u32, "documents": [], "hashes": {}});
+        let bytes = serde_json::to_vec(&raw).unwrap();
+        match Manifest::decode(&bytes) {
+            Ok(_) => panic!("numeric manifest passes"),
+            Err(error) => match error.cause() {
+                ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
+                    assert_eq!(got, "9", "the error keeps the raw value");
+                }
+                other => panic!("wrong numeric variant: {other}"),
             },
         }
     }
@@ -183,7 +199,7 @@ mod tests {
             },
         );
         let manifest = Manifest {
-            version: MANIFEST_VERSION,
+            version: VERSION,
             documents: vec![
                 opaque_doc("blob.bin", ResourceHandle::Cache(opaque_sha.clone())),
                 Document::new(
@@ -219,7 +235,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
-        let body = b"sealed live bytes";
+        let body = b"packaged live bytes";
         let handle = project_handle(&stores, dir.path(), "note.txt", body);
         let documents = vec![Document::new(
             Route::new(RouteBase::Home, "note").unwrap(),

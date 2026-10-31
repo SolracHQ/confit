@@ -198,15 +198,5 @@ mod tests {
             }
             "#,
         );
-        reject(
-            r#"
-            #[face(userdata)]
-            pub enum Flagged {
-                /// Cached entry.
-                #[face(skip_decode)]
-                Cached(String),
-            }
-            "#,
-        );
     }
 }

@@ -11,3 +11,5 @@ pub mod progress;
 pub mod sha;
 /// Near-match suggestions for unknown names.
 pub mod suggest;
+/// Binary version triplet with manifest compatibility.
+pub mod version;
