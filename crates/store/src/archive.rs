@@ -9,8 +9,10 @@ use confit_core::error::{
     ArchiveError, ContentError, ContextualCause, ContextualResult, DocumentError, ErrorCause,
     FilesystemError, WithContext, contextual,
 };
-use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::Sha;
+use confit_ui::Event;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 
 use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
@@ -26,16 +28,16 @@ type Map = BTreeMap<String, (Sha, u32)>;
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     resources: Arc<Resources>,
-    progress: ProgressSender,
+    to_ui: Sender<ToUi>,
     maps: Arc<std::sync::RwLock<HashMap<Sha, Map>>>,
 }
 
 impl ArchiveStore {
     /// Build an archive store over the shared cache.
-    pub fn new(resources: Arc<Resources>, progress: ProgressSender) -> Self {
+    pub fn new(resources: Arc<Resources>, to_ui: Sender<ToUi>) -> Self {
         Self {
             resources,
-            progress,
+            to_ui,
             maps: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
@@ -187,16 +189,23 @@ impl ArchiveStore {
     /// - [`FilesystemError`] for unreadable archives and cache write faults.
     fn unpack_all(&self, archive: &ArchiveHandle) -> ContextualResult<Map> {
         let archive_path = archive.path().to_path_buf();
+        let _ = self.to_ui.send(ToUi::Progress(Event::Started {
+            id: archive_path.display().to_string(),
+            label: format!("collecting artifacts: {}", archive_path.display()),
+        }));
         let file = std::fs::File::open(&archive_path)
             .map_err(ContextualCause::from)
             .with_fs_path(&archive_path)?;
         let map = Unpack::new(&self.resources, &archive_path).run(file)?;
         self.write_map(archive, &map)?;
         let total = map.len();
-        let _ = self.progress.send(Event::Unpacked {
-            archive: archive_path.display().to_string(),
-            total,
-        });
+        let _ = self.to_ui.send(ToUi::Progress(Event::Finished {
+            id: archive_path.display().to_string(),
+            label: format!(
+                "collecting artifacts: {} ({total} members)",
+                archive_path.display()
+            ),
+        }));
         Ok(map)
     }
 }
@@ -905,7 +914,7 @@ mod tests {
 
     #[test]
     fn unpack_announces_unpacked_with_counts() {
-        use confit_core::progress::Event;
+        use confit_ui::Event;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
@@ -925,14 +934,14 @@ mod tests {
             }
             Err(error) => panic!("archive unpacks: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(events.len(), 1, "unpack fires one fact");
-        match &events[0] {
-            Event::Unpacked {
-                archive: seen,
-                total,
-            } => {
-                assert_eq!(*total, 2, "unpack counts every member");
+        let events: Vec<ToUi> = receiver.try_iter().collect();
+        assert_eq!(events.len(), 2, "unpack fires start and finish");
+        match &events[1] {
+            ToUi::Progress(Event::Finished { id: seen, label }) => {
+                assert!(
+                    label.contains("(2 members)"),
+                    "unpack counts every member: {label}"
+                );
                 assert_eq!(
                     seen,
                     &dir.path()

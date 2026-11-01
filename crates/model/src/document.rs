@@ -8,7 +8,7 @@ mod tests;
 use std::collections::BTreeMap;
 
 use crate::routes::Route;
-use confit_binding::fault::FaceFault;
+use confit_binding::fault::{FaceFault, FaultReason};
 use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use confit_core::error::{ContextualResult, DocumentError, contextual};
@@ -261,12 +261,12 @@ pub(crate) fn default_file_mode() -> u32 {
 pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, FaceFault> {
     let text = String::decode(value, lua).map_err(|error| {
         let found = match error.reason {
-            confit_binding::fault::FaultReason::ShapeMismatch { found, .. } => found,
-            confit_binding::fault::FaultReason::UnknownVariant { found, .. } => found,
+            FaultReason::ShapeMismatch { found, .. } => found,
+            FaultReason::UnknownVariant { found, .. } => found,
         };
         FaceFault {
             segments: Vec::new(),
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            reason: FaultReason::ShapeMismatch {
                 require: "expected a string".to_owned(),
                 found,
             },
@@ -276,7 +276,7 @@ pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, 
         || {
             Err(FaceFault {
                 segments: Vec::new(),
-                reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                reason: FaultReason::ShapeMismatch {
                     require: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
                     found: format!("'{text}'"),
                 },

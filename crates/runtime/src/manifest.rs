@@ -10,7 +10,7 @@ use confit_core::error::ContextualResult;
 use confit_core::error::ManifestError;
 use confit_core::error::{ContextualCause, DocumentError, WithContext, contextual};
 use confit_core::sha::Sha;
-use confit_core::version::compatible;
+use confit_core::version;
 use confit_model::document::{Data, Document};
 use confit_model::hook::Hook;
 use confit_store::Stores;
@@ -103,7 +103,7 @@ impl Manifest {
                 got: raw.to_string(),
             })
         })?;
-        if !compatible(found) {
+        if !version::compatible(found) {
             return Err(contextual(ManifestError::VersionUnsupported {
                 got: format!("[{}, {}, {}]", found[0], found[1], found[2]),
             }));

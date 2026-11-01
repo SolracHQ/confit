@@ -202,7 +202,7 @@ pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 /// Resolve the profile against the project folder.
-pub fn resolve_profile(project: &std::path::Path, profile: Option<&std::path::Path>) -> PathBuf {
+pub fn resolve_profile(project: &Path, profile: Option<&Path>) -> PathBuf {
     match profile {
         Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
         Some(explicit) => project.join(explicit),

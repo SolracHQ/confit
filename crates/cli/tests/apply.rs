@@ -6,7 +6,6 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{seed_file, test_sinks, test_stores};
 use confit_cli::actions::{apply, commit::WriteReport};
 use confit_cli::cli::ApplyArgs;
 use confit_core::error::TerminalResult;
@@ -31,26 +30,26 @@ return {{
 /// Seed one project with the profile text.
 fn seed_project(dir: &Path, relative: &str) {
     let site = dir.join("site");
-    seed_file(&site.join("main.lua"), profile_text(relative).as_bytes());
+    common::seed_file(&site.join("main.lua"), profile_text(relative).as_bytes());
 }
 
-/// Run one apply with the input bytes, the force flag, and the profile.
+/// Run one apply with the canned replies, the force flag, and the profile.
 fn run_apply(
     dir: &Path,
-    input: &[u8],
+    replies: &[&str],
     force: bool,
     profile: Option<PathBuf>,
 ) -> TerminalResult<WriteReport> {
     let site = dir.join("site");
-    let stores = test_stores(dir, "site");
+    let stores = common::test_stores(dir, "site");
     let args = ApplyArgs {
         project: site,
         profile,
         force,
     };
-    let mut input = std::io::BufReader::new(input);
+    let replies = replies.iter().map(ToString::to_string).collect();
     let hooks = dir.join("hooks");
-    apply::run(&args, &mut input, stores, test_sinks(), hooks)
+    apply::run(&args, stores, common::replying_handles(replies), hooks)
 }
 
 /// Read one home destination under the shared test root.
@@ -69,7 +68,7 @@ fn home_absent(relative: &str) -> bool {
 fn apply_force_writes_without_prompt() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-force-note");
-    match run_apply(dir.path(), b"", true, None) {
+    match run_apply(dir.path(), &[], true, None) {
         Ok(report) => assert_eq!(report.written, 1, "one document lands"),
         Err(error) => panic!("forced apply runs: {error}"),
     }
@@ -84,7 +83,7 @@ fn apply_force_writes_without_prompt() {
 fn apply_yes_writes_documents() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-yes-note");
-    match run_apply(dir.path(), b"yes\n", false, None) {
+    match run_apply(dir.path(), &["yes"], false, None) {
         Ok(report) => assert_eq!(report.written, 1, "one document lands"),
         Err(error) => panic!("confirmed apply runs: {error}"),
     }
@@ -99,7 +98,7 @@ fn apply_yes_writes_documents() {
 fn apply_no_leaves_disk_alone() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-no-note");
-    match run_apply(dir.path(), b"no\n", false, None) {
+    match run_apply(dir.path(), &["no"], false, None) {
         Ok(report) => assert_eq!(report.written, 0, "refused apply writes nothing"),
         Err(error) => panic!("refused apply stays quiet: {error}"),
     }
@@ -114,11 +113,11 @@ fn apply_explicit_profile_beats_default() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-main-note");
     let site = dir.path().join("site");
-    seed_file(
+    common::seed_file(
         &site.join("laptop.lua"),
         profile_text("confit-alt-note").as_bytes(),
     );
-    match run_apply(dir.path(), b"", true, Some(PathBuf::from("laptop.lua"))) {
+    match run_apply(dir.path(), &[], true, Some(PathBuf::from("laptop.lua"))) {
         Ok(report) => assert_eq!(report.written, 1, "one document lands"),
         Err(error) => panic!("explicit profile runs: {error}"),
     }

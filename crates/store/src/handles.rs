@@ -203,8 +203,9 @@ fn stores_of(lua: &Lua) -> mlua::Result<Stores> {
 mod tests {
     use super::*;
     use crate::StoreRoots;
-    use confit_core::progress::Event;
     use confit_driver::archive::{Algorithm, Builder, Level};
+    use confit_ui::{Event, ToUi};
+    use crossbeam_channel::Receiver;
     use mlua::Value;
 
     fn fixture_sha() -> Sha {
@@ -249,7 +250,7 @@ mod tests {
         )
     }
 
-    fn test_stores_with_events(dir: &Path) -> (Stores, crossbeam_channel::Receiver<Event>) {
+    fn test_stores_with_events(dir: &Path) -> (Stores, Receiver<ToUi>) {
         let (sender, receiver) = crossbeam_channel::unbounded();
         (
             Stores::new(
@@ -471,8 +472,6 @@ mod tests {
 
     #[test]
     fn member_reread_reuses_unpack() {
-        use confit_core::progress::Event;
-
         let dir = tempfile::tempdir().unwrap();
         let (stores, receiver) = test_stores_with_events(dir.path());
         let project = project_root(dir.path());
@@ -494,10 +493,13 @@ mod tests {
             Ok(_) => panic!("expected its text for repeated member"),
             Err(error) => panic!("repeated members reuse the extract: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
-        assert_eq!(events.len(), 1, "repeat unpack fires once");
-        match &events[0] {
-            Event::Unpacked { total, .. } => assert_eq!(*total, 2),
+        let events: Vec<ToUi> = receiver.try_iter().collect();
+        assert_eq!(events.len(), 2, "repeat unpack fires once per run");
+        match events.last() {
+            Some(ToUi::Progress(Event::Finished { label, .. })) => assert!(
+                label.contains("(2 members)"),
+                "repeat unpack announces itself: {label}"
+            ),
             other => panic!("repeat unpack announces itself: {other:?}"),
         }
     }

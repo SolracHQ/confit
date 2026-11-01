@@ -6,11 +6,13 @@ use std::path::PathBuf;
 
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, WithContext};
-use confit_core::progress::{Event, ProgressSender};
 use confit_driver as driver;
 use confit_model::document::{Data, Document, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
+use confit_ui::Event;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 
 use crate::render::render_document;
 
@@ -19,7 +21,7 @@ pub struct Writer {
     /// Write capabilities for one run.
     pub stores: Stores,
     /// Write events.
-    pub progress: ProgressSender,
+    pub to_ui: Sender<ToUi>,
 }
 
 impl Writer {
@@ -120,11 +122,12 @@ impl Writer {
     }
 
     fn emit_written(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.progress.send(Event::DocumentWritten {
-            path: destination.display(),
-            done,
-            total,
-        });
+        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+            id: "write".to_owned(),
+            label: format!("writing {done}/{total}: {}", destination.display()),
+            done: u64::try_from(done).unwrap_or(u64::MAX),
+            total: Some(u64::try_from(total).unwrap_or(u64::MAX)),
+        }));
     }
 
     /// Write one tree destination member by member.
@@ -284,27 +287,28 @@ impl Writer {
     }
 
     fn emit_removed(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.progress.send(Event::DocumentRemoved {
-            path: destination.display(),
-            done,
-            total,
-        });
+        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+            id: "remove".to_owned(),
+            label: format!("removing {done}/{total}: {}", destination.display()),
+            done: u64::try_from(done).unwrap_or(u64::MAX),
+            total: Some(u64::try_from(total).unwrap_or(u64::MAX)),
+        }));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_core::progress::Event;
     use confit_model::document::TextDocument;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
+    use confit_ui::Event;
 
-    fn literal(path: &std::path::Path) -> Route {
+    fn literal(path: &Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
-    fn text_doc(path: &std::path::Path) -> Document {
+    fn text_doc(path: &Path) -> Document {
         Document {
             path: literal(path),
             data: Data::Text(TextDocument {
@@ -326,7 +330,7 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let writer = Writer {
             stores: Stores::new(roots, sender.clone()),
-            progress: sender,
+            to_ui: sender,
         };
         let path = dir.path().join("deleted.txt");
         driver::fs::create_parent(&path).unwrap();
@@ -336,14 +340,15 @@ mod tests {
             Ok(removed) => assert_eq!(removed, 1, "deleted leaves disk"),
             Err(error) => panic!("deleted remove: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![Event::DocumentRemoved {
-                path: path.display().to_string(),
+            vec![ToUi::Progress(Event::Progress {
+                id: "remove".to_owned(),
+                label: format!("removing 1/1: {}", path.display()),
                 done: 1,
-                total: 1,
-            }]
+                total: Some(1),
+            })]
         );
     }
 
@@ -360,7 +365,7 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let writer = Writer {
             stores: Stores::new(roots, sender.clone()),
-            progress: sender,
+            to_ui: sender,
         };
         let first = dir.path().join("first.txt");
         let second = dir.path().join("second.txt");
@@ -369,20 +374,22 @@ mod tests {
             Ok(written) => assert_eq!(written, 2, "both documents land on disk"),
             Err(error) => panic!("documents write: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
             vec![
-                Event::DocumentWritten {
-                    path: first.display().to_string(),
+                ToUi::Progress(Event::Progress {
+                    id: "write".to_owned(),
+                    label: format!("writing 1/2: {}", first.display()),
                     done: 1,
-                    total: 2,
-                },
-                Event::DocumentWritten {
-                    path: second.display().to_string(),
+                    total: Some(2),
+                }),
+                ToUi::Progress(Event::Progress {
+                    id: "write".to_owned(),
+                    label: format!("writing 2/2: {}", second.display()),
                     done: 2,
-                    total: 2,
-                },
+                    total: Some(2),
+                }),
             ]
         );
     }

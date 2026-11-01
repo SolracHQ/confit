@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_binding::fault::FaceFault;
+use confit_binding::fault::{FaceFault, FaultReason};
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
     ContextualResult, DiffWarning, DocumentError, ErrorCause, Require, Terminal, TerminalResult,
@@ -17,9 +17,9 @@ use confit_store::Stores;
 
 use crate::differ::{Differ, Difference, DifferenceOrder};
 use crate::manifest::Manifest;
-use crate::manifest::status::{DocumentStatus, status};
-use crate::manifest::stored::load;
-use crate::render::render_document;
+use crate::manifest::status::{self, DocumentStatus};
+use crate::manifest::stored;
+use crate::render;
 
 /// Prepared manifests.
 pub struct Prepared {
@@ -107,7 +107,7 @@ fn document_hash(document: &Document) -> ContextualResult<Sha> {
     match &document.data {
         Data::Opaque(found) => Ok(found.handle.sha().clone()),
         Data::Tree(found) => Ok(Sha::hash(&tree_manifest_bytes(&found.members))),
-        Data::Rc(_) => Ok(Sha::hash(&render_document(document)?)),
+        Data::Rc(_) => Ok(Sha::hash(&render::render_document(document)?)),
         Data::Structured(found) => found.bytes().map(|bytes| Sha::hash(&bytes)),
         Data::Text(found) => Ok(Sha::hash(&found.bytes())),
         Data::Link(found) => Ok(Sha::hash(&found.bytes())),
@@ -133,7 +133,7 @@ fn check_member_key(relative: &str) -> std::result::Result<(), FaceFault> {
     if relative.is_empty() || relative.starts_with('/') {
         return Err(FaceFault {
             segments: Vec::new(),
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            reason: FaultReason::ShapeMismatch {
                 require: "a relative member path".to_owned(),
                 found: format!("'{relative}'"),
             },
@@ -143,7 +143,7 @@ fn check_member_key(relative: &str) -> std::result::Result<(), FaceFault> {
         if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
             return Err(FaceFault {
                 segments: Vec::new(),
-                reason: confit_binding::fault::FaultReason::ShapeMismatch {
+                reason: FaultReason::ShapeMismatch {
                     require: "a relative member path".to_owned(),
                     found: format!("'{relative}'"),
                 },
@@ -160,7 +160,7 @@ fn check_member_key(relative: &str) -> std::result::Result<(), FaceFault> {
 /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable stored states.
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
 pub fn prepare(stores: &Stores, desired: Manifest) -> TerminalResult<Prepared> {
-    let previous = load(&stores.states())?;
+    let previous = stored::load(&stores.states())?;
     log_processed(&desired, &previous);
     let first_run = stores.states().is_first_run();
     let (differences, warnings) = difference_with(stores, first_run, &desired, &previous)?;
@@ -235,7 +235,7 @@ fn changed_paths(
     let mut out = BTreeSet::new();
     for document in &built.documents {
         if !matches!(
-            status(
+            status::status(
                 document,
                 &previous.documents,
                 &built.hashes,
@@ -277,7 +277,7 @@ fn tree_member_of(destination: &Route, path: &Route) -> bool {
 /// Log finished documents with lifecycle status.
 fn log_processed(built: &Manifest, previous: &Manifest) {
     for document in &built.documents {
-        let status = match status(
+        let status = match status::status(
             document,
             &previous.documents,
             &built.hashes,
@@ -311,6 +311,7 @@ mod tests {
     use confit_store::handles::ResourceHandle;
 
     use crate::fixtures::{project_handle, test_stores};
+    use confit_driver::fs;
 
     fn literal(relative: &str) -> Route {
         Route::new(RouteBase::Literal, relative).unwrap()
@@ -400,7 +401,7 @@ mod tests {
         };
         assert_eq!(manifest.documents.len(), 2, "build keeps documents");
         assert!(
-            confit_driver::fs::read_dir(&dir.path().join("config").join("blobs"))
+            fs::read_dir(&dir.path().join("config").join("blobs"))
                 .unwrap_or_default()
                 .is_empty(),
             "build writes zero pool files"
@@ -530,9 +531,7 @@ mod tests {
                     assert!(
                         matches!(
                             error.cause(),
-                            confit_core::error::ErrorCause::DocumentError(
-                                DocumentError::ParseFailed { .. }
-                            )
+                            ErrorCause::DocumentError(DocumentError::ParseFailed { .. })
                         ),
                         "bad key keeps its require: {line}"
                     );

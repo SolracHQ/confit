@@ -5,8 +5,6 @@
 
 /// Shared error with cause plus context layers.
 pub mod error;
-/// Progress facts for one run.
-pub mod progress;
 /// Verified content hashes.
 pub mod sha;
 /// Near-match suggestions for unknown names.

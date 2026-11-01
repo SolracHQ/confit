@@ -12,8 +12,10 @@ use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
+use confit_ui::UiHandles;
 
-use crate::cli::{BundleArgs, resolve_profile};
+use crate::cli;
+use crate::cli::BundleArgs;
 
 /// Successful bundle run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub struct BundleRunner<'a> {
     pub args: &'a BundleArgs,
     /// Write capabilities for the run.
     pub stores: Stores,
+    /// Renderer channels for prints and prompts.
+    pub handles: UiHandles,
 }
 
 impl BundleRunner<'_> {
@@ -47,14 +51,14 @@ impl BundleRunner<'_> {
     /// - [`confit_core::error::kind::ErrorKind::StoreState`] for state writes.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
     pub fn execute(self) -> TerminalResult<BundleReport> {
-        let path = resolve_profile(&self.args.project, self.args.profile.as_deref());
+        let path = cli::resolve_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {
             return error(
                 ErrorKind::MissingProject,
                 contextual(FilesystemError::FileMissing).with_project(&self.args.project),
             );
         }
-        let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
+        let evaluated = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
         let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
         let output = self.args.output.as_path();
         if is_named_output(output) {

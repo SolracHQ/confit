@@ -5,8 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use confit_core::progress::ProgressSender;
 use confit_driver::paths::BaseDirs;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 
 pub mod archive;
 pub mod fetch;
@@ -80,14 +81,14 @@ fn current_dir() -> PathBuf {
 
 impl Stores {
     /// Build stores over file backends.
-    pub fn new(roots: StoreRoots, progress: ProgressSender) -> Self {
-        let pool = Arc::new(PoolStore::new(&roots, progress.clone()));
+    pub fn new(roots: StoreRoots, to_ui: Sender<ToUi>) -> Self {
+        let pool = Arc::new(PoolStore::new(&roots, to_ui.clone()));
         let resources = Arc::new(Resources::new(&roots, pool.clone()));
-        let archives = Arc::new(ArchiveStore::new(resources.clone(), progress.clone()));
+        let archives = Arc::new(ArchiveStore::new(resources.clone(), to_ui.clone()));
         Self {
             resources: resources.clone(),
             pool: pool.clone(),
-            fetch: Arc::new(FetchCache::new(resources.clone(), progress)),
+            fetch: Arc::new(FetchCache::new(resources.clone(), to_ui)),
             archives,
             states: Arc::new(StateStore::new(&roots)),
             roots,

@@ -10,6 +10,7 @@ confit-core = { path = "../core" }
 confit-driver = { path = "../driver" }
 confit-model = { path = "../model" }
 confit-store = { path = "../store" }
+confit-ui = { path = "../ui" }
 log.workspace = true
 minijinja = { version = "3.0.0", features = ["serde"] }
 mlua = { workspace = true, features = ["lua54", "vendored"] }

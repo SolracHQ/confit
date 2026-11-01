@@ -193,10 +193,12 @@ pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
     use confit_driver as driver;
     use confit_model::routes::{Route, RouteBase};
 
-    fn literal(path: &std::path::Path) -> Route {
+    fn literal(path: &Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
@@ -207,7 +209,7 @@ mod tests {
         }
     }
 
-    fn place(path: &std::path::Path, mode: u32) {
+    fn place(path: &Path, mode: u32) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"run").unwrap();
         driver::fs::set_mode(path, Some(mode)).unwrap();
@@ -387,8 +389,8 @@ mod tests {
 
     #[test]
     fn changed_parsed_route_membership() {
-        let route = literal(std::path::Path::new("/opt/probe/touched"));
-        let other = literal(std::path::Path::new("/opt/probe/untouched"));
+        let route = literal(Path::new("/opt/probe/touched"));
+        let other = literal(Path::new("/opt/probe/untouched"));
         let changed = BTreeSet::from([route.clone()]);
         assert!(
             checks_with(Vec::new()).check(

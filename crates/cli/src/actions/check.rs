@@ -5,11 +5,11 @@ use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kin
 use confit_engine::Engine;
 use confit_runtime::prepare;
 use confit_store::Stores;
+use confit_ui::{ToUi, UiHandles};
 
-use crate::cli::{CheckArgs, resolve_profile};
-use crate::presentation::summary::render_prepared;
-
-use crate::sinks::Sinks;
+use crate::cli;
+use crate::cli::CheckArgs;
+use crate::presentation::summary;
 
 /// Successful check run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,8 +24,8 @@ pub struct CheckRunner<'a> {
     pub args: &'a CheckArgs,
     /// Write capabilities for the run.
     pub stores: Stores,
-    /// Output senders for the run.
-    pub sinks: Sinks,
+    /// Renderer channels for prints and prompts.
+    pub handles: UiHandles,
 }
 
 impl CheckRunner<'_> {
@@ -44,25 +44,25 @@ impl CheckRunner<'_> {
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states.
     /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states.
     pub fn execute(self) -> TerminalResult<CheckReport> {
-        let path = resolve_profile(&self.args.project, self.args.profile.as_deref());
+        let path = cli::resolve_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {
             return error(
                 ErrorKind::MissingProject,
                 contextual(FilesystemError::FileMissing).with_project(&self.args.project),
             );
         }
-        let evaluated = Engine::new(self.stores.clone()).evaluate(&path)?;
+        let evaluated = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
         let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
-        let prepared = prepare(&self.stores, desired)?;
+        let prepared = prepare::prepare(&self.stores, desired)?;
         for warning in &prepared.warnings {
-            self.sinks.print_line(warning.summary());
+            let _ = self.handles.to_ui.send(ToUi::Print(warning.summary()));
             log::warn!(
                 "diff warning: {} context: {}",
                 warning.summary(),
                 warning.context()
             );
         }
-        let text = render_prepared(&prepared);
+        let text = summary::render_prepared(&prepared);
         Ok(CheckReport { text })
     }
 }

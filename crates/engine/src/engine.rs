@@ -9,6 +9,7 @@ use confit_binding::value::Decode;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
 use confit_store::Stores;
+use confit_ui::UiHandles;
 
 use crate::api::profile::Profile;
 use crate::assembly::Assembler;
@@ -29,14 +30,17 @@ pub struct Engine {
     lua: Lua,
     /// Shared store access.
     stores: Stores,
+    /// Renderer channels for Lua input.
+    handles: UiHandles,
 }
 
 impl Engine {
-    /// Build one engine from stores.
-    pub fn new(stores: Stores) -> Self {
+    /// Build one engine from stores and renderer channels.
+    pub fn new(stores: Stores, handles: UiHandles) -> Self {
         Self {
             lua: Lua::new(),
             stores,
+            handles,
         }
     }
 
@@ -54,6 +58,7 @@ impl Engine {
     ///   targets, foreign bases, bad shapes, and Lua failures.
     pub fn evaluate(&self, profile: &Path) -> TerminalResult<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
+        self.lua.set_app_data(self.handles.clone());
         let root = self.stores.resources().roots.project_root.clone();
         let project = Project::read(&root)?;
         self.lua.set_app_data(project.plugin_root(&root)?);

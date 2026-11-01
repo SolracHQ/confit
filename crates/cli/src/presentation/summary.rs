@@ -6,17 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use confit_core::sha::Sha;
 use confit_model::arg::Arg;
-use confit_model::document::{Data, Document, RcEntry, tree_changed};
-use confit_model::hook::{HookLifecycle, diff_lifecycle};
+use confit_model::document::{self as document_mod, Data, Document, RcEntry};
+use confit_model::hook::{self, HookLifecycle};
 use confit_model::routes::Route;
 use confit_runtime::manifest::Manifest;
-use confit_runtime::manifest::status::{
-    DocumentStatus, find_opaque_sibling, key, status, summary, superseded_by,
-};
-use confit_runtime::{Difference, Prepared, render_document};
+use confit_runtime::manifest::status::{self, DocumentStatus};
+use confit_runtime::{Difference, Prepared};
+use confit_store::handles::ResourceHandle;
 
-use crate::presentation::difference::{difference_lines, flatten_table, leaf_changes, leaf_text};
-use crate::presentation::hooks::lifecycle_lines;
+use crate::presentation::difference;
+use crate::presentation::hooks;
 
 /// Yellow style for changed lines.
 const UPDATE_STYLE: &str = "\x1b[33m";
@@ -182,7 +181,7 @@ impl Summary<'_> {
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
-            let status = status(
+            let status = status::status(
                 document,
                 &self.previous.documents,
                 &self.built.hashes,
@@ -202,7 +201,7 @@ impl Summary<'_> {
 
     /// Render hook lifecycle lines from display data.
     fn hook_lifecycle(&self) -> Vec<String> {
-        lifecycle_lines(self.hooks.lifecycle)
+        hooks::lifecycle_lines(self.hooks.lifecycle)
     }
 
     /// Render the closing counts lines.
@@ -216,7 +215,7 @@ impl Summary<'_> {
                 "Documents: {adds} to add, {changes} to change, 0 to destroy."
             ));
         } else {
-            let counts = summary(
+            let counts = status::summary(
                 &self.built.documents,
                 &self.built.hashes,
                 &self.previous.documents,
@@ -294,7 +293,7 @@ impl Summary<'_> {
 
     /// Render entry lines for one document under its own status.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
-        match status(
+        match status::status(
             document,
             &self.previous.documents,
             &self.built.hashes,
@@ -321,7 +320,7 @@ impl Summary<'_> {
                     out.push(painter.paint(Sigil::Header, &self.difference_diff_header(path)));
                     out.extend(painted_diff_lines(painter, diff));
                 }
-                _ => out.extend(difference_lines(std::slice::from_ref(entry))),
+                _ => out.extend(difference::difference_lines(std::slice::from_ref(entry))),
             }
         }
         out
@@ -345,15 +344,16 @@ impl Summary<'_> {
 
     /// Render delete headers for previous keys missing from the manifest.
     fn delete_headers(&self) -> Vec<String> {
-        let seen: BTreeSet<String> = self.built.documents.iter().map(key).collect();
+        let seen: BTreeSet<String> = self.built.documents.iter().map(status::key).collect();
         self.previous
             .documents
             .iter()
             .filter(|recorded| {
-                !seen.contains(&key(recorded)) && !superseded_by(recorded, &self.built.documents)
+                !seen.contains(&status::key(recorded))
+                    && !status::superseded_by(recorded, &self.built.documents)
             })
             .map(|recorded| {
-                let key = key(recorded);
+                let key = status::key(recorded);
                 let (kind, path) = split_key(&key);
                 match &recorded.data {
                     Data::Tree(found) => format!(
@@ -373,17 +373,17 @@ impl Summary<'_> {
             .previous
             .documents
             .iter()
-            .find(|item| key(item) == key(document))
+            .find(|item| status::key(item) == status::key(document))
         {
             return Some(found);
         }
-        find_opaque_sibling(&self.previous.documents, document)
+        status::find_opaque_sibling(&self.previous.documents, document)
     }
 }
 
 /// Render one prepared bundle as its stderr summary.
 pub fn render_prepared(prepared: &Prepared) -> String {
-    let lifecycle = diff_lifecycle(&prepared.desired.hooks, &prepared.previous.hooks);
+    let lifecycle = hook::diff_lifecycle(&prepared.desired.hooks, &prepared.previous.hooks);
     Summary {
         built: &prepared.desired,
         previous: &prepared.previous,
@@ -535,7 +535,7 @@ fn first_run_updates(
                 out.extend(paint_key_line(painter, key, old, new));
             }
             Difference::Structured { old, new, .. } => {
-                for change in leaf_changes(old, new) {
+                for change in difference::leaf_changes(old, new) {
                     out.extend(paint_key_line(
                         painter,
                         &change.key,
@@ -636,9 +636,9 @@ fn named_text(entry: &RcEntry) -> String {
 /// Collect plain entry bodies for one document.
 fn entry_bodies(document: &Document) -> Vec<String> {
     match &document.data {
-        Data::Structured(found) => flatten_table(&found.data)
+        Data::Structured(found) => difference::flatten_table(&found.data)
             .into_iter()
-            .map(|(key, value)| format!("{key} = {}", leaf_text(&value)))
+            .map(|(key, value)| format!("{key} = {}", difference::leaf_text(&value)))
             .collect(),
         Data::Text(found) => {
             if found.content.is_empty() {
@@ -686,9 +686,7 @@ fn opaque_ref_label(sha: &Sha) -> String {
 }
 
 /// Render the label for one opaque handle.
-fn opaque_handle_label(handle: &confit_store::handles::ResourceHandle) -> String {
-    use confit_store::handles::ResourceHandle;
-
+fn opaque_handle_label(handle: &ResourceHandle) -> String {
     match handle {
         ResourceHandle::Cache(sha) => opaque_ref_label(sha),
         ResourceHandle::Project(path, _) => path.display().to_string(),
@@ -732,7 +730,7 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
             }
         }
         (Data::Tree(new), Data::Tree(old)) => {
-            let changed = tree_changed(&old.members, &new.members);
+            let changed = document_mod::tree_changed(&old.members, &new.members);
             vec![painter.paint(
                 Sigil::Update,
                 &format!(
@@ -782,11 +780,11 @@ fn recorded_diff(old: &str, new: &str) -> String {
 
 /// Render one rc update as a recorded to desired text diff.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
-    let old_bytes = match render_document(recorded) {
+    let old_bytes = match confit_runtime::render_document(recorded) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
-    let new_bytes = match render_document(document) {
+    let new_bytes = match confit_runtime::render_document(document) {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
@@ -814,7 +812,7 @@ fn structured_update_lines(
     old: &BTreeMap<String, serde_json::Value>,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    for change in leaf_changes(old, new) {
+    for change in difference::leaf_changes(old, new) {
         out.extend(paint_key_line(
             painter,
             &change.key,
@@ -838,8 +836,8 @@ fn paint_key_line(
             &format!(
                 "  {} {key} = {} -> {}",
                 Sigil::Update.mark(),
-                leaf_text(old_value),
-                leaf_text(new_value)
+                difference::leaf_text(old_value),
+                difference::leaf_text(new_value)
             ),
         )),
         (Some(old_value), None) => Some(painter.paint(
@@ -847,12 +845,16 @@ fn paint_key_line(
             &format!(
                 "  {} {key} = {}",
                 Sigil::Remove.mark(),
-                leaf_text(old_value)
+                difference::leaf_text(old_value)
             ),
         )),
         (None, Some(new_value)) => Some(painter.paint(
             Sigil::Add,
-            &format!("  {} {key} = {}", Sigil::Add.mark(), leaf_text(new_value)),
+            &format!(
+                "  {} {key} = {}",
+                Sigil::Add.mark(),
+                difference::leaf_text(new_value)
+            ),
         )),
         (None, None) => None,
     }
@@ -870,6 +872,7 @@ mod tests {
     use confit_model::hook::Hook;
     use confit_model::id::Id;
     use confit_runtime::manifest::Manifest;
+    use confit_runtime::prepare;
 
     fn probe_hook() -> Hook {
         Hook {
@@ -916,7 +919,7 @@ mod tests {
 
     #[test]
     fn preview_renders_missing_binaries_without_resolving() {
-        let desired = confit_runtime::prepare::build(Vec::new(), vec![probe_hook()]).unwrap();
+        let desired = prepare::build(Vec::new(), vec![probe_hook()]).unwrap();
         let prepared = Prepared {
             desired,
             previous: Manifest {

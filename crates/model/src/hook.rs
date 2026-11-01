@@ -1,7 +1,7 @@
 //! Hook
 //! Post-config steps follow plans beside documents.
 
-use confit_binding::fault::FaceFault;
+use confit_binding::fault::{FaceFault, FaultReason};
 use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use mlua::{Lua, Value};
@@ -276,7 +276,7 @@ fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, FaceFaul
     let text = String::decode(value, lua)?;
     parse_timeout(&text).ok_or_else(|| FaceFault {
         segments: Vec::new(),
-        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+        reason: FaultReason::ShapeMismatch {
             require: "a duration like '10m'".to_owned(),
             found: format!("'{text}'"),
         },

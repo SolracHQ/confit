@@ -24,6 +24,7 @@ use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
+use confit_ui::{FromUi, ToUi, UiHandles};
 use mlua::{Function, Lua, Value};
 
 /// Lua profile with two text configs in zebra then apple order.
@@ -708,7 +709,7 @@ pub fn profile_with_hooks(configs: Vec<Config>) -> Profile {
 
 /// Build one engine over isolated stores under the given dir.
 pub fn test_engine(dir: &Path) -> Engine {
-    let (sender, _) = crossbeam_channel::unbounded();
+    let (sender, _) = crossbeam_channel::unbounded::<ToUi>();
     let stores = Stores::new(
         StoreRoots {
             config_base: dir.join("config"),
@@ -717,7 +718,9 @@ pub fn test_engine(dir: &Path) -> Engine {
         },
         sender,
     );
-    Engine::new(stores)
+    let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
+    let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+    Engine::new(stores, UiHandles { to_ui, from_ui })
 }
 
 /// Create the project root under the given dir.

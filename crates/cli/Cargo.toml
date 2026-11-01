@@ -20,7 +20,6 @@ confit-store = { path = "../store" }
 crossbeam-channel.workspace = true
 diffy.workspace = true
 fern = "0.7.1"
-indicatif = "0.18.6"
 log.workspace = true
 serde_json.workspace = true
 confit-driver = { path = "../driver" }
@@ -28,6 +27,7 @@ thiserror.workspace = true
 minijinja = "3.0.0"
 confit-core = { path = "../core" }
 time = { workspace = true, features = ["local-offset"] }
+confit-ui = { path = "../ui" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

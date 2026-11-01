@@ -3,7 +3,7 @@
 use mlua::{Lua, Table, Value};
 
 use confit_binding::callback::Callback;
-use confit_binding::fault::FaceFault;
+use confit_binding::fault::{FaceFault, FaultReason};
 use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use serde::{Deserialize, Serialize};
@@ -199,7 +199,7 @@ pub enum Patch {
 fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault> {
     let target = table.get::<Value>("target").map_err(|error| FaceFault {
         segments: Vec::new(),
-        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+        reason: FaultReason::ShapeMismatch {
             require: "readable entries".to_owned(),
             found: error.to_string(),
         },
@@ -209,7 +209,7 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault
     }
     let raw = table.get::<Value>("format").map_err(|error| FaceFault {
         segments: Vec::new(),
-        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+        reason: FaultReason::ShapeMismatch {
             require: "readable entries".to_owned(),
             found: error.to_string(),
         },
@@ -235,14 +235,14 @@ pub fn join_destination(
         (None, Some(filter)) => Ok(PatchTarget::Filter(filter)),
         (Some(_), Some(_)) => Err(FaceFault {
             segments: Vec::new(),
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            reason: FaultReason::ShapeMismatch {
                 require: "either 'target' or 'filter'".to_owned(),
                 found: "'target' with 'filter'".to_owned(),
             },
         }),
         (None, None) => Err(FaceFault {
             segments: Vec::new(),
-            reason: confit_binding::fault::FaultReason::ShapeMismatch {
+            reason: FaultReason::ShapeMismatch {
                 require: "either 'target' or 'filter'".to_owned(),
                 found: "nil".to_owned(),
             },

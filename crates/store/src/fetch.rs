@@ -6,8 +6,10 @@ use std::sync::Arc;
 use confit_core::error::{
     ContentError, ContextualCause, ContextualResult, ErrorCause, WithContext, contextual,
 };
-use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::Sha;
+use confit_ui::Event;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 
 use crate::handles::ResourceHandle;
 use crate::resources::Resources;
@@ -26,16 +28,13 @@ const INDEX_EXT: &str = "url";
 #[derive(Clone, Debug)]
 pub struct FetchCache {
     resources: Arc<Resources>,
-    progress: ProgressSender,
+    to_ui: Sender<ToUi>,
 }
 
 impl FetchCache {
     /// Build one file-backed fetch cache over shared resources.
-    pub fn new(resources: Arc<Resources>, progress: ProgressSender) -> Self {
-        Self {
-            resources,
-            progress,
-        }
+    pub fn new(resources: Arc<Resources>, to_ui: Sender<ToUi>) -> Self {
+        Self { resources, to_ui }
     }
 
     /// Derive the index entry path for one URL.
@@ -116,9 +115,10 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] for sha mismatches.
     /// - [`FilesystemError`] for cache write faults.
     fn run(&mut self, re_fetch: bool) -> ContextualResult<ResourceHandle> {
-        let _ = self.cache.progress.send(Event::FetchStarted {
-            url: self.url.to_owned(),
-        });
+        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Started {
+            id: self.url.to_owned(),
+            label: format!("collecting artifacts: {}", self.url),
+        }));
         if !re_fetch && let Some(hit) = self.hit() {
             return hit;
         }
@@ -139,10 +139,14 @@ impl<'a> Fetch<'a> {
         let bytes = std::fs::metadata(&path)
             .map(|facts| usize::try_from(facts.len()).unwrap_or(0))
             .unwrap_or(0);
-        let _ = self.cache.progress.send(Event::FetchCached {
-            url: self.url.to_owned(),
-            bytes,
-        });
+        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Finished {
+            id: self.url.to_owned(),
+            label: format!(
+                "collecting artifacts: {} ({} cached)",
+                self.url,
+                human_bytes(bytes_as_u64(bytes))
+            ),
+        }));
         match self.check(sha) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
@@ -186,10 +190,14 @@ impl<'a> Fetch<'a> {
         };
         self.check(&sha)?;
         self.write_index(&sha)?;
-        let _ = self.cache.progress.send(Event::FetchDownloaded {
-            url: self.url.to_owned(),
-            bytes: usize::try_from(self.bytes).unwrap_or(0),
-        });
+        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Finished {
+            id: self.url.to_owned(),
+            label: format!(
+                "collecting artifacts: {} ({})",
+                self.url,
+                human_bytes(bytes_as_u64(usize::try_from(self.bytes).unwrap_or(0)))
+            ),
+        }));
         Ok(ResourceHandle::Cache(sha))
     }
 
@@ -197,11 +205,12 @@ impl<'a> Fetch<'a> {
     fn report(&mut self) {
         if self.bytes - self.reported >= PROGRESS_STEP_BYTES {
             self.reported = self.bytes;
-            let _ = self.cache.progress.send(Event::FetchProgress {
-                url: self.url.to_owned(),
-                bytes_so_far: self.bytes,
+            let _ = self.cache.to_ui.send(ToUi::Progress(Event::Progress {
+                id: self.url.to_owned(),
+                label: progress_label(self.url, self.bytes, self.total),
+                done: self.bytes,
                 total: self.total,
-            });
+            }));
         }
     }
 
@@ -237,6 +246,39 @@ impl<'a> Fetch<'a> {
         }
         Ok(())
     }
+}
+
+/// Build the spinner message for in-flight fetch bytes.
+fn progress_label(url: &str, done: u64, total: Option<u64>) -> String {
+    match total {
+        Some(known) => format!(
+            "collecting artifacts: {url} ({} of {})",
+            human_bytes(done),
+            human_bytes(known)
+        ),
+        None => format!("collecting artifacts: {url} ({})", human_bytes(done)),
+    }
+}
+
+/// Render one byte count in human form.
+fn human_bytes(bytes: u64) -> String {
+    const STEP: f64 = 1024.0;
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut scaled = bytes as f64;
+    let mut unit = 0;
+    while scaled >= STEP && unit + 1 < UNITS.len() {
+        scaled /= STEP;
+        unit += 1;
+    }
+    format!("{scaled:.1} {}", UNITS[unit])
+}
+
+/// Convert one byte count into u64.
+fn bytes_as_u64(bytes: usize) -> u64 {
+    u64::try_from(bytes).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -434,17 +476,18 @@ mod tests {
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, false) {
             Ok(_) => {
-                let events: Vec<Event> = receiver.try_iter().collect();
+                let events: Vec<ToUi> = receiver.try_iter().collect();
                 assert_eq!(
                     events,
                     vec![
-                        Event::FetchStarted {
-                            url: URL.to_string(),
-                        },
-                        Event::FetchCached {
-                            url: URL.to_string(),
-                            bytes: 5,
-                        },
+                        ToUi::Progress(Event::Started {
+                            id: URL.to_string(),
+                            label: format!("collecting artifacts: {URL}"),
+                        }),
+                        ToUi::Progress(Event::Finished {
+                            id: URL.to_string(),
+                            label: format!("collecting artifacts: {URL} (5 B cached)"),
+                        }),
                     ]
                 );
                 assert_eq!(driver::http::calls(URL), 1, "hit makes no download");
@@ -466,17 +509,18 @@ mod tests {
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None, true) {
             Ok(_) => {
-                let events: Vec<Event> = receiver.try_iter().collect();
+                let events: Vec<ToUi> = receiver.try_iter().collect();
                 assert_eq!(
                     events,
                     vec![
-                        Event::FetchStarted {
-                            url: URL.to_string(),
-                        },
-                        Event::FetchDownloaded {
-                            url: URL.to_string(),
-                            bytes: 5,
-                        },
+                        ToUi::Progress(Event::Started {
+                            id: URL.to_string(),
+                            label: format!("collecting artifacts: {URL}"),
+                        }),
+                        ToUi::Progress(Event::Finished {
+                            id: URL.to_string(),
+                            label: format!("collecting artifacts: {URL} (5 B)"),
+                        }),
                     ]
                 );
                 assert_eq!(driver::http::calls(URL), 2, "re-fetch downloads once");
@@ -508,31 +552,34 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("repeat hit serves: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
             vec![
-                Event::FetchStarted {
-                    url: URL.to_string(),
-                },
-                Event::FetchDownloaded {
-                    url: URL.to_string(),
-                    bytes: 5,
-                },
-                Event::FetchStarted {
-                    url: FILE_URL.to_string(),
-                },
-                Event::FetchDownloaded {
-                    url: FILE_URL.to_string(),
-                    bytes: 6,
-                },
-                Event::FetchStarted {
-                    url: URL.to_string(),
-                },
-                Event::FetchCached {
-                    url: URL.to_string(),
-                    bytes: 5,
-                },
+                ToUi::Progress(Event::Started {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL}"),
+                }),
+                ToUi::Progress(Event::Finished {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL} (5 B)"),
+                }),
+                ToUi::Progress(Event::Started {
+                    id: FILE_URL.to_string(),
+                    label: format!("collecting artifacts: {FILE_URL}"),
+                }),
+                ToUi::Progress(Event::Finished {
+                    id: FILE_URL.to_string(),
+                    label: format!("collecting artifacts: {FILE_URL} (6 B)"),
+                }),
+                ToUi::Progress(Event::Started {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL}"),
+                }),
+                ToUi::Progress(Event::Finished {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL} (5 B cached)"),
+                }),
             ]
         );
     }
@@ -674,7 +721,7 @@ mod tests {
             Err(error) => {
                 assert!(matches!(
                     error.cause(),
-                    confit_core::error::ErrorCause::FetchError(FetchError::DownloadFailed)
+                    ErrorCause::FetchError(FetchError::DownloadFailed)
                 ));
                 assert!(
                     matches!(error.context.url.as_deref(), Some(URL)),
@@ -710,17 +757,18 @@ mod tests {
             }
             Err(error) => panic!("miss downloads: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
             vec![
-                Event::FetchStarted {
-                    url: URL.to_string(),
-                },
-                Event::FetchDownloaded {
-                    url: URL.to_string(),
-                    bytes: 5,
-                },
+                ToUi::Progress(Event::Started {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL}"),
+                }),
+                ToUi::Progress(Event::Finished {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL} (5 B)"),
+                }),
             ]
         );
         assert_eq!(driver::http::calls(URL), 1, "one download per miss");
@@ -739,17 +787,18 @@ mod tests {
             }
             Err(error) => panic!("hit serves: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
             vec![
-                Event::FetchStarted {
-                    url: URL.to_string(),
-                },
-                Event::FetchCached {
-                    url: URL.to_string(),
-                    bytes: 5,
-                },
+                ToUi::Progress(Event::Started {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL}"),
+                }),
+                ToUi::Progress(Event::Finished {
+                    id: URL.to_string(),
+                    label: format!("collecting artifacts: {URL} (5 B cached)"),
+                }),
             ]
         );
         assert_eq!(
@@ -795,14 +844,9 @@ mod tests {
         }
         let mut seen: Vec<u64> = Vec::new();
         for event in receiver.try_iter() {
-            if let Event::FetchProgress {
-                bytes_so_far,
-                total,
-                ..
-            } = event
-            {
+            if let ToUi::Progress(Event::Progress { done, total, .. }) = event {
                 assert_eq!(total, Some(raw.len() as u64), "progress keeps the total");
-                seen.push(bytes_so_far);
+                seen.push(done);
             }
         }
         assert!(seen.len() >= 2, "chunks report twice: {}", seen.len());

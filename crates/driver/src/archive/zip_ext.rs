@@ -25,7 +25,7 @@ pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> ContextualResult<Vec<S
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_owned();
+        let name = entry.name().map_err(zip_error)?.into_owned();
         if name.is_empty() {
             continue;
         }
@@ -55,7 +55,7 @@ pub(super) fn walk<R: io::Read + io::Seek>(
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_owned();
+        let name = entry.name().map_err(zip_error)?.into_owned();
         if name.is_empty() {
             continue;
         }

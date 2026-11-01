@@ -1,15 +1,17 @@
 //! Content-addressed pool.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use confit_core::error::{
     ContextualCause, ContextualResult, ErrorCause, FilesystemError, WithContext, contextual,
 };
-use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::{Sha, ShaWriter};
+use confit_ui::Event;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 use sha2::Digest as _;
 
 use crate::StoreRoots;
@@ -25,16 +27,16 @@ const POOL_GZIP_LEVEL: u32 = 6;
 #[derive(Debug, Clone)]
 pub struct PoolStore {
     pool: PathBuf,
-    progress: ProgressSender,
+    to_ui: Sender<ToUi>,
     finished: Arc<AtomicUsize>,
 }
 
 impl PoolStore {
     /// Build one file-backed pool.
-    pub fn new(roots: &StoreRoots, progress: ProgressSender) -> Self {
+    pub fn new(roots: &StoreRoots, to_ui: Sender<ToUi>) -> Self {
         Self {
             pool: roots.config_base.join(BLOBS_DIR),
-            progress,
+            to_ui,
             finished: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -93,7 +95,12 @@ impl PoolStore {
         }
         staged.persist(&dest).with_cache_path(&dest)?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.progress.send(Event::PoolStored { done });
+        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+            id: "pool".to_owned(),
+            label: format!("compressing pool entries ({done})"),
+            done: u64::try_from(done).unwrap_or(u64::MAX),
+            total: None,
+        }));
         Ok(())
     }
 
@@ -166,7 +173,7 @@ impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
 }
 
 /// Drop files in one pool home outside the keep set.
-fn prune_dir(dir: &std::path::Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
+fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
     let entries = match driver::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error)
@@ -195,7 +202,7 @@ fn prune_dir(dir: &std::path::Path, keep: &BTreeSet<Sha>) -> ContextualResult<us
 }
 
 /// Report whether one pool home file is inside the keep set.
-fn held(path: &std::path::Path, keep: &BTreeSet<Sha>) -> bool {
+fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .and_then(|name| Sha::new(name).ok())
@@ -208,7 +215,7 @@ mod tests {
 
     use std::io::Read as _;
 
-    fn test_roots(dir: &std::path::Path) -> StoreRoots {
+    fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
             temp_base: dir.join("temp"),
@@ -216,7 +223,7 @@ mod tests {
         }
     }
 
-    fn test_store(dir: &std::path::Path) -> PoolStore {
+    fn test_store(dir: &Path) -> PoolStore {
         let (sender, _) = crossbeam_channel::unbounded();
         PoolStore::new(&test_roots(dir), sender)
     }
@@ -308,10 +315,15 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("pool stores: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![Event::PoolStored { done: 1 }],
+            vec![ToUi::Progress(Event::Progress {
+                id: "pool".to_owned(),
+                label: "compressing pool entries (1)".to_owned(),
+                done: 1,
+                total: None,
+            })],
             "store fires one finished fact"
         );
     }
@@ -331,10 +343,15 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("repeat store skips: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![Event::PoolStored { done: 1 }],
+            vec![ToUi::Progress(Event::Progress {
+                id: "pool".to_owned(),
+                label: "compressing pool entries (1)".to_owned(),
+                done: 1,
+                total: None,
+            })],
             "repeat store fires no fact"
         );
     }
@@ -354,10 +371,15 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("present store skips the stream: {error}"),
         }
-        let events: Vec<Event> = receiver.try_iter().collect();
+        let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![Event::PoolStored { done: 1 }],
+            vec![ToUi::Progress(Event::Progress {
+                id: "pool".to_owned(),
+                label: "compressing pool entries (1)".to_owned(),
+                done: 1,
+                total: None,
+            })],
             "present store fires no fact"
         );
     }
@@ -386,7 +408,7 @@ mod tests {
             Ok(()) => panic!("mismatched stream passes"),
             Err(error) => {
                 match error.cause() {
-                    confit_core::error::ErrorCause::ContentHashMismatch { expected, found } => {
+                    ErrorCause::ContentHashMismatch { expected, found } => {
                         assert_eq!(expected, &sha, "mismatch keeps expected");
                         assert_eq!(found, &wrong, "mismatch keeps found");
                     }

@@ -1,7 +1,6 @@
 //! Restore run
 //! Packages to disk writes with prompts.
 
-use std::io::BufRead;
 use std::path::PathBuf;
 
 use confit_core::error::{
@@ -15,7 +14,7 @@ use confit_store::state::Picker;
 
 use super::commit::{CommitRunner, WriteReport};
 use crate::cli::RestoreArgs;
-use crate::sinks::Sinks;
+use confit_ui::UiHandles;
 
 /// Resolve desired documents from one package with explicit run fields.
 ///
@@ -31,9 +30,8 @@ use crate::sinks::Sinks;
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for diff faults.
 pub fn run(
     args: &RestoreArgs,
-    input: &mut dyn BufRead,
     stores: Stores,
-    sinks: Sinks,
+    handles: UiHandles,
     hooks_dir: PathBuf,
 ) -> TerminalResult<WriteReport> {
     let positional = args.source.as_path();
@@ -61,13 +59,12 @@ pub fn run(
             contextual(FilesystemError::MalformedPath).with_fs_path(positional),
         );
     };
-    let prepared = prepare(&stores, desired)?;
+    let prepared = prepare::prepare(&stores, desired)?;
     CommitRunner {
         prepared,
         force: args.force,
-        input,
         stores,
-        sinks,
+        handles,
         hooks_dir,
     }
     .execute()

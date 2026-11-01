@@ -6,6 +6,7 @@ use confit_core::error::{ContextualCause, ContextualResult};
 use crate::api::fact::Fact;
 use crate::api::fetch::Fetch;
 use crate::api::global::Global;
+use crate::api::input::Input;
 use crate::api::open::Open;
 use crate::api::template::Template;
 use crate::api::validate::Validate;
@@ -22,6 +23,7 @@ pub fn generate_stubs() -> ContextualResult<Vec<StubDocument>> {
         Open::stub_document(),
         Validate::stub_document(),
         Fact::stub_document(),
+        Input::stub_document(),
         Template::stub_document(),
     ];
     for document in &documents {

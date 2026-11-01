@@ -8,13 +8,15 @@ use confit_core::error::{
     ContextualCause, ContextualResult, Error, ErrorCause, HookRunError, Terminal, TerminalResult,
     WithContext, contextual, error,
 };
-use confit_core::progress::{Event, ProgressSender};
 use confit_core::sha::Sha;
 use confit_driver as driver;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
+use confit_ui::Event;
+use confit_ui::ToUi;
+use crossbeam_channel::Sender;
 
 use crate::checks::{Checks, Unmet, find_executable};
 
@@ -45,7 +47,7 @@ pub struct Spawned {
 /// One hook runner with spawns and post-checks.
 pub struct HookRunner {
     /// Hook events.
-    pub progress: ProgressSender,
+    pub to_ui: Sender<ToUi>,
 }
 
 /// Decided hooks.
@@ -142,11 +144,10 @@ impl HookRunner {
                 .terminal(ErrorKind::RunHook)?;
             path_dirs.push(materialized);
         }
-        let _ = self.progress.send(Event::HookRunning {
-            position,
-            total,
-            argv: argv_text.clone(),
-        });
+        let _ = self.to_ui.send(ToUi::Progress(Event::Started {
+            id: argv_text.clone(),
+            label: format!("hook {position} of {total}: {argv_text}"),
+        }));
         let log = hooks_dir.join(hook_file_name(hook.id.as_str()));
         let header = format!("hook {position} of {total}: {argv_text}");
         let file = open_hook_log(&log, &header)?;
@@ -160,6 +161,10 @@ impl HookRunner {
             },
         )?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
+        let _ = self.to_ui.send(ToUi::Progress(Event::Finished {
+            id: argv_text.clone(),
+            label: format!("hook {position} of {total} done: {argv_text}"),
+        }));
         Ok(Spawned {
             argv: argv_text,
             code: outcome.code,
@@ -300,11 +305,11 @@ mod tests {
 
     use crate::write::Writer;
 
-    fn literal(path: &std::path::Path) -> Route {
+    fn literal(path: &Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
     }
 
-    fn text_doc(path: &std::path::Path, mode: u32) -> Document {
+    fn text_doc(path: &Path, mode: u32) -> Document {
         Document {
             path: literal(path),
             data: Data::Text(TextDocument {
@@ -317,10 +322,10 @@ mod tests {
 
     fn runner() -> HookRunner {
         let (sender, _) = crossbeam_channel::unbounded();
-        HookRunner { progress: sender }
+        HookRunner { to_ui: sender }
     }
 
-    fn writer_in(dir: &std::path::Path) -> Writer {
+    fn writer_in(dir: &Path) -> Writer {
         let (sender, _) = crossbeam_channel::unbounded();
         let roots = StoreRoots {
             config_base: dir.join("config"),
@@ -329,7 +334,7 @@ mod tests {
         };
         Writer {
             stores: Stores::new(roots, sender.clone()),
-            progress: sender,
+            to_ui: sender,
         }
     }
 
@@ -341,7 +346,7 @@ mod tests {
         }
     }
 
-    fn mise_hook(bindir: &std::path::Path) -> Hook {
+    fn mise_hook(bindir: &Path) -> Hook {
         Hook {
             argv: vec![Arg::Text("mise".into()), Arg::Text("install".into())],
             path: vec![Arg::Text(bindir.display().to_string())],
@@ -353,7 +358,7 @@ mod tests {
         }
     }
 
-    fn tool_hook(bindir: &std::path::Path) -> Hook {
+    fn tool_hook(bindir: &Path) -> Hook {
         Hook {
             argv: vec![Arg::Text("tool".into()), Arg::Text("run".into())],
             path: vec![Arg::Text(bindir.display().to_string())],

@@ -15,7 +15,7 @@ use confit_store::state::Picker;
 use confit_store::state::StateStore;
 
 use super::Manifest;
-use confit_core::version::{VERSION, compatible};
+use confit_core::version::{self, VERSION};
 
 /// Load the applied manifest with missing states as empty.
 ///
@@ -151,7 +151,7 @@ fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTre
         Ok(found) => found,
         Err(_) => return,
     };
-    if !compatible(found.version) {
+    if !version::compatible(found.version) {
         return;
     }
     for handle in found.handles() {

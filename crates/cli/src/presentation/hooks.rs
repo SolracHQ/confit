@@ -129,7 +129,7 @@ fn timeout_text(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::hook::diff_lifecycle;
+    use confit_model::hook;
     use confit_model::id::Id;
     use confit_model::routes::{Route, RouteBase};
 
@@ -165,7 +165,7 @@ mod tests {
     }
 
     fn render_lifecycle(current: &[Hook], previous: &[Hook]) -> Vec<String> {
-        lifecycle_lines(&diff_lifecycle(current, previous))
+        lifecycle_lines(&hook::diff_lifecycle(current, previous))
     }
 
     fn changed(path: &str) -> Condition {

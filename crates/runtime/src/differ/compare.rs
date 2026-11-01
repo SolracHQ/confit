@@ -12,8 +12,9 @@ use super::Difference;
 use super::DifferenceOrder;
 use super::disk::{DiskReader, FileBytes, FileDigest};
 use super::ordered::Ordered;
-use crate::manifest::status::mode;
-use crate::render::render_document;
+use crate::manifest::Manifest;
+use crate::manifest::status;
+use crate::render;
 use confit_core::error::ContextualResult;
 use confit_core::error::{ContextualCause, DiffWarning, WithContext, contextual};
 
@@ -46,7 +47,7 @@ impl<'a> Comparator<'a> {
     /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
     pub(crate) fn run(
         &mut self,
-        manifest: &crate::manifest::Manifest,
+        manifest: &Manifest,
     ) -> ContextualResult<(Vec<Difference>, Vec<DiffWarning>)> {
         let mut out = Vec::new();
         for document in &manifest.documents {
@@ -68,7 +69,7 @@ impl<'a> Comparator<'a> {
             return self.compare_digest_handle(document);
         }
         DiskReader::digest(document, |FileDigest { digest, mode }| {
-            let recorded = match render_document(document) {
+            let recorded = match render::render_document(document) {
                 Ok(found) => found,
                 Err(leaf) => {
                     let contextual = contextual(leaf).with_document(document.path.display());
@@ -234,7 +235,7 @@ impl<'a> Comparator<'a> {
 
     /// Append one mode entry for mode-carrying documents.
     fn append_mode(&self, document: &Document, disk_mode: Option<u32>, out: &mut Vec<Difference>) {
-        let wanted = mode(document);
+        let wanted = status::mode(document);
         if let Some(wanted) = wanted
             && let Some(seen) = disk_mode
             && wanted != seen

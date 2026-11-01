@@ -6,6 +6,7 @@ use confit_store::{StoreRoots, Stores};
 use mlua::{Lua, Value};
 
 use crate::routes::{Route, RouteBase};
+use confit_driver::fs;
 
 /// Build a fresh Lua state for tests.
 fn test_lua() -> Lua {
@@ -87,10 +88,7 @@ fn handle_of(lua: &Lua, stores: &Stores, name: &str) -> String {
 /// Report whether resolve wrote zero pool files.
 fn no_blob_files(directory: &tempfile::TempDir) -> bool {
     let pool = directory.path().join("config").join("blobs");
-    !pool.exists()
-        || confit_driver::fs::read_dir(&pool)
-            .unwrap_or_default()
-            .is_empty()
+    !pool.exists() || fs::read_dir(&pool).unwrap_or_default().is_empty()
 }
 
 #[test]

@@ -106,6 +106,7 @@ mod tests {
     use confit_store::handles::ResourceHandle;
 
     use crate::manifest::Manifest;
+    use crate::render;
     use confit_core::version::VERSION;
 
     fn literal(path: &std::path::Path) -> Route {
@@ -229,7 +230,7 @@ mod tests {
                 Vec::new(),
             )),
         );
-        let recorded = crate::render::render_document(&document).unwrap();
+        let recorded = render::render_document(&document).unwrap();
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),

@@ -5,13 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_cli::sinks::Sinks;
-use confit_driver::fs::create_parent;
+use confit_driver::fs;
 use confit_store::{StoreRoots, Stores};
+use confit_ui::{FromUi, ToUi, UiHandles};
 
 /// Build stores over one temp dir with silent progress.
 pub fn test_stores(dir: &Path, project: &str) -> Stores {
-    let (sender, _) = crossbeam_channel::unbounded();
+    let (sender, _) = crossbeam_channel::unbounded::<ToUi>();
     Stores::new(
         StoreRoots {
             config_base: dir.join("config"),
@@ -22,14 +22,34 @@ pub fn test_stores(dir: &Path, project: &str) -> Stores {
     )
 }
 
-/// Build silent sinks.
-pub fn test_sinks() -> Sinks {
-    Sinks::default()
+/// Build silent handles.
+pub fn test_handles() -> UiHandles {
+    let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
+    let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+    UiHandles { to_ui, from_ui }
+}
+
+/// Build handles replying with the canned answers.
+pub fn replying_handles(replies: Vec<String>) -> UiHandles {
+    let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
+    let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+    std::thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        for message in incoming {
+            if matches!(message, ToUi::Prompt(_)) {
+                let line = replies.next().unwrap_or_default();
+                if outgoing.send(FromUi::Answer(line)).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    UiHandles { to_ui, from_ui }
 }
 
 /// Write one file with parent folders first.
 pub fn seed_file(path: &Path, text: &[u8]) {
-    create_parent(path).unwrap();
+    fs::create_parent(path).unwrap();
     std::fs::write(path, text).unwrap();
 }
 

@@ -1,7 +1,7 @@
 //! Init run
 //! Project scaffolding from live faces and embedded resources.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use confit_core::error::{
     ContextualCause, DocumentError, Error, ErrorCause, EvalError, FilesystemError, Terminal,
@@ -90,7 +90,7 @@ impl InitRunner<'_> {
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] for scaffold writes.
 /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for scaffold writes.
-fn scaffold(root: &std::path::Path, project: &Project) -> TerminalResult<InitReport> {
+fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let profile = root.join(DEFAULT_PROFILE);
     let stubs_dir = root.join(&project.stubs.folder);
     let project_path = root.join(PROJECT_FILE);
@@ -144,7 +144,7 @@ fn scaffold(root: &std::path::Path, project: &Project) -> TerminalResult<InitRep
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] for stub writes.
-fn write_stubs(dir: &std::path::Path) -> TerminalResult<InitReport> {
+fn write_stubs(dir: &Path) -> TerminalResult<InitReport> {
     let documents = generate_stubs().map_err(map_stubs)?;
     for document in &documents {
         let destination = dir.join(format!("{}.d.lua", document.namespace));
@@ -175,7 +175,7 @@ fn map_stubs(contextual: ContextualCause) -> Error {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] for plugin writes.
-fn write_plugins(root: &std::path::Path, folder: &std::path::Path) -> TerminalResult<InitReport> {
+fn write_plugins(root: &Path, folder: &Path) -> TerminalResult<InitReport> {
     let dir = root.join(folder);
     for (relative, text) in PLUGIN_FILES.iter().copied() {
         write_file(&dir.join(relative), text.as_bytes())?;
@@ -197,7 +197,7 @@ const LSP_TEXT: &str = include_str!("../../resources/luarc.json");
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] for config writes.
-fn write_lsp(root: &std::path::Path, project: &Project) -> TerminalResult<InitReport> {
+fn write_lsp(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let path = root.join(LSP_FILE);
     let context = minijinja::context!(
         plugins => escape(&project.plugins.folder.display().to_string()),
@@ -228,7 +228,7 @@ fn escape(text: &str) -> String {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] for folder and file writes.
-fn write_file(destination: &std::path::Path, text: &[u8]) -> TerminalResult<()> {
+fn write_file(destination: &Path, text: &[u8]) -> TerminalResult<()> {
     driver::fs::create_parent(destination).terminal(ErrorKind::InitProject)?;
     std::fs::write(destination, text)
         .map_err(ContextualCause::from)

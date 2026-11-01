@@ -1,11 +1,20 @@
 use clap::Parser;
 
-use confit_cli::actions::{apply, restore};
-use confit_cli::cli::{APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME, resolve_logs_dir};
-use confit_cli::presentation::spinner::Terminal;
-use confit_cli::sinks::Sinks;
+use std::path::Path;
+
+use confit_cli::actions::bundle::BundleRunner;
+use confit_cli::actions::check::CheckRunner;
+use confit_cli::actions::export::ExportRunner;
+use confit_cli::actions::init::{InitOutcome, InitRunner};
+use confit_cli::actions::{apply, delete, restore};
+use confit_cli::cli;
+use confit_cli::cli::{
+    APP_LOG_NAME, ApplyArgs, BundleArgs, CheckArgs, Cli, Command, DeleteArgs, ExportArgs,
+    HOOKS_DIR_NAME, InitArgs, RestoreArgs,
+};
 use confit_core::error::TerminalResult;
 use confit_store::{StoreRoots, Stores};
+use confit_ui::{Ui, UiHandles};
 
 fn main() {
     if let Err(error) = run() {
@@ -44,8 +53,8 @@ fn main() {
 /// Run the selected subcommand to completion.
 fn run() -> TerminalResult<()> {
     let mut cli = Cli::parse();
-    confit_cli::cli::expand_command(&mut cli.command);
-    let logs_dir = resolve_logs_dir(cli.logs_dir.as_deref());
+    cli::expand_command(&mut cli.command);
+    let logs_dir = cli::resolve_logs_dir(cli.logs_dir.as_deref());
     let log_path = logs_dir.join(APP_LOG_NAME);
     let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
     if let Err(error) = std::fs::create_dir_all(&hooks_dir) {
@@ -103,91 +112,66 @@ fn run() -> TerminalResult<()> {
         .chain(log_file);
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
-    match &cli.command {
-        Command::Bundle(args) => run_bundle(args),
-        Command::Check(args) => run_check(args, &log_path),
-        Command::Apply(args) => run_apply(args, &log_path, &hooks_dir),
-        Command::Restore(args) => run_restore(args, &log_path, &hooks_dir),
+    let ui = Ui::start();
+    let outcome = match &cli.command {
+        Command::Bundle(args) => run_bundle(args, ui.handles()),
+        Command::Check(args) => run_check(args, ui.handles(), &log_path),
+        Command::Apply(args) => run_apply(args, ui.handles(), &log_path, &hooks_dir),
+        Command::Restore(args) => run_restore(args, ui.handles(), &log_path, &hooks_dir),
         Command::Init(args) => run_init(args),
-        Command::Export(args) => run_export(args),
-        Command::Delete(args) => run_delete(args),
+        Command::Export(args) => run_export(args, ui.handles()),
+        Command::Delete(args) => run_delete(args, ui.handles()),
+    };
+    ui.finish();
+    if outcome.is_err() {
+        anstream::eprintln!("log: {}", log_path.display());
     }
+    log::logger().flush();
+    outcome
 }
 
 /// Run bundle and print the written artifact path.
-fn run_bundle(args: &confit_cli::cli::BundleArgs) -> TerminalResult<()> {
-    let terminal = Terminal::new();
-    let sender = terminal.sink();
+fn run_bundle(args: &BundleArgs, handles: UiHandles) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, sender.clone());
-    let report = confit_cli::actions::bundle::BundleRunner {
+    let stores = Stores::new(roots, handles.to_ui.clone());
+    let report = BundleRunner {
         args,
         stores: stores.clone(),
+        handles,
     }
     .execute()?;
-    terminal.finish();
     anstream::println!("bundle: {}", report.text);
     Ok(())
 }
 
 /// Run check with summary output.
-fn run_check(args: &confit_cli::cli::CheckArgs, log_path: &std::path::Path) -> TerminalResult<()> {
-    let terminal = Terminal::new();
-    let sender = terminal.sink();
+fn run_check(args: &CheckArgs, handles: UiHandles, log_path: &Path) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, sender.clone());
-    let sinks = Sinks {
-        progress: sender.clone(),
-        print: terminal.print_handle(),
-        suspend: terminal.suspend_handle(),
-    };
-    let prepared = confit_cli::actions::check::CheckRunner {
+    let stores = Stores::new(roots, handles.to_ui.clone());
+    let prepared = CheckRunner {
         args,
         stores: stores.clone(),
-        sinks,
+        handles,
     }
     .execute()?;
-    terminal.finish();
     anstream::println!("{}", prepared.text);
     anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
     Ok(())
 }
 
 /// Run apply with preview and prompts.
 fn run_apply(
-    args: &confit_cli::cli::ApplyArgs,
-    log_path: &std::path::Path,
-    hooks_dir: &std::path::Path,
+    args: &ApplyArgs,
+    handles: UiHandles,
+    log_path: &Path,
+    hooks_dir: &Path,
 ) -> TerminalResult<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let terminal = Terminal::new();
-    let sender = terminal.sink();
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, sender.clone());
-    let sinks = Sinks {
-        progress: sender.clone(),
-        print: terminal.print_handle(),
-        suspend: terminal.suspend_handle(),
-    };
-    let report = match apply::run(
-        args,
-        &mut input,
-        stores.clone(),
-        sinks,
-        hooks_dir.to_path_buf(),
-    ) {
-        Ok(report) => report,
-        Err(error) => {
-            terminal.finish();
-            anstream::eprintln!("log: {}", log_path.display());
-            return Err(error);
-        }
-    };
-    terminal.finish();
+    let stores = Stores::new(roots, handles.to_ui.clone());
+    let report = apply::run(args, stores.clone(), handles, hooks_dir.to_path_buf())?;
     anstream::println!(
         "applied: {} files, {} removed",
         report.written,
@@ -197,40 +181,18 @@ fn run_apply(
         anstream::println!("restore: confit restore %1");
     }
     anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
     Ok(())
 }
 
 /// Run restore with preview and prompts.
 fn run_restore(
-    args: &confit_cli::cli::RestoreArgs,
-    log_path: &std::path::Path,
-    hooks_dir: &std::path::Path,
+    args: &RestoreArgs,
+    handles: UiHandles,
+    log_path: &Path,
+    hooks_dir: &Path,
 ) -> TerminalResult<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let terminal = Terminal::new();
-    let sender = terminal.sink();
-    let stores = Stores::new(StoreRoots::standard(), sender.clone());
-    let sinks = Sinks {
-        progress: sender.clone(),
-        print: terminal.print_handle(),
-        suspend: terminal.suspend_handle(),
-    };
-    let report = match restore::run(
-        args,
-        &mut input,
-        stores.clone(),
-        sinks,
-        hooks_dir.to_path_buf(),
-    ) {
-        Ok(report) => report,
-        Err(error) => {
-            terminal.finish();
-            anstream::eprintln!("log: {}", log_path.display());
-            return Err(error);
-        }
-    };
-    terminal.finish();
+    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
+    let report = restore::run(args, stores.clone(), handles, hooks_dir.to_path_buf())?;
     anstream::println!(
         "restored: {} files, {} removed",
         report.written,
@@ -240,15 +202,13 @@ fn run_restore(
         anstream::println!("restore: confit restore %1");
     }
     anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
     Ok(())
 }
 
 /// Run export and write a bundle file or print its manifest.
-fn run_export(args: &confit_cli::cli::ExportArgs) -> TerminalResult<()> {
-    let terminal = Terminal::new();
-    let stores = Stores::new(StoreRoots::standard(), terminal.sink());
-    let report = confit_cli::actions::export::ExportRunner::run(args, stores, Sinks::default())?;
+fn run_export(args: &ExportArgs, handles: UiHandles) -> TerminalResult<()> {
+    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
+    let report = ExportRunner::run(args, stores)?;
     if let Some(dest) = report.dest {
         anstream::println!("export: {}", dest.display());
     } else if let Some(manifest) = report.manifest {
@@ -258,10 +218,9 @@ fn run_export(args: &confit_cli::cli::ExportArgs) -> TerminalResult<()> {
 }
 
 /// Run delete and drop one named state and unreferenced entries.
-fn run_delete(args: &confit_cli::cli::DeleteArgs) -> TerminalResult<()> {
-    let terminal = Terminal::new();
-    let stores = Stores::new(StoreRoots::standard(), terminal.sink());
-    let report = confit_cli::actions::delete::run(args, stores)?;
+fn run_delete(args: &DeleteArgs, handles: UiHandles) -> TerminalResult<()> {
+    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
+    let report = delete::run(args, stores)?;
     anstream::println!(
         "delete: @{} ({} entries pruned)",
         report.name,
@@ -271,28 +230,28 @@ fn run_delete(args: &confit_cli::cli::DeleteArgs) -> TerminalResult<()> {
 }
 
 /// Run init with project scaffolding.
-fn run_init(args: &confit_cli::cli::InitArgs) -> TerminalResult<()> {
-    let runner = confit_cli::actions::init::InitRunner { args };
+fn run_init(args: &InitArgs) -> TerminalResult<()> {
+    let runner = InitRunner { args };
     for outcome in runner.execute()? {
         match outcome {
-            confit_cli::actions::init::InitOutcome::Scaffold(report) => {
+            InitOutcome::Scaffold(report) => {
                 anstream::println!("init: {} ({} files)", report.path.display(), report.written);
             }
-            confit_cli::actions::init::InitOutcome::Stubs(report) => {
+            InitOutcome::Stubs(report) => {
                 anstream::println!(
                     "stubs: {} ({} files)",
                     report.path.display(),
                     report.written
                 );
             }
-            confit_cli::actions::init::InitOutcome::Plugins(report) => {
+            InitOutcome::Plugins(report) => {
                 anstream::println!(
                     "plugins: {} ({} files)",
                     report.path.display(),
                     report.written
                 );
             }
-            confit_cli::actions::init::InitOutcome::Lsp(report) => {
+            InitOutcome::Lsp(report) => {
                 anstream::println!("lsp: {} ({} files)", report.path.display(), report.written);
             }
         }

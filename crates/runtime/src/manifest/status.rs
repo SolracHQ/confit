@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_binding::fault::FaceFault;
+use confit_binding::fault::{FaceFault, FaultReason};
 use confit_binding::value::Decode;
 use confit_binding_macros::Face;
 use confit_core::sha::Sha;
@@ -147,7 +147,7 @@ fn decode_count(lua: &Lua, value: &Value) -> std::result::Result<usize, FaceFaul
     let found = u64::decode(value, lua)?;
     usize::try_from(found).map_err(|_| FaceFault {
         segments: Vec::new(),
-        reason: confit_binding::fault::FaultReason::ShapeMismatch {
+        reason: FaultReason::ShapeMismatch {
             require: "a small non-negative integer".to_owned(),
             found: found.to_string(),
         },

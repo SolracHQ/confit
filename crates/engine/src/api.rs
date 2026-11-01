@@ -4,6 +4,7 @@ pub mod config;
 pub mod fact;
 pub mod fetch;
 pub mod global;
+pub mod input;
 pub mod open;
 pub mod patch;
 pub mod profile;
@@ -19,6 +20,7 @@ use confit_store::Stores;
 
 use crate::api::fact::Fact;
 use crate::api::fetch::Fetch;
+use crate::api::input::Input;
 use crate::api::open::Open;
 use crate::api::template::Template;
 use crate::api::validate::Validate;
@@ -41,6 +43,9 @@ pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
         Fact::NAMESPACE => Fact::register(lua)
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::LuaFailed),
+        Input::NAMESPACE => Input::register(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
         Template::NAMESPACE => Template::register(lua)

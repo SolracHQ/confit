@@ -253,7 +253,7 @@ mod tests {
             documents.push(Document {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
                 data: Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Project(path, confit_core::sha::Sha::hash(body)),
+                    handle: ResourceHandle::Project(path, Sha::hash(body)),
                     mode: 0o644,
                     unmanaged: false,
                 }),
@@ -369,10 +369,7 @@ mod tests {
             vec![Document {
                 path: Route::new(RouteBase::Home, "bin").unwrap(),
                 data: Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Project(
-                        path,
-                        confit_core::sha::Sha::hash(b"wanted bytes"),
-                    ),
+                    handle: ResourceHandle::Project(path, Sha::hash(b"wanted bytes")),
                     mode: 0o644,
                     unmanaged: false,
                 }),
@@ -488,8 +485,6 @@ mod tests {
 
     #[test]
     fn read_faults_fail_at_first_bad_entry() {
-        use confit_core::sha::Sha;
-
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 

@@ -1,19 +1,19 @@
 //! Apply run
 //! Project folders to disk writes with prompts.
 
-use std::io::BufRead;
 use std::path::PathBuf;
 
 use confit_core::error::{
     FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
 };
 use confit_engine::Engine;
-use confit_runtime::{prepare, prepare::build};
+use confit_runtime::prepare;
 use confit_store::Stores;
+use confit_ui::UiHandles;
 
 use super::commit::{CommitRunner, WriteReport};
-use crate::cli::{ApplyArgs, resolve_profile};
-use crate::sinks::Sinks;
+use crate::cli;
+use crate::cli::ApplyArgs;
 
 /// Resolve desired documents from the project folder with explicit run fields.
 ///
@@ -30,28 +30,26 @@ use crate::sinks::Sinks;
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable stored states.
 pub fn run(
     args: &ApplyArgs,
-    input: &mut dyn BufRead,
     stores: Stores,
-    sinks: Sinks,
+    handles: UiHandles,
     hooks_dir: PathBuf,
 ) -> TerminalResult<WriteReport> {
-    let path = resolve_profile(&args.project, args.profile.as_deref());
+    let path = cli::resolve_profile(&args.project, args.profile.as_deref());
     if args.profile.is_none() && !path.exists() {
         return error(
             ErrorKind::MissingProject,
             contextual(FilesystemError::FileMissing).with_project(&args.project),
         );
     }
-    let evaluated = Engine::new(stores.clone()).evaluate(&path)?;
-    let built = build(evaluated.documents, evaluated.hooks)?;
+    let evaluated = Engine::new(stores.clone(), handles.clone()).evaluate(&path)?;
+    let built = prepare::build(evaluated.documents, evaluated.hooks)?;
     built.persist(&stores).terminal(ErrorKind::StoreState)?;
-    let prepared = prepare(&stores, built)?;
+    let prepared = prepare::prepare(&stores, built)?;
     CommitRunner {
         prepared,
         force: args.force,
-        input,
         stores,
-        sinks,
+        handles,
         hooks_dir,
     }
     .execute()

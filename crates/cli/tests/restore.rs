@@ -6,7 +6,6 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{seed_file, test_sinks, test_stores};
 use confit_cli::actions::{apply, bundle::BundleRunner, restore};
 use confit_cli::cli::{ApplyArgs, BundleArgs, RestoreArgs};
 use confit_driver::paths::BaseDirs;
@@ -30,7 +29,7 @@ return {{
 /// Seed one project with the profile text.
 fn seed_project(dir: &Path, relative: &str, text: &str) {
     let site = dir.join("site");
-    seed_file(
+    common::seed_file(
         &site.join("main.lua"),
         profile_text(relative, text).as_bytes(),
     );
@@ -39,7 +38,7 @@ fn seed_project(dir: &Path, relative: &str, text: &str) {
 /// Bundle one project to the output path with shared stores.
 fn bundle_project(dir: &Path, output: PathBuf) {
     let site = dir.join("site");
-    let stores = test_stores(dir, "site");
+    let stores = common::test_stores(dir, "site");
     let args = BundleArgs {
         project: site,
         profile: None,
@@ -48,6 +47,7 @@ fn bundle_project(dir: &Path, output: PathBuf) {
     BundleRunner {
         args: &args,
         stores,
+        handles: common::test_handles(),
     }
     .execute()
     .unwrap();
@@ -55,28 +55,26 @@ fn bundle_project(dir: &Path, output: PathBuf) {
 
 /// Restore one package with the prompt skipped.
 fn restore_source(dir: &Path, source: PathBuf) {
-    let stores = test_stores(dir, "site");
+    let stores = common::test_stores(dir, "site");
     let args = RestoreArgs {
         source,
         force: true,
     };
-    let mut input = std::io::BufReader::new(b"" as &[u8]);
     let hooks = dir.join("hooks");
-    restore::run(&args, &mut input, stores, test_sinks(), hooks).unwrap();
+    restore::run(&args, stores, common::test_handles(), hooks).unwrap();
 }
 
 /// Apply one project with the prompt skipped.
 fn apply_project(dir: &Path) {
     let site = dir.join("site");
-    let stores = test_stores(dir, "site");
+    let stores = common::test_stores(dir, "site");
     let args = ApplyArgs {
         project: site,
         profile: None,
         force: true,
     };
-    let mut input = std::io::BufReader::new(b"" as &[u8]);
     let hooks = dir.join("hooks");
-    apply::run(&args, &mut input, stores, test_sinks(), hooks).unwrap();
+    apply::run(&args, stores, common::test_handles(), hooks).unwrap();
 }
 
 /// Read one home destination under the shared test root.

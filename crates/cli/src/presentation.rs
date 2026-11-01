@@ -1,7 +1,6 @@
 //! Presentation
-//! Terminal summary and progress spinner.
+//! Terminal summaries.
 
 pub mod difference;
 pub mod hooks;
-pub mod spinner;
 pub mod summary;

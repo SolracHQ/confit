@@ -1,18 +1,20 @@
 //! Commit run
 //! Prepared manifests to disk writes shared by apply and restore.
 
-use std::io::BufRead;
 use std::path::PathBuf;
 
-use confit_core::error::{Terminal, TerminalResult, contextual, error, kind::ErrorKind};
+use confit_core::error::{
+    ContextualCause, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
+};
 use confit_model::arg::Arg;
 use confit_runtime::manifest::stored;
-use confit_runtime::{HookDecision, HookRunner, Prepared, Writer, refresh};
+use confit_runtime::prepare;
+use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
+use confit_ui::{ToUi, UiHandles};
 
-use crate::presentation::difference::difference_lines;
-use crate::presentation::summary::render_prepared;
-use crate::sinks::Sinks;
+use crate::presentation::difference;
+use crate::presentation::summary;
 
 /// Successful commit run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,22 +26,35 @@ pub struct WriteReport {
 }
 
 /// Commit run from prepared manifests to disk writes.
-pub struct CommitRunner<'a> {
+pub struct CommitRunner {
     /// Prepared manifests with differences and changed routes.
     pub prepared: Prepared,
     /// First prompt skip with difference re-prompt.
     pub force: bool,
-    /// Stdin confirmation reader.
-    pub input: &'a mut dyn BufRead,
     /// Write capabilities for the run.
     pub stores: Stores,
-    /// Output senders for the run.
-    pub sinks: Sinks,
+    /// Renderer channels for prints and prompts.
+    pub handles: UiHandles,
     /// Hook output folder holding one file per hook.
     pub hooks_dir: PathBuf,
 }
 
-impl<'a> CommitRunner<'a> {
+impl CommitRunner {
+    /// Send one line to the renderer.
+    fn print(&self, line: impl Into<String>) {
+        let _ = self.handles.to_ui.send(ToUi::Print(line.into()));
+    }
+
+    /// Ask one yes question on the renderer.
+    fn confirm(&self) -> TerminalResult<bool> {
+        let reply = self
+            .handles
+            .ask("Apply these changes? Type 'yes' to continue: ".to_owned())
+            .map_err(ContextualCause::from)
+            .terminal(ErrorKind::ReadReply)?;
+        Ok(reply.trim() == "yes")
+    }
+
     /// Write prepared manifests with preview, difference prompts, and rotation.
     ///
     /// # Errors
@@ -59,25 +74,25 @@ impl<'a> CommitRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for hook runs.
     /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
     pub fn execute(self) -> TerminalResult<WriteReport> {
-        self.sinks.print_line(render_prepared(&self.prepared));
+        self.print(summary::render_prepared(&self.prepared));
         for warning in &self.prepared.warnings {
-            self.sinks.print_line(warning.summary());
+            self.print(warning.summary());
             log::warn!(
                 "diff warning: {} context: {}",
                 warning.summary(),
                 warning.context()
             );
         }
-        if !self.force && !self.sinks.confirm(self.input)? {
-            self.sinks.print_line("no yes passed, bye".to_owned());
+        if !self.force && !self.confirm()? {
+            self.print("no yes passed, bye");
             return Ok(WriteReport {
                 written: 0,
                 removed: 0,
             });
         }
-        let (fresh, fresh_warnings) = refresh(&self.stores, &self.prepared)?;
+        let (fresh, fresh_warnings) = prepare::refresh(&self.stores, &self.prepared)?;
         for warning in &fresh_warnings {
-            self.sinks.print_line(warning.summary());
+            self.print(warning.summary());
             log::warn!(
                 "diff warning: {} context: {}",
                 warning.summary(),
@@ -85,11 +100,11 @@ impl<'a> CommitRunner<'a> {
             );
         }
         if fresh != self.prepared.differences {
-            for line in difference_lines(&fresh) {
-                self.sinks.print_line(line);
+            for line in difference::difference_lines(&fresh) {
+                self.print(line);
             }
-            if !self.sinks.confirm(self.input)? {
-                self.sinks.print_line("no yes passed, bye".to_owned());
+            if !self.confirm()? {
+                self.print("no yes passed, bye");
                 return Ok(WriteReport {
                     written: 0,
                     removed: 0,
@@ -118,7 +133,7 @@ impl<'a> CommitRunner<'a> {
         let changed = &self.prepared.changed;
         let writer = Writer {
             stores: self.stores.clone(),
-            progress: self.sinks.progress.clone(),
+            to_ui: self.handles.to_ui.clone(),
         };
         let written = writer.write_documents(&built.documents, changed)?;
         let removed = writer.remove_deleted(&previous.documents, &built.documents)?;
@@ -142,7 +157,7 @@ impl<'a> CommitRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
     fn run_hooks(&self) -> TerminalResult<()> {
         let runner = HookRunner {
-            progress: self.sinks.progress.clone(),
+            to_ui: self.handles.to_ui.clone(),
         };
         let prepared = &self.prepared;
         let decided = runner.decide_all(&prepared.desired.hooks, &prepared.changed)?;
@@ -171,7 +186,7 @@ impl<'a> CommitRunner<'a> {
                 }
                 HookDecision::Run(binary) => {
                     let line = format!("hook {position} of {total}: {}", Arg::join(&hook.argv));
-                    self.sinks.print_line(line.clone());
+                    self.print(line.clone());
                     let spawned = runner.spawn(hook, binary, position, total, &self.hooks_dir)?;
                     log::info!("{line} output in {}", spawned.log.display());
                     runner.confirm(&spawned)?;

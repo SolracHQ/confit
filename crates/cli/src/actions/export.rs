@@ -13,8 +13,6 @@ use confit_store::state::Picker;
 
 use crate::cli::ExportArgs;
 
-use crate::sinks::Sinks;
-
 /// Auto-name stem for exports of the applied state.
 const APPLIED_STEM: &str = "applied";
 /// Auto-name stem prefix for exports of history entries.
@@ -35,8 +33,6 @@ pub struct ExportRunner<'a> {
     pub args: &'a ExportArgs,
     /// The write capabilities for the run.
     pub stores: Stores,
-    /// The output senders for the run.
-    pub sinks: Sinks,
 }
 
 impl<'a> ExportRunner<'a> {
@@ -50,13 +46,8 @@ impl<'a> ExportRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
     /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
-    pub fn run(args: &'a ExportArgs, stores: Stores, sinks: Sinks) -> TerminalResult<ExportReport> {
-        Self {
-            args,
-            stores,
-            sinks,
-        }
-        .execute()
+    pub fn run(args: &'a ExportArgs, stores: Stores) -> TerminalResult<ExportReport> {
+        Self { args, stores }.execute()
     }
 
     /// Resolve the picker, then write the bundle file or render manifest JSON.

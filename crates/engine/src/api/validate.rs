@@ -127,13 +127,14 @@ impl Validate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::global::Global;
     use mlua::{Lua, Value};
 
     fn test_lua() -> Lua {
         let lua = Lua::new();
         let validate = Validate::register(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
-        crate::api::global::Global::install(&lua, &lua.globals()).unwrap();
+        Global::install(&lua, &lua.globals()).unwrap();
         lua
     }
 

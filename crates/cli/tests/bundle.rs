@@ -6,7 +6,6 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{repo_path, seed_file, seed_tree, test_stores};
 use confit_cli::actions::bundle::BundleRunner;
 use confit_cli::cli::BundleArgs;
 use confit_runtime::manifest::stored;
@@ -24,9 +23,9 @@ return {
 /// Seed the real example tree with the shared plugins beside it.
 fn example_project(dir: &Path) -> PathBuf {
     let site = dir.join("nest").join("site");
-    seed_tree(&repo_path("../../examples/0-basic_tool"), &site);
-    seed_tree(&repo_path("../../plugins"), &dir.join("plugins"));
-    seed_file(&site.join("main.lua"), SUGAR_MAIN.as_bytes());
+    common::seed_tree(&common::repo_path("../../examples/0-basic_tool"), &site);
+    common::seed_tree(&common::repo_path("../../plugins"), &dir.join("plugins"));
+    common::seed_file(&site.join("main.lua"), SUGAR_MAIN.as_bytes());
     site
 }
 
@@ -35,7 +34,7 @@ fn bundle_file_lands_non_empty_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     let output = dir.path().join("bundle.cb");
-    let stores = test_stores(dir.path(), "nest/site");
+    let stores = common::test_stores(dir.path(), "nest/site");
     let args = BundleArgs {
         project: site,
         profile: None,
@@ -44,6 +43,7 @@ fn bundle_file_lands_non_empty_bytes() {
     let report = BundleRunner {
         args: &args,
         stores,
+        handles: common::test_handles(),
     }
     .execute()
     .unwrap();
@@ -60,7 +60,7 @@ fn bundle_file_lands_non_empty_bytes() {
 fn bundle_named_state_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
-    let stores = test_stores(dir.path(), "nest/site");
+    let stores = common::test_stores(dir.path(), "nest/site");
     let args = BundleArgs {
         project: site,
         profile: None,
@@ -69,6 +69,7 @@ fn bundle_named_state_reads_back() {
     let report = BundleRunner {
         args: &args,
         stores: stores.clone(),
+        handles: common::test_handles(),
     }
     .execute()
     .unwrap();

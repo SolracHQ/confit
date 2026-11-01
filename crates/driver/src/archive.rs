@@ -219,7 +219,7 @@ pub fn supported(head: &[u8]) -> bool {
 /// - [`confit_core::error::FilesystemError`] for denied access and missing input.
 pub fn uncompress<R: io::Read + io::Seek>(
     mut reader: R,
-    visit: impl FnMut(Entry<'_>) -> confit_core::error::ContextualResult<()>,
+    visit: impl FnMut(Entry<'_>) -> ContextualResult<()>,
 ) -> ContextualResult<()> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {

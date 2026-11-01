@@ -58,6 +58,7 @@ mod tests {
     use confit_binding::value::Decode;
     use confit_model::id::Id;
     use confit_store::{StoreRoots, Stores};
+    use confit_ui::{FromUi, ToUi, UiHandles};
     use mlua::Value;
 
     use crate::engine::Engine;
@@ -86,6 +87,13 @@ mod tests {
         lua.set_app_data(stores.clone());
         install(&lua).unwrap();
         lua
+    }
+
+    /// Build disconnected renderer channels.
+    fn silent_handles() -> UiHandles {
+        let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        UiHandles { to_ui, from_ui }
     }
 
     #[test]
@@ -204,7 +212,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let engine = Engine::new(stores);
+        let engine = Engine::new(stores, silent_handles());
         match engine.evaluate(&profile) {
             Ok(_) => panic!("duplicate ids pass"),
             Err(error) => assert_eq!(

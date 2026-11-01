@@ -2,6 +2,8 @@
 //!
 //! Causes name the failed result. Location lives in [`ErrorContext`](super::ErrorContext).
 
+use crate::sha::Sha;
+
 /// Unexpected filesystem result.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FilesystemError {
@@ -346,7 +348,7 @@ pub enum ContentError {
     #[error("corrupt cached object '{expected}'")]
     CorruptObject {
         /// The expected content hash.
-        expected: crate::sha::Sha,
+        expected: Sha,
     },
 }
 
@@ -368,9 +370,9 @@ pub enum ErrorCause {
     #[error("content mismatch, expected '{expected}', found '{found}'")]
     ContentHashMismatch {
         /// The expected content hash.
-        expected: crate::sha::Sha,
+        expected: Sha,
         /// The found content hash.
-        found: crate::sha::Sha,
+        found: Sha,
     },
     /// Content failure.
     #[error(transparent)]
@@ -419,8 +421,6 @@ mod tests {
 
     #[test]
     fn io_mismatch_maps_to_content_hash_mismatch() {
-        use crate::sha::Sha;
-
         let expected = Sha::hash(b"want");
         let found = Sha::hash(b"got");
         let failure = std::io::Error::new(
