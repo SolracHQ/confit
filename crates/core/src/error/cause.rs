@@ -288,7 +288,7 @@ pub enum EvalError {
     /// Failed Lua evaluation.
     #[error("lua failed")]
     LuaFailed,
-    /// Failed Face decode.
+    /// Failed Shape decode.
     #[error("bad shape")]
     BadShape,
 }

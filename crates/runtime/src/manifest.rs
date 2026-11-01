@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_foreign_triplet_with_got() {
+    fn decode_rejects_wrong_triplet_with_got() {
         let raw = serde_json::json!({"version": [0, 8, 0], "documents": [], "hashes": {}});
         let bytes = serde_json::to_vec(&raw).unwrap();
         match Manifest::decode(&bytes) {

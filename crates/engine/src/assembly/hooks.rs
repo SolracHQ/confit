@@ -9,10 +9,10 @@ use confit_core::suggest;
 use mlua::{Lua, Value};
 
 use crate::api::profile::Profile;
-use confit_binding::value::{Decode, Encode};
 use confit_model::document::Document;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
+use lua_binding::value::{Decode, Encode};
 
 use super::patches::split_patches;
 

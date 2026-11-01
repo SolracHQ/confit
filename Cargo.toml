@@ -8,9 +8,9 @@ members = [
   "crates/cli",
   "crates/store",
   "crates/runtime",
-  "crates/binding",
-  "crates/binding-macros",
   "crates/ui",
+  "lua-binding/crates/binding",
+  "lua-binding/crates/binding-macros",
 ]
 
 [workspace.package]
@@ -25,6 +25,8 @@ diffy = "0.5.2"
 dirs = "7.0.0"
 flate2 = "1.1.10"
 log = "0.4.34"
+lua-binding = { version = "0.1.0", path = "lua-binding/crates/binding" }
+lua-binding-macros = { version = "0.1.0", path = "lua-binding/crates/binding-macros" }
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "serde"] }
 noyalib = "0.0.58"
 serde = { version = "1.0.229", features = ["derive"] }

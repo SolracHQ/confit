@@ -18,9 +18,6 @@ crossbeam-channel.workspace = true
 thiserror.workspace = true
 log.workspace = true
 diffy.workspace = true
-confit-binding = { version = "0.9.0", path = "../binding" }
-confit-binding-macros = { version = "0.9.0", path = "../binding-macros" }
-mlua = { workspace = true, features = ["lua54", "vendored"] }
 sha2.workspace = true
 confit-core = { path = "../core" }
 confit-ui = { path = "../ui" }

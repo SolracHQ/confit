@@ -8,11 +8,11 @@ mod tests;
 use std::collections::BTreeMap;
 
 use crate::routes::Route;
-use confit_binding::fault::{FaceFault, FaultReason};
-use confit_binding::value::Decode;
-use confit_binding_macros::Face;
 use confit_core::error::{ContextualResult, DocumentError, contextual};
 use confit_store::handles::ResourceHandle;
+use lua_binding::Shape;
+use lua_binding::error::{DecodeError, DecodeTag};
+use lua_binding::value::Decode;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
@@ -22,9 +22,9 @@ pub use rc::{RcData, RcEntry};
 pub const DEFAULT_FILE_MODE: u32 = 0o644;
 
 /// Serialization format for structured documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Shape)]
 #[serde(rename_all = "lowercase")]
-#[face(table, string)]
+#[shape(table, str_alias)]
 pub enum StructuredFormat {
     /// JSON format.
     Json,
@@ -62,8 +62,8 @@ impl std::fmt::Display for StructuredFormat {
 }
 
 /// Symbolic link content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct LinkDocument {
     /// The link target route.
     pub target: Route,
@@ -77,19 +77,19 @@ impl LinkDocument {
 }
 
 /// Plain text file content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct TextDocument {
     /// The exact file text.
-    #[face(rename = "text")]
+    #[shape(name = "text")]
     pub content: String,
     /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
     #[serde(default = "default_file_mode")]
-    #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
+    #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
     pub mode: u32,
     /// Existence-only document flag.
     #[serde(default)]
-    #[face(default)]
+    #[shape(default)]
     pub unmanaged: bool,
 }
 
@@ -101,24 +101,24 @@ impl TextDocument {
 }
 
 /// Binary file content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct OpaqueDocument {
     /// The opaque file handle.
     pub handle: ResourceHandle,
     /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
     #[serde(default = "default_file_mode")]
-    #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
+    #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
     pub mode: u32,
     /// Existence-only document flag.
     #[serde(default)]
-    #[face(default)]
+    #[shape(default)]
     pub unmanaged: bool,
 }
 
 /// Structured file content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct StructuredDocument {
     /// The serialization format.
     pub format: StructuredFormat,
@@ -142,9 +142,9 @@ impl StructuredDocument {
 }
 
 /// One tree member.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(untagged)]
-#[face(table, untagged, rename = "TreeMember")]
+#[shape(table, untagged, name = "TreeMember")]
 pub enum TreeMember {
     /// Bare handle with default mode.
     Handle(ResourceHandle),
@@ -153,7 +153,7 @@ pub enum TreeMember {
         /// The file payload.
         handle: ResourceHandle,
         /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
-        #[face(proxy = String, decode_hook = decode_mode, encode_hook = render_mode)]
+        #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode)]
         mode: u32,
     },
 }
@@ -176,17 +176,17 @@ impl TreeMember {
 }
 
 /// Managed file set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct TreeDocument {
     /// Tree members keyed by relative path.
     pub members: BTreeMap<String, TreeMember>,
 }
 
 /// One document payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(untagged)]
-#[face(table, untagged)]
+#[shape(table, untagged)]
 pub enum Data {
     /// Structured data file.
     Structured(StructuredDocument),
@@ -203,13 +203,13 @@ pub enum Data {
 }
 
 /// One declared document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[shape(table)]
 pub struct Document {
     /// The destination route.
     pub path: Route,
     /// The document payload.
-    #[face(flatten)]
+    #[shape(flatten)]
     #[serde(flatten)]
     pub data: Data,
 }
@@ -257,16 +257,16 @@ pub(crate) fn default_file_mode() -> u32 {
 ///
 /// # Errors
 ///
-/// - [`FaceFault`] for values outside octal or symbolic text.
-pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, FaceFault> {
+/// - [`DecodeError`] for values outside octal or symbolic text.
+pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, DecodeError> {
     let text = String::decode(value, lua).map_err(|error| {
         let found = match error.reason {
-            FaultReason::ShapeMismatch { found, .. } => found,
-            FaultReason::UnknownVariant { found, .. } => found,
+            DecodeTag::ShapeMismatch { found, .. } => found,
+            DecodeTag::UnknownVariant { found, .. } => found,
         };
-        FaceFault {
+        DecodeError {
             segments: Vec::new(),
-            reason: FaultReason::ShapeMismatch {
+            reason: DecodeTag::ShapeMismatch {
                 require: "expected a string".to_owned(),
                 found,
             },
@@ -274,9 +274,9 @@ pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, 
     })?;
     parse_mode_bits(&text).map_or_else(
         || {
-            Err(FaceFault {
+            Err(DecodeError {
                 segments: Vec::new(),
-                reason: FaultReason::ShapeMismatch {
+                reason: DecodeTag::ShapeMismatch {
                     require: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
                     found: format!("'{text}'"),
                 },

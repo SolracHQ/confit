@@ -2,7 +2,7 @@
 
 use mlua::Lua;
 
-use confit_binding_macros::{Face, face_impl};
+use lua_binding::{Shape, lua_module};
 
 use confit_core::sha::Sha;
 
@@ -11,17 +11,17 @@ use confit_store::handles::ResourceHandle;
 use crate::api::stores_of;
 
 /// Fetch options.
-#[derive(Debug, Clone, Default, Face)]
-#[face(table)]
+#[derive(Debug, Clone, Default, Shape)]
+#[shape(table)]
 pub struct FetchOpts {
     /// The pinned sha256 hex digest.
     pub sha256: Option<String>,
 }
 
-/// Fetch namespace.
+/// Fetch module.
 pub struct Fetch;
 
-#[face_impl(namespace = "confit.fetch")]
+#[lua_module("confit.fetch")]
 impl Fetch {
     /// Open one url.
     ///
@@ -37,7 +37,7 @@ impl Fetch {
     pub fn fetch(
         lua: &Lua,
         url: String,
-        #[face(optional)] opts: FetchOpts,
+        #[shape(optional)] opts: FetchOpts,
     ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_of(lua)?;
         if url.is_empty() {
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_inputs_raise_showing_want() {
+    fn wrong_inputs_raise_showing_want() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let lua = test_lua(&stores);

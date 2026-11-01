@@ -1,5 +1,5 @@
 //! Init run
-//! Project scaffolding from live faces and embedded resources.
+//! Project scaffolding from live shapes and embedded resources.
 
 use std::path::{Path, PathBuf};
 
@@ -98,7 +98,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let documents = generate_stubs().map_err(map_stubs)?;
     let stub_destinations: Vec<PathBuf> = documents
         .iter()
-        .map(|document| stubs_dir.join(format!("{}.d.lua", document.namespace)))
+        .map(|document| stubs_dir.join(format!("{}.d.lua", document.module)))
         .collect();
     let mut destinations = vec![profile.clone(), project_path.clone()];
     destinations.extend(stub_destinations.iter().cloned());
@@ -137,7 +137,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     })
 }
 
-/// Write the generated faces alone, overwriting present stubs.
+/// Write the generated shapes alone, overwriting present stubs.
 ///
 /// # Errors
 ///
@@ -147,7 +147,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
 fn write_stubs(dir: &Path) -> TerminalResult<InitReport> {
     let documents = generate_stubs().map_err(map_stubs)?;
     for document in &documents {
-        let destination = dir.join(format!("{}.d.lua", document.namespace));
+        let destination = dir.join(format!("{}.d.lua", document.module));
         write_file(&destination, document.text.as_bytes())?;
     }
     Ok(InitReport {

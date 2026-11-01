@@ -107,8 +107,8 @@ Nine crates. One job each.
 
 | Crate | It owns |
 | --- | --- |
-| binding | Lua faces, values, registries and stubs |
-| binding-macros | Derive glue for faces at build time |
+| lua-binding | Lua shapes, values, generators and stubs |
+| lua-binding-macros | Derive glue for shapes at build time |
 | core | Errors, hashes and progress events |
 | driver | Filesystem, http, archive, process and path helpers |
 | store | Project files, pool, fetch cache, archives, slots and history |
@@ -120,8 +120,8 @@ Nine crates. One job each.
 ## Dependencies stay acyclic
 
 The graph below shows the real edges. Binding sits at the bottom like a third
-party lib. Core sits above it and every domain crate uses it. The domain crates
-build on each other in one direction. No cycles. Faster builds. Tidy folders.
+party lib. The domain crates build on each other in one direction. No cycles.
+Faster builds. Tidy folders.
 
 The graph looks like this.
 
@@ -137,12 +137,11 @@ graph TD
     engine --> store
     engine --> driver
     engine --> core
-    engine --> binding["confit-binding"]
+    engine --> binding["lua-binding"]
     runtime --> model
     runtime --> store
     runtime --> driver
     runtime --> core
-    runtime --> binding
     model --> store
     model --> driver
     model --> core
@@ -151,7 +150,6 @@ graph TD
     store --> core
     store --> binding
     driver --> core
-    core --> binding
 ```
 
 Macros feed the derive layer at build time and never appear at runtime.

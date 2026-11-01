@@ -1,9 +1,9 @@
 //! Hook
 //! Post-config steps follow plans beside documents.
 
-use confit_binding::fault::{FaceFault, FaultReason};
-use confit_binding::value::Decode;
-use confit_binding_macros::Face;
+use lua_binding::Shape;
+use lua_binding::error::{DecodeError, DecodeTag};
+use lua_binding::value::Decode;
 use mlua::{Lua, Value};
 use serde::{Deserialize, Serialize};
 
@@ -12,37 +12,37 @@ use crate::condition::Condition;
 use crate::id::Id;
 
 /// One post-config step with conditions and checks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(deny_unknown_fields)]
-#[face(table, validate = reject_empty_argv)]
+#[shape(table, validate = reject_empty_argv)]
 pub struct Hook {
     /// Command for the subprocess.
     pub argv: Vec<Arg>,
     /// PATH entries for the subprocess alone.
-    #[face(default)]
+    #[shape(default)]
     pub path: Vec<Arg>,
     /// The hook identifier.
     pub id: Id,
     /// The capability condition.
     #[serde(default)]
-    #[face(default)]
+    #[shape(default)]
     pub requires: Condition,
     /// The need condition.
     #[serde(default)]
-    #[face(default)]
+    #[shape(default)]
     pub when: Condition,
     /// The run condition.
     #[serde(default)]
-    #[face(default)]
+    #[shape(default)]
     pub check: Condition,
     /// The run cap in seconds.
-    #[face(rename = "timeout", proxy = String, decode_hook = decode_timeout, encode_hook = render_timeout, default = default_timeout_secs)]
+    #[shape(name = "timeout", proxy = String, decode_hook = decode_timeout, encode_hook = render_timeout, default = default_timeout_secs)]
     pub timeout_secs: u64,
 }
 
 /// One condition key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
-#[face(table, string)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Shape)]
+#[shape(table, str_alias)]
 pub enum ConditionKey {
     /// The capability condition.
     Requires,
@@ -53,8 +53,8 @@ pub enum ConditionKey {
 }
 
 /// One condition change.
-#[derive(Debug, Clone, PartialEq, Eq, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Shape)]
+#[shape(table)]
 pub struct ConditionChange {
     /// The key under diffing.
     pub key: ConditionKey,
@@ -65,8 +65,8 @@ pub struct ConditionChange {
 }
 
 /// One timeout change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
-#[face(table)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Shape)]
+#[shape(table)]
 pub struct TimeoutChange {
     /// The recorded cap in seconds.
     pub before: u64,
@@ -75,8 +75,8 @@ pub struct TimeoutChange {
 }
 
 /// One hook modification.
-#[derive(Debug, Clone, PartialEq, Eq, Face)]
-#[face(table)]
+#[derive(Debug, Clone, PartialEq, Eq, Shape)]
+#[shape(table)]
 pub struct HookModification {
     /// Condition edits in key order.
     pub conditions: Vec<ConditionChange>,
@@ -271,12 +271,12 @@ fn reject_empty_argv(hook: &Hook) -> mlua::Result<()> {
 ///
 /// # Errors
 ///
-/// - [`FaceFault`] for values outside the duration shape.
-fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, FaceFault> {
+/// - [`DecodeError`] for values outside the duration shape.
+fn decode_timeout(lua: &Lua, value: &Value) -> std::result::Result<u64, DecodeError> {
     let text = String::decode(value, lua)?;
-    parse_timeout(&text).ok_or_else(|| FaceFault {
+    parse_timeout(&text).ok_or_else(|| DecodeError {
         segments: Vec::new(),
-        reason: FaultReason::ShapeMismatch {
+        reason: DecodeTag::ShapeMismatch {
             require: "a duration like '10m'".to_owned(),
             found: format!("'{text}'"),
         },

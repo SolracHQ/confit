@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use mlua::{Lua, Table, Value};
 
 use crate::api::patch::{RcLiveDocument, StructuredLiveDocument, StructuredPatch};
-use confit_binding::value::{Decode, Encode};
 use confit_model::document::{
     Data, Document, RcData, RcEntry, StructuredDocument, StructuredFormat,
 };
 use confit_model::routes::Route;
+use lua_binding::value::{Decode, Encode};
 
 use super::Assembler;
 use super::owned::OwnedPatch;
@@ -212,11 +212,11 @@ impl Assembler<'_> {
     }
 }
 
-/// Build one live view from its face for patch callbacks.
+/// Build one live view from its shape for patch callbacks.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for faces outside the table shape.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for shapes outside the table shape.
 fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     match document.encode(lua) {
         Ok(Value::Table(table)) => Ok(table),

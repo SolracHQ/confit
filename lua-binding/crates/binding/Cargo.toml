@@ -1,0 +1,13 @@
+[package]
+name = "lua-binding"
+version = "0.1.0"
+edition = "2024"
+readme = "../../README.md"
+
+[dependencies]
+lua-binding-macros = { workspace = true }
+mlua = { workspace = true, features = ["lua54", "vendored"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

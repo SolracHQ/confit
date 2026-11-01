@@ -13,15 +13,9 @@ function document(body) end
 
 --- Portable route over standard folders.
 --- @class Route
+--- @field base RouteBase The destination base.
+--- @field relative string The relative path.
 Route = {}
-
---- Return the destination base.
---- @return RouteBase The destination base.
-function Route:base() end
-
---- Return the relative path text.
---- @return string The relative path text.
-function Route:relative() end
 
 --- Render the portable route display in sugar call form.
 --- @return string The sugar call display.

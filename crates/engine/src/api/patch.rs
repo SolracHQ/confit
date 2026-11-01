@@ -2,10 +2,10 @@
 
 use mlua::{Lua, Table, Value};
 
-use confit_binding::callback::Callback;
-use confit_binding::fault::{FaceFault, FaultReason};
-use confit_binding::value::Decode;
-use confit_binding_macros::Face;
+use lua_binding::Shape;
+use lua_binding::callable::Callable;
+use lua_binding::error::{DecodeError, DecodeTag};
+use lua_binding::value::Decode;
 use serde::{Deserialize, Serialize};
 
 use confit_model::document::{RcData, StructuredDocument, StructuredFormat};
@@ -13,70 +13,70 @@ use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
 /// Live structured document under patching.
-#[derive(Debug, Clone, PartialEq, Eq, Face)]
-#[face(table, rename = "Document_Structured")]
+#[derive(Debug, Clone, PartialEq, Eq, Shape)]
+#[shape(table, name = "Document_Structured")]
 pub struct StructuredLiveDocument {
     /// The destination route.
     pub path: Route,
     /// The structured body under patching.
-    #[face(flatten)]
+    #[shape(flatten)]
     pub body: StructuredDocument,
 }
 
 /// Live rc document under patching.
-#[derive(Debug, Clone, PartialEq, Eq, Face)]
-#[face(table, rename = "Document_Rc")]
+#[derive(Debug, Clone, PartialEq, Eq, Shape)]
+#[shape(table, name = "Document_Rc")]
 pub struct RcLiveDocument {
     /// The destination route.
     pub path: Route,
     /// The rc body under patching.
-    #[face(flatten)]
+    #[shape(flatten)]
     pub body: RcData,
 }
 
 /// Patch structured data in place.
 #[allow(dead_code)]
-#[derive(Face)]
-#[face(callback_shape)]
+#[derive(Shape)]
+#[shape(function)]
 pub struct StructuredApplyArgs {
     /// Live structured document under patching.
-    #[face(live)]
+    #[shape(borrowed)]
     document: StructuredLiveDocument,
 }
 
 /// Patch rc sections in place.
 #[allow(dead_code)]
-#[derive(Face)]
-#[face(callback_shape)]
+#[derive(Shape)]
+#[shape(function)]
 pub struct RcApplyArgs {
     /// Live rc document under patching.
-    #[face(live)]
+    #[shape(borrowed)]
     document: RcLiveDocument,
 }
 
 /// Run one hook patch.
 #[allow(dead_code)]
-#[derive(Face)]
-#[face(callback_shape)]
+#[derive(Shape)]
+#[shape(function)]
 pub struct HookArgs {
     /// Live hook under patching.
-    #[face(live)]
+    #[shape(borrowed)]
     hook: Hook,
 }
 
-/// Face for patch filter callbacks.
+/// Shape for patch filter callbacks.
 #[allow(dead_code)]
-#[derive(Face)]
-#[face(callback_shape, returns = bool)]
+#[derive(Shape)]
+#[shape(function, returns = bool)]
 pub struct FilterArgs {
     /// Target route of the candidate document.
     route: Route,
 }
 
 /// Patch merge level.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Face)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Shape)]
 #[serde(rename_all = "lowercase")]
-#[face(table, string)]
+#[shape(table, str_alias)]
 pub enum Level {
     /// Lowest merge level.
     Minor,
@@ -134,54 +134,54 @@ pub enum PatchTarget {
     /// Single destination route.
     Target(Route),
     /// Callback over routes.
-    Filter(Callback<FilterArgs>),
+    Filter(Callable<FilterArgs>),
 }
 
 /// One structured patch table.
-#[derive(Debug, Clone, Face)]
-#[face(table, validate = reject_structured_destination)]
+#[derive(Debug, Clone, Shape)]
+#[shape(table, validate = reject_structured_destination)]
 pub struct StructuredPatch {
     /// The patch target route.
     pub target: Option<Route>,
     /// The patch filter callback.
-    pub filter: Option<Callback<FilterArgs>>,
+    pub filter: Option<Callable<FilterArgs>>,
     /// The structured format under patching.
     pub format: StructuredFormat,
     /// The patch callback over the live document.
-    pub apply: Callback<StructuredApplyArgs>,
+    pub apply: Callable<StructuredApplyArgs>,
     /// The patch merge level. Higher levels apply first.
-    #[face(default)]
+    #[shape(default)]
     pub priority: Level,
 }
 
 /// One rc patch table.
-#[derive(Debug, Clone, Face)]
-#[face(table, validate = reject_rc_destination)]
+#[derive(Debug, Clone, Shape)]
+#[shape(table, validate = reject_rc_destination)]
 pub struct RcPatch {
     /// The patch target route.
     pub target: Option<Route>,
     /// The patch filter callback.
-    pub filter: Option<Callback<FilterArgs>>,
+    pub filter: Option<Callable<FilterArgs>>,
     /// The patch callback over the live document.
-    pub apply: Callback<RcApplyArgs>,
+    pub apply: Callable<RcApplyArgs>,
     /// The patch merge level. Higher levels apply first.
-    #[face(default)]
+    #[shape(default)]
     pub priority: Level,
 }
 
 /// One hook patch table.
-#[derive(Debug, Clone, Face)]
-#[face(table)]
+#[derive(Debug, Clone, Shape)]
+#[shape(table)]
 pub struct HookPatch {
     /// The hook id under patching.
     pub target: String,
     /// The hook callback over the live hook.
-    pub apply: Callback<HookArgs>,
+    pub apply: Callable<HookArgs>,
 }
 
 /// One patch table in either shape.
-#[derive(Debug, Clone, Face)]
-#[face(table, untagged, probe = probe_patch)]
+#[derive(Debug, Clone, Shape)]
+#[shape(table, untagged, probe = probe_patch)]
 pub enum Patch {
     /// Structured data payload patch.
     Structured(StructuredPatch),
@@ -195,11 +195,11 @@ pub enum Patch {
 ///
 /// # Errors
 ///
-/// - [`FaceFault`] for unreadable tables.
-fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault> {
-    let target = table.get::<Value>("target").map_err(|error| FaceFault {
+/// - [`DecodeError`] for unreadable tables.
+fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, DecodeError> {
+    let target = table.get::<Value>("target").map_err(|error| DecodeError {
         segments: Vec::new(),
-        reason: FaultReason::ShapeMismatch {
+        reason: DecodeTag::ShapeMismatch {
             require: "readable entries".to_owned(),
             found: error.to_string(),
         },
@@ -207,9 +207,9 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault
     if matches!(target, Value::String(_)) {
         return HookPatch::decode(&Value::Table(table.clone()), lua).map(Patch::Hook);
     }
-    let raw = table.get::<Value>("format").map_err(|error| FaceFault {
+    let raw = table.get::<Value>("format").map_err(|error| DecodeError {
         segments: Vec::new(),
-        reason: FaultReason::ShapeMismatch {
+        reason: DecodeTag::ShapeMismatch {
             require: "readable entries".to_owned(),
             found: error.to_string(),
         },
@@ -225,24 +225,24 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, FaceFault
 ///
 /// # Errors
 ///
-/// - [`FaceFault`] for missing and doubled destinations.
+/// - [`DecodeError`] for missing and doubled destinations.
 pub fn join_destination(
     target: Option<Route>,
-    filter: Option<Callback<FilterArgs>>,
-) -> std::result::Result<PatchTarget, FaceFault> {
+    filter: Option<Callable<FilterArgs>>,
+) -> std::result::Result<PatchTarget, DecodeError> {
     match (target, filter) {
         (Some(route), None) => Ok(PatchTarget::Target(route)),
         (None, Some(filter)) => Ok(PatchTarget::Filter(filter)),
-        (Some(_), Some(_)) => Err(FaceFault {
+        (Some(_), Some(_)) => Err(DecodeError {
             segments: Vec::new(),
-            reason: FaultReason::ShapeMismatch {
+            reason: DecodeTag::ShapeMismatch {
                 require: "either 'target' or 'filter'".to_owned(),
                 found: "'target' with 'filter'".to_owned(),
             },
         }),
-        (None, None) => Err(FaceFault {
+        (None, None) => Err(DecodeError {
             segments: Vec::new(),
-            reason: FaultReason::ShapeMismatch {
+            reason: DecodeTag::ShapeMismatch {
                 require: "either 'target' or 'filter'".to_owned(),
                 found: "nil".to_owned(),
             },
@@ -250,7 +250,7 @@ pub fn join_destination(
     }
 }
 
-/// Reject structured faces missing or doubling destinations.
+/// Reject structured shapes missing or doubling destinations.
 ///
 /// # Errors
 ///
@@ -261,7 +261,7 @@ fn reject_structured_destination(patch: &StructuredPatch) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Reject rc faces missing or doubling destinations.
+/// Reject rc shapes missing or doubling destinations.
 ///
 /// # Errors
 ///
@@ -275,16 +275,16 @@ fn reject_rc_destination(patch: &RcPatch) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_binding::face::Face;
-    use confit_binding::registry::Registry;
+    use lua_binding::generator::Generator;
+    use lua_binding::shape::Shape;
 
     #[test]
     fn filter_stubs_show_boolean_returns_while_apply_stays_bare() {
-        let mut collector = Registry::new();
+        let mut collector = Generator::new();
         StructuredPatch::collect(&mut collector);
         RcPatch::collect(&mut collector);
         HookPatch::collect(&mut collector);
-        let text = collector.stub_text();
+        let text = collector.generate();
         assert!(
             text.contains("fun(route: Route): boolean"),
             "filter shows bool: {text}"

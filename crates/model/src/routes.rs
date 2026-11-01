@@ -3,18 +3,18 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_binding::trace::LuaTrace;
-use confit_binding_macros::{Face, face_impl};
 use confit_core::error::{ContextualResult, DocumentError, Require, contextual};
 use confit_driver::paths::BaseDirs;
+use lua_binding::trace::LuaTrace;
+use lua_binding::{Shape, lua_methods};
 use serde::{Deserialize, Serialize};
 
 /// Portable standard folders enum.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Face,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Shape,
 )]
 #[serde(rename_all = "lowercase")]
-#[face(table, string)]
+#[shape(table, str_alias)]
 pub enum RouteBase {
     /// User home folder.
     Home,
@@ -29,17 +29,19 @@ pub enum RouteBase {
 }
 
 /// Portable route over standard folders.
-#[derive(Clone, Debug, Face, Serialize, Deserialize)]
-#[face(traced, userdata)]
+#[derive(Clone, Debug, Shape, Serialize, Deserialize)]
+#[shape(traced, object)]
 #[serde(deny_unknown_fields)]
 pub struct Route {
     /// The destination base.
+    #[shape(get)]
     base: RouteBase,
     /// The relative path.
+    #[shape(get)]
     relative: PathBuf,
     /// The route declaration stack.
     #[serde(skip)]
-    #[face(lua_trace)]
+    #[shape(lua_trace)]
     pub trace: LuaTrace,
 }
 
@@ -140,28 +142,20 @@ impl Route {
     pub fn relative_path(&self) -> &Path {
         &self.relative
     }
-}
 
-#[face_impl]
-impl Route {
     /// Return the destination base.
-    ///
-    /// # Returns
-    ///
-    /// - The destination base.
     pub fn base(&self) -> RouteBase {
         self.base
     }
 
     /// Return the relative path text.
-    ///
-    /// # Returns
-    ///
-    /// - The relative path text.
     pub fn relative(&self) -> String {
         self.relative.display().to_string()
     }
+}
 
+#[lua_methods]
+impl Route {
     /// Render the portable route display in sugar call form.
     ///
     /// # Returns
@@ -191,21 +185,21 @@ fn dir_or_fail(_base: RouteBase, found: Option<PathBuf>) -> ContextualResult<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_binding::trace::SourceSite;
-    use confit_binding::value::{Decode, Encode};
-    use confit_binding_macros::Face;
     use confit_core::error::{DocumentError, ErrorCause};
+    use lua_binding::Shape;
+    use lua_binding::trace::SourceSite;
+    use lua_binding::value::{Decode, Encode};
     use mlua::{Lua, Value};
 
     /// Foreign handle for route decode tests.
     #[allow(dead_code)]
-    #[derive(Clone, Face)]
-    #[face(userdata)]
+    #[derive(Clone, Shape)]
+    #[shape(object)]
     struct Foreign {
         seed: String,
     }
 
-    #[face_impl]
+    #[lua_methods]
     impl Foreign {}
 
     #[test]
@@ -231,7 +225,7 @@ mod tests {
             .unwrap();
         assert!(
             Route::decode(&Value::UserData(foreign), &lua).is_err(),
-            "foreign userdata fails"
+            "wrong userdata fails"
         );
     }
 
@@ -270,9 +264,9 @@ mod tests {
         lua.globals().set("route_case", encoded).unwrap();
         let display: String = lua.load("return route_case:display()").eval().unwrap();
         assert_eq!(display, "home('.bashrc')");
-        let base: String = lua.load("return route_case:base()").eval().unwrap();
+        let base: String = lua.load("return route_case.base").eval().unwrap();
         assert_eq!(base, "home");
-        let relative: String = lua.load("return route_case:relative()").eval().unwrap();
+        let relative: String = lua.load("return route_case.relative").eval().unwrap();
         assert_eq!(relative, ".bashrc");
         assert_eq!(route.join("sub").display(), "home('.bashrc/sub')");
     }

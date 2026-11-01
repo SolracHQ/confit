@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use confit_binding_macros::Face;
+use lua_binding::Shape;
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
@@ -13,9 +13,9 @@ const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
 /// Text or route for command arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Shape)]
 #[serde(untagged)]
-#[face(table, untagged)]
+#[shape(table, untagged)]
 pub enum Arg {
     /// Plain string argument.
     Text(String),

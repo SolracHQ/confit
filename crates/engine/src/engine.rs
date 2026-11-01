@@ -5,11 +5,11 @@ use std::path::Path;
 use confit_core::error::{EvalError, TerminalResult, contextual, error, kind::ErrorKind};
 use mlua::Lua;
 
-use confit_binding::value::Decode;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
 use confit_store::Stores;
 use confit_ui::UiHandles;
+use lua_binding::value::Decode;
 
 use crate::api::profile::Profile;
 use crate::assembly::Assembler;

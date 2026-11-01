@@ -2,7 +2,7 @@
 
 use mlua::Lua;
 
-use confit_binding_macros::face_impl;
+use lua_binding::lua_globals;
 
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
@@ -10,7 +10,7 @@ use confit_model::routes::{Route, RouteBase};
 /// Global constructors.
 pub struct Global;
 
-#[face_impl(global)]
+#[lua_globals("confit")]
 impl Global {
     /// Build one opaque id.
     ///
@@ -55,10 +55,10 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    use confit_binding::value::Decode;
     use confit_model::id::Id;
     use confit_store::{StoreRoots, Stores};
     use confit_ui::{FromUi, ToUi, UiHandles};
+    use lua_binding::value::Decode;
     use mlua::Value;
 
     use crate::engine::Engine;

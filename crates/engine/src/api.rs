@@ -33,22 +33,22 @@ use crate::api::validate::Validate;
 /// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names and module build failures.
 pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
     match name {
-        Fetch::NAMESPACE => Fetch::register(lua)
+        Fetch::MODULE => Fetch::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Open::NAMESPACE => Open::register(lua)
+        Open::MODULE => Open::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Validate::NAMESPACE => Validate::register(lua)
+        Validate::MODULE => Validate::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Fact::NAMESPACE => Fact::register(lua)
+        Fact::MODULE => Fact::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Input::NAMESPACE => Input::register(lua)
+        Input::MODULE => Input::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Template::NAMESPACE => Template::register(lua)
+        Template::MODULE => Template::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
         _ => error(

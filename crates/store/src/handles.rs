@@ -3,16 +3,16 @@
 
 use std::path::{Path, PathBuf};
 
-use confit_binding_macros::{Face, face_impl};
 use confit_core::sha::Sha;
+use lua_binding::{Shape, lua_methods};
 use mlua::{Lua, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::Stores;
 
 /// Handle to a trusted resource.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Face)]
-#[face(userdata)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Shape)]
+#[shape(object)]
 pub enum ResourceHandle {
     /// Content-addressed cache entry, trusted by its hash.
     Cache(Sha),
@@ -59,8 +59,8 @@ impl ResourceHandle {
 }
 
 /// Handle to a verified compressed archive.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Face)]
-#[face(userdata)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Shape)]
+#[shape(object)]
 pub struct ArchiveHandle {
     sha: Sha,
     path: PathBuf,
@@ -101,7 +101,7 @@ impl StateHandle {
     }
 }
 
-#[face_impl]
+#[lua_methods]
 impl ResourceHandle {
     /// Read file text.
     ///
@@ -146,7 +146,7 @@ impl ResourceHandle {
     }
 }
 
-#[face_impl]
+#[lua_methods]
 impl ArchiveHandle {
     /// List the archive member names, archive-relative with forward slashes.
     ///

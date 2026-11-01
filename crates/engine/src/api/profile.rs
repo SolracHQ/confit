@@ -1,19 +1,19 @@
 //! Plain profile decode.
 
-use confit_binding_macros::Face;
+use lua_binding::Shape;
 
 use super::config::Config;
 use confit_model::document::Document;
 
 /// One profile.
-#[derive(Debug, Clone, Default, Face)]
-#[face(table)]
+#[derive(Debug, Clone, Default, Shape)]
+#[shape(table)]
 pub struct Profile {
     /// Configs in profile order.
-    #[face(default)]
+    #[shape(default)]
     pub configs: Vec<Config>,
     /// Documents in declaration order with destination paths.
-    #[face(default)]
+    #[shape(default)]
     pub documents: Vec<Document>,
 }
 

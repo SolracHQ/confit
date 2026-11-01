@@ -1,18 +1,18 @@
 //! Id
 //! Opaque identities with declaration stacks.
 
-use confit_binding::trace::LuaTrace;
-use confit_binding_macros::{Face, face_impl};
+use lua_binding::trace::LuaTrace;
+use lua_binding::{Shape, lua_methods};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// One opaque identity.
-#[derive(Clone, Debug, Default, Face)]
-#[face(traced, userdata)]
+#[derive(Clone, Debug, Default, Shape)]
+#[shape(traced, object)]
 pub struct Id {
     /// The full identity string.
     pub id: String,
     /// The identity declaration stack.
-    #[face(lua_trace)]
+    #[shape(lua_trace)]
     pub trace: LuaTrace,
 }
 
@@ -63,29 +63,29 @@ impl Id {
     }
 }
 
-#[face_impl]
+#[lua_methods]
 impl Id {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_binding::value::Decode;
-    use confit_binding_macros::Face;
+    use lua_binding::Shape;
+    use lua_binding::value::Decode;
     use mlua::{Lua, Value};
 
     /// Foreign handle for id decode tests.
     #[allow(dead_code)]
-    #[derive(Clone, Face)]
-    #[face(userdata)]
+    #[derive(Clone, Shape)]
+    #[shape(object)]
     struct Foreign {
         seed: String,
     }
 
-    #[face_impl]
+    #[lua_methods]
     impl Foreign {}
 
     #[test]
-    fn id_decode_rejects_foreign_shapes() {
+    fn id_decode_rejects_wrong_shapes() {
         let lua = Lua::new();
         let text = lua.create_string("same").unwrap();
         assert!(
@@ -105,7 +105,7 @@ mod tests {
             .unwrap();
         assert!(
             Id::decode(&Value::UserData(foreign), &lua).is_err(),
-            "foreign userdata fails"
+            "wrong userdata fails"
         );
     }
 

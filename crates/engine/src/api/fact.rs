@@ -1,12 +1,12 @@
 //! Immediate host facts over closed names.
 
-use confit_binding_macros::{Face, face_impl};
 use confit_core::version::VERSION;
+use lua_binding::{Shape, lua_module};
 use mlua::{Lua, Value};
 
 /// Closed host fact names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
-#[face(table, string)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Shape)]
+#[shape(table, str_alias)]
 pub enum FactName {
     /// Binary version triplet.
     Version,
@@ -16,10 +16,10 @@ pub enum FactName {
     Arch,
 }
 
-/// Fact namespace.
+/// Fact module.
 pub struct Fact;
 
-#[face_impl(namespace = "confit.fact")]
+#[lua_module("confit.fact")]
 impl Fact {
     /// Read one host fact.
     ///
@@ -49,7 +49,7 @@ mod tests {
 
     fn test_lua() -> Lua {
         let lua = Lua::new();
-        let fact = Fact::register(&lua).unwrap();
+        let fact = Fact::add(&lua).unwrap();
         lua.globals().set("fact", fact).unwrap();
         lua
     }

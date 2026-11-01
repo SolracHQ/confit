@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_rejects_foreign_inputs() {
+    fn resource_rejects_wrong_inputs() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("project")).unwrap();
         let store = test_store(dir.path());

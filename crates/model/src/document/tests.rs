@@ -1,8 +1,8 @@
 use super::{Data, Document, OpaqueDocument, RcEntry, TextDocument, TreeDocument, TreeMember};
-use confit_binding::value::{Decode, Encode};
 use confit_core::sha::Sha;
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
+use lua_binding::value::{Decode, Encode};
 use mlua::{Lua, Value};
 
 use crate::routes::{Route, RouteBase};

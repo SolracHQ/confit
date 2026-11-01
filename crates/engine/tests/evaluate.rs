@@ -383,7 +383,7 @@ fn bad_base_renders_face_line() {
             );
             assert!(
                 error.to_string().contains("is not a valid variant"),
-                "the line shows the face failure: {error}"
+                "the line shows the shape failure: {error}"
             );
         }
     }

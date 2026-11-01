@@ -1,7 +1,7 @@
 //! Shape checks over the decode cores.
 
-use confit_binding::value::Decode;
-use confit_binding_macros::face_impl;
+use lua_binding::lua_module;
+use lua_binding::value::Decode;
 use mlua::{Lua, Value};
 
 use crate::api::config::Config;
@@ -12,7 +12,7 @@ use confit_model::document::RcEntry;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Validate namespace.
+/// Validate module.
 pub struct Validate;
 
 /// Decode one value with its failure reason beside it.
@@ -23,7 +23,7 @@ fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Opti
     }
 }
 
-#[face_impl(namespace = "confit.validate")]
+#[lua_module("confit.validate")]
 impl Validate {
     /// Check one document table, else nil with reason.
     ///
@@ -132,7 +132,7 @@ mod tests {
 
     fn test_lua() -> Lua {
         let lua = Lua::new();
-        let validate = Validate::register(&lua).unwrap();
+        let validate = Validate::add(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
         Global::install(&lua, &lua.globals()).unwrap();
         lua
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_rejects_foreign_shapes_showing_keys() {
+    fn patch_rejects_wrong_shapes_showing_keys() {
         let lua = test_lua();
         let cases = [
             r#"
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn new_check_verbs_pass_good_shapes() {
+    fn new_check_functions_pass_good_shapes() {
         let lua = test_lua();
         for (verb, body) in [
             ("hook", r#"{ argv = { "true" }, id = id("tools/test") }"#),

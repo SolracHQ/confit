@@ -2,12 +2,12 @@
 
 use mlua::{Lua, Value};
 
-use confit_binding_macros::face_impl;
+use lua_binding::lua_module;
 
-/// Template namespace.
+/// Template module.
 pub struct Template;
 
-#[face_impl(namespace = "confit.template")]
+#[lua_module("confit.template")]
 impl Template {
     /// Render one template string with plain vars.
     ///

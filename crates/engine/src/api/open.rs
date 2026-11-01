@@ -2,16 +2,16 @@
 
 use mlua::Lua;
 
-use confit_binding_macros::face_impl;
+use lua_binding::lua_module;
 
 use confit_store::handles::ResourceHandle;
 
 use crate::api::stores_of;
 
-/// Open namespace.
+/// Open module.
 pub struct Open;
 
-#[face_impl(namespace = "confit.open")]
+#[lua_module("confit.open")]
 impl Open {
     /// Open one project-relative file.
     ///
@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_inputs_raise_showing_want() {
+    fn wrong_inputs_raise_showing_want() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());

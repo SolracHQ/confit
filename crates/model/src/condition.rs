@@ -1,15 +1,15 @@
 //! Condition
 //! Shell session predicates held as data.
 
-use confit_binding_macros::Face;
+use lua_binding::Shape;
 use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
 
 /// Shell session predicate.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Shape)]
 #[serde(rename_all = "snake_case")]
-#[face(table, tagged)]
+#[shape(table, typed_alias)]
 pub enum Condition {
     /// Equality between a shell variable and a value.
     EnvEq {
@@ -44,7 +44,7 @@ pub enum Condition {
     Any(Vec<Condition>),
     /// A negated nested condition.
     #[serde(rename = "nop")]
-    #[face(tag = "nop")]
+    #[shape(variant = "nop")]
     Not(Box<Condition>),
 }
 

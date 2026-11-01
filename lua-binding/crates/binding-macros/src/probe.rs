@@ -1,0 +1,249 @@
+//! Expands probe enums into marker-key aliases.
+
+use proc_macro2::TokenStream as Tokens;
+use quote::quote;
+use syn::Attribute;
+
+use super::parse::{doc_lines, parse_variant_flags, payload_of};
+
+/// Builds the probe enum expansion.
+pub(crate) fn expand_probe_enum(
+    name: &syn::Ident,
+    data: &syn::DataEnum,
+    attrs: &[Attribute],
+    validate: &Option<syn::Path>,
+    rename: &Option<String>,
+) -> Result<Tokens, syn::Error> {
+    let outer = name.to_string();
+    let display = rename.clone().unwrap_or_else(|| outer.clone());
+    let type_docs = doc_lines(attrs).join(" ");
+    let count = data.variants.len();
+    if count == 0 {
+        return Err(syn::Error::new_spanned(
+            name,
+            format!("{outer}: probe shapes need one variant at least"),
+        ));
+    }
+    let mut arms = Vec::new();
+    let mut shapes = Vec::new();
+    let mut dispatch = Vec::new();
+    let mut encodes = Vec::new();
+    for (index, variant) in data.variants.iter().enumerate() {
+        let variant_name = variant.ident.to_string();
+        let ident = variant.ident.clone();
+        let flags = parse_variant_flags(&outer, &variant_name, &variant.attrs)?;
+        if flags.name.is_some() || flags.variant.is_some() {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                format!(
+                    "{outer}.{variant_name}: probe shapes take probe; name and variant belong to other markers"
+                ),
+            ));
+        }
+        if flags.probe.is_empty() && index + 1 != count {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                format!("{outer}: last position is expected for probe fallback"),
+            ));
+        }
+        let payload = payload_of(&outer, variant, "probe")?;
+        let docs = doc_lines(&variant.attrs).join(" ");
+        arms.push(quote! {
+            ::lua_binding::shape::Variant {
+                name: stringify!(#ident),
+                description: #docs,
+                shape: ::std::borrow::Cow::Owned(
+                    <#payload as ::lua_binding::shape::Shape>::name(),
+                ),
+                fields: ::std::vec::Vec::new(),
+                collect: <#payload as ::lua_binding::shape::Shape>::collect,
+            }
+        });
+        shapes.push(quote! {
+            <#payload as ::lua_binding::shape::Shape>::name()
+        });
+        encodes.push(quote! {
+            Self::#ident(inner) => {
+                <#payload as ::lua_binding::value::Encode>::encode(inner, lua)
+            },
+        });
+        let last = index + 1 == count;
+        if flags.probe.is_empty() {
+            match validate {
+                Some(hook) => dispatch.push(quote! {
+                    {
+                        let result = <#payload as ::lua_binding::value::Decode>::decode(
+                            &::mlua::Value::Table(table),
+                            lua,
+                        )
+                        .map(Self::#ident)?;
+                        #hook(&result).map_err(|error: ::mlua::Error| {
+                            ::lua_binding::error::DecodeError {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
+                                    require: ::std::format!("valid {}", #outer),
+                                    found: error.to_string(),
+                                },
+                            }
+                        })?;
+                        return ::std::result::Result::Ok(result);
+                    }
+                }),
+                None => dispatch.push(quote! {
+                    return <#payload as ::lua_binding::value::Decode>::decode(
+                        &::mlua::Value::Table(table),
+                        lua,
+                    )
+                    .map(Self::#ident);
+                }),
+            }
+        } else {
+            let mut check: Tokens = {
+                let first = &flags.probe[0];
+                quote! { probe(#first) }
+            };
+            for key in flags.probe.iter().skip(1) {
+                check = quote! { #check && probe(#key) };
+            }
+            let table_value = if last {
+                quote! { &::mlua::Value::Table(table) }
+            } else {
+                quote! { &::mlua::Value::Table(table.clone()) }
+            };
+            match validate {
+                Some(hook) => dispatch.push(quote! {
+                    if #check {
+                        let result =
+                            <#payload as ::lua_binding::value::Decode>::decode(
+                                #table_value,
+                                lua,
+                            )
+                            .map(Self::#ident)?;
+                        #hook(&result).map_err(|error: ::mlua::Error| {
+                            ::lua_binding::error::DecodeError {
+                                segments: ::std::vec::Vec::new(),
+                                reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
+                                    require: ::std::format!("valid {}", #outer),
+                                    found: error.to_string(),
+                                },
+                            }
+                        })?;
+                        return ::std::result::Result::Ok(result);
+                    }
+                }),
+                None => dispatch.push(quote! {
+                    if #check {
+                        return <#payload as ::lua_binding::value::Decode>::decode(
+                            #table_value,
+                            lua,
+                        )
+                        .map(Self::#ident);
+                    }
+                }),
+            }
+        }
+    }
+    Ok(quote! {
+        impl ::lua_binding::shape::Shape for #name {
+            fn name() -> ::std::string::String {
+                #display.to_owned()
+            }
+
+            fn shape_data() -> ::lua_binding::shape::ShapeData {
+                ::lua_binding::shape::ShapeData::Alias {
+                    description: #type_docs,
+                    variants: ::std::vec![#(#arms),*],
+                }
+            }
+
+            fn collect(
+                collector: &mut ::lua_binding::generator::Generator,
+            ) {
+                let data = <Self as ::lua_binding::shape::Shape>::shape_data();
+                if collector.add(<Self as ::lua_binding::shape::Shape>::name(), &data) {
+                    data.collect_referenced(collector);
+                }
+            }
+        }
+
+        impl ::lua_binding::value::Decode for #name {
+            fn decode(
+                value: &::mlua::Value,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<Self, ::lua_binding::error::DecodeError> {
+                let table = <::mlua::Table as ::mlua::FromLua>::from_lua(
+                    value.clone(),
+                    lua,
+                )
+                .map_err(|_| {
+                    ::lua_binding::error::DecodeError {
+                        segments: ::std::vec::Vec::new(),
+                        reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
+                            require: "a table".to_owned(),
+                            found: value.type_name().to_owned(),
+                        },
+                    }
+                })?;
+                let probe = |key: &str| -> bool {
+                    table
+                        .get::<::mlua::Value>(key)
+                        .is_ok_and(|item| !matches!(item, ::mlua::Value::Nil))
+                };
+                #(#dispatch)*
+                ::std::result::Result::Err(::lua_binding::error::DecodeError {
+                    segments: ::std::vec::Vec::new(),
+                    reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
+                        require: [#(#shapes),*].join(" | "),
+                        found: "an unknown shape".to_owned(),
+                    },
+                })
+            }
+        }
+
+        impl ::lua_binding::value::Encode for #name {
+            fn encode(
+                &self,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<::mlua::Value, ::mlua::Error> {
+                match self {
+                    #(#encodes)*
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand(source: &str) -> String {
+        let input: syn::DeriveInput = syn::parse_str(source).unwrap();
+        let syn::Data::Enum(data) = &input.data else {
+            panic!("want enum input");
+        };
+        expand_probe_enum(&input.ident, data, &input.attrs, &None, &None)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn probe_variants_emit_methods() {
+        let expanded = expand(
+            r#"
+            #[shape(table, probe)]
+            pub enum Probed {
+                /// First arm.
+                #[shape(probe = "alpha")]
+                First(ProbeA),
+                /// Fallback arm.
+                Second(ProbeB),
+            }
+            "#,
+        );
+        assert!(expanded.contains("add"));
+        assert!(expanded.contains("collect_referenced"));
+        assert!(expanded.contains("shape"));
+        assert!(expanded.contains("Variant"));
+    }
+}

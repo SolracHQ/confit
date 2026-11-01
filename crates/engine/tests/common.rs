@@ -6,8 +6,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use confit_binding::callback::Callback;
-use confit_binding::value::Decode;
 use confit_core::sha::Sha;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
@@ -25,6 +23,8 @@ use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
 use confit_ui::{FromUi, ToUi, UiHandles};
+use lua_binding::callable::Callable;
+use lua_binding::value::Decode;
 use mlua::{Function, Lua, Value};
 
 /// Lua profile with two text configs in zebra then apple order.
@@ -595,7 +595,7 @@ pub fn structured_patch_of(
         target: Some(Route::new(RouteBase::Home, relative).unwrap()),
         filter: None,
         format,
-        apply: Callback::new(apply),
+        apply: Callable::new(apply),
         priority,
     }
 }
@@ -606,7 +606,7 @@ pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> 
     RcPatch {
         target: Some(Route::new(RouteBase::Home, relative).unwrap()),
         filter: None,
-        apply: Callback::new(apply),
+        apply: Callable::new(apply),
         priority,
     }
 }
@@ -623,9 +623,9 @@ pub fn structured_filter_of(
     let apply: Function = lua.load(source).call(()).unwrap();
     StructuredPatch {
         target: None,
-        filter: Some(Callback::new(filter)),
+        filter: Some(Callable::new(filter)),
         format,
-        apply: Callback::new(apply),
+        apply: Callable::new(apply),
         priority,
     }
 }
@@ -636,8 +636,8 @@ pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &st
     let apply: Function = lua.load(source).call(()).unwrap();
     RcPatch {
         target: None,
-        filter: Some(Callback::new(filter)),
-        apply: Callback::new(apply),
+        filter: Some(Callable::new(filter)),
+        apply: Callable::new(apply),
         priority,
     }
 }

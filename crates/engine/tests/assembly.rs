@@ -991,10 +991,10 @@ fn structured_filters_reach_every_match_in_order() {
         .unwrap();
     let patch = structured_filter_of(
         &lua,
-        r#"return function(route) return string.find(route:relative(), "json") ~= nil end"#,
+        r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) table.insert(order, document.path:relative()) document.data.touched = true end"#,
+        r#"return function(document) table.insert(order, document.path.relative) document.data.touched = true end"#,
     );
     let profile = profile_of(
         vec![
@@ -1039,9 +1039,9 @@ fn rc_filters_reach_every_match_in_order() {
         .unwrap();
     let patch = rc_filter_of(
         &lua,
-        r#"return function(route) return string.find(route:relative(), "sh") ~= nil end"#,
+        r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
         Level::Normal,
-        r#"return function(document) table.insert(order, document.path:relative()) document.profile[#document.profile + 1] = { env = { name = "TOUCHED", value = "1" } } end"#,
+        r#"return function(document) table.insert(order, document.path.relative) document.profile[#document.profile + 1] = { env = { name = "TOUCHED", value = "1" } } end"#,
     );
     let profile = profile_of(
         vec![
@@ -1080,7 +1080,7 @@ fn structured_apply_receives_document_path() {
         "config.json",
         StructuredFormat::Json,
         Level::Normal,
-        r#"return function(document) document.data.seen_base = document.path:base() document.data.seen_relative = document.path:relative() end"#,
+        r#"return function(document) document.data.seen_base = document.path.base document.data.seen_relative = document.path.relative end"#,
     );
     let profile = profile_of(
         vec![placed_structured("config.json")],
@@ -1114,7 +1114,7 @@ fn rc_apply_receives_document_path() {
         &lua,
         ".bashrc",
         Level::Normal,
-        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SEEN", value = document.path:base() .. ":" .. document.path:relative() } } end"#,
+        r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "SEEN", value = document.path.base .. ":" .. document.path.relative } } end"#,
     );
     let profile = profile_of(
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],

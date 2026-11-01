@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_binding::fault::{FaceFault, FaultReason};
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
     ContextualResult, DiffWarning, DocumentError, ErrorCause, Require, Terminal, TerminalResult,
@@ -48,7 +47,7 @@ pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> TerminalResult<Manif
     for document in &placed {
         if let Data::Tree(found) = &document.data {
             for relative in found.members.keys() {
-                if check_member_key(relative).is_err() {
+                if !is_member_key(relative) {
                     return error(
                         ErrorKind::Evaluate,
                         contextual(DocumentError::ParseFailed {
@@ -124,33 +123,17 @@ fn tree_manifest_bytes(members: &BTreeMap<String, TreeMember>) -> Vec<u8> {
     out
 }
 
-/// Reject tree keys outside relative member paths.
-///
-/// # Errors
-///
-/// - [`FaceFault`] for empty, absolute, and dot-dot keys.
-fn check_member_key(relative: &str) -> std::result::Result<(), FaceFault> {
+/// Report whether a tree key is a relative member path.
+fn is_member_key(relative: &str) -> bool {
     if relative.is_empty() || relative.starts_with('/') {
-        return Err(FaceFault {
-            segments: Vec::new(),
-            reason: FaultReason::ShapeMismatch {
-                require: "a relative member path".to_owned(),
-                found: format!("'{relative}'"),
-            },
-        });
+        return false;
     }
     for segment in relative.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
-            return Err(FaceFault {
-                segments: Vec::new(),
-                reason: FaultReason::ShapeMismatch {
-                    require: "a relative member path".to_owned(),
-                    found: format!("'{relative}'"),
-                },
-            });
+            return false;
         }
     }
-    Ok(())
+    true
 }
 
 /// Resolve one desired manifest against previous state.

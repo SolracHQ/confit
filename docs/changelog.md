@@ -20,7 +20,7 @@
   the live hook. Repeated ids fail the plan.
 - Added dotted require paths. Dotted paths address any
   file inside the project. Folder paths fall back to
-  `init.lua` entries. Plugins require siblings alone.
+  `init.lua` entries. Plugins require only siblings.
   Project code requires anything contained.
 - Added the is plugin with `is.string`, `is.nonempty`,
   `is.num`, `is.bool`, `is.tab` and `is.fun` checks with
@@ -61,10 +61,10 @@
 - Changed fetch and open calls to handles. Fetch and open
   calls return handles with `text`, `load`, `archive` and
   `sha` verbs. Bytes load on call. Text files open through
-  `text` alone, structured files open through `load`
-  alone. Absent Load returns nil with reason.
+  `text`. Structured files open through `load`. Absent Load
+  returns nil with reason.
 - Changed opaque documents to blob refs with hashes.
-  Bytes stream on write. Plan labels show hashes alone.
+  Bytes stream on write. Plan labels show hashes.
 - Changed blob payloads to seal at build. Decoded handles
   seal into refs. Decode and validate compress nothing.
 - Changed tree documents to member tables. Members map
@@ -86,10 +86,10 @@
   and shim checks join the shared hook through a hook
   patch. Activation shells come from matched routes.
 - Changed nerd fonts to tree member tables. Fonts fetch
-  one release zip each, keep ttf members alone and write
+  one release zip each, keep only ttf members, and write
   them as a tree document with an `fc-cache` hook. Missing
   versions resolve from the releases feed.
-- Changed blob compression progress to a done count alone.
+- Changed blob compression progress to a done count.
 - Changed archive extraction to stream each member under
   a pending folder with a streamed hash.
 - Changed storage to stream bytes with 14 MB peak on
@@ -141,8 +141,8 @@
   the `changed` gate, `hook` gains the `requires` slot, `mise`
   gains the package `options` field, `resources` teaches the
   three-zone jail on every loader, `document` scopes
-  `unmanaged` to text and opaque and names callback args for
-  the member identity, `config` notes that bare rc entry
+  `unmanaged` to text and opaque and documents callback args
+  for the member identity, `config` notes that bare rc entry
   tables fail `add_document`.
 
 ## [0.8]
@@ -154,8 +154,8 @@ Design spec: `docs/design/v0.8.md`.
 - `confit.runtime.changed(path)` shows true while the preview for
   `path` is anything but already-in-place, true on first runs. Hooks
   carrying it skip quiet applies and run touching ones. Unknown paths
-  fail the plan naming the path, rc guards refuse the shape. The mise
-, nerd fonts plugins gate their hooks on it, so unrelated applies
+  fail the plan with the path, rc guards refuse the shape. The mise
+  and nerd fonts plugins gate their hooks on it, so unrelated applies
   stop re-running `mise install` and `fc-cache`.
 - Plan shows hooks as data with lifecycle markers and
   unevaluated gates, so bundles carry a readable behavioral
@@ -163,7 +163,7 @@ Design spec: `docs/design/v0.8.md`.
 - The summary renders titled sections holding drift notes,
   resources, hooks, then counts. Headers carry `+`, `~`, `-`
   sigils with detail lines nested beneath, empty sections stay
-  out, and the counts read one documents line, and one hooks
+  out, and the counts show one documents line, and one hooks
   line while hooks move.
 - Hook gates render simplified infix with full parens, so merged
   duplicate gates collapse to one branch instead of repeating it.
@@ -172,22 +172,22 @@ Design spec: `docs/design/v0.8.md`.
   closed `when` skips as unneeded instead of warning inability.
   Profiles carrying capability leaves in `when` move them to
   `requires`.
-- Disk symlinks resolve before non-link comparisons, so opaque
-, text, rc, and structured documents compare the bytes
-  behind the link. Dangling links read absent. A pre-existing
+- Disk symlinks resolve before non-link comparisons, so opaque,
+  text, rc, and structured documents compare the bytes
+  behind the link. Dangling links show absent. A pre-existing
   symlink under a plain document unlinks first, leaving its
-  target alone, then the fresh file lands as a normal write.
+  target in place, then the fresh file lands as a normal write.
 - Text and opaque documents take an `unmanaged` flag. Drift
   skips the comparison for present unmanaged documents and
-  checks existence alone. Present ones skip the write while
+  checks existence. Present ones skip the write while
   their declaration matches the recorded manifest, rewritten
   declarations land once, missing ones land from declared
   content. `written` counts written documents.
 - Structured patch paths count from 1, so `servers[1].host`
-  names the first server. `servers[0]` fails the plan naming
+  addresses the first server. `servers[0]` fails the plan with
   the path. Drift keys and summary lines echo the same
   1-based shapes back.
-- Plan with no destination previews alone and writes nothing,
+- Plan with no destination previews and writes nothing,
   so the safe path runs cheaper than the apply it previews.
   Explicit outputs mint artifacts on purpose, a file output
   builds the portable bundle, a named output fills the slot.
@@ -220,25 +220,25 @@ Design spec: `docs/design/v0.7.md`.
 - Slots store manifests now, binary bytes live once gzipped
   in a shared pool under content hashes. `plan -o` writes
   portable `.cb` bundles holding their own blobs, the pool
-  fills on apply alone, and apply prunes unreferenced bytes
+  fills on apply, and apply prunes unreferenced bytes
   after archiving. Hunk markers never render, and rc updates
   render content hunks against recorded documents.
 - First-run impact. A missing state slot diffs desired
   documents against disk bytes through `DriftOrder::DiskFirst`,
   rendering one lifecycle block per document holding drift
-  entries. Whole disk-absent documents read as creates,
-  remaining groups read as updates with disk values first,
+  entries. Whole disk-absent documents show as creates,
+  remaining groups show as updates with disk values first,
   text hunks render verbatim disk-first, trees collapse to
-  one changed member count, documents holding no entries read
+  one changed member count, documents holding no entries show
   no lines outside the add count. The apply preview renders
   the same form. Past the first run the steady behavior
   returns unchanged.
 - `export` packs any slot (`%N` history newest-first, `@name`
   named, nothing applied) into a portable `.cb` bundle and
-  prints the path, with `-o` naming the destination and `-m`
+  prints the path, with `-o` setting the destination and `-m`
   printing the manifest. `delete @name` drops named
   slots and prunes orphaned pool bytes. Missing apply
-  profiles fail naming the path.
+  profiles fail with the path.
 - `apply` runs Load over its positional by shape now: `.lua` and
   extensionless paths evaluate a profile, `.cb` runs a bundle,
   `@name` runs a named slot, `%N` runs history newest-first
@@ -266,7 +266,7 @@ Design spec: `docs/design/v0.7.md`.
   `fonts/{name}` folder with its own `fc-cache -f` hook
   scoped to that folder. The shared installer config and
   `nerd_fonts.init` disappear with it.
-- CI runs on pull requests alone, so tag pushes run only
+- CI runs on pull requests, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match
   for the rendered bytes. Newer clippy demands it.
@@ -305,7 +305,7 @@ Design spec: `docs/design/v0.6.md`.
 - Hooks: configs carry post-config steps through
   `confit.hook.run(argv, opts)` and `config:add_hook`. Argv
   lists execute directly with no shell in between. Opts hold
-  `path` (subprocess PATH dirs alone), `when` (run gate),
+  `path` (subprocess PATH dirs), `when` (run gate),
   `checks` (prove the run before and after), `timeout`
   (Lua-shaped durations, default `10m`). Plan previews each
   hook as a `! run:` line with the resolved absolute binary.
@@ -322,13 +322,13 @@ Design spec: `docs/design/v0.6.md`.
   `env_set`, `all`, `any`, `nop`.
 - Plan format version 3 carrying `hooks`. Hooks persist into
   state as pure data and re-evaluate each plan: failed checks
-  read as drift, passing checks read as applied.
+  show as drift, passing checks show as applied.
 - Named plans: `-o @work` stores under the user config
   folder as `plans/work.json`, `--plan @work` replays it.
   Empty names and separators fail as plan errors.
 - `config:require(name, hint?)`: missing siblings fail the
-  plan naming both configs, hint on its own line. Existence
-  alone, cycles resolve fine. The
+  plan with both configs, hint on its own line. The check
+  covers existence, and cycles resolve fine. The
   `plugin:{user}/{name}:{capability}` shape stays pure
   convention.
 - `mise.init(version?)` returns the installer config: the
@@ -343,8 +343,8 @@ Design spec: `docs/design/v0.6.md`.
   The callback keeps the `(name, info, content)` shape and
   returns a relative path per kept member, nil per skip.
   Manifests sort by relative path, modes inherit the archive
-  executable bit, empty picks fail naming the filter. Plans
-  read one line either way: `tree (n files)` adds,
+  executable bit, empty picks fail with the filter. Plans
+  show one line either way: `tree (n files)` adds,
   `tree (changed of total files changed)` updates. Drift
   walks members, apply rewrites changed members, and removes
   dropped ones while hand-placed files stay untouched.
@@ -360,7 +360,7 @@ Design spec: `docs/design/v0.6.md`.
 ### Changed
 
 - Plan format version 4 carrying the tree kind. State files
-  at version 3 read as unsupported.
+  at version 3 show as unsupported.
 - Crates version 0.6.0 across core, engine, and cli.
 - `mise.package` takes a table: `name` required, `version`
   defaulting to `latest`, `bin` defaulting to the name for the
@@ -371,7 +371,7 @@ Design spec: `docs/design/v0.6.md`.
   The old positional shape breaks outright.
 - `confit.shell` renames to `confit.runtime`. `{{shell}}`
   template slots stay.
-- The built binary names `confit` again through a `[[bin]]`
+- The built binary is `confit` again through a `[[bin]]`
   section, so the test harness mounts the real name.
 - Patch collisions settle by config declaration order
   instead of owner name. Rc and structured patches share the
@@ -406,7 +406,7 @@ Design spec: `docs/design/v0.5.md`.
   file or sidecar, sidecar mismatch, or `--re-fetch`.
 - `confit.document.compressed` unpacks gzip, tar, and zip through
   a per-member callback returning a document, nil skipping the
-  member. Filters read path, meta, and data.
+  member. Filters receive path, meta, and data.
 - Opaque document kind for binaries: base64 payloads in the plan,
   raw bytes on apply, hash, and size drift.
 - `confit.utils` namespace: `render` (moved from `confit.text`),
@@ -465,7 +465,7 @@ built, then superseded without sealing.
 - Everything rewritten from the v0.3 tree, nothing copied. Behavior
   colocates with data; no separate model layer, no free functions
   with long parameter lists.
-- One path holds one document. Repeats fail as plan errors naming
+- One path holds one document. Repeats fail as plan errors with
   the path. Documents carry no owner.
 - Collision slots span sections by name; exec entries accumulate
   with no collision. Collision lines keep their shape with op
@@ -499,8 +499,8 @@ built, then superseded without sealing.
 - `confit.path` lib (`home`, `config`, `data`, `confroot`): joins over
   the OS folders and the project root for `confroot`.
 - Filesystem-aware `plan`/`status`: each artifact path snapshots behind
-  the `SnapshotStore` trait; absent paths read as absence, unreadable paths
-  warn on stderr naming path and reason, exit stays 0.
+  the `SnapshotStore` trait; absent paths count as absence, unreadable paths
+  warn on stderr with path and reason, exit stays 0.
 - Three-way diff (desired vs previous vs disk): create, update,
   unchanged, delete counts, and `OverwriteUntracked`,
   `ManualModification`, `Unreadable` warnings.
@@ -513,7 +513,7 @@ built, then superseded without sealing.
 - `tool:init({ source = "path" })` third init shape, rendering
   `source path` next to `eval` and `cmd` entries.
 - New direct dependencies: `anstream` (color honoring `NO_COLOR` and
-  terminal detection; pipes read plain text), `diffy` (unified hunks for
+  terminal detection; pipes show plain text), `diffy` (unified hunks for
   byte kinds behind headers, line vocabulary), `directories` (home
   folder expansion, OS folders for the path lib), `noyalib`
   (YAML resource loads and YAML rendering).
@@ -530,12 +530,11 @@ built, then superseded without sealing.
   `install_confit` call wires every namespace; the evaluator keeps no
   install sequence.
 - Plan assembly moves into actions with one fold per contribution
-  kind. `main` parses, binds the live filesystem backend, and prints
-  alone.
+  kind. `main` parses, binds the live filesystem backend, and prints.
 - Shared shapes centralize in a model split between state entities and
   transfer shapes, with one plan-version constant replacing the magic
   number.
-- The CLI holds argument shapes alone. Every user-facing string moves
+- The CLI holds argument shapes. Every user-facing string moves
   to presentation, which also owns terminal color that stays off on
   pipes.
 - One shared hashing utility in `security` serves snapshots, digests,
@@ -549,7 +548,7 @@ built, then superseded without sealing.
 - Repository collapses to a single `Filesystem` seam, services own
   expansion, parsing, hashing, and shaping.
 - Root escapes fail closed even while the target stays absent;
-  missing escape targets previously read inline silently.
+  missing escape targets previously appeared inline silently.
 
 ### Removed
 
@@ -560,7 +559,7 @@ built, then superseded without sealing.
   horizon.
 - `--format` and the TOML plan export: pretty JSON already covers
   readability, and the export failed on legal plan data holding nulls.
-  Plans serialize as JSON alone.
+  Plans serialize as JSON.
 
 ## [0.1.0] - 2026-09-09
 
@@ -578,7 +577,7 @@ Design spec: `docs/design/v0.1.md`.
 - `status`: diff desired vs previous state in memory; summary to stderr.
 - Structural-equality env shadowing with `_shadowed` losers (excluded from
   hash and diff); rich summary lists every entry with its winner tool;
-  `--conflicts` names losers (`starship wins over bat`); `--root` defaults
+  `--conflicts` lists losers (`starship wins over bat`); `--root` defaults
   to the profile file's parent.
 - Docker test harness: Fedora-minimal `confit-test` container, `tester`
   user, `confit-test-home` volume, `:ro` target mount, `just test-*`

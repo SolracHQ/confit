@@ -1,7 +1,7 @@
 //! Rc
 //! Shell entry shapes for rc files.
 
-use confit_binding_macros::Face;
+use lua_binding::Shape;
 
 use crate::arg::Arg;
 use crate::condition::Condition;
@@ -10,9 +10,9 @@ use crate::routes::Route;
 use serde::{Deserialize, Serialize};
 
 /// One rc entry in any section.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(rename_all = "snake_case")]
-#[face(table, tagged)]
+#[shape(table, typed_alias)]
 pub enum RcEntry {
     /// Plain value export.
     Env {
@@ -89,18 +89,18 @@ impl RcEntry {
 }
 
 /// Shell RC Document.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Face)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(deny_unknown_fields)]
-#[face(table)]
+#[shape(table)]
 pub struct RcData {
     /// Entries before the guard.
-    #[face(default)]
+    #[shape(default)]
     pub profile: Vec<RcEntry>,
     /// Entries after the guard.
-    #[face(default)]
+    #[shape(default)]
     pub config: Vec<RcEntry>,
     /// Entries last.
-    #[face(default)]
+    #[shape(default)]
     pub r#final: Vec<RcEntry>,
 }
 

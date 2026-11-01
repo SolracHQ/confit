@@ -7,9 +7,9 @@ use mlua::Lua;
 
 use crate::api::patch::{FilterArgs, Patch, PatchTarget, StructuredPatch, join_destination};
 use crate::api::profile::Profile;
-use confit_binding::callback::Callback;
 use confit_model::document::{Data, Document, RcData, StructuredFormat};
 use confit_model::routes::Route;
+use lua_binding::callable::Callable;
 
 use super::owned::{OwnedPatch, assemble_config};
 use confit_core::error::{
@@ -145,7 +145,7 @@ fn expanded_destinations(
 fn matched_destinations(
     lua: &Lua,
     placed: &[Document],
-    filter: &Callback<FilterArgs>,
+    filter: &Callable<FilterArgs>,
     area_matches: fn(&Document) -> bool,
 ) -> TerminalResult<Vec<Route>> {
     let mut matched = Vec::new();
@@ -292,7 +292,7 @@ mod tests {
             target: Some(Route::new(RouteBase::Home, relative).unwrap()),
             filter: None,
             format,
-            apply: Callback::new(apply),
+            apply: Callable::new(apply),
             priority,
         }
     }
@@ -302,7 +302,7 @@ mod tests {
         RcPatch {
             target: Some(Route::new(RouteBase::Home, relative).unwrap()),
             filter: None,
-            apply: Callback::new(apply),
+            apply: Callable::new(apply),
             priority,
         }
     }
@@ -344,9 +344,9 @@ mod tests {
         OwnedPatch::join_patch(
             Patch::Structured(StructuredPatch {
                 target: None,
-                filter: Some(Callback::new(filter)),
+                filter: Some(Callable::new(filter)),
                 format: StructuredFormat::Json,
-                apply: Callback::new(apply),
+                apply: Callable::new(apply),
                 priority: Level::Normal,
             }),
             "tools/test",
@@ -359,8 +359,8 @@ mod tests {
         OwnedPatch::join_patch(
             Patch::Rc(RcPatch {
                 target: None,
-                filter: Some(Callback::new(filter)),
-                apply: Callback::new(apply),
+                filter: Some(Callable::new(filter)),
+                apply: Callable::new(apply),
                 priority: Level::Normal,
             }),
             "tools/test",
@@ -446,7 +446,7 @@ mod tests {
         ];
         let patch = structured_filter_of(
             &lua,
-            r#"return function(route) return string.find(route:relative(), "json") ~= nil end"#,
+            r#"return function(route) return string.find(route.relative, "json") ~= nil end"#,
             r#"return function(document) return end"#,
         );
         match grouped_structured(&lua, &placed, &[patch]) {
@@ -501,7 +501,7 @@ mod tests {
         ];
         let patch = rc_filter_of(
             &lua,
-            r#"return function(route) return string.find(route:relative(), "sh") ~= nil end"#,
+            r#"return function(route) return string.find(route.relative, "sh") ~= nil end"#,
             r#"return function(document) return end"#,
         );
         match grouped_rc(&lua, &placed, &[patch]) {

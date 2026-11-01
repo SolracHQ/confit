@@ -3,18 +3,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use confit_binding::fault::{FaceFault, FaultReason};
-use confit_binding::value::Decode;
-use confit_binding_macros::Face;
 use confit_core::sha::Sha;
 use confit_model::document::Data;
-use mlua::{Lua, Value};
-
 use confit_model::document::Document;
 
 /// Per-document lifecycle status against previous documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
-#[face(table, string)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentStatus {
     /// Document absent from previous documents.
     Create,
@@ -25,17 +19,13 @@ pub enum DocumentStatus {
 }
 
 /// Lifecycle counts for one bundle against previous documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Face)]
-#[face(table)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
     /// Documents absent from previous documents.
-    #[face(proxy = u64, decode_hook = decode_count)]
     pub create: usize,
     /// Documents with a differing data hash.
-    #[face(proxy = u64, decode_hook = decode_count)]
     pub update: usize,
     /// Previous documents missing from the built documents.
-    #[face(proxy = u64, decode_hook = decode_count)]
     pub delete: usize,
 }
 
@@ -136,22 +126,6 @@ pub fn summary(
         }
     }
     counts
-}
-
-/// Decode one count field into its size value.
-///
-/// # Errors
-///
-/// - [`FaceFault`] for values outside the count shape.
-fn decode_count(lua: &Lua, value: &Value) -> std::result::Result<usize, FaceFault> {
-    let found = u64::decode(value, lua)?;
-    usize::try_from(found).map_err(|_| FaceFault {
-        segments: Vec::new(),
-        reason: FaultReason::ShapeMismatch {
-            require: "a small non-negative integer".to_owned(),
-            found: found.to_string(),
-        },
-    })
 }
 
 #[cfg(test)]

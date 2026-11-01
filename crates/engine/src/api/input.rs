@@ -3,12 +3,12 @@
 use confit_ui::UiHandles;
 use mlua::Lua;
 
-use confit_binding_macros::face_impl;
+use lua_binding::lua_module;
 
-/// Input namespace.
+/// Input module.
 pub struct Input;
 
-#[face_impl(namespace = "confit.input")]
+#[lua_module("confit.input")]
 impl Input {
     /// Read one prompted line.
     ///
@@ -57,7 +57,7 @@ mod tests {
         });
         let lua = Lua::new();
         let _ = lua.set_app_data(UiHandles { to_ui, from_ui });
-        let input = Input::register(&lua).unwrap();
+        let input = Input::add(&lua).unwrap();
         lua.globals().set("input", input).unwrap();
         lua
     }
