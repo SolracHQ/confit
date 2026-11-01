@@ -1,4 +1,4 @@
-//! Assemble validated profiles into finished documents.
+//! Assembles validated profiles.
 
 mod collect;
 mod freeze;
@@ -14,34 +14,37 @@ use crate::api::profile::Profile;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
 
-/// Validated profile assembly into finished documents.
 pub struct Assembler<'a> {
     lua: &'a Lua,
 }
 
 impl<'a> Assembler<'a> {
-    /// Build one assembler over live Lua.
+    /// Builds one assembler.
     pub fn new(lua: &'a Lua) -> Self {
         Self { lua }
     }
 
-    /// Return the live Lua instance.
+    /// Returns the Lua instance.
     pub(super) fn lua(&self) -> &Lua {
         self.lua
     }
 
-    /// Collect one profile into documents in destination order.
+    /// Collects one profile into sorted documents.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents, missing
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated documents, missing
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
-    ///   requirements and targets, foreign bases, bad shapes, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when a
+    ///   config name or a destination repeats.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a
+    ///   requirement is missing, a patch target is unknown, or a changed
+    ///   condition targets an unbuilt route.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a
+    ///   document fails to render.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+    ///   fails or a shape fails to encode.
     pub fn assemble(&self, profile: &Profile) -> TerminalResult<Vec<Document>> {
-        collect::check_names(profile)?;
-        collect::check_requirements(profile)?;
+        collect::validate_names(profile)?;
+        collect::validate_requirements(profile)?;
         let placed = collect::dedupe(profile)?;
         let owned = patches::split_patches(profile);
         let mut finished: Vec<Document> = Vec::new();
@@ -62,17 +65,19 @@ impl<'a> Assembler<'a> {
             finished.push(document.clone());
         }
         finished.sort_by(|left, right| left.path.cmp(&right.path));
-        freeze::check_rc_guards(&finished)?;
+        freeze::validate_rc_guards(&finished)?;
         Ok(finished)
     }
 
-    /// Collect one profile's hooks in first-seen order.
+    /// Collects one profile's hooks.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids, unknown targets,
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated ids, unknown targets,
-    ///   unbuilt routes, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a hook id
+    ///   repeats, a patch target is unknown, or a changed condition targets an
+    ///   unbuilt route.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a hook
+    ///   fails to encode or a callback fails.
     pub fn collect_hooks(
         &self,
         profile: &Profile,
@@ -82,15 +87,19 @@ impl<'a> Assembler<'a> {
     }
 }
 
-/// Collect one profile into documents in destination order.
+/// Collects one profile into sorted documents.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents, missing
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated documents, missing
-/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for repeated documents, missing
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated documents, missing
-///   requirements and targets, foreign bases, bad shapes, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when a
+///   config name or a destination repeats.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a requirement is
+///   missing, a patch target is unknown, or a changed condition targets an
+///   unbuilt route.
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a document
+///   fails to render.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback fails
+///   or a shape fails to encode.
 pub fn assemble(lua: &Lua, profile: &Profile) -> TerminalResult<Vec<Document>> {
     Assembler::new(lua).assemble(profile)
 }

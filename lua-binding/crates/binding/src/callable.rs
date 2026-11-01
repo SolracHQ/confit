@@ -13,7 +13,7 @@ use crate::generator::Generator;
 use crate::shape::{Shape, ShapeData};
 use crate::value::{Decode, Encode};
 
-/// A Lua function with a typed signature.
+/// A typed Lua function.
 ///
 /// The signature fixes the argument and return shapes used on every call.
 pub struct Callable<Args> {

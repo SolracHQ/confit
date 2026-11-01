@@ -1,4 +1,4 @@
-//! Evaluate Lua profiles into documents with hooks.
+//! Evaluates Lua profiles.
 
 pub mod api;
 pub mod assembly;

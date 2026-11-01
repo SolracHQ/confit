@@ -1,4 +1,3 @@
-//! Stored manifests.
 //! Applied, named, and history manifests in the state store.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,13 +16,13 @@ use confit_store::state::StateStore;
 use super::Manifest;
 use confit_core::version::{self, VERSION};
 
-/// Load the applied manifest with missing states as empty.
+/// Loads the applied manifest and returns an empty manifest for an absent state.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states and bad payloads.
-/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unsupported versions.
-/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for absent versions.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a state is unreadable or the payload is bad.
+/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the version is unsupported.
+/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when the version is absent.
 pub fn load(states: &StateStore) -> TerminalResult<Manifest> {
     match resolve(states, &Picker::Applied) {
         Ok(found) => Ok(found),
@@ -35,12 +34,12 @@ pub fn load(states: &StateStore) -> TerminalResult<Manifest> {
     }
 }
 
-/// Write the applied state with history rotation.
+/// Writes the applied state and adds it to the history.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::StoreState`] for manifest render and state write faults.
-/// - [`confit_core::error::kind::ErrorKind::RotateHistory`] for history rotation faults.
+/// - [`confit_core::error::kind::ErrorKind::StoreState`] when the manifest render or the state write fails.
+/// - [`confit_core::error::kind::ErrorKind::RotateHistory`] when the history rotation fails.
 pub fn store(states: &StateStore, manifest: &Manifest) -> TerminalResult<()> {
     let text = manifest.json().terminal(ErrorKind::StoreState)?;
     let bytes = text.into_bytes();
@@ -52,14 +51,14 @@ pub fn store(states: &StateStore, manifest: &Manifest) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Resolve one picker to its stored manifest.
+/// Resolves one picker to the manifest that its state holds.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for absent states, unreadable states,
-///   and bad payloads.
-/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unsupported versions.
-/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for absent versions.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a state is absent or unreadable,
+///   or the payload is bad.
+/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the version is unsupported.
+/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when the version is absent.
 pub fn resolve(states: &StateStore, picker: &Picker) -> TerminalResult<Manifest> {
     let handle = states
         .resolve(picker)
@@ -80,12 +79,12 @@ pub fn resolve(states: &StateStore, picker: &Picker) -> TerminalResult<Manifest>
     error(kind, contextual)
 }
 
-/// Write one named state with its bundle manifest.
+/// Writes one manifest into the state that one name picks.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::StoreState`] for wrong picker kinds, manifest render faults,
-///   and state write faults.
+/// - [`confit_core::error::kind::ErrorKind::StoreState`] when the picker kind is wrong, the manifest
+///   render fails, or the state write fails.
 pub fn store_named(
     states: &StateStore,
     picker: &Picker,
@@ -99,11 +98,11 @@ pub fn store_named(
     Ok(())
 }
 
-/// Gather content refs for a sweep.
+/// Collects the content hashes that the states hold for a sweep.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for unreadable folders.
+/// - [`confit_core::error::FilesystemError`] when a folder is unreadable.
 pub fn keep_set(states: &StateStore) -> ContextualResult<BTreeSet<Sha>> {
     let mut keep = BTreeSet::new();
     if let Ok(handle) = states.applied() {
@@ -118,7 +117,7 @@ pub fn keep_set(states: &StateStore) -> ContextualResult<BTreeSet<Sha>> {
     Ok(keep)
 }
 
-/// Build one empty manifest at the current version.
+/// Builds one manifest with no documents at the current version.
 fn empty() -> Manifest {
     Manifest {
         version: VERSION,
@@ -128,7 +127,7 @@ fn empty() -> Manifest {
     }
 }
 
-/// Write one state handle with history-free bytes.
+/// Writes bytes to one state handle and skips the history.
 fn store_bytes(states: &StateStore, picker: &Picker, bytes: &[u8]) -> ContextualResult<()> {
     let handle = match states.resolve(picker) {
         Ok(handle) => handle,
@@ -141,7 +140,7 @@ fn store_bytes(states: &StateStore, picker: &Picker, bytes: &[u8]) -> Contextual
     Ok(())
 }
 
-/// Collect content refs from one readable state manifest.
+/// Collects the content hashes from one state manifest that decodes.
 fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTreeSet<Sha>) {
     let bytes = match states.read(handle) {
         Ok(bytes) => bytes,

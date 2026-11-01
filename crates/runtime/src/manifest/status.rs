@@ -1,4 +1,3 @@
-//! Manifest compare.
 //! Lifecycle status against previous manifests.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,29 +6,29 @@ use confit_core::sha::Sha;
 use confit_model::document::Data;
 use confit_model::document::Document;
 
-/// Per-document lifecycle status against previous documents.
+/// The lifecycle status of one document against previous documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentStatus {
-    /// Document absent from previous documents.
+    /// A document that the previous documents lack.
     Create,
-    /// Document present with a differing data hash.
+    /// A document whose data hash differs from the previous one.
     Update,
-    /// Document present with an equal data hash.
+    /// A document whose data hash matches the previous one.
     Unchanged,
 }
 
-/// Lifecycle counts for one bundle against previous documents.
+/// The document counts against the previous documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
-    /// Documents absent from previous documents.
+    /// The count of documents absent from the previous documents.
     pub create: usize,
-    /// Documents with a differing data hash.
+    /// The count of documents with a differing data hash.
     pub update: usize,
-    /// Previous documents missing from the built documents.
+    /// The count of previous documents absent from the built documents.
     pub delete: usize,
 }
 
-/// Report the lifecycle status against previous documents.
+/// Returns the lifecycle status of one document against the previous documents.
 pub fn status(
     document: &Document,
     previous: &[Document],
@@ -55,12 +54,12 @@ pub fn status(
     }
 }
 
-/// Report whether a recorded document yields to desired documents.
+/// Returns whether a recorded document yields to the desired documents.
 pub fn superseded_by(document: &Document, desired: &[Document]) -> bool {
     find_opaque_sibling(desired, document).is_some()
 }
 
-/// Build one kind with display key.
+/// Returns the kind key with the display path.
 pub fn key(document: &Document) -> String {
     let kind = match &document.data {
         Data::Structured(_) => "structured",
@@ -73,21 +72,21 @@ pub fn key(document: &Document) -> String {
     format!("{kind}:{}", document.path.display())
 }
 
-/// Report whether the document carries opaque bytes.
+/// Returns whether the document carries opaque bytes.
 pub fn is_opaque(document: &Document) -> bool {
     matches!(document.data, Data::Opaque(_))
 }
 
-/// Report the document mode when the kind carries one.
+/// Returns the document mode when its kind carries one.
 pub fn mode(document: &Document) -> Option<u32> {
     match &document.data {
-        Data::Text(found) => Some(found.mode),
-        Data::Opaque(found) => Some(found.mode),
+        Data::Text(found) => Some(found.mode.bits()),
+        Data::Opaque(found) => Some(found.mode.bits()),
         Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
     }
 }
 
-/// Find one opaque same-destination sibling with a different kind.
+/// Finds one opaque sibling at the same destination with a different kind.
 pub fn find_opaque_sibling<'a>(
     documents: &'a [Document],
     document: &Document,
@@ -99,7 +98,7 @@ pub fn find_opaque_sibling<'a>(
     })
 }
 
-/// Count lifecycle states against previous documents.
+/// Counts the documents in each lifecycle state against the previous documents.
 pub fn summary(
     built: &[Document],
     built_hashes: &BTreeMap<String, Sha>,
@@ -131,7 +130,7 @@ pub fn summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::TextDocument;
+    use confit_model::document::{FileMode, TextDocument};
     use confit_model::routes::{Route, RouteBase};
 
     #[test]
@@ -140,7 +139,7 @@ mod tests {
             path: Route::new(RouteBase::Home, name).unwrap(),
             data: Data::Text(TextDocument {
                 content: "hi".into(),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
                 unmanaged: false,
             }),
         };
@@ -150,7 +149,7 @@ mod tests {
         assert_eq!(
             (counts.create, counts.update, counts.delete),
             (1, 0, 1),
-            "fresh is create and stale is delete"
+            "the built document is a create and the previous document is a delete"
         );
     }
 }

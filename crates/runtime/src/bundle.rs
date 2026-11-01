@@ -1,4 +1,3 @@
-//! Bundle
 //! Portable bundle archives.
 
 mod pack;
@@ -10,20 +9,21 @@ use std::sync::Arc;
 use confit_store::Stores;
 use confit_store::resources::Resources;
 
-/// Bundle file extension imposed on explicit outputs.
+/// The bundle extension that an explicit output carries.
 const BUNDLE_EXTENSION: &str = "cb";
 
-/// Bundle manifest file name inside the archive.
+/// The archive member name of the bundle manifest.
 pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 
-/// Portable bundle archives.
+/// A reader and writer for portable bundle archives.
 #[derive(Debug, Clone)]
 pub struct Bundler {
+    /// The shared resource store.
     pub(crate) resources: Arc<Resources>,
 }
 
 impl Bundler {
-    /// Build a bundler over shared stores.
+    /// Builds one bundler that shares the resource store with the run.
     pub fn new(stores: &Stores) -> Self {
         Self {
             resources: stores.resources(),
@@ -31,8 +31,8 @@ impl Bundler {
     }
 }
 
-/// Ensure one bundle destination with the bundle extension.
-pub fn ensure_bundle_extension(dest: &Path) -> PathBuf {
+/// Returns the destination with a `.cb` extension.
+pub fn with_bundle_extension(dest: &Path) -> PathBuf {
     if dest
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case(BUNDLE_EXTENSION))
@@ -50,13 +50,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundle_extension_pins_suffix_contract() {
+    fn bundle_extension_adds_a_suffix_to_a_bare_path() {
         for (input, want) in [
             ("plan", "plan.cb"),
             ("plan.cb", "plan.cb"),
             ("plan.CB", "plan.CB"),
         ] {
-            let out = ensure_bundle_extension(Path::new(input));
+            let out = with_bundle_extension(Path::new(input));
             assert_eq!(out.to_str(), Some(want));
         }
     }

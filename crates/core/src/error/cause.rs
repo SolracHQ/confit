@@ -1,46 +1,47 @@
-//! Unexpected results to required operations.
+//! Failure causes for required operations.
 //!
-//! Causes name the failed result. Location lives in [`ErrorContext`](super::ErrorContext).
+//! A cause holds the failed result, and its location lives in
+//! [`ErrorContext`](super::ErrorContext).
 
 use crate::sha::Sha;
 
-/// Unexpected filesystem result.
+/// A filesystem failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FilesystemError {
-    /// Vanished file.
+    /// A file that is absent.
     #[error("missing file")]
     FileMissing,
-    /// Present file.
+    /// A file that is already present.
     #[error("file already exists")]
     FileExists,
-    /// Refused file.
+    /// A path that denies access.
     #[error("permission denied")]
     FilePermissionDenied,
-    /// Full disk.
+    /// A disk with no free space.
     #[error("disk full")]
     DiskFull,
-    /// Read-only disk.
+    /// A disk that refuses writes.
     #[error("disk read-only")]
     DiskReadOnly,
-    /// Capped disk.
+    /// A disk beyond its quota.
     #[error("quota exceeded")]
     DiskQuotaExceeded,
-    /// Oversized file.
+    /// A file beyond the size limit.
     #[error("file too large")]
     FileTooLarge,
-    /// Path escaping its root.
+    /// A path that escapes the project root.
     #[error("path escapes the project root")]
     OutsideRoot,
-    /// Malformed path shape.
+    /// A path with a malformed shape.
     #[error("malformed path")]
     MalformedPath,
-    /// Unmapped failure.
+    /// A filesystem failure with no mapping.
     #[error("unknown filesystem failure")]
     FileUnknown,
 }
 
 impl From<std::io::Error> for FilesystemError {
-    /// Map one io failure to its filesystem cause.
+    /// Turns one io failure into its filesystem cause.
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::NotFound => Self::FileMissing,
@@ -56,7 +57,7 @@ impl From<std::io::Error> for FilesystemError {
 }
 
 impl From<std::string::FromUtf8Error> for DocumentError {
-    /// Map one utf8 failure to its document cause.
+    /// Turns one utf8 failure into its document cause.
     fn from(_error: std::string::FromUtf8Error) -> Self {
         Self::ParseFailed {
             require: Require::Utf8Text,
@@ -65,28 +66,28 @@ impl From<std::string::FromUtf8Error> for DocumentError {
 }
 
 impl From<std::string::FromUtf8Error> for ErrorCause {
-    /// Map one utf8 failure to its bare shared cause.
+    /// Turns one utf8 failure into its bare shared cause.
     fn from(error: std::string::FromUtf8Error) -> Self {
         Self::from(DocumentError::from(error))
     }
 }
 
 impl From<std::time::SystemTimeError> for FilesystemError {
-    /// Map one clock failure to its filesystem cause.
+    /// Turns one clock failure into its filesystem cause.
     fn from(_error: std::time::SystemTimeError) -> Self {
         Self::FileUnknown
     }
 }
 
 impl From<std::time::SystemTimeError> for ErrorCause {
-    /// Map one clock failure to its bare shared cause.
+    /// Turns one clock failure into its bare shared cause.
     fn from(error: std::time::SystemTimeError) -> Self {
         Self::from(FilesystemError::from(error))
     }
 }
 
 impl From<std::io::Error> for ErrorCause {
-    /// Map one io failure to its bare shared cause.
+    /// Turns one io failure into its bare shared cause.
     fn from(error: std::io::Error) -> Self {
         if let Some(cause) = error
             .get_ref()
@@ -98,76 +99,76 @@ impl From<std::io::Error> for ErrorCause {
     }
 }
 
-/// Unexpected fetch result.
+/// A fetch failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FetchError {
-    /// Failed download.
+    /// A download that failed.
     #[error("download failed")]
     DownloadFailed,
-    /// Rejected status code.
+    /// A status code that the fetch rejects.
     #[error("status {code} rejected")]
     StatusRejected {
         /// The rejected status code.
         code: u16,
     },
-    /// Timed-out request.
+    /// A request past its deadline.
     #[error("request timed out")]
     TimedOut,
 }
 
-/// Unexpected archive result.
+/// An archive failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArchiveError {
-    /// Foreign input posing as an archive.
+    /// Input that is not a compressed archive.
     #[error("not a compressed archive")]
     NotArchive,
-    /// Locked archive needing a password.
+    /// An archive locked by a password.
     #[error("password protected")]
     PasswordLocked,
-    /// Unknown compression algorithm.
+    /// A compression algorithm with no match.
     #[error("unknown algorithm")]
     AlgorithmUnknown,
-    /// Bare gzip stream without tar.
+    /// A gzip stream with no tar layer.
     #[error("bare gzip stream without tar")]
     BareGzip,
-    /// Corrupt archive backend.
+    /// An archive backend that reports corruption.
     #[error("corrupt archive")]
     BackendCorrupt,
 }
 
-/// Unexpected bundle result.
+/// A bundle failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BundleError {
-    /// Doubled manifest entry.
+    /// A manifest entry that appears twice.
     #[error("duplicate manifest entry")]
     DuplicateManifest,
-    /// Missing manifest entry.
+    /// A manifest entry that is absent.
     #[error("missing manifest entry")]
     ManifestMissing,
-    /// Missing content entry.
+    /// A content entry that is absent.
     #[error("missing content entry")]
     ContentMissing,
 }
 
-/// Store slot reason as a fixed fact.
+/// A store slot reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotReason {
-    /// Empty slot name.
+    /// A slot name that holds no characters.
     EmptyName,
-    /// Slot name holding forbidden characters.
+    /// A slot name with forbidden characters.
     NameChars,
-    /// History slot holding a non-number.
+    /// A history slot with a non-number.
     NotNumber,
-    /// History slot beyond the stored listing.
+    /// A history slot that points past the stored listing.
     OutOfRange,
-    /// History slot missing its entry file.
+    /// A history slot with no entry file.
     MissingEntry,
-    /// Bare slot naming neither name nor history.
+    /// A slot with neither a name nor a history.
     BareSlot,
 }
 
 impl std::fmt::Display for SlotReason {
-    /// Render one slot reason.
+    /// Writes the slot reason as text.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyName => write!(formatter, "name is empty"),
@@ -182,38 +183,38 @@ impl std::fmt::Display for SlotReason {
 
 impl std::error::Error for SlotReason {}
 
-/// Unexpected manifest result.
+/// A manifest failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ManifestError {
-    /// Invalid manifest payload.
+    /// A manifest payload that fails its check.
     #[error("invalid manifest")]
     Invalid,
-    /// Unsupported manifest version.
+    /// A manifest version that this binary rejects.
     #[error("manifest version {got} is unsupported")]
     VersionUnsupported {
-        /// The found version rendering.
+        /// The found version text.
         got: String,
     },
-    /// Missing manifest version.
+    /// A manifest with no version.
     #[error("missing manifest version")]
     MissingVersion,
 }
 
-/// Required document shape as a fixed fact.
+/// A required document shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Require {
-    /// Non-empty route path.
+    /// A route path that holds at least one character.
     RoutePath,
-    /// Resolvable base folder.
+    /// A base folder that resolves.
     BaseFolder,
-    /// Relative member path.
+    /// A relative member path.
     MemberPath,
     /// Utf8 text.
     Utf8Text,
 }
 
 impl std::fmt::Display for Require {
-    /// Render one required shape.
+    /// Writes the required shape as text.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RoutePath => write!(formatter, "non-empty route path"),
@@ -224,127 +225,127 @@ impl std::fmt::Display for Require {
     }
 }
 
-/// Unexpected document result.
+/// A document failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DocumentError {
-    /// Document failing its parse.
-    #[error("invalid document, require {require}")]
+    /// A document that fails its parse.
+    #[error("invalid document, expected {require}")]
     ParseFailed {
         /// The required shape.
         require: Require,
     },
-    /// Document failing its render.
+    /// A document that fails its render.
     #[error("cannot render document")]
     RenderFailed,
-    /// Opaque document refusing render.
+    /// An opaque document that refuses render.
     #[error("opaque document is not renderable")]
     OpaqueNotRenderable,
-    /// Tree document refusing render.
+    /// A tree document that refuses render.
     #[error("tree document is not renderable")]
     TreeNotRenderable,
 }
 
-/// Unexpected project load result.
+/// A project load failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectError {
-    /// Invalid project document.
+    /// A project document that fails its check.
     #[error("invalid project config")]
     InvalidConfig,
 }
 
-/// Unexpected eval result.
+/// An eval failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EvalError {
-    /// Repeated hook definition.
+    /// A hook definition that appears twice.
     #[error("duplicate hook")]
     DuplicateHook,
-    /// Repeated document definition.
+    /// A document definition that appears twice.
     #[error("duplicate document")]
     DuplicateDocument,
-    /// Require cycle.
+    /// A require chain that returns to its start.
     #[error("require cycle")]
     CycleDetected,
-    /// Hook patch missing its target.
+    /// A hook patch with no matching hook.
     #[error("hook patch target matches no hook")]
     HookTargetUnknown,
-    /// Patch target matching no document.
+    /// A patch with no matching document.
     #[error("patch target matches no document")]
     PatchTargetUnknown,
-    /// Config require missing its target.
+    /// A config require with no matching document.
     #[error("config requires missing document")]
     ConfigRequiresMissing,
-    /// Changed references missing their document.
+    /// A changed reference with no matching document.
     #[error("changed references missing document")]
     ChangedReferencesMissing,
-    /// Require escaping its scope.
+    /// A require that escapes its scope.
     #[error("require escapes scope")]
     RequireEscapesScope,
-    /// Bad require name.
-    #[error("bad require name: {rule}")]
+    /// A require name that breaks a rule.
+    #[error("invalid require name: {rule}")]
     BadRequireName {
         /// The violated naming rule.
         rule: RequireNameRule,
     },
-    /// Failed Lua evaluation.
+    /// A Lua evaluation that failed.
     #[error("lua failed")]
     LuaFailed,
-    /// Failed Shape decode.
-    #[error("bad shape")]
+    /// A Shape decode that failed.
+    #[error("invalid shape")]
     BadShape,
 }
 
-/// Require name rule as a fixed fact.
+/// A require name rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequireNameRule {
-    /// Backslash in the name.
+    /// A name that holds a backslash.
     Backslash,
-    /// Drive prefix in the name.
+    /// A name that starts with a drive prefix.
     DrivePrefix,
-    /// Absolute path in the name.
+    /// A name that holds an absolute path.
     AbsolutePath,
 }
 
 impl std::fmt::Display for RequireNameRule {
-    /// Render one violated naming rule.
+    /// Writes the violated naming rule as text.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Backslash => write!(formatter, "backslashes are not allowed"),
-            Self::DrivePrefix => write!(formatter, "drive prefixes are not allowed"),
-            Self::AbsolutePath => write!(formatter, "absolute paths are not allowed"),
+            Self::Backslash => write!(formatter, "a name holds a backslash"),
+            Self::DrivePrefix => write!(formatter, "a name holds a drive prefix"),
+            Self::AbsolutePath => write!(formatter, "a name holds an absolute path"),
         }
     }
 }
 
-/// Unexpected hook run result.
+/// A hook run failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HookRunError {
-    /// Timed-out hook.
+    /// A hook past its timeout.
     #[error("hook timed out")]
     TimedOut,
-    /// Unresolved hook binary.
+    /// A hook binary with no resolution.
     #[error("hook binary unresolved")]
     BinaryUnresolved,
-    /// Hook exit with a nonzero code.
+    /// A hook process that exits with a nonzero code.
     #[error("hook failed with code {code}")]
     ExitedNonzero {
         /// The process exit code.
         code: i32,
     },
-    /// Hook run missing its checks.
+    /// A hook run with unmet checks.
     #[error("hook checks unmet")]
     ChecksUnmet,
-    /// Hook run blocked by its requires.
+    /// A hook run that a require blocks.
     #[error("hook blocked")]
     Blocked,
 }
 
-/// Unexpected content result.
+/// A content failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentError {
-    /// Project handle landing in cache.
+    /// A project handle that lands in cache.
     #[error("project handle in cache")]
     ProjectHandleInCache,
-    /// Corrupt cached object.
+    /// A cached object that fails its hash.
     #[error("corrupt cached object '{expected}'")]
     CorruptObject {
         /// The expected content hash.
@@ -352,21 +353,21 @@ pub enum ContentError {
     },
 }
 
-/// Unexpected command line result.
+/// A command line usage failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UsageError {
-    /// Conflicting flags.
+    /// Flags that conflict.
     #[error("conflicting flags")]
     FlagsConflict,
 }
 
-/// Unexpected result to a required operation.
+/// A failure cause for a required operation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorCause {
-    /// Filesystem failure.
+    /// A filesystem operation that failed.
     #[error(transparent)]
     FilesystemError(#[from] FilesystemError),
-    /// Content failing its hash.
+    /// Content that fails its hash.
     #[error("content mismatch, expected '{expected}', found '{found}'")]
     ContentHashMismatch {
         /// The expected content hash.
@@ -374,37 +375,37 @@ pub enum ErrorCause {
         /// The found content hash.
         found: Sha,
     },
-    /// Content failure.
+    /// A content operation that failed.
     #[error(transparent)]
     ContentError(#[from] ContentError),
-    /// Fetch failure.
+    /// A fetch operation that failed.
     #[error(transparent)]
     FetchError(#[from] FetchError),
-    /// Archive failure.
+    /// An archive operation that failed.
     #[error(transparent)]
     ArchiveError(#[from] ArchiveError),
-    /// Bundle failure.
+    /// A bundle operation that failed.
     #[error(transparent)]
     BundleError(#[from] BundleError),
-    /// Manifest failure.
+    /// A manifest operation that failed.
     #[error(transparent)]
     ManifestError(#[from] ManifestError),
-    /// Project load failure.
+    /// A project load that failed.
     #[error(transparent)]
     ProjectError(#[from] ProjectError),
-    /// Document failure.
+    /// A document operation that failed.
     #[error(transparent)]
     DocumentError(#[from] DocumentError),
-    /// Eval failure.
+    /// An eval operation that failed.
     #[error(transparent)]
     EvalError(#[from] EvalError),
-    /// Hook run failure.
+    /// A hook run that failed.
     #[error(transparent)]
     HookRunError(#[from] HookRunError),
-    /// Command line usage failure.
+    /// A command line that breaks a usage rule.
     #[error(transparent)]
     UsageError(#[from] UsageError),
-    /// Store slot reason.
+    /// A store slot that breaks a rule.
     #[error("invalid store slot: {0}")]
     SlotReason(#[from] SlotReason),
 }
@@ -414,7 +415,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn io_not_found_maps_to_file_missing() {
+    fn io_not_found_maps_to_file_absent() {
         let failure = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
         assert_eq!(FilesystemError::from(failure), FilesystemError::FileMissing);
     }
@@ -435,10 +436,10 @@ mod tests {
                 expected: got,
                 found: seen,
             } => {
-                assert_eq!(got, expected, "mismatch keeps expected");
-                assert_eq!(seen, found, "mismatch keeps found");
+                assert_eq!(got, expected, "the cause keeps the expected hash");
+                assert_eq!(seen, found, "the cause keeps the found hash");
             }
-            other => panic!("wrong mismatch cause: {other}"),
+            other => panic!("expected a content hash mismatch: {other}"),
         }
     }
 
@@ -455,13 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn bad_require_name_keeps_rule() {
+    fn invalid_require_name_reports_the_rule() {
         let cause = EvalError::BadRequireName {
             rule: RequireNameRule::Backslash,
         };
         assert_eq!(
             cause.to_string(),
-            "bad require name: backslashes are not allowed"
+            "invalid require name: a name holds a backslash"
         );
     }
 }

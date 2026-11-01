@@ -1,4 +1,4 @@
-//! Evaluate Lua profiles into documents with hooks.
+//! Evaluates profile files.
 
 use std::path::Path;
 
@@ -16,26 +16,26 @@ use crate::assembly::Assembler;
 use crate::loader::{install, load_chunk};
 use crate::project::Project;
 
-/// Evaluated profile documents with hooks.
+/// One evaluated profile.
 pub struct Evaluated {
-    /// Assembled documents in destination order.
+    /// The assembled documents.
     pub documents: Vec<Document>,
-    /// Collected hooks in first-seen order.
+    /// The collected hooks.
     pub hooks: Vec<Hook>,
 }
 
-/// Profile evaluator.
+/// The profile evaluator.
 pub struct Engine {
     /// The Lua instance.
     lua: Lua,
-    /// Shared store access.
+    /// The shared stores.
     stores: Stores,
-    /// Renderer channels for Lua input.
+    /// The renderer handles for Lua input.
     handles: UiHandles,
 }
 
 impl Engine {
-    /// Build one engine from stores and renderer channels.
+    /// Builds one engine.
     pub fn new(stores: Stores, handles: UiHandles) -> Self {
         Self {
             lua: Lua::new(),
@@ -44,18 +44,23 @@ impl Engine {
         }
     }
 
-    /// Evaluate one profile file into documents with hooks.
+    /// Evaluates one profile file.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles and projects,
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable profiles and projects,
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable profiles and projects,
-    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for unreadable profiles and projects,
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for unreadable profiles and projects,
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable profiles and projects,
-    ///   misshaped profiles, repeated documents, missing requirements and
-    ///   targets, foreign bases, bad shapes, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the
+    ///   profile is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the
+    ///   project file is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a profile
+    ///   shape is bad, a requirement is missing, or a patch target is
+    ///   unknown.
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when two
+    ///   configs share a name or a destination.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a
+    ///   document fails to render.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a chunk
+    ///   fails to load or a callback fails.
     pub fn evaluate(&self, profile: &Path) -> TerminalResult<Evaluated> {
         self.lua.set_app_data(self.stores.clone());
         self.lua.set_app_data(self.handles.clone());

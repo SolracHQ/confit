@@ -1,5 +1,4 @@
-//! Summary
-//! Stderr summary over built bundles.
+//! Renders the terminal summary over prepared manifests.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,41 +16,41 @@ use confit_store::handles::ResourceHandle;
 use crate::presentation::difference;
 use crate::presentation::hooks;
 
-/// Yellow style for changed lines.
+/// The escape sequence that paints a changed line yellow.
 const UPDATE_STYLE: &str = "\x1b[33m";
-/// Green style for added lines.
+/// The escape sequence that paints an added line green.
 const ADD_STYLE: &str = "\x1b[32m";
-/// Red style for removed lines.
+/// The escape sequence that paints a removed line red.
 const REMOVE_STYLE: &str = "\x1b[31m";
-/// Bold style for headers and the closing counts.
+/// The escape sequence that paints a header bold.
 const HEADER_STYLE: &str = "\x1b[1m";
-/// Style reset suffix.
+/// The escape sequence that clears the style.
 const RESET: &str = "\x1b[0m";
 
-/// Difference section title showing manual edits as apply losses.
+/// The differences title that shows manual edits as apply losses.
 const DIFFERENCE_TITLE: &str = "Changes outside Confit will be overwritten on next apply";
-/// Resources section title over document blocks.
+/// The resources title over document blocks.
 const RESOURCES_TITLE: &str = "Resources";
-/// Hooks section title over lifecycle lines.
+/// The hooks title over lifecycle lines.
 const HOOKS_TITLE: &str = "Hooks";
-/// Summary section title over the closing counts.
+/// The summary title over the closing counts.
 const SUMMARY_TITLE: &str = "Summary";
 
-/// Line sigil for paint color.
+/// The kind of display line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sigil {
-    /// Addition, painted green.
+    /// An added line with the plus mark.
     Add,
-    /// Change, painted yellow.
+    /// A changed line with the tilde mark.
     Update,
-    /// Removal, painted red.
+    /// A removed line with the minus mark.
     Remove,
-    /// Header, painted bold.
+    /// A section title with the space mark.
     Header,
 }
 
 impl Sigil {
-    /// Return the line mark for one sigil.
+    /// Returns the character that starts the line.
     pub fn mark(self) -> char {
         match self {
             Sigil::Add => '+',
@@ -62,15 +61,15 @@ impl Sigil {
     }
 }
 
-/// One terminal painter.
+/// The terminal line painter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Painter {
-    /// Color flag for terminal stderr runs.
+    /// The flag that turns on the color escapes.
     color: bool,
 }
 
 impl Painter {
-    /// Resolve the color decision from the terminal and the environment.
+    /// Resolves the color decision from the environment and the terminal.
     pub fn new() -> Self {
         Self {
             color: std::env::var_os("NO_COLOR").is_none()
@@ -78,7 +77,7 @@ impl Painter {
         }
     }
 
-    /// Paint one line in the sigil style.
+    /// Paints one line in the style of its sigil.
     pub fn paint(&self, sigil: Sigil, text: &str) -> String {
         if !self.color {
             return text.to_string();
@@ -94,59 +93,59 @@ impl Painter {
 }
 
 impl Default for Painter {
-    /// Resolve the color decision like `new`.
+    /// Resolves the color decision for the default painter.
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Hook display data.
+/// One block of hook lines.
 #[derive(Debug)]
 pub struct Hooks<'a> {
-    /// Lifecycle entries in plan order with removals trailing.
+    /// The lifecycle entries in plan order with removals last.
     pub lifecycle: &'a [HookLifecycle<'a>],
 }
 
-/// One hook count triple.
+/// The hook line counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HookCounts {
-    /// Added hook header count.
+    /// The number of added hook lines.
     pub added: usize,
-    /// Changed hook header count.
+    /// The number of changed hook lines.
     pub changed: usize,
-    /// Removed hook header count.
+    /// The number of removed hook lines.
     pub destroyed: usize,
 }
 
 impl HookCounts {
-    /// Report whether one triple is empty of moving hooks.
+    /// Returns whether every hook count is zero.
     pub fn is_empty(&self) -> bool {
         self.added == 0 && self.changed == 0 && self.destroyed == 0
     }
 
-    /// Return the total moving hooks.
+    /// Returns the number of hooks that move.
     pub fn total(&self) -> usize {
         self.added + self.changed + self.destroyed
     }
 }
 
-/// One stderr summary.
+/// One bundle summary.
 #[derive(Debug)]
 pub struct Summary<'a> {
-    /// Built manifest for display.
+    /// The manifest that the summary shows.
     pub built: &'a Manifest,
-    /// Previous manifest for lifecycle marks.
+    /// The recorded manifest that supplies the lifecycle marks.
     pub previous: &'a Manifest,
-    /// Manifest versus disk edits leading the text.
+    /// The manifest versus disk differences that lead the text.
     pub differences: &'a [Difference],
-    /// First-run flag for absent state.
+    /// The flag that marks a run with no recorded manifest.
     pub first_run: bool,
-    /// Hook display data for the hooks section.
+    /// The hook lines for the hooks section.
     pub hooks: Hooks<'a>,
 }
 
 impl Summary<'_> {
-    /// Render the full stderr summary with color.
+    /// Renders the summary for stderr and picks the first-run form.
     pub fn render(&self) -> String {
         if self.first_run {
             return self.render_first_run();
@@ -175,9 +174,9 @@ impl Summary<'_> {
         lines.join("\n")
     }
 
-    /// Collect resource blocks for repeat runs.
+    /// Collects the resource blocks that a repeat run shows.
     ///
-    /// - Unchanged documents excluded.
+    /// - An unchanged document adds no block.
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
@@ -199,14 +198,14 @@ impl Summary<'_> {
         out
     }
 
-    /// Render hook lifecycle lines from display data.
+    /// Renders the hook lifecycle lines from the recorded hooks.
     fn hook_lifecycle(&self) -> Vec<String> {
         hooks::lifecycle_lines(self.hooks.lifecycle)
     }
 
-    /// Render the closing counts lines.
+    /// Renders the closing count lines.
     ///
-    /// - Hooks line present with moving hooks.
+    /// - The hooks line appears when a hook moves.
     pub fn summary_lines(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(2);
         if self.first_run {
@@ -236,7 +235,7 @@ impl Summary<'_> {
         out
     }
 
-    /// Count first-run creates and overwrites.
+    /// Counts the documents that a first run creates or overwrites.
     fn first_run_counts(&self) -> (usize, usize) {
         let mut adds = 0;
         let mut changes = 0;
@@ -254,7 +253,7 @@ impl Summary<'_> {
         (adds, changes)
     }
 
-    /// Render the first-run form over desired versus disk differences.
+    /// Renders the first-run form against the disk differences.
     fn render_first_run(&self) -> String {
         let painter = Painter::new();
         let mut lines = Vec::new();
@@ -291,7 +290,7 @@ impl Summary<'_> {
         lines.join("\n")
     }
 
-    /// Render entry lines for one document under its own status.
+    /// Renders the entry lines that one document's status calls for.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
         match status::status(
             document,
@@ -311,7 +310,7 @@ impl Summary<'_> {
         }
     }
 
-    /// Render repeat difference entries with grouped and painted diffs.
+    /// Renders the difference entries of a repeat run in painted groups.
     fn repeat_difference_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for entry in self.differences {
@@ -326,7 +325,7 @@ impl Summary<'_> {
         out
     }
 
-    /// Render the header line for one repeat diff destination.
+    /// Renders the header line for one changed destination.
     fn difference_diff_header(&self, path: &Route) -> String {
         let found = self
             .previous
@@ -342,7 +341,7 @@ impl Summary<'_> {
         }
     }
 
-    /// Render delete headers for previous keys missing from the manifest.
+    /// Renders the delete headers for previous keys that the manifest drops.
     fn delete_headers(&self) -> Vec<String> {
         let seen: BTreeSet<String> = self.built.documents.iter().map(status::key).collect();
         self.previous
@@ -367,7 +366,7 @@ impl Summary<'_> {
             .collect()
     }
 
-    /// Find one recorded document by key with opaque fallback.
+    /// Finds the matching recorded document, else the opaque one.
     fn find_recorded<'a>(&'a self, document: &Document) -> Option<&'a Document> {
         if let Some(found) = self
             .previous
@@ -381,7 +380,7 @@ impl Summary<'_> {
     }
 }
 
-/// Render one prepared bundle as its stderr summary.
+/// Renders the stderr summary for one prepared bundle.
 pub fn render_prepared(prepared: &Prepared) -> String {
     let lifecycle = hook::diff_lifecycle(&prepared.desired.hooks, &prepared.previous.hooks);
     Summary {
@@ -396,7 +395,7 @@ pub fn render_prepared(prepared: &Prepared) -> String {
     .render()
 }
 
-/// Return the display label for one document.
+/// Returns the label that a document line shows.
 fn doc_label(document: &Document) -> Cow<'_, str> {
     match &document.data {
         Data::Structured(found) => Cow::Borrowed(found.format.name()),
@@ -404,7 +403,7 @@ fn doc_label(document: &Document) -> Cow<'_, str> {
     }
 }
 
-/// Return the kind name for one payload.
+/// Returns the name of the payload kind.
 fn kind_name(data: &Data) -> &'static str {
     match data {
         Data::Structured(_) => "structured",
@@ -416,12 +415,12 @@ fn kind_name(data: &Data) -> &'static str {
     }
 }
 
-/// Render the header line for one document.
+/// Renders the path and the label of one document.
 fn header_line(document: &Document) -> String {
     format!("{}: {}", document.path.display(), doc_label(document))
 }
 
-/// Format one document header with its lifecycle sigil.
+/// Formats one document header with the sigil of its status.
 fn status_header(document: &Document, status: DocumentStatus) -> String {
     let sigil = match status {
         DocumentStatus::Create => Sigil::Add.mark(),
@@ -431,7 +430,7 @@ fn status_header(document: &Document, status: DocumentStatus) -> String {
     format!("{sigil} {}", header_line(document))
 }
 
-/// Append one titled section for a body with lines.
+/// Appends one titled section and skips an empty body.
 fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: Vec<String>) {
     if body.is_empty() {
         return;
@@ -440,7 +439,7 @@ fn push_section(lines: &mut Vec<String>, painter: &Painter, title: &str, body: V
     lines.extend(body);
 }
 
-/// Count lifecycle entries by change.
+/// Counts the lifecycle entries for each change kind.
 fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
     let mut counts = HookCounts {
         added: 0,
@@ -459,7 +458,7 @@ fn hook_counts(lifecycle: &[HookLifecycle]) -> HookCounts {
     counts
 }
 
-/// Collect one document's difference entries for first runs.
+/// Collects one document's difference entries for a first run.
 fn first_run_entries<'a>(
     differences: &'a [Difference],
     document: &Document,
@@ -481,7 +480,7 @@ fn first_run_entries<'a>(
         .collect()
 }
 
-/// Report whether one tree member route nests under its destination.
+/// Returns whether a route sits under its destination path.
 fn member_of(destination: &Route, path: &Route) -> bool {
     path.base() == destination.base()
         && path.relative_path() != destination.relative_path()
@@ -490,7 +489,7 @@ fn member_of(destination: &Route, path: &Route) -> bool {
             .starts_with(destination.relative_path())
 }
 
-/// Report whether one first-run group is whole.
+/// Returns whether every entry in the group is a create.
 fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     if entries
         .iter()
@@ -506,7 +505,7 @@ fn first_run_creates(document: &Document, entries: &[&Difference]) -> bool {
     false
 }
 
-/// Render one first-run update group with disk values first.
+/// Renders a first-run group as an update with the disk values first.
 fn first_run_updates(
     painter: &Painter,
     document: &Document,
@@ -567,7 +566,7 @@ fn first_run_updates(
     out
 }
 
-/// Paint unified diff content lines by their leading symbol.
+/// Paints the diff lines that carry a content symbol.
 fn painted_diff_lines(painter: &Painter, diff: &str) -> Vec<String> {
     diff.lines()
         .filter(|line| {
@@ -577,7 +576,7 @@ fn painted_diff_lines(painter: &Painter, diff: &str) -> Vec<String> {
         .collect()
 }
 
-/// Paint one diff content line by its leading symbol.
+/// Paints one diff line by its first character.
 fn paint_diff_line(painter: &Painter, line: &str) -> String {
     if let Some(rest) = line.strip_prefix('+') {
         painter.paint(Sigil::Add, &format!("  +{rest}"))
@@ -588,7 +587,7 @@ fn paint_diff_line(painter: &Painter, line: &str) -> String {
     }
 }
 
-/// Render one entry's tree member rel under its destination.
+/// Renders one entry's tree member path under its destination.
 fn member_rel(document: &Document, entry: &Difference) -> String {
     match entry {
         Difference::Key { key, .. } => key.strip_suffix(":mode").unwrap_or(key).to_string(),
@@ -603,7 +602,7 @@ fn member_rel(document: &Document, entry: &Difference) -> String {
     }
 }
 
-/// Render one exec payload as shell text.
+/// Renders one exec entry as shell text.
 fn init_text(entry: &RcEntry) -> String {
     match entry {
         RcEntry::Eval { argv, .. } => format!("eval \"$({})\"", Arg::join(argv)),
@@ -619,7 +618,7 @@ fn init_text(entry: &RcEntry) -> String {
     }
 }
 
-/// Render one named rc entry as display text.
+/// Renders one named rc entry as a shell line.
 fn named_text(entry: &RcEntry) -> String {
     match entry {
         RcEntry::Env { name, value, .. } => format!("profile {name} = {value}"),
@@ -633,7 +632,7 @@ fn named_text(entry: &RcEntry) -> String {
     }
 }
 
-/// Collect plain entry bodies for one document.
+/// Collects the plain entry lines for one document.
 fn entry_bodies(document: &Document) -> Vec<String> {
     match &document.data {
         Data::Structured(found) => difference::flatten_table(&found.data)
@@ -675,17 +674,17 @@ fn entry_bodies(document: &Document) -> Vec<String> {
     }
 }
 
-/// Report whether the opaque kind is on either side.
+/// Returns whether either document is opaque.
 fn touches_opaque(first: &Document, second: &Document) -> bool {
     matches!(first.data, Data::Opaque(_)) || matches!(second.data, Data::Opaque(_))
 }
 
-/// Render the hash label for one opaque ref.
+/// Renders the label for one cache reference.
 fn opaque_ref_label(sha: &Sha) -> String {
     format!("sha256:{sha}")
 }
 
-/// Render the label for one opaque handle.
+/// Renders the label for one handle's source.
 fn opaque_handle_label(handle: &ResourceHandle) -> String {
     match handle {
         ResourceHandle::Cache(sha) => opaque_ref_label(sha),
@@ -693,7 +692,7 @@ fn opaque_handle_label(handle: &ResourceHandle) -> String {
     }
 }
 
-/// Collect update lines with old to new values.
+/// Collects the update lines between the recorded and the desired document.
 fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     match (&document.data, &recorded.data) {
         (Data::Structured(new), Data::Structured(old)) => {
@@ -758,7 +757,7 @@ fn update_lines(painter: &Painter, document: &Document, recorded: &Document) -> 
     }
 }
 
-/// Render desired entry bodies under the update sigil.
+/// Renders the desired bodies when no recorded body differs.
 fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
     entry_bodies(document)
         .into_iter()
@@ -766,7 +765,7 @@ fn update_fallback(painter: &Painter, document: &Document) -> Vec<String> {
         .collect()
 }
 
-/// Build one recorded-to-desired unified diff for plan updates.
+/// Builds the unified diff from the recorded text to the desired text.
 fn recorded_diff(old: &str, new: &str) -> String {
     diffy::create_patch(old, new)
         .to_string()
@@ -778,7 +777,7 @@ fn recorded_diff(old: &str, new: &str) -> String {
         .join("\n")
 }
 
-/// Render one rc update as a recorded to desired text diff.
+/// Renders one rc update as a text diff from recorded to desired.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
     let old_bytes = match confit_runtime::render_document(recorded) {
         Ok(bytes) => bytes,
@@ -797,7 +796,7 @@ fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) 
     painted_diff_lines(painter, &diff)
 }
 
-/// Split a manifest key into kind and path halves.
+/// Splits a manifest key into the kind and the path.
 fn split_key(key: &str) -> (&str, &str) {
     match key.find(':') {
         Some(index) => (&key[..index], &key[index + 1..]),
@@ -805,7 +804,7 @@ fn split_key(key: &str) -> (&str, &str) {
     }
 }
 
-/// Collect structured leaf changes with old to new maps.
+/// Collects the changed leaves between the old and the new map.
 fn structured_update_lines(
     painter: &Painter,
     new: &BTreeMap<String, serde_json::Value>,
@@ -823,7 +822,7 @@ fn structured_update_lines(
     out
 }
 
-/// Paint one leaf change line for one dotted key.
+/// Paints one line for one changed leaf under a dotted key.
 fn paint_key_line(
     painter: &Painter,
     key: &str,
@@ -868,8 +867,8 @@ mod tests {
     use confit_core::version::VERSION;
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
-    use confit_model::document::{TreeDocument, TreeMember};
-    use confit_model::hook::Hook;
+    use confit_model::document::{FileMode, TreeDocument, TreeMember};
+    use confit_model::hook::{Hook, HookTimeout};
     use confit_model::id::Id;
     use confit_runtime::manifest::Manifest;
     use confit_runtime::prepare;
@@ -884,7 +883,7 @@ mod tests {
             },
             when: Condition::default(),
             check: Condition::default(),
-            timeout_secs: 60,
+            timeout_secs: HookTimeout::new(60),
         }
     }
 
@@ -899,7 +898,7 @@ mod tests {
             "a.ttf".to_owned(),
             TreeMember::Full {
                 handle: ResourceHandle::Cache(blob),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
             },
         );
         let document = Document {
@@ -909,16 +908,20 @@ mod tests {
         let member_path = dest.join("a.ttf");
         let differences = vec![Difference::Missing { path: member_path }];
         let entries = first_run_entries(&differences, &document);
-        assert_eq!(entries.len(), 1, "tree members group under destinations");
+        assert_eq!(
+            entries.len(),
+            1,
+            "the tree members group under the destination"
+        );
         assert_eq!(
             member_rel(&document, entries[0]),
             "a.ttf",
-            "member lines show the relative path"
+            "the member line shows the relative path"
         );
     }
 
     #[test]
-    fn preview_renders_missing_binaries_without_resolving() {
+    fn preview_renders_an_absent_binary_hook() {
         let desired = prepare::build(Vec::new(), vec![probe_hook()]).unwrap();
         let prepared = Prepared {
             desired,
@@ -936,12 +939,15 @@ mod tests {
         let text = render_prepared(&prepared);
         assert!(
             text.contains("+ absent-probe run"),
-            "preview holds the hook line"
+            "the preview holds the hook line"
         );
         assert!(
             text.contains("requires (in_path(absent-probe))"),
-            "preview holds condition text"
+            "the preview holds the condition text"
         );
-        assert!(text.contains("Hooks: 1 to add"), "preview counts the hook");
+        assert!(
+            text.contains("Hooks: 1 to add"),
+            "the preview counts the hook"
+        );
     }
 }

@@ -1,50 +1,50 @@
-//! Tar member reading.
+//! Reads tar members.
 
 use std::io;
 use std::io::Read as _;
 
 use confit_core::error::{ArchiveError, ContextualCause, ContextualResult};
 
-/// Gzip magic for deflated streams.
+/// The magic bytes that open a gzip stream.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-/// Offset of the tar format tag.
+/// The byte offset of the tar format tag.
 const TAR_MAGIC_OFFSET: usize = 257;
 
-/// Tar magic tag for the format.
+/// The tag that marks the tar format.
 const TAR_MAGIC: &[u8] = b"ustar";
 
-/// One tar block for the decode window.
+/// The tar block size in bytes.
 const TAR_BLOCK: u64 = 512;
 
-/// Fallback mode for missing permission bits.
+/// The permission bits used when an entry holds no mode.
 const FALLBACK_MODE: u32 = 0o644;
 
-/// Permission mask for exposed modes.
+/// The mask that keeps the exposed permission bits.
 const MODE_MASK: u32 = 0o777;
 
-/// One tar file head.
+/// A file entry inside a tar archive.
 struct NamedFile {
-    /// Container name with forward slashes.
+    /// The name of the file with forward slashes.
     name: String,
-    /// Unix permission bits.
+    /// The permission bits of the file.
     mode: u32,
 }
 
-/// One sniffed stream.
+/// The stream after a gzip check.
 enum Probed<R> {
-    /// Gzipped stream with bytes chained back.
+    /// A gzip stream that starts with the checked prefix.
     Gzipped(io::Chain<io::Cursor<Vec<u8>>, R>),
-    /// Plain stream with bytes chained back.
+    /// A plain stream that starts with the checked prefix.
     Plain(io::Chain<io::Cursor<Vec<u8>>, R>),
 }
 
-/// Return tar member names in archive order.
+/// Collects the tar member names in archive order.
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`ArchiveError::BareGzip`] when a gzip stream holds no tar.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub(super) fn names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     match sniff(reader)? {
         Probed::Plain(stream) => plain_names(stream),
@@ -55,12 +55,12 @@ pub(super) fn names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     }
 }
 
-/// Walk tar members with one visitor.
+/// Calls the visitor for each tar member.
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`ArchiveError::BareGzip`] when a gzip stream holds no tar.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub(super) fn walk(
     reader: impl io::Read,
     visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,
@@ -74,11 +74,11 @@ pub(super) fn walk(
     }
 }
 
-/// Sniff gzip magic off one stream.
+/// Checks the stream head for the gzip magic.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 fn sniff<R: io::Read>(mut reader: R) -> ContextualResult<Probed<R>> {
     let mut prefix = Vec::with_capacity(GZIP_MAGIC.len());
     let mut byte = [0u8; 1];
@@ -98,12 +98,12 @@ fn sniff<R: io::Read>(mut reader: R) -> ContextualResult<Probed<R>> {
     }
 }
 
-/// Decode one tar block window.
+/// Decodes the first tar block from the gzip stream.
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::BareGzip`] for gzip singles without tar.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`ArchiveError::BareGzip`] when a gzip stream holds no tar.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 fn gunzip_window<R: io::Read>(
     reader: R,
 ) -> ContextualResult<io::Chain<io::Cursor<Vec<u8>>, flate2::read::GzDecoder<R>>> {
@@ -117,17 +117,17 @@ fn gunzip_window<R: io::Read>(
     }
 }
 
-/// Report whether tar bytes fill one head window.
+/// Returns whether the head bytes hold a tar tag.
 fn is_tar_tag(head: &[u8]) -> bool {
     head.get(TAR_MAGIC_OFFSET..TAR_MAGIC_OFFSET + TAR_MAGIC.len())
         .is_some_and(|tag| tag == TAR_MAGIC)
 }
 
-/// Return file names from one plain tar stream.
+/// Collects the file names from a plain tar stream.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
+/// - [`confit_core::error::FilesystemError`] when access is denied, the input is missing, or an entry is corrupt.
 fn plain_names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries()?;
@@ -144,11 +144,11 @@ fn plain_names(reader: impl io::Read) -> ContextualResult<Vec<String>> {
     Ok(found)
 }
 
-/// Walk file members from one plain tar stream.
+/// Calls the visitor for each file member of a plain tar stream.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for denied access, missing input, and corrupt entries.
+/// - [`confit_core::error::FilesystemError`] when access is denied, the input is missing, or an entry is corrupt.
 fn plain_walk(
     reader: impl io::Read,
     mut visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,
@@ -171,11 +171,11 @@ fn plain_walk(
     Ok(())
 }
 
-/// Collect one file head from a tar entry.
+/// Returns the file head when the entry is a file.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for failed paths.
+/// - [`confit_core::error::FilesystemError`] when the entry path fails.
 fn file_head<R: io::Read>(entry: &mut tar::Entry<'_, R>) -> ContextualResult<Option<NamedFile>> {
     let kind = entry.header().entry_type();
     if kind.is_dir() || !kind.is_file() {

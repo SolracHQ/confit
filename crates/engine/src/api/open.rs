@@ -1,4 +1,4 @@
-//! Resource files opened from the project root.
+//! Opens project files as handles.
 
 use mlua::Lua;
 
@@ -6,14 +6,13 @@ use lua_binding::lua_module;
 
 use confit_store::handles::ResourceHandle;
 
-use crate::api::stores_of;
+use crate::api::stores_from;
 
-/// Open module.
 pub struct Open;
 
 #[lua_module("confit.open")]
 impl Open {
-    /// Open one project-relative file.
+    /// Opens one project file.
     ///
     /// # Arguments
     ///
@@ -24,7 +23,7 @@ impl Open {
     /// - The resource handle, else nil.
     /// - The failure reason, else nil.
     pub fn open(lua: &Lua, path: String) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.resources().resource(&path) {
             Ok(handle) => Ok((Some(handle), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
@@ -53,7 +52,7 @@ mod tests {
         )
     }
 
-    fn test_lua(stores: &Stores) -> Lua {
+    fn fresh_lua(stores: &Stores) -> Lua {
         let lua = Lua::new();
         let _ = lua.set_app_data(stores.clone());
         let project = builtin(&lua, "confit.open").unwrap();
@@ -72,29 +71,29 @@ mod tests {
     }
 
     #[test]
-    fn opens_files_reading_text_with_hash() {
+    fn open_reads_project_file_text() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         std::fs::write(project.join("note.txt"), b"hello").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let source = r#"
             local handle = assert(open("note.txt"))
             return assert(handle:text())
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
-            Ok(_) => panic!("project text returns a string"),
-            Err(error) => panic!("project opens its file: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the open module reads the file: {error}"),
         }
     }
 
     #[test]
-    fn escapes_raise_where_written() {
+    fn open_returns_nil_for_escaping_paths() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         for segment in ["../outside", "/etc/passwd"] {
             let source = format!(
                 "local handle, reason = open({segment:?}) \
@@ -103,18 +102,18 @@ mod tests {
             );
             match run(&lua, &source) {
                 Ok(Value::String(_)) => {}
-                Ok(_) => panic!("escaping read returns nil with reason: {segment}"),
-                Err(error) => panic!("escaping load stays soft: {error}"),
+                Ok(_) => panic!("expected a string reason: {segment}"),
+                Err(error) => panic!("the open module keeps the escape soft: {error}"),
             }
         }
     }
 
     #[test]
-    fn misses_return_nil_with_reason() {
+    fn open_returns_nil_for_an_absent_file() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let source = r#"
             local handle, reason = open("absent.txt")
             assert(handle == nil)
@@ -124,26 +123,29 @@ mod tests {
             Ok(Value::String(reason)) => {
                 assert!(
                     !reason.to_string_lossy().is_empty(),
-                    "reason shows the miss"
+                    "the reason shows the miss"
                 )
             }
-            Ok(_) => panic!("missing file returns nil with reason"),
-            Err(error) => panic!("missing files stay soft: {error}"),
+            Ok(_) => panic!("expected a string reason"),
+            Err(error) => panic!("the open module keeps the miss soft: {error}"),
         }
     }
 
     #[test]
-    fn wrong_inputs_raise_showing_want() {
+    fn open_rejects_non_text_paths() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let source = r#"return open(1)"#;
-        assert!(run(&lua, source).is_err(), "foreign input fails");
+        assert!(
+            run(&lua, source).is_err(),
+            "the open module rejects a non-text path"
+        );
     }
 
     #[test]
-    fn loads_structured_formats_ignoring_extension() {
+    fn structured_load_decodes_every_format() {
         for (name, body, script) in [
             (
                 "payload.txt",
@@ -194,18 +196,21 @@ mod tests {
             let stores = test_stores(dir.path());
             let project = project_root(dir.path());
             std::fs::write(project.join(name), body).unwrap();
-            let lua = test_lua(&stores);
-            assert!(run(&lua, script).is_ok(), "structured load serves {name}");
+            let lua = fresh_lua(&stores);
+            assert!(
+                run(&lua, script).is_ok(),
+                "the structured loader decodes {name}"
+            );
         }
     }
 
     #[test]
-    fn loads_unknown_kind_showing_kind() {
+    fn structured_load_returns_nil_for_unknown_kinds() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         std::fs::write(project.join("mystery.bin"), b"\x89PNG\r\n\x1a\nbinary").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let source = r#"
             local handle = assert(open("mystery.bin"))
             local found, reason = handle:load()
@@ -214,26 +219,26 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("unknown kind returns nil with reason"),
-            Err(error) => panic!("unknown kinds stay soft: {error}"),
+            Ok(_) => panic!("expected a string reason"),
+            Err(error) => panic!("the structured loader keeps the failure soft: {error}"),
         }
     }
 
     #[test]
-    fn loads_missing_files_as_text_does() {
+    fn deleted_file_load_matches_the_text_reason() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         std::fs::write(project.join("gone.toml"), b"title = \"gone\"\n").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let source = r#"
             local handle = assert(open("gone.toml"))
             return handle
         "#;
         let handle = match run(&lua, source) {
             Ok(Value::UserData(found)) => found,
-            Ok(_) => panic!("project opens its file"),
-            Err(error) => panic!("project opens its file: {error}"),
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the open module reads the file: {error}"),
         };
         lua.globals().set("saved", handle).unwrap();
         std::fs::remove_file(project.join("gone.toml")).unwrap();
@@ -246,8 +251,8 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("deleted load returns nil with reason"),
-            Err(error) => panic!("deleted loads stay soft: {error}"),
+            Ok(_) => panic!("expected a string reason"),
+            Err(error) => panic!("the structured loader keeps a deleted file soft: {error}"),
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Bundle output.
+//! Writes one portable bundle with its manifest and contents.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,21 +13,21 @@ use confit_store::handles::ResourceHandle;
 
 use super::BUNDLE_MANIFEST;
 use super::Bundler;
-use super::ensure_bundle_extension;
+use super::with_bundle_extension;
 use crate::manifest::Manifest;
 
-/// Entry mode for bundle members.
+/// The file mode that every bundle member carries.
 const BUNDLE_ENTRY_MODE: u32 = 0o644;
 
 impl Bundler {
-    /// Write one portable bundle with the manifest and the contents.
+    /// Writes one bundle archive and returns its path.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for render faults, unreadable contents,
-    ///   and write faults with the bundle path slot.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when a render or write fails, or the content
+    ///   is unreadable, with the bundle path.
     pub fn write(&self, manifest: &Manifest, dest: &Path) -> TerminalResult<PathBuf> {
-        let dest = ensure_bundle_extension(dest);
+        let dest = with_bundle_extension(dest);
         Pack::new(self, manifest, &dest)
             .and_then(|pack| pack.run())
             .with_bundle_path(dest)
@@ -35,34 +35,34 @@ impl Bundler {
     }
 }
 
-/// One bundle build.
+/// The write state of one bundle.
 struct Pack<'a> {
-    /// The bundler under writing.
+    /// The bundler that writes the bundle.
     bundler: &'a Bundler,
-    /// The ensured bundle destination.
+    /// The bundle destination with the bundle extension.
     dest: PathBuf,
     /// The rendered manifest text.
     text: String,
-    /// Unique handles in content-hash order.
+    /// The content handles that the bundle writes, sorted by content hash.
     contents: Vec<ResourceHandle>,
-    /// Opened content files.
+    /// The content files held open for the write.
     staged: Vec<Staged>,
 }
 
-/// One staged content file.
+/// One open content file.
 struct Staged {
     /// The handle naming the entry with its carried sha.
     handle: ResourceHandle,
-    /// The opened content bytes.
+    /// The opened content file.
     file: std::fs::File,
 }
 
 impl<'a> Pack<'a> {
-    /// Build one bundle write with deduped contents.
+    /// Builds one bundle write with one entry per content.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::RenderFailed`] for manifest render failures.
+    /// - [`confit_core::error::DocumentError::RenderFailed`] when the manifest render fails.
     fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> ContextualResult<Self> {
         let dest = dest.to_path_buf();
         let text = manifest.json()?;
@@ -80,23 +80,23 @@ impl<'a> Pack<'a> {
         })
     }
 
-    /// Run one bundle write into the ensured destination.
+    /// Runs one bundle write and returns the destination path.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for unreadable contents and write faults.
-    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] for contents failing the carried sha.
+    /// - [`confit_core::error::FilesystemError`] when the content is unreadable or a write fails.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
     fn run(mut self) -> ContextualResult<PathBuf> {
         self.collect()?;
         self.build()
     }
 
-    /// Open every unique content outside the atomic write.
+    /// Opens every content file before the atomic write.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for unreadable contents with the attempted path.
-    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] for contents failing the carried sha.
+    /// - [`confit_core::error::FilesystemError`] when the content is unreadable, with the attempted path.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
     fn collect(&mut self) -> ContextualResult<()> {
         for handle in &self.contents {
             let file = match handle {
@@ -113,12 +113,12 @@ impl<'a> Pack<'a> {
         Ok(())
     }
 
-    /// Write the staged bundle into its destination file.
+    /// Writes the staged bundle as one archive file.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for write faults.
-    /// - [`confit_core::error::ArchiveError`] for failed members.
+    /// - [`confit_core::error::FilesystemError`] when a write fails.
+    /// - [`confit_core::error::ArchiveError`] when a member fails.
     fn build(self) -> ContextualResult<PathBuf> {
         use confit_driver::archive::{Algorithm, Builder, Level};
 
@@ -164,7 +164,7 @@ mod tests {
 
     use confit_core::error::ErrorCause;
     use confit_driver as driver;
-    use confit_model::document::{Data, Document, OpaqueDocument};
+    use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
     use confit_store::handles::ResourceHandle;
@@ -201,14 +201,14 @@ mod tests {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
                 data: Data::Opaque(OpaqueDocument {
                     handle: ResourceHandle::Project(path, Sha::hash(body)),
-                    mode: 0o644,
+                    mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
             });
         }
         match build(documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
-            Err(error) => panic!("manifest builds: {error}"),
+            Err(error) => panic!("the manifest fails to build: {error}"),
         }
     }
 
@@ -234,21 +234,21 @@ mod tests {
     }
 
     #[test]
-    fn write_registers_finished_file_with_streamed_contents() {
+    fn bundle_write_lands_the_finished_file_with_every_content() {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
         let plan = dir.path().join("plan");
         let dest = match store.write(&manifest, &plan) {
             Ok(dest) => dest,
-            Err(error) => panic!("manifest writes: {error}"),
+            Err(error) => panic!("the manifest fails to write: {error}"),
         };
         assert_eq!(
             dest,
             dir.path().join("plan.cb").as_path(),
-            "write points at the destination"
+            "the write returns the bundle destination"
         );
         let raw = std::fs::read(&dest).unwrap();
-        assert!(!raw.is_empty(), "write leaves bytes");
+        assert!(!raw.is_empty(), "the bundle holds bytes");
         let mut bodies = entry_bodies(&dest);
         bodies.sort();
         let mut expected = Vec::new();
@@ -258,18 +258,18 @@ mod tests {
             };
             let mut reader = match store.resources.open(&found.handle) {
                 Ok(reader) => reader,
-                Err(error) => panic!("content opens: {error}"),
+                Err(error) => panic!("the content fails to open: {error}"),
             };
             let mut body = Vec::new();
             reader.read_to_end(&mut body).unwrap();
             expected.push(body);
         }
         expected.sort();
-        assert_eq!(bodies, expected, "streamed contents stay intact");
+        assert_eq!(bodies, expected, "the streamed contents match");
     }
 
     #[test]
-    fn write_reports_write_denied() {
+    fn write_reports_a_denied_destination() {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"written bytes"]);
         let locked = dir.path().join("locked");
@@ -277,17 +277,17 @@ mod tests {
         driver::fs::set_mode(&locked, Some(0o555)).unwrap();
         let dest = locked.join("plan");
         match store.write(&manifest, &dest) {
-            Ok(_) => panic!("denied disk passes"),
+            Ok(_) => panic!("expected a write rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::FilesystemError(_) | ErrorCause::ArchiveError(_) => {
                     assert!(
                         error
                             .to_string()
                             .contains(&locked.join("plan.cb").display().to_string()),
-                        "write keeps the destination"
+                        "the rejection keeps the destination"
                     );
                 }
-                other => panic!("wrong write cause: {other:?}"),
+                other => panic!("expected a write fault: {other:?}"),
             },
         }
         driver::fs::set_mode(&locked, Some(0o755)).unwrap();

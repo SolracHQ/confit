@@ -1,4 +1,4 @@
-//! Bundle input.
+//! Reads one portable bundle into its manifest.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -16,29 +16,29 @@ use crate::manifest::Manifest;
 use confit_driver as driver;
 
 impl Bundler {
-    /// Read one portable bundle into its manifest.
+    /// Reads one bundle archive into its manifest.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle opens and foreign bytes.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed member bodies with the member slot.
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] when the bundle fails to open or the bytes are foreign.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] when a member body fails, with the member slot.
     pub fn read(&self, path: &Path) -> TerminalResult<Manifest> {
         Unpack::new(self, path).run()
     }
 }
 
-/// One bundle walk.
+/// The read state of one bundle.
 struct Unpack<'a> {
-    /// The bundler under reading.
+    /// The bundler that reads the bundle.
     bundler: &'a Bundler,
-    /// The bundle path under reading.
+    /// The bundle path.
     bundle: &'a Path,
     /// The buffered manifest bytes.
     raw: Option<Vec<u8>>,
 }
 
 impl<'a> Unpack<'a> {
-    /// Build one bundle walk.
+    /// Builds one walk with no buffered manifest.
     fn new(bundler: &'a Bundler, bundle: &'a Path) -> Self {
         Self {
             bundler,
@@ -47,12 +47,12 @@ impl<'a> Unpack<'a> {
         }
     }
 
-    /// Run one walk into its manifest.
+    /// Runs one walk and returns its manifest.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for failed bundle opens and foreign bytes.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for failed member bodies with the member slot.
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] when the bundle fails to open or the bytes are foreign.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] when a member body fails, with the member slot.
     fn run(mut self) -> TerminalResult<Manifest> {
         let bundle: PathBuf = self.bundle.to_path_buf();
         let file = std::fs::File::open(self.bundle)
@@ -84,25 +84,25 @@ impl<'a> Unpack<'a> {
         }
     }
 
-    /// Visit one walk entry with the member slot on faults.
+    /// Visits one walk entry and adds the member slot on faults.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::BundleError`] for doubled manifest entries.
-    /// - [`confit_core::error::DocumentError`] for bad entry names with the member slot.
-    /// - [`confit_core::error::ErrorCause`] for failed contents with the member slot.
+    /// - [`confit_core::error::BundleError`] when a manifest entry doubles.
+    /// - [`confit_core::error::DocumentError`] when an entry name is bad, with the member slot.
+    /// - [`confit_core::error::ErrorCause`] when the content fails, with the member slot.
     fn visit(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
         let name = entry.name.clone();
         self.entry(entry).with_member(name)
     }
 
-    /// Receive one walk entry into the manifest buffer or the cache.
+    /// Receives one walk entry and routes it to the manifest buffer or the cache.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::BundleError::DuplicateManifest`] for doubled manifest entries.
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for bad entry names.
-    /// - [`confit_core::error::ErrorCause`] for failed contents.
+    /// - [`confit_core::error::BundleError::DuplicateManifest`] when a manifest entry doubles.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when an entry name is bad.
+    /// - [`confit_core::error::ErrorCause`] when the content fails.
     fn entry(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
         if entry.name == BUNDLE_MANIFEST {
             return self.receive_manifest(entry.reader);
@@ -110,12 +110,12 @@ impl<'a> Unpack<'a> {
         self.receive_content(entry.name, entry.reader)
     }
 
-    /// Buffer one manifest entry body.
+    /// Buffers the manifest entry body for the later decode.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::BundleError::DuplicateManifest`] for doubled manifest entries.
-    /// - [`confit_core::error::FilesystemError`] for cut manifest bodies.
+    /// - [`confit_core::error::BundleError::DuplicateManifest`] when a manifest entry doubles.
+    /// - [`confit_core::error::FilesystemError`] when the manifest body is cut.
     fn receive_manifest(&mut self, mut reader: impl std::io::Read) -> ContextualResult<()> {
         if self.raw.is_some() {
             return Err(contextual(BundleError::DuplicateManifest));
@@ -126,12 +126,12 @@ impl<'a> Unpack<'a> {
         Ok(())
     }
 
-    /// Land one content entry body in the cache under its name hash.
+    /// Stores one content entry body in the cache under its name hash.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for bad entry names.
-    /// - [`confit_core::error::ErrorCause`] for failed contents.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when an entry name is bad.
+    /// - [`confit_core::error::ErrorCause`] when the content fails.
     fn receive_content(
         &mut self,
         name: String,
@@ -149,7 +149,7 @@ impl<'a> Unpack<'a> {
         Ok(())
     }
 
-    /// Return the requiring document route for one member from the manifest.
+    /// Returns the route of the document that requires one member.
     fn required_entry(&self, member: &str) -> Option<String> {
         let raw = self.raw.as_deref()?;
         let manifest = Manifest::decode(raw).ok()?;
@@ -157,12 +157,13 @@ impl<'a> Unpack<'a> {
         required_by(&manifest, &sha)
     }
 
-    /// Decode the buffered manifest with presence checks.
+    /// Decodes the buffered manifest and checks that every member is present.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for absent manifests and bad payloads.
-    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for absent contents with bundle and member slots.
+    /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] when the manifest is absent or the payload is bad.
+    /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] when content is absent, with the bundle and
+    ///   member slots.
     fn finish(self) -> TerminalResult<Manifest> {
         let bundle: PathBuf = self.bundle.to_path_buf();
         let manifest = match self.raw {
@@ -195,7 +196,7 @@ impl<'a> Unpack<'a> {
     }
 }
 
-/// Return the document route requiring one content hash.
+/// Returns the route of the document that requires one content hash.
 fn required_by(manifest: &Manifest, sha: &Sha) -> Option<String> {
     manifest.documents.iter().find_map(|document| {
         let held = match &document.data {
@@ -219,7 +220,7 @@ mod tests {
 
     use crate::prepare::build;
     use confit_core::version::VERSION;
-    use confit_model::document::{Data, Document, OpaqueDocument};
+    use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
     use confit_store::handles::ResourceHandle;
@@ -254,14 +255,14 @@ mod tests {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
                 data: Data::Opaque(OpaqueDocument {
                     handle: ResourceHandle::Project(path, Sha::hash(body)),
-                    mode: 0o644,
+                    mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
             });
         }
         match build(documents, Vec::new()) {
             Ok(manifest) => (Bundler::new(&stores), manifest),
-            Err(error) => panic!("manifest builds: {error}"),
+            Err(error) => panic!("the manifest fails to build: {error}"),
         }
     }
 
@@ -282,7 +283,7 @@ mod tests {
             Ok(())
         };
         if let Err(error) = driver::StagedFile::write(dest, build) {
-            panic!("fixture bundle builds: {error}");
+            panic!("the fixture bundle fails to build: {error}");
         }
     }
 
@@ -292,32 +293,36 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_writes_manifest_first_with_sorted_contents() {
+    fn bundle_round_trip_writes_the_manifest_first_with_sorted_contents() {
         let dir = tempfile::tempdir().unwrap();
         let (store, manifest) = opaque_manifest(dir.path(), &[b"alpha", b"beta"]);
         let plan = dir.path().join("plan");
         let dest = match store.write(&manifest, &plan) {
             Ok(dest) => dest,
-            Err(error) => panic!("manifest writes: {error}"),
+            Err(error) => panic!("the manifest fails to write: {error}"),
         };
-        assert_eq!(dest, dir.path().join("plan.cb"), "bare output gains suffix");
+        assert_eq!(
+            dest,
+            dir.path().join("plan.cb"),
+            "the bare output gains the suffix"
+        );
         let names = entry_names(&dest);
         assert_eq!(names[0], BUNDLE_MANIFEST, "the manifest comes first");
         let contents: Vec<String> = names[1..].to_vec();
-        assert_eq!(contents.len(), 2, "every content ships once");
+        assert_eq!(contents.len(), 2, "the bundle ships every content once");
         let mut sorted = contents.clone();
         sorted.sort();
-        assert_eq!(sorted, contents, "content entries sort by hash");
+        assert_eq!(sorted, contents, "the content entries sort by hash");
         for name in &contents {
-            assert_eq!(name.len(), 64, "content names carry hashes: {name}");
+            assert_eq!(name.len(), 64, "the content name holds a hash: {name}");
             assert!(
                 name.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                "content names stay hex: {name}"
+                "the content name is hex: {name}"
             );
         }
         match store.read(&dest) {
             Ok(found) => {
-                assert_eq!(found.hashes, manifest.hashes, "hashes round-trip");
+                assert_eq!(found.hashes, manifest.hashes, "the hashes round-trip");
                 let carried = |manifest: &Manifest| {
                     manifest
                         .handles()
@@ -325,9 +330,13 @@ mod tests {
                         .map(|handle| handle.sha().clone())
                         .collect::<Vec<_>>()
                 };
-                assert_eq!(carried(&found), carried(&manifest), "contents round-trip");
+                assert_eq!(
+                    carried(&found),
+                    carried(&manifest),
+                    "the contents round-trip"
+                );
             }
-            Err(error) => panic!("manifest load: {error}"),
+            Err(error) => panic!("the manifest fails to load: {error}"),
         }
     }
 
@@ -340,24 +349,24 @@ mod tests {
         let stale_path = dir.path().join("stale.cb");
         build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
         match store.read(&stale_path) {
-            Ok(_) => panic!("stale manifest passes"),
+            Ok(_) => panic!("expected a version rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
-                    assert_eq!(got, "[0, 8, 0]", "stale keeps version");
+                    assert_eq!(got, "[0, 8, 0]", "the rejection keeps the version");
                     assert!(
                         error
                             .to_string()
                             .contains(&stale_path.display().to_string()),
-                        "stale keeps bundle"
+                        "the rejection keeps the bundle path"
                     );
                 }
-                other => panic!("wrong stale cause: {other:?}"),
+                other => panic!("expected a version rejection: {other:?}"),
             },
         }
     }
 
     #[test]
-    fn read_rejects_missing_content() {
+    fn read_rejects_a_bundle_with_absent_content() {
         use confit_store::Stores;
 
         let dir = tempfile::tempdir().unwrap();
@@ -370,35 +379,35 @@ mod tests {
                 path: Route::new(RouteBase::Home, "bin").unwrap(),
                 data: Data::Opaque(OpaqueDocument {
                     handle: ResourceHandle::Project(path, Sha::hash(b"wanted bytes")),
-                    mode: 0o644,
+                    mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
             }],
             Vec::new(),
         ) {
             Ok(manifest) => manifest,
-            Err(error) => panic!("manifest builds: {error}"),
+            Err(error) => panic!("the manifest fails to build: {error}"),
         };
         let raw = serde_json::to_vec(&manifest).unwrap();
-        let thin = dir.path().join("thin.cb");
-        build_bundle(&thin, &[(BUNDLE_MANIFEST, raw)]);
+        let manifest_only = dir.path().join("manifest_only.cb");
+        build_bundle(&manifest_only, &[(BUNDLE_MANIFEST, raw)]);
         let store = Bundler::new(&stores);
-        match store.read(&thin) {
-            Ok(_) => panic!("thin manifest passes"),
+        match store.read(&manifest_only) {
+            Ok(_) => panic!("expected a content rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::BundleError(BundleError::ContentMissing) => {
                     assert!(
                         error.to_string().contains("home('bin')"),
-                        "missing keeps the requiring document"
+                        "the rejection keeps the requiring document"
                     );
                 }
-                other => panic!("wrong missing cause: {other:?}"),
+                other => panic!("expected a content rejection: {other:?}"),
             },
         }
     }
 
     #[test]
-    fn read_rejects_duplicate_and_unexpected_and_bad_ids() {
+    fn read_rejects_duplicate_manifests_and_invalid_entry_names() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
@@ -418,15 +427,15 @@ mod tests {
             ],
         );
         match store.read(&dup_path) {
-            Ok(_) => panic!("duplicate manifest passes"),
+            Ok(_) => panic!("expected a manifest rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::BundleError(BundleError::DuplicateManifest) => {
                     assert!(
                         error.to_string().contains(BUNDLE_MANIFEST),
-                        "duplicate names the manifest"
+                        "the rejection shows the manifest"
                     );
                 }
-                other => panic!("wrong duplicate cause: {other:?}"),
+                other => panic!("expected a manifest rejection: {other:?}"),
             },
         }
 
@@ -439,19 +448,21 @@ mod tests {
             ],
         );
         match store.read(&bad_path) {
-            Ok(_) => panic!("bad id passes"),
+            Ok(_) => panic!("expected a member rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
                     match &error.context().member {
-                        Some(member) => assert_eq!(member, "short", "bad id keeps its input"),
-                        None => panic!("bad id keeps its input: {error}"),
+                        Some(member) => {
+                            assert_eq!(member, "short", "the rejection keeps the member name")
+                        }
+                        None => panic!("expected a member name: {error}"),
                     }
                     assert!(
                         error.to_string().contains("short"),
-                        "bad id names the entry"
+                        "the rejection shows the entry"
                     );
                 }
-                other => panic!("wrong bad id cause: {other:?}"),
+                other => panic!("expected a member rejection: {other:?}"),
             },
         }
 
@@ -464,27 +475,27 @@ mod tests {
             ],
         );
         match store.read(&odd_path) {
-            Ok(_) => panic!("unexpected entry passes"),
+            Ok(_) => panic!("expected a member rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
                     match &error.context().member {
                         Some(member) => {
-                            assert_eq!(member, "other.txt", "unexpected keeps its input")
+                            assert_eq!(member, "other.txt", "the rejection keeps the member name")
                         }
-                        None => panic!("unexpected keeps its input: {error}"),
+                        None => panic!("expected a member name: {error}"),
                     }
                     assert!(
                         error.to_string().contains("other.txt"),
-                        "unexpected names the entry"
+                        "the rejection shows the entry"
                     );
                 }
-                other => panic!("wrong unexpected cause: {other:?}"),
+                other => panic!("expected a member rejection: {other:?}"),
             },
         }
     }
 
     #[test]
-    fn read_faults_fail_at_first_bad_entry() {
+    fn read_stops_at_the_first_invalid_entry() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
 
@@ -505,21 +516,21 @@ mod tests {
             ],
         );
         match store.read(&mixed_path) {
-            Ok(_) => panic!("mixed bundle passes"),
+            Ok(_) => panic!("expected a member rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::DocumentError(DocumentError::ParseFailed { .. }) => {
                     match &error.context().member {
                         Some(member) => {
-                            assert_eq!(member, "nope", "first bad entry keeps its input")
+                            assert_eq!(member, "nope", "the rejection keeps the member name")
                         }
-                        None => panic!("first bad entry keeps its input: {error}"),
+                        None => panic!("expected a member name: {error}"),
                     }
                     assert!(
                         error.to_string().contains("nope"),
-                        "first bad entry names itself"
+                        "the rejection shows the entry"
                     );
                 }
-                other => panic!("wrong mixed cause: {other:?}"),
+                other => panic!("expected a member rejection: {other:?}"),
             },
         }
 
@@ -530,7 +541,7 @@ mod tests {
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 Data::Opaque(OpaqueDocument {
                     handle: ResourceHandle::Cache(sha.clone()),
-                    mode: 0o644,
+                    mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
             )],
@@ -547,15 +558,15 @@ mod tests {
             ],
         );
         match store.read(&drift_path) {
-            Ok(_) => panic!("drifted bytes pass"),
+            Ok(_) => panic!("expected a content rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::ContentHashMismatch { .. } => {
                     assert!(
                         error.to_string().contains("home('bin')"),
-                        "drifted bytes name the requiring document"
+                        "the rejection shows the requiring document"
                     );
                 }
-                other => panic!("wrong drift cause: {other:?}"),
+                other => panic!("expected a content rejection: {other:?}"),
             },
         }
     }
@@ -567,23 +578,23 @@ mod tests {
         let plan = dir.path().join("plan");
         let dest = match store.write(&manifest, &plan) {
             Ok(dest) => dest,
-            Err(error) => panic!("manifest writes: {error}"),
+            Err(error) => panic!("the manifest fails to write: {error}"),
         };
 
         let foreign_path = dir.path().join("foreign.cb");
         std::fs::write(&foreign_path, b"not an archive").unwrap();
         match store.read(&foreign_path) {
-            Ok(_) => panic!("foreign bytes pass"),
+            Ok(_) => panic!("expected an archive rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::ArchiveError(_) => {
                     assert!(
                         error
                             .to_string()
                             .contains(&foreign_path.display().to_string()),
-                        "failed member keeps the bundle"
+                        "the rejection keeps the bundle path"
                     );
                 }
-                other => panic!("wrong foreign cause: {other:?}"),
+                other => panic!("expected an archive rejection: {other:?}"),
             },
         }
 
@@ -591,15 +602,15 @@ mod tests {
         let cut_path = dir.path().join("cut.cb");
         std::fs::write(&cut_path, &raw[..raw.len() / 2]).unwrap();
         match store.read(&cut_path) {
-            Ok(_) => panic!("cut envelope passes"),
+            Ok(_) => panic!("expected a member rejection"),
             Err(error) => match error.cause() {
                 ErrorCause::FilesystemError(_) => {
                     assert!(
                         error.to_string().contains(BUNDLE_MANIFEST),
-                        "cut manifest names the manifest entry"
+                        "the rejection shows the manifest entry"
                     );
                 }
-                other => panic!("wrong cut cause: {other:?}"),
+                other => panic!("expected a member rejection: {other:?}"),
             },
         }
     }
@@ -611,14 +622,14 @@ mod tests {
         let plan = dir.path().join("plan");
         let dest = match store.write(&manifest, &plan) {
             Ok(dest) => dest,
-            Err(error) => panic!("manifest writes: {error}"),
+            Err(error) => panic!("the manifest fails to write: {error}"),
         };
         let raw = std::fs::read(&dest).unwrap();
-        assert!(!raw.is_empty(), "gzipped holds bytes");
+        assert!(!raw.is_empty(), "the bundle holds bytes");
         assert_eq!(
             &raw[0..2],
             &[0x1f, 0x8b],
-            "gzipped envelope carries gzip magic"
+            "the envelope carries the gzip magic"
         );
     }
 }

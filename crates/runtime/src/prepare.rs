@@ -20,28 +20,28 @@ use crate::manifest::status::{self, DocumentStatus};
 use crate::manifest::stored;
 use crate::render;
 
-/// Prepared manifests.
+/// One resolved manifest.
 pub struct Prepared {
-    /// Built manifest with counts.
+    /// The built manifest.
     pub desired: Manifest,
-    /// Previous manifest for lifecycle marks.
+    /// The manifest from the previous run.
     pub previous: Manifest,
-    /// Difference list behind the rendered preview.
+    /// The differences that the preview shows.
     pub differences: Vec<Difference>,
-    /// Non-blocking warnings for failed states.
+    /// The warnings that failed states produce without stopping the run.
     pub warnings: Vec<DiffWarning>,
-    /// First-run flag for absent state.
+    /// Whether the run starts with no stored state.
     pub first_run: bool,
-    /// Changed routes behind hook conditions and writes.
+    /// The routes that changed, for hook conditions and writes.
     pub changed: BTreeSet<Route>,
 }
 
-/// Build the desired manifest from declared documents with a filled hash section.
+/// Builds the desired manifest from the declared documents with its hashes.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for failed renders and member key shapes.
-/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for failed renders and member key shapes.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a render fails or a member key is bad.
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a render fails or a member key is bad.
 pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> TerminalResult<Manifest> {
     let mut placed: Vec<Document> = documents;
     for document in &placed {
@@ -69,12 +69,12 @@ pub fn build(documents: Vec<Document>, hooks: Vec<Hook>) -> TerminalResult<Manif
     })
 }
 
-/// Fold content hashes over hashed documents keyed by path display.
+/// Folds the content hashes over the documents, keyed by displayed path.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for failed renders and member shapes.
-/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for failed renders and member shapes.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a render fails or a member shape is bad.
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a render fails or a member shape is bad.
 fn fill_hashes(documents: &[Document]) -> TerminalResult<BTreeMap<String, Sha>> {
     let mut hashes = BTreeMap::new();
     for document in documents {
@@ -96,12 +96,12 @@ fn fill_hashes(documents: &[Document]) -> TerminalResult<BTreeMap<String, Sha>> 
     Ok(hashes)
 }
 
-/// Hash one document over rendered bytes.
+/// Hashes the rendered bytes of one document.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable rc route bases.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when an rc route base is absent.
 fn document_hash(document: &Document) -> ContextualResult<Sha> {
     match &document.data {
         Data::Opaque(found) => Ok(found.handle.sha().clone()),
@@ -113,17 +113,19 @@ fn document_hash(document: &Document) -> ContextualResult<Sha> {
     }
 }
 
-/// Render the canonical manifest bytes for tree hashing.
+/// Builds the manifest bytes that hash a tree.
 fn tree_manifest_bytes(members: &BTreeMap<String, TreeMember>) -> Vec<u8> {
     let mut out = Vec::new();
     for (relative, member) in members {
         let sha = member.handle().sha();
-        out.extend_from_slice(format!("{:o} {} {}\n", member.mode(), relative, sha).as_bytes());
+        out.extend_from_slice(
+            format!("{:o} {} {}\n", member.mode().bits(), relative, sha).as_bytes(),
+        );
     }
     out
 }
 
-/// Report whether a tree key is a relative member path.
+/// Returns whether a tree key is a relative member path.
 fn is_member_key(relative: &str) -> bool {
     if relative.is_empty() || relative.starts_with('/') {
         return false;
@@ -136,12 +138,12 @@ fn is_member_key(relative: &str) -> bool {
     true
 }
 
-/// Resolve one desired manifest against previous state.
+/// Resolves one desired manifest against the stored state.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable stored states.
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored state is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a difference reports an evaluation fault.
 pub fn prepare(stores: &Stores, desired: Manifest) -> TerminalResult<Prepared> {
     let previous = stored::load(&stores.states())?;
     log_processed(&desired, &previous);
@@ -158,11 +160,11 @@ pub fn prepare(stores: &Stores, desired: Manifest) -> TerminalResult<Prepared> {
     })
 }
 
-/// Refresh the difference list with first-run reference rules.
+/// Refreshes the differences with the first-run reference rules.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a difference reports an evaluation fault.
 pub fn refresh(
     stores: &Stores,
     prepared: &Prepared,
@@ -176,11 +178,11 @@ pub fn refresh(
     Ok(found)
 }
 
-/// Diff one built manifest with first-run reference rules.
+/// Diffs one built manifest against the reference under the first-run rules.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation terminals from differences.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a difference reports an evaluation fault.
 fn difference_with(
     stores: &Stores,
     first_run: bool,
@@ -201,7 +203,7 @@ fn difference_with(
         .terminal(ErrorKind::Evaluate)
 }
 
-/// Compute the changed destination routes for one apply run.
+/// Computes the changed routes for one apply run.
 fn changed_paths(
     built: &Manifest,
     previous: &Manifest,
@@ -248,7 +250,7 @@ fn changed_paths(
     out
 }
 
-/// Report whether one tree member route nests under its destination.
+/// Returns whether one tree member route nests under its destination.
 fn tree_member_of(destination: &Route, path: &Route) -> bool {
     path.base() == destination.base()
         && path.relative_path() != destination.relative_path()
@@ -257,7 +259,7 @@ fn tree_member_of(destination: &Route, path: &Route) -> bool {
             .starts_with(destination.relative_path())
 }
 
-/// Log finished documents with lifecycle status.
+/// Logs the documents that finished with their lifecycle status.
 fn log_processed(built: &Manifest, previous: &Manifest) {
     for document in &built.documents {
         let status = match status::status(
@@ -289,7 +291,7 @@ fn log_processed(built: &Manifest, previous: &Manifest) {
 mod tests {
     use super::*;
     use confit_model::document::Document;
-    use confit_model::document::{Data, OpaqueDocument, TextDocument, TreeDocument};
+    use confit_model::document::{Data, FileMode, OpaqueDocument, TextDocument, TreeDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::handles::ResourceHandle;
 
@@ -309,22 +311,22 @@ mod tests {
     }
 
     #[test]
-    fn hash_pins_text_bytes() {
+    fn text_hash_pins_the_rendered_bytes() {
         let hash = hash_of(Data::Text(TextDocument {
             content: "pinned text\n".into(),
-            mode: 0o644,
+            mode: FileMode::new(0o644),
             unmanaged: false,
         }));
         assert_eq!(
             hash,
             Sha::new("f007767c80150f15e9cacf96dc8d24ac3b6b3094c9b727d1534b175910968f2a").unwrap(),
-            "text hash differs only when rendered bytes change"
+            "the text hash follows the rendered bytes"
         );
     }
 
     // Hash contracts pin text and tree alone. Other variants reuse model bytes.
     #[test]
-    fn hash_covers_tree_manifest_bytes() {
+    fn tree_hash_covers_the_manifest_bytes() {
         let first = Sha::new("aa".repeat(32)).unwrap();
         let second = Sha::new("cc".repeat(32)).unwrap();
         let mut members = BTreeMap::new();
@@ -332,26 +334,26 @@ mod tests {
             "b".to_owned(),
             TreeMember::Full {
                 handle: ResourceHandle::Cache(second),
-                mode: 0o755,
+                mode: FileMode::new(0o755),
             },
         );
         members.insert(
             "a".to_owned(),
             TreeMember::Full {
                 handle: ResourceHandle::Cache(first),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
             },
         );
         let expected = Sha::hash(&tree_manifest_bytes(&members));
         assert_eq!(
             hash_of(Data::Tree(TreeDocument { members })),
             expected,
-            "tree hash covers manifest bytes"
+            "the tree hash covers the manifest bytes"
         );
     }
 
     #[test]
-    fn build_hashes_live_handles_with_verified_hashes() {
+    fn build_hashes_live_handles_with_their_content_hashes() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
@@ -361,7 +363,7 @@ mod tests {
             "top.txt".to_owned(),
             TreeMember::Full {
                 handle: note,
-                mode: 0o644,
+                mode: FileMode::new(0o644),
             },
         );
         let documents = vec![
@@ -373,21 +375,25 @@ mod tests {
                 Route::new(RouteBase::Home, "blob.bin").unwrap(),
                 Data::Opaque(OpaqueDocument {
                     handle: other,
-                    mode: 0o644,
+                    mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
             ),
         ];
         let manifest = match build(documents, Vec::new()) {
             Ok(found) => found,
-            Err(error) => panic!("manifest hashes: {error}"),
+            Err(error) => panic!("the manifest fails to hash: {error}"),
         };
-        assert_eq!(manifest.documents.len(), 2, "build keeps documents");
+        assert_eq!(
+            manifest.documents.len(),
+            2,
+            "the build keeps both documents"
+        );
         assert!(
             fs::read_dir(&dir.path().join("config").join("blobs"))
                 .unwrap_or_default()
                 .is_empty(),
-            "build writes zero pool files"
+            "the build leaves the pool empty"
         );
         for document in &manifest.documents {
             let payloads: Vec<&ResourceHandle> = match &document.data {
@@ -398,7 +404,7 @@ mod tests {
             for payload in payloads {
                 assert!(
                     matches!(payload, ResourceHandle::Project(..)),
-                    "build keeps live payloads"
+                    "the build keeps live handles"
                 );
             }
         }
@@ -406,9 +412,9 @@ mod tests {
             Some(hash) => assert_eq!(
                 *hash,
                 Sha::hash(b"other bytes"),
-                "opaque hash copies the content sha"
+                "the opaque hash copies the content sha"
             ),
-            None => panic!("hashed opaque builds"),
+            None => panic!("expected an opaque hash"),
         }
         match manifest.hashes.get("home('fonts')") {
             Some(hash) => {
@@ -419,22 +425,22 @@ mod tests {
                 {
                     Some(document) => match &document.data {
                         Data::Tree(found) => found.members.clone(),
-                        _ => panic!("hashed tree keeps its shape"),
+                        _ => panic!("expected a tree body"),
                     },
-                    None => panic!("hashed tree builds"),
+                    None => panic!("expected a tree hash"),
                 };
                 assert_eq!(
                     *hash,
                     Sha::hash(&tree_manifest_bytes(&members)),
-                    "tree hash covers manifest bytes"
+                    "the tree hash covers the manifest bytes"
                 );
             }
-            None => panic!("hashed tree builds"),
+            None => panic!("expected a tree hash"),
         }
     }
 
     #[test]
-    fn hash_bare_and_full_members_with_modes() {
+    fn tree_hash_covers_bare_and_full_members_with_their_modes() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let bare = project_handle(&stores, dir.path(), "note.txt", b"bare bytes");
@@ -445,7 +451,7 @@ mod tests {
             "sub/nested.txt".to_owned(),
             TreeMember::Full {
                 handle: full,
-                mode: 0o755,
+                mode: FileMode::new(0o755),
             },
         );
         let documents = vec![Document::new(
@@ -454,7 +460,7 @@ mod tests {
         )];
         let manifest = match build(documents, Vec::new()) {
             Ok(found) => found,
-            Err(error) => panic!("manifest hashes: {error}"),
+            Err(error) => panic!("the manifest fails to hash: {error}"),
         };
         let document = match manifest
             .documents
@@ -462,37 +468,41 @@ mod tests {
             .find(|document| document.path.display() == "home('tree')")
         {
             Some(found) => found,
-            None => panic!("hashed tree builds"),
+            None => panic!("expected a tree document"),
         };
         match &document.data {
             Data::Tree(found) => {
                 let members = &found.members;
-                assert_eq!(members.len(), 2, "build keeps both members");
+                assert_eq!(members.len(), 2, "the build keeps both members");
                 let bare = match members.get("top.txt") {
                     Some(found) => found,
-                    None => panic!("bare member keeps its key"),
+                    None => panic!("expected the top.txt member"),
                 };
                 assert!(
                     matches!(bare.handle(), ResourceHandle::Project(..)),
-                    "bare member keeps its live bytes"
+                    "the bare member keeps its live bytes"
                 );
-                assert_eq!(bare.mode(), 0o644, "bare member keeps the default mode");
+                assert_eq!(
+                    bare.mode().bits(),
+                    0o644,
+                    "the bare member takes the default mode"
+                );
                 let full = match members.get("sub/nested.txt") {
                     Some(found) => found,
-                    None => panic!("full member keeps its mode"),
+                    None => panic!("expected the sub/nested.txt member"),
                 };
                 assert!(
                     matches!(full.handle(), ResourceHandle::Project(..)),
-                    "full member keeps its live bytes"
+                    "the full member keeps its live bytes"
                 );
-                assert_eq!(full.mode(), 0o755, "full member keeps its mode");
+                assert_eq!(full.mode().bits(), 0o755, "the full member keeps its mode");
             }
-            _ => panic!("hashed tree keeps its shape"),
+            _ => panic!("expected a tree body"),
         }
     }
 
     #[test]
-    fn reject_bad_member_keys_at_hash() {
+    fn build_rejects_an_invalid_member_key() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
@@ -504,19 +514,19 @@ mod tests {
                 Data::Tree(TreeDocument { members }),
             )];
             match build(documents, Vec::new()) {
-                Ok(_) => panic!("bad key hashes: {key}"),
+                Ok(_) => panic!("expected a key rejection: {key}"),
                 Err(error) => {
                     let line = error.to_string();
                     assert!(
                         line.contains("home('tree')"),
-                        "bad key keeps its route: {line}"
+                        "the rejection keeps the route: {line}"
                     );
                     assert!(
                         matches!(
                             error.cause(),
                             ErrorCause::DocumentError(DocumentError::ParseFailed { .. })
                         ),
-                        "bad key keeps its require: {line}"
+                        "the rejection keeps the member path require: {line}"
                     );
                 }
             }

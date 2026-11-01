@@ -1,4 +1,4 @@
-//! HTTP downloads.
+//! Downloads URL bodies over HTTP.
 
 use std::io;
 
@@ -6,15 +6,15 @@ use confit_core::error::ContextualCause;
 #[cfg(not(any(test, feature = "test-support")))]
 use confit_core::error::FetchError;
 
-/// Download one URL body as a readable stream with the total length.
+/// Opens a URL body as a stream with its total length.
 ///
-/// Failures record the request url in their context.
+/// Each failure records the request URL in its context.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FetchError::StatusRejected`] for failing statuses.
-/// - [`confit_core::error::FetchError::TimedOut`] for timeouts.
-/// - [`confit_core::error::FetchError::DownloadFailed`] for transport failures.
+/// - [`confit_core::error::FetchError::StatusRejected`] when the server rejects the status.
+/// - [`confit_core::error::FetchError::TimedOut`] when the request times out.
+/// - [`confit_core::error::FetchError::DownloadFailed`] when the transport fails.
 pub fn download(
     url: &str,
     limit: u64,
@@ -29,13 +29,13 @@ pub fn download(
     }
 }
 
-/// Download one URL body over the network.
+/// Fetches a URL body over the network.
 ///
 /// # Errors
 ///
-/// - [`FetchError::StatusRejected`] for failing statuses.
-/// - [`FetchError::TimedOut`] for timeouts.
-/// - [`FetchError::DownloadFailed`] for transport failures.
+/// - [`FetchError::StatusRejected`] when the server rejects the status.
+/// - [`FetchError::TimedOut`] when the request times out.
+/// - [`FetchError::DownloadFailed`] when the transport fails.
 #[cfg(not(any(test, feature = "test-support")))]
 fn network(url: &str, limit: u64) -> Result<(Box<dyn io::Read>, Option<u64>), ContextualCause> {
     let response = match ureq::get(url).call() {
@@ -67,7 +67,7 @@ pub use registry::{calls, clear, fail, serve};
 
 #[cfg(any(test, feature = "test-support"))]
 mod registry {
-    //! Scripted downloads for tests.
+    //! Serves scripted downloads for tests.
 
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -89,7 +89,7 @@ mod registry {
         });
     }
 
-    /// Script one URL body for later downloads.
+    /// Registers a URL body for a later download.
     pub fn serve(url: &str, body: &[u8]) {
         SCRIPTS.with(|cell| {
             cell.borrow_mut()
@@ -98,19 +98,19 @@ mod registry {
         });
     }
 
-    /// Script one bare URL failure for later downloads.
+    /// Registers a URL failure for a later download.
     pub fn fail(url: &str, cause: FetchError) {
         SCRIPTS.with(|cell| {
             cell.borrow_mut().failures.insert(url.to_string(), cause);
         });
     }
 
-    /// Return download counts for one URL.
+    /// Returns how many times a URL was downloaded.
     pub fn calls(url: &str) -> usize {
         SCRIPTS.with(|cell| cell.borrow().calls.get(url).copied().unwrap_or(0))
     }
 
-    /// Clear every scripted body, failure, and count.
+    /// Removes every scripted body, failure, and count.
     pub fn clear() {
         SCRIPTS.with(|cell| {
             let mut scripts = cell.borrow_mut();
@@ -120,7 +120,7 @@ mod registry {
         });
     }
 
-    /// Serve one scripted download with the scripted body length.
+    /// Returns a scripted body as a stream with its length.
     pub(super) fn download(
         url: &str,
         _limit: u64,
@@ -140,7 +140,7 @@ mod registry {
                         Some(total),
                     ))
                 }
-                None => panic!("no scripted body for url '{url}'"),
+                None => panic!("the scripts hold no body for url '{url}'"),
             }
         })
     }

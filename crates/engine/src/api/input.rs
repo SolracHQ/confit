@@ -1,16 +1,15 @@
-//! Prompted lines over the renderer.
+//! Prompts one line.
 
 use confit_ui::UiHandles;
 use mlua::Lua;
 
 use lua_binding::lua_module;
 
-/// Input module.
 pub struct Input;
 
 #[lua_module("confit.input")]
 impl Input {
-    /// Read one prompted line.
+    /// Asks for one line.
     ///
     /// # Arguments
     ///
@@ -25,12 +24,12 @@ impl Input {
     }
 }
 
-/// Read the shared renderer handles from one Lua instance.
+/// Returns the renderer handles.
 fn handles_of(lua: &Lua) -> mlua::Result<UiHandles> {
     match lua.app_data_ref::<UiHandles>() {
         Some(handles) => Ok(handles.clone()),
         None => Err(mlua::Error::RuntimeError(
-            "confit input is not installed".to_owned(),
+            "the confit input is not installed".to_owned(),
         )),
     }
 }
@@ -41,7 +40,7 @@ mod tests {
     use confit_ui::{FromUi, ToUi};
     use mlua::Value;
 
-    fn test_lua(replies: Vec<String>) -> Lua {
+    fn fresh_lua(replies: Vec<String>) -> Lua {
         let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
         let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
         std::thread::spawn(move || {
@@ -67,12 +66,12 @@ mod tests {
     }
 
     #[test]
-    fn returns_asked_lines() {
-        let lua = test_lua(vec!["hello".to_owned()]);
+    fn input_returns_the_asked_line() {
+        let lua = fresh_lua(vec!["hello".to_owned()]);
         match run(&lua, r#"return input("Name? ")"#) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
-            Ok(_) => panic!("input returns a string"),
-            Err(error) => panic!("input returns its line: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the input reader returns the line: {error}"),
         }
     }
 }

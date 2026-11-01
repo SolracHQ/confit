@@ -1,4 +1,4 @@
-//! Zip member reading.
+//! Reads zip members.
 
 use std::io;
 
@@ -6,14 +6,14 @@ use confit_core::error::ContextualResult;
 
 use super::zip_error;
 
-/// Return zip member names in archive order.
+/// Collects the zip member names in archive order.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::ArchiveError::PasswordLocked`] for locked archives.
-/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] for unknown features and methods.
-/// - [`confit_core::error::ArchiveError::BackendCorrupt`] for corrupt archives.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`confit_core::error::ArchiveError::PasswordLocked`] when the archive is locked.
+/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] when the archive uses an unknown feature.
+/// - [`confit_core::error::ArchiveError::BackendCorrupt`] when the archive is corrupt.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> ContextualResult<Vec<String>> {
     let mut archive = zip::ZipArchive::new(reader).map_err(zip_error)?;
     let total = archive.len();
@@ -34,14 +34,14 @@ pub(super) fn names<R: io::Read + io::Seek>(reader: R) -> ContextualResult<Vec<S
     Ok(found)
 }
 
-/// Walk zip members with one visitor.
+/// Calls the visitor for each zip member.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::ArchiveError::PasswordLocked`] for locked archives.
-/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] for unknown features and methods.
-/// - [`confit_core::error::ArchiveError::BackendCorrupt`] for corrupt archives and missing entries.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`confit_core::error::ArchiveError::PasswordLocked`] when the archive is locked.
+/// - [`confit_core::error::ArchiveError::AlgorithmUnknown`] when the archive uses an unknown feature.
+/// - [`confit_core::error::ArchiveError::BackendCorrupt`] when the archive is corrupt or an entry is absent.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub(super) fn walk<R: io::Read + io::Seek>(
     reader: R,
     mut visit: impl FnMut(super::Entry<'_>) -> ContextualResult<()>,

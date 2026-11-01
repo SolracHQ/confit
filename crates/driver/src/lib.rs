@@ -1,20 +1,20 @@
-//! Driver side effects.
+//! Host side effects for files, archives, downloads, and processes.
 
 #![deny(missing_docs)]
 
 #[cfg(target_os = "windows")]
 compile_error!("confit supports unix targets only");
 
-/// Archive framing.
+/// Reads and writes archive containers.
 pub mod archive;
 mod atomic;
-/// Filesystem helpers.
+/// Reads and writes the host filesystem.
 pub mod fs;
-/// HTTP downloads.
+/// Downloads URL bodies over HTTP.
 pub mod http;
-/// Base folders.
+/// Resolves the base folders.
 pub mod paths;
-/// Process runs.
+/// Runs processes.
 pub mod process;
 
 pub use atomic::{StagedDir, StagedFile};

@@ -1,4 +1,4 @@
-//! Channel UI for progress, prints, and prompts.
+//! Worker threads send progress, prints, and prompts to the render thread.
 
 mod protocol;
 
@@ -9,23 +9,23 @@ use std::{io, time::Duration};
 
 use crossbeam_channel::{Receiver, Sender};
 
-/// Handles for worker threads to reach the render thread.
+/// The channel ends that connect worker threads to the render thread.
 #[derive(Debug, Clone)]
 pub struct UiHandles {
-    /// Sender for progress, prints, and prompts.
+    /// The end that sends progress, prints, and prompts to the render thread.
     pub to_ui: Sender<ToUi>,
-    /// Receiver for prompt answers.
+    /// The end that receives prompt answers from the render thread.
     pub from_ui: Receiver<FromUi>,
 }
 
 impl UiHandles {
-    /// Ask one question on the render thread and wait for the answer.
+    /// Sends one question to the render thread and returns its answer.
     ///
     /// - Callers hold at most one pending prompt at a time.
     ///
     /// # Errors
     ///
-    /// - [`std::io::Error`] for closed channels.
+    /// - [`std::io::Error`] when a channel is closed.
     pub fn ask(&self, prompt: String) -> io::Result<String> {
         if self.to_ui.send(ToUi::Prompt(prompt)).is_err() {
             return Err(send_err_closed());
@@ -37,16 +37,16 @@ impl UiHandles {
     }
 }
 
-/// Live renderer with its worker channels.
+/// The running renderer.
 pub struct Ui {
-    /// Sender for prints and prompts.
+    /// The channels that reach the render thread.
     handles: UiHandles,
-    /// Renderer join at teardown.
+    /// The join handle for the render thread, used at teardown.
     renderer: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Ui {
-    /// Start the renderer.
+    /// Starts the render thread with unbounded worker channels.
     pub fn start() -> Self {
         let (to_ui_tx, to_ui_rx) = crossbeam_channel::unbounded::<ToUi>();
         let (answer_tx, answer_rx) = crossbeam_channel::unbounded::<FromUi>();
@@ -63,12 +63,12 @@ impl Ui {
         }
     }
 
-    /// Return the worker channels.
+    /// Returns a clone of the worker channels.
     pub fn handles(&self) -> UiHandles {
         self.handles.clone()
     }
 
-    /// Drop the senders and join the thread.
+    /// Drops the worker channels and waits for the render thread to stop.
     pub fn finish(self) {
         let Self { handles, renderer } = self;
         drop(handles);
@@ -78,7 +78,7 @@ impl Ui {
     }
 }
 
-/// Run the render loop until channel close.
+/// Renders progress, prints, and prompts until every channel closes.
 fn run_loop(rx: Receiver<ToUi>, answers: Sender<FromUi>) {
     use std::io::IsTerminal as _;
     let terminal = io::stderr().is_terminal();
@@ -102,12 +102,12 @@ fn run_loop(rx: Receiver<ToUi>, answers: Sender<FromUi>) {
     spinner.finish_and_clear();
 }
 
-/// Build the io error for a closed ui channel.
+/// Builds the broken pipe error that a closed ui channel reports.
 fn send_err_closed() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "ui closed")
 }
 
-/// Read one stdin line with widgets parked and send it back.
+/// Parks the widgets, reads one stdin line, and sends the answer back.
 fn respond(multi: &MultiProgress, answers: &Sender<FromUi>, question: &str) {
     match multi.suspend(|| read_answer(question)) {
         Ok(text) => {
@@ -120,11 +120,11 @@ fn respond(multi: &MultiProgress, answers: &Sender<FromUi>, question: &str) {
     }
 }
 
-/// Read one stdin line without the trailing newline.
+/// Reads one stdin line and trims the trailing newline.
 ///
 /// # Errors
 ///
-/// - [`std::io::Error`] for stderr and stdin failures.
+/// - [`std::io::Error`] when stderr or stdin fails.
 fn read_answer(question: &str) -> io::Result<String> {
     use std::io::{BufRead as _, Write as _};
     let mut stderr = io::stderr().lock();
@@ -137,7 +137,7 @@ fn read_answer(question: &str) -> io::Result<String> {
     Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
-/// Map one run fact onto the spinner message.
+/// Shows one run fact on the spinner and ticks it.
 fn render(spinner: &indicatif::ProgressBar, event: Event) {
     log::debug!("event: {event:?}");
     match event {
@@ -150,7 +150,7 @@ fn render(spinner: &indicatif::ProgressBar, event: Event) {
     spinner.tick();
 }
 
-/// Build the spinner style with a fallback default.
+/// Builds the spinner style, falling back to a plain spinner.
 fn spinner_style() -> indicatif::ProgressStyle {
     match indicatif::ProgressStyle::with_template("{spinner:.green} {msg}") {
         Ok(style) => style.tick_chars("|/-\\ "),
@@ -163,13 +163,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finish_joins_renderer() {
+    fn ui_finish_joins_the_renderer() {
         let ui = Ui::start();
         ui.finish();
     }
 
     #[test]
-    fn ask_fails_on_closed_channel() {
+    fn ask_reports_a_closed_channel() {
         let (to_ui, rx) = crossbeam_channel::unbounded::<ToUi>();
         drop(rx);
         let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();

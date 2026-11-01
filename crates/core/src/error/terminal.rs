@@ -1,39 +1,39 @@
 //! Terminal errors shown to the user.
 //!
-//! One error joins the required operation with its cause and its context.
+//! One error joins the required operation, its cause, and its context.
 
 use super::cause::{ErrorCause, EvalError, HookRunError, ManifestError};
 use super::context::ErrorContext;
 use super::contextual::{ContextualCause, ContextualResult};
 use super::kind::ErrorKind;
 
-/// Log closing pointing at the log file.
+/// The closing line that points at the log file.
 pub const LOG_CLOSING: &str = "For more information please see the log";
-/// Guide closing pointing at help and manual.
+/// The closing line that points at help and the manual.
 pub const GUIDE_CLOSING: &str = "please check help or manual for detailed guide";
 
-/// Closed terminal error result.
+/// One closed terminal result.
 pub type TerminalResult<T> = std::result::Result<T, Error>;
 
-/// Close one contextual cause into its terminal error.
+/// Joins one cause with its kind into a terminal error.
 pub fn error<T>(kind: ErrorKind, contextual: impl Into<ContextualCause>) -> TerminalResult<T> {
     Err(contextual.into().terminal(kind))
 }
 
-/// Close one contextual result into its terminal error.
+/// A contextual result that closes into a terminal error.
 pub trait Terminal<T> {
-    /// Map one contextual cause into its terminal error.
+    /// Turns one contextual result into its terminal error.
     fn terminal(self, kind: ErrorKind) -> TerminalResult<T>;
 }
 
 impl<T> Terminal<T> for ContextualResult<T> {
-    /// Map one contextual cause into its terminal error.
+    /// Turns one contextual result into its terminal error.
     fn terminal(self, kind: ErrorKind) -> TerminalResult<T> {
         self.map_err(|contextual| contextual.terminal(kind))
     }
 }
 
-/// Terminal error shown to the user.
+/// A failure that ends the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     kind: ErrorKind,
@@ -42,7 +42,7 @@ pub struct Error {
 }
 
 impl Error {
-    /// Build one terminal error.
+    /// Joins one cause and its kind into a terminal error.
     pub fn new(kind: ErrorKind, contextual: ContextualCause) -> Self {
         let ContextualCause { cause, context } = contextual;
         Self {
@@ -52,22 +52,22 @@ impl Error {
         }
     }
 
-    /// Return the required operation.
+    /// Returns the operation that failed.
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
 
-    /// Return the failed result.
+    /// Returns the cause that failed.
     pub fn cause(&self) -> &ErrorCause {
         &self.cause
     }
 
-    /// Return where the operation ran.
+    /// Returns the location where the operation ran.
     pub fn context(&self) -> &ErrorContext {
         &self.context
     }
 
-    /// Render one terminal line.
+    /// Formats one terminal line.
     pub fn summary(&self) -> String {
         let context = &self.context;
         match &self.kind {
@@ -114,15 +114,14 @@ impl Error {
             },
             ErrorKind::LuaFailed => match &context.detail {
                 Some(detail) => {
-                    let mut text =
-                        format!("Cannot Evaluate the profile due the following error:\n{detail}");
+                    let mut text = format!("Cannot evaluate the profile:\n{detail}");
                     if !context.trace.is_empty() {
                         text.push('\n');
                         text.push_str(&context.trace.join("\n"));
                     }
                     text
                 }
-                None => "Cannot Evaluate the profile due the following error:\nunknown".to_owned(),
+                None => "Cannot evaluate the profile:\nunknown".to_owned(),
             },
             ErrorKind::Evaluate => {
                 if let (ErrorCause::EvalError(EvalError::HookTargetUnknown), Some(id)) =
@@ -144,17 +143,13 @@ impl Error {
                 }
             }
             ErrorKind::CorruptManifest => match (&context.fs_path, &context.detail) {
-                (Some(path), Some(detail)) => format!(
-                    "Cannot load '{}' manifest, it seems like is corrupt: {detail}",
-                    path.display()
-                ),
-                (Some(path), None) => format!(
-                    "Cannot load '{}' manifest, it seems like is corrupt: unknown",
-                    path.display()
-                ),
-                (None, _) => {
-                    "Cannot load 'unknown' manifest, it seems like is corrupt: unknown".to_owned()
+                (Some(path), Some(detail)) => {
+                    format!("Cannot load the manifest at '{}': {detail}", path.display())
                 }
+                (Some(path), None) => {
+                    format!("Cannot load the manifest at '{}': unknown", path.display())
+                }
+                (None, _) => "Cannot load the manifest at 'unknown': unknown".to_owned(),
             },
             ErrorKind::ManifestVersion => match &self.cause {
                 ErrorCause::ManifestError(ManifestError::VersionUnsupported { got }) => {
@@ -178,8 +173,8 @@ impl Error {
                 None => "Cannot load 'unknown' manifest, missing version".to_owned(),
             },
             ErrorKind::DeleteNonNamed => match &context.slot {
-                Some(slot) => format!("Cannot delete non named slot '{slot}'"),
-                None => "Cannot delete non named slot 'unknown'".to_owned(),
+                Some(slot) => format!("Cannot delete the bare slot '{slot}'"),
+                None => "Cannot delete the bare slot 'unknown'".to_owned(),
             },
             ErrorKind::FlagsConflict => match &context.command {
                 Some(command) => format!(
@@ -197,14 +192,14 @@ impl Error {
             },
             ErrorKind::MissingProject => match &context.project {
                 Some(project) => format!(
-                    "Cannot load project, provided dir does not exist at '{}'",
+                    "Cannot load the project, the folder '{}' is absent",
                     project.display()
                 ),
-                None => "Cannot load project, provided dir does not exist at 'unknown'".to_owned(),
+                None => "Cannot load the project, the folder 'unknown' is absent".to_owned(),
             },
             ErrorKind::MissingProfile => match &context.profile {
-                Some(profile) => format!("profile missing at '{}'", profile.display()),
-                None => "profile missing at 'unknown'".to_owned(),
+                Some(profile) => format!("Cannot open the profile at '{}'", profile.display()),
+                None => "Cannot open the profile at 'unknown'".to_owned(),
             },
             ErrorKind::LoadProject => match (&context.project, &context.fs_path) {
                 (Some(project), _) => {
@@ -240,9 +235,7 @@ impl Error {
             ErrorKind::ExportState => "Cannot export the state".to_owned(),
             ErrorKind::RestoreState => "Cannot restore the state".to_owned(),
             ErrorKind::RotateHistory => "Cannot rotate history".to_owned(),
-            ErrorKind::PruneBlobs => {
-                "Cannot cleanup old blobs, unnecessary files can persist please check".to_owned()
-            }
+            ErrorKind::PruneBlobs => "Cannot clean the old blobs, stale files remain".to_owned(),
             ErrorKind::StoreState => "Cannot store the state".to_owned(),
             ErrorKind::InitProject => "Cannot initialize the project".to_owned(),
             ErrorKind::ReadReply => "Cannot read your reply".to_owned(),
@@ -261,7 +254,7 @@ impl Error {
         }
     }
 
-    /// Report one closing line for the terminal output.
+    /// Returns the closing line for the terminal output.
     pub fn closing(&self) -> &'static str {
         match &self.kind {
             ErrorKind::FlagsConflict => GUIDE_CLOSING,
@@ -272,14 +265,14 @@ impl Error {
 }
 
 impl std::fmt::Display for Error {
-    /// Render one terminal line for direct printing.
+    /// Prints one terminal line.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", self.summary())
     }
 }
 
 impl std::error::Error for Error {
-    /// Report one cause.
+    /// Returns the cause.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.cause)
     }

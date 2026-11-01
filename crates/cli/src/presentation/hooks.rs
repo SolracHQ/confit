@@ -1,5 +1,4 @@
-//! Hooks
-//! Hook lifecycle lines for plans beside documents.
+//! Renders hook lifecycle lines for a plan.
 
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
@@ -8,7 +7,7 @@ use confit_runtime::Unmet;
 
 use crate::presentation::summary::Sigil;
 
-/// Render one unmet condition with its failing member.
+/// Renders one unmet condition and the member that failed.
 pub fn describe_unmet(fault: &Unmet) -> String {
     let head = fault.member.describe();
     if fault.cause.is_empty() {
@@ -26,7 +25,7 @@ pub fn describe_unmet(fault: &Unmet) -> String {
     format!("{head} [{}: {tail}]", fault.index)
 }
 
-/// Render one blocked condition with its fault beside the words.
+/// Renders one blocked condition with its fault beside the condition text.
 pub fn describe_blocked(condition: &Condition, fault: &Unmet) -> String {
     if fault.member == *condition {
         return describe_unmet(fault);
@@ -34,7 +33,7 @@ pub fn describe_blocked(condition: &Condition, fault: &Unmet) -> String {
     format!("{} [{}]", condition.describe(), describe_unmet(fault))
 }
 
-/// Render plan hook lines from lifecycle diff data.
+/// Renders the plan hook lines from the lifecycle changes.
 pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in lifecycle {
@@ -79,9 +78,9 @@ pub fn lifecycle_lines(lifecycle: &[HookLifecycle]) -> Vec<String> {
     lines
 }
 
-/// Render full condition lines for one added hook.
+/// Renders every condition line for one added hook.
 ///
-/// - True conditions stay silent.
+/// - A true condition adds no line.
 fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
     for (key, condition) in [
         ("requires", &hook.requires),
@@ -99,7 +98,7 @@ fn full_conditions(hook: &Hook, out: &mut Vec<String>) {
     }
 }
 
-/// Return one condition key name for detail lines.
+/// Returns the key text that a condition line shows.
 fn condition_key_text(key: ConditionKey) -> &'static str {
     match key {
         ConditionKey::Requires => "requires",
@@ -108,7 +107,7 @@ fn condition_key_text(key: ConditionKey) -> &'static str {
     }
 }
 
-/// Render one condition change line per key while text differs.
+/// Renders one condition change line for each key whose text differs.
 fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String>) {
     for change in conditions {
         let key = condition_key_text(change.key);
@@ -121,7 +120,7 @@ fn render_condition_changes(conditions: &[ConditionChange], out: &mut Vec<String
     }
 }
 
-/// Render one timeout with the run cap suffix.
+/// Renders one timeout with the seconds suffix.
 fn timeout_text(secs: u64) -> String {
     format!("{secs}s")
 }
@@ -130,6 +129,7 @@ fn timeout_text(secs: u64) -> String {
 mod tests {
     use super::*;
     use confit_model::hook;
+    use confit_model::hook::HookTimeout;
     use confit_model::id::Id;
     use confit_model::routes::{Route, RouteBase};
 
@@ -154,7 +154,7 @@ mod tests {
             requires: Condition::default(),
             when,
             check,
-            timeout_secs,
+            timeout_secs: HookTimeout::new(timeout_secs),
         }
     }
 
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn describe_nests_compounds_with_full_parens() {
+    fn describe_nests_conditions_with_full_parens() {
         let condition = Condition::Any(vec![
             Condition::All(vec![in_path("a"), in_path("b")]),
             Condition::Not(Box::new(in_path("c"))),
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn added_hook_prints_plus_with_full_conditions() {
+    fn added_hook_prints_a_header_and_full_conditions() {
         let mut added = hook(
             &["mise", "install"],
             &[],
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_hook_prints_bare_minus() {
+    fn removed_hook_prints_a_removed_header() {
         let mut recorded = hook(&["tool"], &[], in_path("mise"), in_path("probe"), 60);
         recorded.requires = in_path("cap");
         assert_eq!(
@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_condition_prints_tilde_with_key_diff() {
+    fn modified_condition_prints_the_key_change() {
         let mut before = hook(
             &["mise", "install"],
             &[],
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_previous_prints_all_plus() {
+    fn empty_previous_renders_every_hook_as_added() {
         let current = vec![
             hook(
                 &["tool", "first"],
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn condition_changes_read_old_to_new() {
+    fn condition_changes_render_old_to_new() {
         let before = hook(
             &["mise"],
             &[],
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn check_diff_reports_key_change() {
+    fn check_diff_reports_the_key_change() {
         let before = hook(&["mise"], &[], Condition::default(), in_path("a"), 60);
         let after = hook(&["mise"], &[], Condition::default(), in_path("b"), 60);
         assert_eq!(
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_change_parsed_old_to_new() {
+    fn timeout_change_renders_old_to_new() {
         let before = hook(
             &["mise"],
             &[],
@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_leaf_parsed_member_words() {
+    fn unmet_leaf_renders_the_member_text() {
         let fault = Unmet {
             index: 0,
             member: in_path("mise"),
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_conjunction_names_failing_member() {
+    fn unmet_conjunction_shows_the_failing_member() {
         let fault = Unmet {
             index: 1,
             member: in_path("b"),

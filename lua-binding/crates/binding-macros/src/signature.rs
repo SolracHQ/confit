@@ -59,9 +59,6 @@ fn collect_fields(
             || flags.opaque
             || flags.ignore
             || flags.flatten
-            || flags.proxy.is_some()
-            || flags.decode_hook.is_some()
-            || flags.encode_hook.is_some()
             || flags.name.is_some()
             || flags.default.is_some()
         {

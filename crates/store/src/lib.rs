@@ -1,4 +1,4 @@
-//! Store write-backed capability roots for one run.
+//! Write-backed capability roots for one run.
 
 #![deny(missing_docs)]
 
@@ -22,36 +22,36 @@ use pool::PoolStore;
 use resources::Resources;
 use state::StateStore;
 
-/// Base folders for every write-backed capability.
+/// The base folders of one run.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
-    /// State and history storage base.
+    /// The base folder for state and history.
     pub config_base: PathBuf,
-    /// Fetch cache and pending area for transient files.
+    /// The base folder for the fetch cache and transient files.
     pub temp_base: PathBuf,
-    /// Project boundary for trusted files.
+    /// The folder that bounds every trusted project file.
     pub project_root: PathBuf,
 }
 
-/// Stateful write capabilities for one run.
+/// The write-backed stores for one run.
 #[derive(Clone)]
 pub struct Stores {
-    /// Base folders for every write-backed capability.
+    /// The base folders for every store.
     pub roots: StoreRoots,
-    /// Trusted project files.
+    /// The trusted project files shared by every store.
     resources: Arc<Resources>,
-    /// Content-addressed pool.
+    /// The pool that holds content-addressed bytes.
     pool: Arc<PoolStore>,
-    /// Content-addressed fetch cache.
+    /// The cache that holds remote bytes by content hash.
     fetch: Arc<FetchCache>,
-    /// Compressed archive member listing and extraction.
+    /// The store that lists and extracts archive members.
     archives: Arc<ArchiveStore>,
-    /// Named state files with history.
+    /// The store that holds named state files and their history.
     states: Arc<StateStore>,
 }
 
 impl StoreRoots {
-    /// Build standard host roots from environment folders.
+    /// Builds host roots under the standard environment folders.
     pub fn standard() -> Self {
         let config_base = BaseDirs::new()
             .config
@@ -64,7 +64,7 @@ impl StoreRoots {
         }
     }
 
-    /// Build roots under one temp folder for tests.
+    /// Builds test roots under one temporary folder.
     pub fn under(temp: &Path, project_root: &Path) -> Self {
         Self {
             config_base: temp.join("confit"),
@@ -74,13 +74,13 @@ impl StoreRoots {
     }
 }
 
-/// Read the working folder with a relative fallback.
+/// Returns the working folder, or `.` on failure.
 fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 impl Stores {
-    /// Build stores over file backends.
+    /// Builds every store over file backends.
     pub fn new(roots: StoreRoots, to_ui: Sender<ToUi>) -> Self {
         let pool = Arc::new(PoolStore::new(&roots, to_ui.clone()));
         let resources = Arc::new(Resources::new(&roots, pool.clone()));
@@ -95,27 +95,27 @@ impl Stores {
         }
     }
 
-    /// Return trusted project files.
+    /// Returns the store of trusted project files.
     pub fn resources(&self) -> Arc<Resources> {
         self.resources.clone()
     }
 
-    /// Return the content-addressed pool.
+    /// Returns the pool of content-addressed bytes.
     pub fn pool(&self) -> Arc<PoolStore> {
         self.pool.clone()
     }
 
-    /// Return the content-addressed fetch cache.
+    /// Returns the cache of remote bytes.
     pub fn fetch(&self) -> Arc<FetchCache> {
         self.fetch.clone()
     }
 
-    /// Return the compressed archive store.
+    /// Returns the store of archive members.
     pub fn archives(&self) -> Arc<ArchiveStore> {
         self.archives.clone()
     }
 
-    /// Return named state files with history.
+    /// Returns the store of state files and history.
     pub fn states(&self) -> Arc<StateStore> {
         self.states.clone()
     }

@@ -17,13 +17,13 @@ use sha2::Digest as _;
 use crate::StoreRoots;
 use confit_driver as driver;
 
-/// Pool folder name under the config base.
+/// The folder name for pool entries under the config base.
 const BLOBS_DIR: &str = "blobs";
 
-/// Pool gzip level.
+/// The gzip level for pool entries.
 const POOL_GZIP_LEVEL: u32 = 6;
 
-/// Content-addressed pool.
+/// A store of content-addressed bytes under the config base.
 #[derive(Debug, Clone)]
 pub struct PoolStore {
     pool: PathBuf,
@@ -32,7 +32,7 @@ pub struct PoolStore {
 }
 
 impl PoolStore {
-    /// Build one file-backed pool.
+    /// Builds a pool over the config base.
     pub fn new(roots: &StoreRoots, to_ui: Sender<ToUi>) -> Self {
         Self {
             pool: roots.config_base.join(BLOBS_DIR),
@@ -41,17 +41,17 @@ impl PoolStore {
         }
     }
 
-    /// Derive the pool file for one content hash.
+    /// Returns the file that holds one content hash.
     pub fn path(&self, sha: &Sha) -> PathBuf {
         self.pool.join(sha.hex())
     }
 
-    /// Compress one stream into the pool under the expected hash.
+    /// Stores one stream in the pool under its expected hash.
     ///
     /// # Errors
     ///
-    /// - [`ErrorCause::ContentHashMismatch`] for streams failing the expected hash.
-    /// - [`FilesystemError`] for pool write faults.
+    /// - [`ErrorCause::ContentHashMismatch`] when the stream fails the expected hash.
+    /// - [`FilesystemError`] when a pool write fails.
     pub fn store_checked(&self, sha: &Sha, mut reader: impl std::io::Read) -> ContextualResult<()> {
         let dest = self.path(sha);
         if dest.exists() {
@@ -104,11 +104,11 @@ impl PoolStore {
         Ok(())
     }
 
-    /// Open a verified byte stream for one content hash.
+    /// Opens one pool entry as a stream that verifies its hash.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for missing and unreadable pool entries.
+    /// - [`FilesystemError`] when the pool entry is absent or unreadable.
     pub fn open(
         &self,
         sha: &Sha,
@@ -123,17 +123,17 @@ impl PoolStore {
         ))
     }
 
-    /// Drop pool files outside the keep set.
+    /// Removes pool files that the keep set leaves out.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for listing and removal failures.
+    /// - [`FilesystemError`] when listing or removal fails.
     pub fn prune(&self, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
         prune_dir(&self.pool, keep)
     }
 }
 
-/// Pool body reader verifying its content hash.
+/// A reader that checks each body against its expected hash.
 pub struct VerifiedRead<R> {
     inner: R,
     hasher: sha2::Sha256,
@@ -141,7 +141,7 @@ pub struct VerifiedRead<R> {
 }
 
 impl<R: std::io::Read> VerifiedRead<R> {
-    /// Wrap one body stream with its expected digest.
+    /// Builds a verified reader over one body stream.
     pub fn new(inner: R, expected: Sha) -> Self {
         Self {
             inner,
@@ -172,7 +172,7 @@ impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
     }
 }
 
-/// Drop files in one pool home outside the keep set.
+/// Removes the files in one pool folder that the keep set leaves out.
 fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
     let entries = match driver::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -201,7 +201,7 @@ fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
     Ok(removed)
 }
 
-/// Report whether one pool home file is inside the keep set.
+/// Returns true if the pool file is in the keep set.
 fn held(path: &Path, keep: &BTreeSet<Sha>) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -228,12 +228,12 @@ mod tests {
         PoolStore::new(&test_roots(dir), sender)
     }
 
-    /// Reader failing on every read.
+    /// A test reader that fails every read.
     struct FailRead;
 
     impl std::io::Read for FailRead {
         fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("stream stays unread"))
+            Err(std::io::Error::other("the stream is not read"))
         }
     }
 
@@ -244,12 +244,12 @@ mod tests {
                 reader.read_to_end(&mut found).unwrap();
                 found
             }
-            Err(error) => panic!("pooled bytes open: {error}"),
+            Err(error) => panic!("the pooled bytes fail to open: {error}"),
         }
     }
 
     #[test]
-    fn open_rejects_tampered_body() {
+    fn pool_open_rejects_tampered_body() {
         use std::io::Write as _;
 
         let dir = tempfile::tempdir().unwrap();
@@ -257,7 +257,7 @@ mod tests {
         let sha = Sha::hash(b"original bytes");
         match store.store_checked(&sha, &b"original bytes"[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         let dest = store.path(&sha);
         let sink = std::fs::File::create(&dest).unwrap();
@@ -268,52 +268,58 @@ mod tests {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 match reader.read_to_end(&mut found) {
-                    Ok(_) => panic!("tampered body opens"),
+                    Ok(_) => panic!("expected a tampered body error"),
                     Err(error) => {
                         let mismatch = error
                             .get_ref()
                             .and_then(|cause| cause.downcast_ref::<ErrorCause>())
-                            .unwrap_or_else(|| panic!("tampered keeps mismatch: {error}"));
+                            .unwrap_or_else(|| panic!("expected a content hash mismatch: {error}"));
                         match mismatch {
                             ErrorCause::ContentHashMismatch { expected, found } => {
-                                assert_eq!(expected, &sha, "mismatch keeps expected");
+                                assert_eq!(expected, &sha, "the mismatch keeps the expected hash");
                                 assert_eq!(
                                     found,
                                     &Sha::hash(b"tampered bytes"),
-                                    "mismatch keeps found"
+                                    "the mismatch keeps the found hash"
                                 );
                             }
-                            other => panic!("wrong tamper cause: {other}"),
+                            other => {
+                                panic!("expected a content hash mismatch: {other}")
+                            }
                         }
                     }
                 }
             }
-            Err(error) => panic!("tampered open fails: {error}"),
+            Err(error) => panic!("the tampered body fails to open: {error}"),
         }
     }
 
     #[test]
-    fn store_open_round_trip() {
+    fn pool_store_and_open_round_trip_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = b"pooled bytes";
         let sha = Sha::hash(raw);
         match store.store_checked(&sha, &raw[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
-        assert_eq!(read_open(&store, &sha), raw, "open round-trips bytes");
+        assert_eq!(
+            read_open(&store, &sha),
+            raw,
+            "the pool opens the stored bytes"
+        );
     }
 
     #[test]
-    fn store_announces_finished_entry() {
+    fn pool_store_announces_a_finished_entry() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = PoolStore::new(&test_roots(dir.path()), sender);
         let raw = b"announced bytes";
         match store.store_checked(&Sha::hash(raw), &raw[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
@@ -324,12 +330,12 @@ mod tests {
                 done: 1,
                 total: None,
             })],
-            "store fires one finished fact"
+            "the pool store writes one finished event"
         );
     }
 
     #[test]
-    fn repeat_store_stays_silent() {
+    fn pool_store_stays_silent_on_repeat() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = PoolStore::new(&test_roots(dir.path()), sender);
@@ -337,11 +343,11 @@ mod tests {
         let sha = Sha::hash(raw);
         match store.store_checked(&sha, &raw[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         match store.store_checked(&sha, &raw[..]) {
             Ok(()) => {}
-            Err(error) => panic!("repeat store skips: {error}"),
+            Err(error) => panic!("the repeated store fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
@@ -352,12 +358,12 @@ mod tests {
                 done: 1,
                 total: None,
             })],
-            "repeat store fires no fact"
+            "the repeated store writes no event"
         );
     }
 
     #[test]
-    fn present_store_never_parsed_the_stream() {
+    fn pool_store_skips_the_stream_for_a_present_entry() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = PoolStore::new(&test_roots(dir.path()), sender);
@@ -365,11 +371,11 @@ mod tests {
         let sha = Sha::hash(raw);
         match store.store_checked(&sha, &raw[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         match store.store_checked(&sha, FailRead) {
             Ok(()) => {}
-            Err(error) => panic!("present store skips the stream: {error}"),
+            Err(error) => panic!("the present store fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
@@ -380,69 +386,78 @@ mod tests {
                 done: 1,
                 total: None,
             })],
-            "present store fires no fact"
+            "the present store writes no event"
         );
     }
 
     #[test]
-    fn missing_open_names_pool_path() {
+    fn pool_open_names_the_pool_path() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let sha = Sha::hash(b"absent");
         match store.open(&sha) {
-            Ok(_) => panic!("absent content opens"),
+            Ok(_) => panic!("expected an absent content error"),
             Err(error) => match &error.context.cache_path {
-                Some(found) => assert_eq!(found, &store.path(&sha), "miss keeps the cache path"),
-                None => panic!("miss keeps the cache path: {error}"),
+                Some(found) => {
+                    assert_eq!(found, &store.path(&sha), "the miss keeps the cache path")
+                }
+                None => panic!("expected the cache path: {error}"),
             },
         }
     }
 
     #[test]
-    fn reject_mismatched_stream() {
+    fn pool_store_rejects_a_mismatched_stream() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let sha = Sha::hash(b"pooled bytes");
-        let wrong = Sha::hash(b"garbage");
+        let other_sha = Sha::hash(b"garbage");
         match store.store_checked(&sha, &b"garbage"[..]) {
-            Ok(()) => panic!("mismatched stream passes"),
+            Ok(()) => panic!("expected a mismatched stream error"),
             Err(error) => {
                 match error.cause() {
                     ErrorCause::ContentHashMismatch { expected, found } => {
-                        assert_eq!(expected, &sha, "mismatch keeps expected");
-                        assert_eq!(found, &wrong, "mismatch keeps found");
+                        assert_eq!(expected, &sha, "the mismatch keeps the expected hash");
+                        assert_eq!(found, &other_sha, "the mismatch keeps the found hash");
                     }
-                    other => panic!("wrong mismatch cause: {other}"),
+                    other => panic!("expected a content hash mismatch: {other}"),
                 }
                 match &error.context.cache_path {
-                    Some(found) => assert_eq!(found, &store.path(&sha), "mismatch keeps the path"),
-                    None => panic!("mismatch keeps the path: {error}"),
+                    Some(found) => assert_eq!(
+                        found,
+                        &store.path(&sha),
+                        "the mismatch keeps the cache path"
+                    ),
+                    None => panic!("expected the cache path: {error}"),
                 }
             }
         }
-        assert!(!store.path(&sha).exists(), "mismatch leaves no file");
+        assert!(!store.path(&sha).exists(), "the mismatch leaves no file");
     }
 
     #[test]
-    fn prune_keeps_referenced_pool_entries() {
+    fn pool_prune_keeps_referenced_entries() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let kept = Sha::hash(b"kept bytes");
         let dropped = Sha::hash(b"dropped bytes");
         match store.store_checked(&kept, &b"kept bytes"[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         match store.store_checked(&dropped, &b"dropped bytes"[..]) {
             Ok(()) => {}
-            Err(error) => panic!("pool stores: {error}"),
+            Err(error) => panic!("the pool fails to store: {error}"),
         }
         let keep = BTreeSet::from([kept.clone()]);
         match store.prune(&keep) {
-            Ok(removed) => assert_eq!(removed, 1, "prune drops the unreferenced"),
-            Err(error) => panic!("pool prunes: {error}"),
+            Ok(removed) => assert_eq!(removed, 1, "the prune drops the unreferenced entry"),
+            Err(error) => panic!("the pool fails to prune: {error}"),
         }
         assert_eq!(read_open(&store, &kept), b"kept bytes");
-        assert!(store.open(&dropped).is_err(), "the unreferenced dies");
+        assert!(
+            store.open(&dropped).is_err(),
+            "the pool holds no pruned entry"
+        );
     }
 }

@@ -7,7 +7,7 @@ use confit_driver as driver;
 use confit_model::condition::Condition;
 use confit_model::routes::Route;
 
-/// Default hook timeout in seconds for the `10m` opt default.
+/// The hook timeout in seconds when a hook takes the `10m` default.
 pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
 
 /// One unmet condition.
@@ -21,17 +21,17 @@ pub struct Unmet {
     pub cause: Vec<Unmet>,
 }
 
-/// Host facts under condition checks.
+/// One snapshot of the host facts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checks {
-    /// Environment variables under reading.
+    /// The host environment variables.
     pub vars: BTreeMap<String, String>,
-    /// PATH directories in search order.
+    /// The directories that the PATH search visits in order.
     pub path_dirs: Vec<PathBuf>,
 }
 
 impl Checks {
-    /// Snapshot the host environment and PATH dirs.
+    /// Snapshots the current host environment and the PATH directories.
     pub fn current() -> Self {
         let mut vars = BTreeMap::new();
         for (key, value) in std::env::vars_os() {
@@ -45,7 +45,7 @@ impl Checks {
         Self { vars, path_dirs }
     }
 
-    /// Return facts with extra dirs first.
+    /// Returns the facts with the extra directories searched first.
     pub fn extended(&self, dirs: Vec<PathBuf>) -> Self {
         let mut path_dirs = dirs;
         path_dirs.extend(self.path_dirs.iter().cloned());
@@ -55,7 +55,7 @@ impl Checks {
         }
     }
 
-    /// Report whether conditions hold against facts and the driver.
+    /// Returns whether one condition holds against the facts and the driver.
     pub fn check(&self, cond: &Condition, changed: &BTreeSet<Route>) -> bool {
         match cond {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
@@ -69,7 +69,7 @@ impl Checks {
         }
     }
 
-    /// Return the fault under one condition while the condition fails.
+    /// Returns the fault of one condition that fails.
     pub fn unmet(&self, cond: &Condition, changed: &BTreeSet<Route>) -> Option<Unmet> {
         match cond {
             Condition::All(items) => self.conjunction_unmet(items, changed),
@@ -79,7 +79,7 @@ impl Checks {
         }
     }
 
-    /// Return the fault at the first failing member of one conjunction.
+    /// Returns the fault of the first failing member of one conjunction.
     fn conjunction_unmet(&self, items: &[Condition], changed: &BTreeSet<Route>) -> Option<Unmet> {
         for (index, member) in items.iter().enumerate() {
             if self.check(member, changed) {
@@ -94,7 +94,7 @@ impl Checks {
         None
     }
 
-    /// Return the nested faults under one failing member.
+    /// Returns the faults nested under one failing member.
     fn nested(&self, member: &Condition, changed: &BTreeSet<Route>) -> Vec<Unmet> {
         match member {
             Condition::All(items) => self.conjunction_unmet(items, changed).into_iter().collect(),
@@ -103,7 +103,7 @@ impl Checks {
         }
     }
 
-    /// Return the fault under one disjunction with every member fault.
+    /// Returns the fault of one disjunction with the fault of every member.
     fn disjunction_unmet(
         &self,
         cond: &Condition,
@@ -120,7 +120,7 @@ impl Checks {
         })
     }
 
-    /// Collect one fault per member under one failed disjunction.
+    /// Collects one fault per member of one failed disjunction.
     fn disjunction_each(&self, items: &[Condition], changed: &BTreeSet<Route>) -> Vec<Unmet> {
         items
             .iter()
@@ -128,7 +128,7 @@ impl Checks {
             .collect()
     }
 
-    /// Return the fault under one negation while inner conditions hold.
+    /// Returns the fault of one negation while its inner conditions hold.
     fn negation_unmet(
         &self,
         cond: &Condition,
@@ -146,7 +146,7 @@ impl Checks {
         }
     }
 
-    /// Return the fault under one leaf while the leaf fails.
+    /// Returns the fault of one leaf that fails.
     fn leaf_unmet(&self, leaf: &Condition, changed: &BTreeSet<Route>) -> Option<Unmet> {
         if self.check(leaf, changed) {
             None
@@ -160,7 +160,7 @@ impl Checks {
     }
 }
 
-/// Collect failing leaf member strings under one unmet fault.
+/// Collects the member strings of the failing leaves under one unmet fault.
 pub fn unmet_names(fault: &Unmet) -> Vec<String> {
     if fault.cause.is_empty() {
         return vec![fault.member.describe()];
@@ -172,7 +172,7 @@ pub fn unmet_names(fault: &Unmet) -> Vec<String> {
     out
 }
 
-/// Find one executable across dirs through the driver.
+/// Finds one executable in the directories through the driver.
 pub fn find_executable(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     const EXEC_BIT: u32 = 0o111;
 
@@ -215,7 +215,7 @@ mod tests {
         driver::fs::set_mode(path, Some(mode)).unwrap();
     }
 
-    /// Driver oracle for the discovery decision.
+    /// Returns the expected executable for the discovery decision.
     fn oracle(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         const EXEC_BIT: u32 = 0o111;
         for dir in dirs {
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn executable_bit_controls_discovery() {
+    fn discovery_requires_the_executable_bit() {
         let dir = tempfile::tempdir().unwrap();
         let tool = dir.path().join("tool");
         let regular = dir.path().join("regular");
@@ -244,12 +244,12 @@ mod tests {
         assert_eq!(
             find_executable("regular", &dirs),
             None,
-            "644 without exec bit misses"
+            "the search skips a 644 file"
         );
         assert_eq!(
             find_executable("absent", &dirs),
             None,
-            "missing binary misses"
+            "the search skips an absent binary"
         );
         assert!(
             checks_with(dirs.clone()).check(
@@ -258,7 +258,7 @@ mod tests {
                 },
                 &BTreeSet::new(),
             ),
-            "InPath holds a 755 hit"
+            "the path condition holds an executable file"
         );
         assert!(
             !checks_with(dirs).check(
@@ -267,12 +267,12 @@ mod tests {
                 },
                 &BTreeSet::new(),
             ),
-            "InPath misses a 644 file"
+            "the path condition rejects a 644 file"
         );
     }
 
     #[test]
-    fn ordered_dirs_first_win() {
+    fn search_order_picks_the_first_directory() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
         let second = dir.path().join("second");
@@ -281,17 +281,17 @@ mod tests {
         assert_eq!(
             find_executable("tool", &[first.clone(), second.clone()]),
             Some(first.join("tool")),
-            "first dir wins"
+            "the first directory wins"
         );
         assert_eq!(
             find_executable("tool", &[second.clone(), first.clone()]),
             Some(second.join("tool")),
-            "order flip moves the win"
+            "the reordered directories move the win"
         );
     }
 
     #[test]
-    fn symlinks_follow_with_dangling_missing() {
+    fn discovery_follows_a_live_link_and_skips_a_dead_link() {
         let dir = tempfile::tempdir().unwrap();
         place(&dir.path().join("tool"), 0o755);
         driver::fs::write_link(&dir.path().join("link_ok"), std::path::Path::new("tool")).unwrap();
@@ -305,17 +305,17 @@ mod tests {
         assert_eq!(
             find_executable("link_ok", &dirs),
             Some(dir.path().join("link_ok")),
-            "current link follows its target"
+            "the search follows a live link"
         );
         assert_eq!(
             find_executable("link_dead", &dirs),
             None,
-            "dangling link is missing"
+            "the search skips a dangling link"
         );
     }
 
     #[test]
-    fn helper_matches_oracle_row_by_row() {
+    fn find_executable_matches_the_oracle_on_every_row() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
         let second = dir.path().join("second");
@@ -353,13 +353,13 @@ mod tests {
         for (name, dirs, want) in rows {
             let oracle = oracle(name, &dirs);
             let found = find_executable(name, &dirs);
-            assert_eq!(oracle, found, "helper parity for {name}");
-            assert_eq!(found, want, "helper verdict for {name}");
+            assert_eq!(oracle, found, "the helper matches the oracle for {name}");
+            assert_eq!(found, want, "the search returns {name} as expected");
         }
     }
 
     #[test]
-    fn exists_true_for_seeded_false_for_absent() {
+    fn exists_condition_holds_for_a_seeded_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("needle");
         std::fs::create_dir_all(dir.path()).unwrap();
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(
             route.expand().unwrap(),
             path,
-            "literal routes resolve unchanged"
+            "the literal route keeps its path"
         );
         assert!(
             checks_with(Vec::new()).check(
@@ -377,18 +377,18 @@ mod tests {
                 },
                 &BTreeSet::new(),
             ),
-            "seeded path presence holds"
+            "the exists condition holds a seeded path"
         );
         let missing = literal(&dir.path().join("absent"));
         assert!(
             !checks_with(Vec::new())
                 .check(&Condition::Exists { route: missing }, &BTreeSet::new(),),
-            "absent path fails"
+            "the exists condition rejects an absent path"
         );
     }
 
     #[test]
-    fn changed_parsed_route_membership() {
+    fn changed_condition_follows_route_membership() {
         let route = literal(Path::new("/opt/probe/touched"));
         let other = literal(Path::new("/opt/probe/untouched"));
         let changed = BTreeSet::from([route.clone()]);
@@ -399,11 +399,11 @@ mod tests {
                 },
                 &changed,
             ),
-            "member route holds"
+            "the changed condition holds a member route"
         );
         assert!(
             !checks_with(Vec::new()).check(&Condition::Changed { route: other }, &changed,),
-            "absent route fails"
+            "the changed condition rejects an absent route"
         );
     }
 
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_conjunction_names_first_failing_member() {
+    fn unmet_conjunction_names_the_first_unmet_member() {
         let checks = checks_with(Vec::new());
         let cond = Condition::All(vec![leaf("a"), leaf("b")]);
         let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();
@@ -448,17 +448,17 @@ mod tests {
     }
 
     #[test]
-    fn unmet_holding_conditions_read_none() {
+    fn unmet_holding_conditions_return_none() {
         let checks = checks_with(Vec::new());
         assert_eq!(
             checks.unmet(&Condition::All(Vec::new()), &BTreeSet::new()),
             None,
-            "empty conjunction holds"
+            "the empty conjunction holds"
         );
         assert_eq!(
             checks.unmet(&Condition::Not(Box::new(leaf("absent"))), &BTreeSet::new()),
             None,
-            "negated miss holds"
+            "the negated condition holds"
         );
     }
 }

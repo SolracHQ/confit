@@ -1,4 +1,4 @@
-//! Stubs from live shapes.
+//! Generates stubs from live shapes.
 
 use confit_core::error::{ContextualCause, ContextualResult};
 use lua_binding::stub::Stub;
@@ -15,7 +15,8 @@ use crate::api::validate::Validate;
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::LuaFailed`] for stub parse failures.
+/// - [`confit_core::error::EvalError::LuaFailed`] when a stub fails to
+///   parse.
 pub fn generate_stubs() -> ContextualResult<Vec<Stub>> {
     let stubs = vec![
         Global::stub(),
@@ -27,17 +28,18 @@ pub fn generate_stubs() -> ContextualResult<Vec<Stub>> {
         Template::stub(),
     ];
     for stub in &stubs {
-        check_parse(&stub.module, &stub.text)?;
+        validate_stub_parse(&stub.module, &stub.text)?;
     }
     Ok(stubs)
 }
 
-/// Checks one stub parses as Lua.
+/// Validates that one stub parses as Lua.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::LuaFailed`] for stub parse failures.
-fn check_parse(module: &str, text: &str) -> ContextualResult<()> {
+/// - [`confit_core::error::EvalError::LuaFailed`] when the stub fails to
+///   parse.
+fn validate_stub_parse(module: &str, text: &str) -> ContextualResult<()> {
     let lua = mlua::Lua::new();
     lua.load(text)
         .set_name(format!("@{module}"))
@@ -56,25 +58,25 @@ mod tests {
         assert_eq!(stub.module, "confit.fetch");
         assert!(
             stub.text.starts_with("--- @meta confit.fetch\n"),
-            "module stub holds the meta header"
+            "the module stub holds the meta header"
         );
         assert!(
             stub.text.ends_with("\nreturn fetch\n"),
-            "single functions return the bare name"
+            "the module stub returns the bare name"
         );
     }
 
     #[test]
-    fn global_stub_holds_bare_header_with_no_return() {
+    fn global_stub_holds_a_bare_header() {
         let stub = Global::stub();
         assert_eq!(stub.module, "confit");
         assert!(
             stub.text.starts_with("--- @meta _\n"),
-            "global stub holds the bare header"
+            "the global stub holds the bare header"
         );
         assert!(
             !stub.text.contains("\nreturn "),
-            "global stub holds no return line"
+            "the global stub holds no return line"
         );
     }
 }

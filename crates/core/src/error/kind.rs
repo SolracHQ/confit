@@ -1,83 +1,83 @@
-//! Terminal error kinds naming required operations.
+//! Terminal error kinds for required operations.
 //!
-//! Kinds name the operation. Causes name the failed result and context
-//! names where the operation ran.
+//! A kind states the operation. A cause holds the failed result. The context
+//! holds where the operation ran.
 
-/// Terminal error kind.
+/// The required operation that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
-    /// Failed bundle read.
+    /// A bundle read that failed.
     ReadBundle,
-    /// Failed bundle write.
+    /// A bundle write that failed.
     WriteBundle,
-    /// Failed member unpack.
+    /// A member unpack that failed.
     UnpackMember,
-    /// Failed manifest render.
+    /// A manifest render that failed.
     RenderManifest,
-    /// Repeated document.
+    /// A document that appears twice.
     DuplicateDocument,
-    /// Failed module open.
+    /// A module open that failed.
     OpenModule,
-    /// Failed hook run.
+    /// A hook run that failed.
     RunHook,
-    /// Failed hook process spawn.
+    /// A hook process spawn that failed.
     SpawnHook,
-    /// Failed Lua evaluation.
+    /// A Lua evaluation that failed.
     LuaFailed,
-    /// Failed profile evaluation.
+    /// A profile evaluation that failed.
     Evaluate,
-    /// Corrupt stored manifest.
+    /// A stored manifest that is corrupt.
     CorruptManifest,
-    /// Unsupported manifest version.
+    /// A manifest version that the binary rejects.
     ManifestVersion,
-    /// Manifest missing its version.
+    /// A manifest with no version.
     ManifestNoVersion,
-    /// Non named delete input.
+    /// A delete input with no name.
     DeleteNonNamed,
-    /// Conflicting flags.
+    /// Flags that conflict.
     FlagsConflict,
-    /// Present target.
+    /// A target that is already present.
     OverwriteRefused,
-    /// Missing project folder.
+    /// A project folder that is absent.
     MissingProject,
-    /// Missing profile file.
+    /// A profile file that is absent.
     MissingProfile,
-    /// Failed project config load.
+    /// A project config load that failed.
     LoadProject,
-    /// Failed profile open.
+    /// A profile open that failed.
     OpenProfile,
-    /// Failed slot delete.
+    /// A slot delete that failed.
     DeleteSlot,
-    /// Failed slot parse for restore.
+    /// A slot parse for restore that failed.
     RestoreSlot,
-    /// Failed slot export.
+    /// A slot export that failed.
     ExportSlot,
-    /// Failed slot bundle.
+    /// A slot bundle that failed.
     BundleSlot,
-    /// Failed state delete.
+    /// A state delete that failed.
     DeleteState,
-    /// Failed state apply.
+    /// A state apply that failed.
     ApplyState,
-    /// Failed bundle-side state handling.
+    /// A bundle-side state operation that failed.
     BundleState,
-    /// Failed state export.
+    /// A state export that failed.
     ExportState,
-    /// Failed package handling for restore.
+    /// A state restore that failed.
     RestoreState,
-    /// Failed history rotation.
+    /// A history rotation that failed.
     RotateHistory,
-    /// Failed old blob cleanup.
+    /// An old blob cleanup that failed.
     PruneBlobs,
-    /// Failed state store.
+    /// A state store that failed.
     StoreState,
-    /// Failed project init.
+    /// A project init that failed.
     InitProject,
-    /// Unreadable prompt reply.
+    /// A prompt reply that fails its read.
     ReadReply,
-    /// Failed hook log write.
+    /// A hook log write that failed.
     WriteHookLog,
-    /// Failed destination write.
+    /// A destination write that failed.
     WriteDestination,
-    /// Failed destination removal.
+    /// A destination removal that failed.
     RemoveDestination,
 }

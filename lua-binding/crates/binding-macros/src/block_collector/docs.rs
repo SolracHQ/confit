@@ -1,7 +1,7 @@
 //! Splits method doc comments into summary, `# Arguments`, and `# Returns`
 //! sections.
 
-/// Splits doc lines into summary and section bodies.
+/// The summary and section bodies of a method doc comment.
 pub(crate) struct SectionSplit {
     pub(crate) summary: Vec<String>,
     pub(crate) arguments: Vec<String>,

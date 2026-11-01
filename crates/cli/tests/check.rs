@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use confit_cli::actions::check::CheckRunner;
 use confit_cli::cli::CheckArgs;
 
-/// Fetch-free profile over the shared sugar plugin.
+/// A profile that requires the shared sugar plugin and needs no fetch.
 const SUGAR_MAIN: &str = r#"
 local sugar = require("plugins._.sugar")
 return {
@@ -18,7 +18,7 @@ return {
 }
 "#;
 
-/// Second profile for the explicit profile choice run.
+/// A profile that writes one alternative document.
 const ALT_MAIN: &str = r#"
 return {
     configs = {
@@ -30,7 +30,7 @@ return {
 }
 "#;
 
-/// Seed the real example tree with the shared plugins beside it.
+/// Copies the example project and the shared plugins into the test folder.
 fn example_project(dir: &Path) -> PathBuf {
     let site = dir.join("nest").join("site");
     common::seed_tree(&common::repo_path("../../examples/0-basic_tool"), &site);
@@ -39,7 +39,7 @@ fn example_project(dir: &Path) -> PathBuf {
     site
 }
 
-/// Run one check over the project with the optional profile.
+/// Checks one project with the optional profile and returns the preview.
 fn run_check(dir: &Path, project: &Path, profile: Option<&Path>) -> String {
     let stores = common::test_stores(dir, "nest/site");
     let args = CheckArgs {
@@ -57,7 +57,7 @@ fn run_check(dir: &Path, project: &Path, profile: Option<&Path>) -> String {
 }
 
 #[test]
-fn check_shows_preview_for_example_project() {
+fn check_previews_the_example_project() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     let text = run_check(dir.path(), &site, None);
@@ -72,7 +72,7 @@ fn check_shows_preview_for_example_project() {
 }
 
 #[test]
-fn check_explicit_profile_beats_default() {
+fn check_explicit_profile_beats_the_default() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     common::seed_file(&site.join("laptop.lua"), ALT_MAIN.as_bytes());

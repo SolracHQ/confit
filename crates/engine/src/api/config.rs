@@ -1,4 +1,4 @@
-//! Plain config decode.
+//! Decodes one config table.
 
 use std::collections::HashMap;
 
@@ -30,7 +30,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Build one config from its name.
+    /// Builds one config.
     pub fn new(
         name: Id,
         documents: Vec<Document>,

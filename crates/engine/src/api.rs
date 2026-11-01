@@ -1,4 +1,4 @@
-//! Module installs over ready values.
+//! Installs the builtin modules.
 
 pub mod config;
 pub mod fact;
@@ -25,12 +25,14 @@ use crate::api::open::Open;
 use crate::api::template::Template;
 use crate::api::validate::Validate;
 
-/// Build one builtin module value.
+/// Builds the named builtin module.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names and module build failures.
-/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names and module build failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a module fails
+///   to build.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] when the name is
+///   unknown.
 pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
     match name {
         Fetch::MODULE => Fetch::add(lua)
@@ -58,16 +60,16 @@ pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
     }
 }
 
-/// Read the shared stores from one Lua instance.
+/// Returns the api stores.
 ///
 /// # Errors
 ///
-/// - [`mlua::Error`] for an uninstalled api.
-pub(crate) fn stores_of(lua: &Lua) -> mlua::Result<Stores> {
+/// - [`mlua::Error`] when the api is not installed.
+pub(crate) fn stores_from(lua: &Lua) -> mlua::Result<Stores> {
     match lua.app_data_ref::<Stores>() {
         Some(stores) => Ok(stores.clone()),
         None => Err(mlua::Error::RuntimeError(
-            "confit api is not installed".to_owned(),
+            "the confit api is not installed".to_owned(),
         )),
     }
 }
@@ -77,11 +79,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_modules_fail() {
+    fn builtin_rejects_unknown_names() {
         let lua = Lua::new();
         assert!(
             builtin(&lua, "confit.nope").is_err(),
-            "unknown module fails"
+            "the builtin resolver rejects an unknown name"
         );
     }
 }

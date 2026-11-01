@@ -10,7 +10,7 @@ use confit_cli::actions::{apply, bundle::BundleRunner, restore};
 use confit_cli::cli::{ApplyArgs, BundleArgs, RestoreArgs};
 use confit_driver::paths::BaseDirs;
 
-/// Build one profile with a single text document holding the text.
+/// Builds a profile that writes one text document with the given text.
 fn profile_text(relative: &str, text: &str) -> String {
     format!(
         r#"
@@ -26,7 +26,7 @@ return {{
     )
 }
 
-/// Seed one project with the profile text.
+/// Seeds the site profile with the document text.
 fn seed_project(dir: &Path, relative: &str, text: &str) {
     let site = dir.join("site");
     common::seed_file(
@@ -35,7 +35,7 @@ fn seed_project(dir: &Path, relative: &str, text: &str) {
     );
 }
 
-/// Bundle one project to the output path with shared stores.
+/// Bundles the site project to the output path with the test stores.
 fn bundle_project(dir: &Path, output: PathBuf) {
     let site = dir.join("site");
     let stores = common::test_stores(dir, "site");
@@ -53,7 +53,7 @@ fn bundle_project(dir: &Path, output: PathBuf) {
     .unwrap();
 }
 
-/// Restore one package with the prompt skipped.
+/// Restores one package into the home folder with the prompt skipped.
 fn restore_source(dir: &Path, source: PathBuf) {
     let stores = common::test_stores(dir, "site");
     let args = RestoreArgs {
@@ -64,7 +64,7 @@ fn restore_source(dir: &Path, source: PathBuf) {
     restore::run(&args, stores, common::test_handles(), hooks).unwrap();
 }
 
-/// Apply one project with the prompt skipped.
+/// Applies the site project with the prompt skipped and drops the report.
 fn apply_project(dir: &Path) {
     let site = dir.join("site");
     let stores = common::test_stores(dir, "site");
@@ -77,20 +77,20 @@ fn apply_project(dir: &Path) {
     apply::run(&args, stores, common::test_handles(), hooks).unwrap();
 }
 
-/// Read one home destination under the shared test root.
+/// Reads one home destination under the shared test root.
 fn home_bytes(relative: &str) -> Vec<u8> {
     let home = BaseDirs::new().home.unwrap();
     std::fs::read(home.join(relative)).unwrap()
 }
 
-/// Write one home destination directly, bypassing the runners.
+/// Writes one home destination directly and bypasses the runners.
 fn write_home(relative: &str, text: &[u8]) {
     let home = BaseDirs::new().home.unwrap();
     std::fs::write(home.join(relative), text).unwrap();
 }
 
 #[test]
-fn restore_bundle_file_writes_home() {
+fn restore_bundle_file_writes_the_home_destination() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-cb-note", "hello");
     let bundle = dir.path().join("state.cb");
@@ -99,12 +99,12 @@ fn restore_bundle_file_writes_home() {
     assert_eq!(
         home_bytes("confit-restore-cb-note"),
         b"hello",
-        "the bundle content lands home"
+        "the restore writes the bundle content to home"
     );
 }
 
 #[test]
-fn restore_named_state_writes_home() {
+fn restore_named_state_writes_the_home_destination() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-named-note", "hello");
     bundle_project(dir.path(), PathBuf::from("@restore-probe"));
@@ -112,25 +112,25 @@ fn restore_named_state_writes_home() {
     assert_eq!(
         home_bytes("confit-restore-named-note"),
         b"hello",
-        "the named content lands home"
+        "the restore writes the named content to home"
     );
 }
 
 #[test]
-fn restore_history_brings_original_back() {
+fn restore_history_returns_the_original() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-rollback-note", "original");
     apply_project(dir.path());
     assert_eq!(
         home_bytes("confit-restore-rollback-note"),
         b"original",
-        "the apply lands first"
+        "the apply writes the original text"
     );
     write_home("confit-restore-rollback-note", b"changed");
     restore_source(dir.path(), PathBuf::from("%1"));
     assert_eq!(
         home_bytes("confit-restore-rollback-note"),
         b"original",
-        "the rollback returns the bytes"
+        "the history restore writes the original bytes"
     );
 }

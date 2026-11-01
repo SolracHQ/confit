@@ -33,7 +33,7 @@ pub enum DecodeTag {
     },
 }
 
-/// A decode failure with the path to the value that failed.
+/// A decode failure and its value path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeError {
     /// The path from the root value.

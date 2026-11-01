@@ -10,6 +10,7 @@
 //! - `object` maps a struct or enum to Lua userdata with methods from
 //!   [`lua_methods`].
 //! - `function` maps a signature struct to a Lua function.
+//! - `proxy` maps a struct to the Lua form of a proxy type.
 //! - `str_alias` maps an enum to Lua strings.
 //! - `typed_alias` maps an enum to single-key tables.
 //! - `untagged` routes a table by its field set.
@@ -18,8 +19,7 @@
 //! Alias markers ride the `table` strategy: `#[shape(table, str_alias)]`.
 //!
 //! Field markers tune a key: `default`, `optional`, `name`, `flatten`,
-//! `ignore`, `proxy`, `borrowed`, `opaque`, `lua_trace`, `key_decode`, and
-//! `value_decode`.
+//! `ignore`, `borrowed`, `opaque`, and `lua_trace`.
 //!
 //! Doc comments on method blocks become stub text. A method with parameters
 //! needs an `# Arguments` section with one `- [name] description` bullet per
@@ -50,9 +50,8 @@ mod untagged;
 ///
 /// Field markers change a key. `default` fills an absent key from `Default`.
 /// `optional` accepts an absent key. `name` sets the Lua key. `flatten` merges
-/// a nested table into the outer table. `ignore` leaves a field to Rust. `proxy`
-/// routes the value through decode and encode hooks. An `Option` field accepts
-/// an absent key. The type carries that rule.
+/// a nested table into the outer table. `ignore` leaves a field to Rust. An
+/// `Option` field accepts an absent key. The type carries that rule.
 ///
 /// Object fields mark Lua access. `get` exposes the field through `__index`.
 /// `get, set` also exposes it through `__newindex`. A field with neither marker
@@ -127,28 +126,34 @@ mod untagged;
 /// }
 /// ```
 ///
-/// Proxy fields route through hook functions. A decode hook takes the Lua
-/// value and returns the Rust value. An encode hook turns the Rust value into
-/// the proxy value, and the derive encodes that value.
+/// A proxy struct takes the Lua form of a proxy type. The `Hooked` impl maps
+/// the proxy value to the Rust value and back. A field of that type carries the
+/// conversion into every table that uses it.
 ///
 /// ```rust,no_run
-/// use lua_binding::error::DecodeError;
+/// use lua_binding::error::{DecodeError, DecodeTag};
+/// use lua_binding::value::Hooked;
 /// use lua_binding::Shape;
-/// use mlua::{Lua, Value};
-///
-/// fn decode_timeout(lua: &Lua, value: &Value) -> Result<u64, DecodeError> {
-///     Ok(60)
-/// }
-///
-/// fn render_timeout(_lua: &Lua, timeout: &u64) -> mlua::Result<String> {
-///     Ok(timeout.to_string())
-/// }
+/// use mlua::Lua;
 ///
 /// #[derive(Shape)]
-/// #[shape(table)]
-/// struct Job {
-///     #[shape(proxy = String, decode_hook = decode_timeout, encode_hook = render_timeout)]
-///     timeout_secs: u64,
+/// #[shape(proxy = String)]
+/// struct Count(u32);
+///
+/// impl Hooked<String> for Count {
+///     fn decode(_lua: &Lua, text: String) -> Result<Self, DecodeError> {
+///         text.parse::<u32>().map(Count).map_err(|_| DecodeError {
+///             segments: Vec::new(),
+///             reason: DecodeTag::ShapeMismatch {
+///                 require: "a count".to_owned(),
+///                 found: text,
+///             },
+///         })
+///     }
+///
+///     fn encode(&self, _lua: &Lua) -> mlua::Result<String> {
+///         Ok(self.0.to_string())
+///     }
 /// }
 /// ```
 #[proc_macro_derive(Shape, attributes(shape))]

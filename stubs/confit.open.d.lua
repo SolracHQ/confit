@@ -1,42 +1,42 @@
 --- @meta confit.open
---- Open one project-relative file.
+--- Opens one project file.
 --- @param path string Project-relative file path.
 --- @return ResourceHandle? The resource handle, else nil.
 --- @return string? The failure reason, else nil.
 function open(path) end
 
---- Handle to a trusted resource.
+--- A handle to a trusted resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
---- Read file text.
---- @return string? File text, else nil.
---- @return string? Failure reason, else nil.
+--- Reads one trusted file as text.
+--- @return string? The decoded file text.
+--- @return string? The failure reason.
 function ResourceHandle:text() end
 
---- Read file content.
---- @return table? Decoded table, else nil.
---- @return string? Failure reason, else nil.
+--- Loads one file into its Lua table.
+--- @return table? The decoded table.
+--- @return string? The failure reason.
 function ResourceHandle:load() end
 
---- Open the input archive.
---- @return ArchiveHandle? Archive handle, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the archive handle for one trusted source.
+--- @return ArchiveHandle? The archive handle.
+--- @return string? The failure reason.
 function ResourceHandle:archive() end
 
---- Handle to a verified compressed archive.
+--- A handle to a verified compressed archive.
 --- @class ArchiveHandle
 ArchiveHandle = {}
 
---- List the archive member names, archive-relative with forward slashes.
---- @return string[]? Member names, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the archive member names in archive-relative form with forward slashes.
+--- @return string[]? The member names.
+--- @return string? The failure reason.
 function ArchiveHandle:members() end
 
---- Open one archive member.
---- @param name string Archive-relative member name.
---- @return ResourceHandle? Member handle, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the handle for one archive member.
+--- @param name string The member path with forward slashes.
+--- @return ResourceHandle? The member handle.
+--- @return string? The failure reason.
 function ArchiveHandle:member(name) end
 
 return open

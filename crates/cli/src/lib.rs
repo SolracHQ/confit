@@ -1,7 +1,4 @@
-//! Confit cli
-//! Terminal surface over profile evaluation and plans.
-
-#![deny(missing_docs)]
+//! Terminal surface for profile evaluation and plans.
 
 pub mod actions;
 pub mod cli;

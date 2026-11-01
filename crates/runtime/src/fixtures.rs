@@ -5,7 +5,7 @@ use std::path::Path;
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
 
-/// Build stores over one temp folder.
+/// Builds stores under one temporary folder.
 pub(crate) fn test_stores(dir: &Path) -> Stores {
     let (sender, _) = crossbeam_channel::unbounded();
     Stores::new(
@@ -18,7 +18,7 @@ pub(crate) fn test_stores(dir: &Path) -> Stores {
     )
 }
 
-/// Land one project file and return its live handle.
+/// Writes one project file and returns its live handle.
 pub(crate) fn project_handle(
     stores: &Stores,
     dir: &Path,
@@ -30,6 +30,6 @@ pub(crate) fn project_handle(
     std::fs::write(project.join(name), body).unwrap();
     match stores.resources().resource(name) {
         Ok(found) => found,
-        Err(error) => panic!("project opens: {error}"),
+        Err(error) => panic!("the project fails to open: {error}"),
     }
 }

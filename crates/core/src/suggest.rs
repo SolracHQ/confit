@@ -1,15 +1,16 @@
 //! Near-match suggestions for unknown names.
 //!
-//! Damerau-Levenshtein keeps transpositions cheap, covering the typo class.
+//! The distance follows Damerau-Levenshtein, so a swapped pair counts as one
+//! edit.
 
-/// Farthest edit distance keeping one candidate.
+/// The farthest edit distance that keeps a candidate.
 pub const MAX_SUGGESTION_DISTANCE: usize = 3;
-/// Most candidates kept per error.
+/// The limit on candidates for one error.
 pub const MAX_SUGGESTION_COUNT: usize = 5;
 
-/// Collect known names near one wanted name.
+/// Finds candidates near one wanted name.
 ///
-/// Order runs nearest first, breaking ties by name.
+/// Candidates come nearest first, with ties broken by name.
 pub fn nearby(wanted: &str, candidates: &[String]) -> Vec<String> {
     let mut scored: Vec<(usize, &str)> = candidates
         .iter()
@@ -34,19 +35,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_transposed_names() {
+    fn nearby_keeps_transposed_names() {
         let found = nearby("documnet", &["document".to_owned(), "profile".to_owned()]);
         assert_eq!(found, vec!["document".to_owned()]);
     }
 
     #[test]
-    fn drops_far_names() {
+    fn nearby_drops_far_names() {
         let found = nearby("xyz", &["document".to_owned()]);
         assert!(found.is_empty());
     }
 
     #[test]
-    fn orders_by_distance_then_name_and_caps() {
+    fn nearby_orders_by_distance_then_name_and_caps() {
         let candidates = ["abd", "abe", "abf", "abg", "abh", "abi", "zzzq"]
             .iter()
             .map(|name| (*name).to_owned())

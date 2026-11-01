@@ -1,49 +1,49 @@
-//! Message protocol between workers and the render thread.
+//! Messages between worker threads and the render thread.
 
-/// Fact for one run step.
+/// The state of one run step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    /// Marks one operation opening.
+    /// An operation that starts.
     Started {
-        /// Stable operation id.
+        /// The id shared by every update for this operation.
         id: String,
-        /// Human label for the spinner row.
+        /// The text shown on the spinner row.
         label: String,
     },
-    /// Marks one operation advance.
+    /// An operation in progress.
     Progress {
-        /// Stable operation id.
+        /// The id shared by every update for this operation.
         id: String,
-        /// Human label for the spinner row.
+        /// The text shown on the spinner row.
         label: String,
-        /// Finished units including this update.
+        /// The finished units through this update.
         done: u64,
-        /// Total units when known.
+        /// The unit count for the whole operation, absent when the source omits it.
         total: Option<u64>,
     },
-    /// Marks one operation end.
+    /// An operation that finishes.
     Finished {
-        /// Stable operation id.
+        /// The id shared by every update for this operation.
         id: String,
-        /// Human label for the spinner row.
+        /// The text shown on the spinner row.
         label: String,
     },
 }
 
-/// Message for the render thread.
+/// One message to the render thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToUi {
-    /// Progress fact for the spinner.
+    /// One run step event for the spinner.
     Progress(Event),
-    /// Line for stderr above the spinner.
+    /// Text written to stderr above the spinner.
     Print(String),
-    /// Question for stdin with the answer on the return channel.
+    /// A question written to stderr, with the answer read from stdin.
     Prompt(String),
 }
 
-/// Message from the render thread.
+/// One message back from the render thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FromUi {
-    /// Line read from stdin without the trailing newline.
+    /// A line read from stdin with the trailing newline trimmed.
     Answer(String),
 }

@@ -1,4 +1,3 @@
-//! Differ
 //! Recorded manifests against disk readers.
 
 mod compare;
@@ -14,21 +13,21 @@ use confit_core::error::{ContextualResult, DiffWarning};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-/// Manual edit at one recorded destination.
+/// A difference between a recorded document and the disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Difference {
-    /// Leaf difference between recorded and disk.
+    /// A difference in one leaf value of a structured document.
     Key {
         /// The recorded destination route.
         path: Route,
-        /// Dotted leaf key with `target` for links.
+        /// The leaf key with dots, and `target` for a link.
         key: String,
         /// The recorded leaf value.
         old: Option<serde_json::Value>,
         /// The disk leaf value.
         new: Option<serde_json::Value>,
     },
-    /// Structured difference between recorded and disk.
+    /// A difference in a structured map.
     Structured {
         /// The recorded destination route.
         path: Route,
@@ -37,53 +36,53 @@ pub enum Difference {
         /// The disk map.
         new: BTreeMap<String, serde_json::Value>,
     },
-    /// Text difference between recorded and disk.
+    /// A difference in text lines.
     Diff {
         /// The recorded destination route.
         path: Route,
         /// The unified diff from recorded to disk.
         diff: String,
     },
-    /// Absent recorded destination on disk.
+    /// A recorded destination that is absent on disk.
     Missing {
         /// The recorded destination route.
         path: Route,
     },
-    /// Unreadable recorded destination on disk.
+    /// A recorded destination that fails to read on disk.
     Unreadable {
         /// The recorded destination route.
         path: Route,
         /// The fault cause for the failed read.
         reason: String,
     },
-    /// Directory blocks the recorded destination on disk.
+    /// A directory that blocks the recorded destination on disk.
     Blocked {
         /// The recorded destination route.
         path: Route,
     },
 }
 
-/// One difference side order.
+/// The order of the old and new sides in a difference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DifferenceOrder {
-    /// Recorded bytes as old with disk as new.
+    /// An order that puts the recorded bytes first.
     RecordedFirst,
-    /// Disk bytes as old with recorded as new.
+    /// An order that puts the disk bytes first.
     DiskFirst,
 }
 
-/// Recorded against disk difference reader.
+/// A reader of recorded documents against disk.
 pub struct Differ {
-    /// Read capabilities for one run.
+    /// The stores that serve the reads for one run.
     pub stores: Stores,
 }
 
 impl Differ {
-    /// Report manual edits between recorded documents and disk.
+    /// Reports the differences between the recorded documents and the disk.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     pub fn differences(
         &self,
         manifest: &Manifest,
@@ -99,7 +98,7 @@ mod tests {
 
     use confit_core::sha::Sha;
     use confit_model::document::{
-        Data, Document, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
+        Data, Document, FileMode, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
     };
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -134,7 +133,7 @@ mod tests {
             path: literal(path),
             data: Data::Text(TextDocument {
                 content: content.to_string(),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
                 unmanaged: false,
             }),
         }
@@ -157,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_doc_reports_missing() {
+    fn absent_document_reports_an_absent_destination() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("absent.txt");
         let found = differences_of(dir.path(), vec![text_doc(&dest, "recorded")]);
@@ -170,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_doc_reports_blocked() {
+    fn directory_destination_reports_a_blocked_difference() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("blocked.txt");
         std::fs::create_dir_all(&dest).unwrap();
@@ -184,19 +183,19 @@ mod tests {
     }
 
     #[test]
-    fn changed_doc_reports_diff() {
+    fn changed_bytes_report_one_text_difference() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("note.txt");
         std::fs::write(&dest, b"disk bytes").unwrap();
         let found = differences_of(dir.path(), vec![text_doc(&dest, "recorded")]);
         assert!(
             matches!(found.as_slice(), [Difference::Diff { .. }]),
-            "changed bytes render one diff"
+            "the changed bytes produce one text difference"
         );
     }
 
     #[test]
-    fn tree_member_missing_reports_missing() {
+    fn absent_tree_member_reports_an_absent_destination() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("tree");
         let member = literal(&dest).join("file.txt");
@@ -205,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_member_blocked_reports_blocked() {
+    fn blocked_tree_member_reports_a_blocked_difference() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("tree");
         std::fs::create_dir_all(dest.join("file.txt")).unwrap();
@@ -215,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn difference_renders_routes_expanded_like_for_like() {
+    fn difference_renders_expanded_routes_in_both_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("shellrc");
         let sourced = dir.path().join("sourced.sh");
@@ -234,11 +233,11 @@ mod tests {
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),
-            "rendered bytes carry the expanded path"
+            "the rendered bytes hold the expanded path"
         );
         assert!(
             !text.contains("literal:"),
-            "rendered bytes carry no display alias"
+            "the rendered bytes hold the plain host path"
         );
         std::fs::write(&dest, &recorded).unwrap();
         let manifest = Manifest {
@@ -255,14 +254,11 @@ mod tests {
             .differences(&manifest, DifferenceOrder::RecordedFirst)
             .unwrap()
             .0;
-        assert!(
-            found.is_empty(),
-            "matching expanded bytes are zero difference"
-        );
+        assert!(found.is_empty(), "the matching bytes produce no difference");
         assert_eq!(
             document.path.display(),
             dest.to_str().unwrap(),
-            "literal display renders the bare host path"
+            "the literal route displays the bare host path"
         );
     }
 }

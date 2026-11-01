@@ -1,12 +1,16 @@
 //! Verified content hashes.
 
+use lua_binding::Shape;
+use lua_binding::error::{DecodeError, DecodeTag};
+use lua_binding::value::Hooked;
+use mlua::Lua;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-/// Verified hash failure shapes.
+/// One verified hash failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShaError {
-    /// Parse failure.
+    /// A text that is not 64 hex characters.
     Parse {
         /// The offending input value.
         input: String,
@@ -19,7 +23,7 @@ impl std::fmt::Display for ShaError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Parse { input, require } => {
-                write!(formatter, "invalid '{input}', require {require}")
+                write!(formatter, "invalid '{input}', expected {require}")
             }
         }
     }
@@ -27,33 +31,34 @@ impl std::fmt::Display for ShaError {
 
 impl std::error::Error for ShaError {}
 
-/// Verified hash result alias.
+/// One verified hash result.
 pub type ShaResult<T> = std::result::Result<T, ShaError>;
 
-/// Byte count for a SHA-256 digest.
+/// The SHA-256 digest size in bytes.
 pub const SHA_BYTE_LEN: usize = 32;
 
-/// Hex character count for a SHA-256 digest.
+/// The SHA-256 digest size in hex characters.
 const SHA_HEX_LEN: usize = 64;
 
-/// Read chunk size for streaming hashes.
+/// The chunk size for a streaming read.
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 
-/// Verified SHA-256 digest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A SHA-256 digest.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Shape)]
+#[shape(proxy = String)]
 pub struct Sha {
     inner: [u8; SHA_BYTE_LEN],
 }
 
 impl Sha {
-    /// Build one content hash.
+    /// Parses one content hash from hex text.
     ///
     /// # Errors
     ///
-    /// - [`ShaError::Parse`] for malformed hashes.
+    /// - [`ShaError::Parse`] when the text holds no 64 hex characters.
     pub fn new(sha: impl Into<String>) -> ShaResult<Self> {
         let sha = sha.into();
-        check_sha_hex(&sha)?;
+        validate_sha_hex(&sha)?;
         let bytes = sha.as_bytes();
         let mut inner = [0u8; SHA_BYTE_LEN];
         for (index, byte) in inner.iter_mut().enumerate() {
@@ -64,7 +69,7 @@ impl Sha {
         Ok(Self { inner })
     }
 
-    /// Hash bytes into a verified digest.
+    /// Computes the digest of the given bytes.
     pub fn hash(bytes: &[u8]) -> Self {
         let digest = sha2::Sha256::digest(bytes);
         Self {
@@ -72,18 +77,18 @@ impl Sha {
         }
     }
 
-    /// Finish a streaming hash.
+    /// Converts a running hasher into its digest.
     pub fn finish(hasher: sha2::Sha256) -> Self {
         Self {
             inner: hasher.finalize().into(),
         }
     }
 
-    /// Hash a byte stream into a verified digest with its byte count.
+    /// Reads a byte stream and returns its digest and byte count.
     ///
     /// # Errors
     ///
-    /// - Stream read failures surface as io errors.
+    /// - [`std::io::Error`] when the stream read fails.
     pub fn read_with_size(stream: &mut impl std::io::Read) -> std::io::Result<(Self, u64)> {
         let mut hasher = sha2::Sha256::new();
         let mut chunk = [0u8; READ_CHUNK_BYTES];
@@ -99,26 +104,26 @@ impl Sha {
         Ok((Self::finish(hasher), len))
     }
 
-    /// Hash a byte stream into a verified digest.
+    /// Reads a byte stream and returns its digest.
     ///
     /// # Errors
     ///
-    /// - Stream read failures surface as io errors.
+    /// - [`std::io::Error`] when the stream read fails.
     pub fn read(stream: &mut impl std::io::Read) -> std::io::Result<Self> {
         Ok(Self::read_with_size(stream)?.0)
     }
 
-    /// Return the raw digest bytes.
+    /// Returns the digest in raw byte form.
     pub fn as_bytes(&self) -> [u8; SHA_BYTE_LEN] {
         self.inner
     }
 
-    /// Build one digest from raw bytes.
+    /// Turns raw bytes into a digest.
     pub fn from_bytes(bytes: [u8; SHA_BYTE_LEN]) -> Self {
         Self { inner: bytes }
     }
 
-    /// Render the hex digest.
+    /// Writes the digest as lowercase hex.
     pub fn hex(&self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(SHA_HEX_LEN);
@@ -129,12 +134,12 @@ impl Sha {
         out
     }
 
-    /// Render the hash and size label.
+    /// Writes the hash and size as a label.
     pub fn label(&self, len: u64) -> String {
         format!("sha256:{self} ({len} bytes)")
     }
 
-    /// Render the short hash prefix for terminal lines.
+    /// Formats the short hash prefix for a terminal line.
     pub fn short(&self) -> String {
         self.hex()[..12].to_owned()
     }
@@ -165,14 +170,30 @@ impl std::fmt::Display for Sha {
     }
 }
 
-/// Writer with a running hash over written bytes.
+impl Hooked<String> for Sha {
+    fn decode(_lua: &Lua, text: String) -> Result<Self, DecodeError> {
+        Sha::new(text.clone()).map_err(|_| DecodeError {
+            segments: Vec::new(),
+            reason: DecodeTag::ShapeMismatch {
+                require: "a 64-char hex digest".to_owned(),
+                found: format!("'{text}'"),
+            },
+        })
+    }
+
+    fn encode(&self, _lua: &Lua) -> mlua::Result<String> {
+        Ok(self.hex())
+    }
+}
+
+/// A writer that hashes every byte it writes.
 pub struct ShaWriter<W> {
     inner: W,
     hasher: sha2::Sha256,
 }
 
 impl<W: std::io::Write> ShaWriter<W> {
-    /// Wrap one writer with a running hash.
+    /// Turns one writer into a hashing writer.
     pub fn new(inner: W) -> Self {
         Self {
             inner,
@@ -180,12 +201,12 @@ impl<W: std::io::Write> ShaWriter<W> {
         }
     }
 
-    /// Finish the running hash over every byte written.
+    /// Closes the running hash after the last byte.
     pub fn digest(self) -> Sha {
         Sha::finish(self.hasher)
     }
 
-    /// Finish the running hash and return the writer with its digest.
+    /// Closes the running hash and hands back the writer with its digest.
     pub fn finish(self) -> (W, Sha) {
         let digest = Sha::finish(self.hasher);
         (self.inner, digest)
@@ -204,7 +225,7 @@ impl<W: std::io::Write> std::io::Write for ShaWriter<W> {
     }
 }
 
-/// Decode one hex character into its value.
+/// Turns one hex character into its value.
 fn hex_value(byte: u8, sha: &str) -> ShaResult<u8> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -217,8 +238,8 @@ fn hex_value(byte: u8, sha: &str) -> ShaResult<u8> {
     }
 }
 
-/// Reject malformed content hashes.
-fn check_sha_hex(sha: &str) -> ShaResult<()> {
+/// Refuses a content hash that is not 64 hex characters.
+fn validate_sha_hex(sha: &str) -> ShaResult<()> {
     if sha.len() == SHA_HEX_LEN && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Ok(());
     }
@@ -226,4 +247,39 @@ fn check_sha_hex(sha: &str) -> ShaResult<()> {
         input: sha.to_owned(),
         require: "64 hex characters".to_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha_hook_decodes_hex_text() {
+        let lua = Lua::new();
+        let text = "0".repeat(SHA_HEX_LEN);
+        let found = <Sha as Hooked<String>>::decode(&lua, text.clone()).unwrap();
+        assert_eq!(
+            found,
+            Sha::new(text).unwrap(),
+            "the hook keeps the digest bytes"
+        );
+    }
+
+    #[test]
+    fn sha_hook_encodes_hex_text() {
+        let lua = Lua::new();
+        let sha = Sha::hash(b"1.2.3");
+        let text = <Sha as Hooked<String>>::encode(&sha, &lua).unwrap();
+        assert_eq!(text, sha.hex(), "the hook returns the hex text");
+    }
+
+    #[test]
+    fn sha_hook_rejects_short_text() {
+        let lua = Lua::new();
+        let error = <Sha as Hooked<String>>::decode(&lua, "0".repeat(SHA_HEX_LEN - 1)).unwrap_err();
+        assert!(
+            error.to_string().contains("a 64-char hex digest"),
+            "the hook error shows the expected shape: {error}"
+        );
+    }
 }

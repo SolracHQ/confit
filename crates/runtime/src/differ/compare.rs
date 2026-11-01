@@ -18,18 +18,18 @@ use crate::render;
 use confit_core::error::ContextualResult;
 use confit_core::error::{ContextualCause, DiffWarning, WithContext, contextual};
 
-/// Recorded against disk comparator.
+/// A comparator of recorded documents against the disk.
 pub(crate) struct Comparator<'a> {
-    /// Read capabilities for one run.
+    /// The stores that serve the reads for one run.
     stores: &'a Stores,
-    /// Difference side order.
+    /// The order of the old and new sides in a difference.
     ordered: Ordered,
-    /// Non-blocking warnings for failed states.
+    /// The warnings that failed states produce without stopping the run.
     warnings: Vec<DiffWarning>,
 }
 
 impl<'a> Comparator<'a> {
-    /// Build one comparator over shared stores with its side order.
+    /// Builds one comparator with its warnings empty.
     pub(crate) fn new(stores: &'a Stores, order: DifferenceOrder) -> Self {
         Self {
             stores,
@@ -38,13 +38,13 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Report manual edits between recorded documents and disk.
+    /// Reports the differences between the recorded documents and the disk.
     ///
-    /// - Entries follow recorded destination order.
+    /// - Entries follow the order of the recorded destinations.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     pub(crate) fn run(
         &mut self,
         manifest: &Manifest,
@@ -56,11 +56,11 @@ impl<'a> Comparator<'a> {
         Ok((out, std::mem::take(&mut self.warnings)))
     }
 
-    /// Collect difference entries for one recorded document.
+    /// Collects the entries that describe one recorded document against the disk.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     fn compare_one(&mut self, document: &Document) -> ContextualResult<Vec<Difference>> {
         if let Data::Tree(found) = &document.data {
             return self.compare_tree(&document.path, &found.members);
@@ -93,13 +93,13 @@ impl<'a> Comparator<'a> {
         })
     }
 
-    /// Collect difference entries for one tree destination walk.
+    /// Collects the entries for the members of one tree destination.
     ///
-    /// - Only manifest members produce entries.
+    /// - Only the members of the manifest produce entries.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     fn compare_tree(
         &mut self,
         destination: &Route,
@@ -113,7 +113,7 @@ impl<'a> Comparator<'a> {
         Ok(out)
     }
 
-    /// Collect difference entries for one tree member.
+    /// Collects the entries for one member of a tree destination.
     fn compare_member(
         &mut self,
         destination: &Route,
@@ -135,12 +135,12 @@ impl<'a> Comparator<'a> {
                     out.push(self.digest(destination, relative, &recorded, &disk));
                 }
                 if let Some(seen) = mode
-                    && seen != member.mode()
+                    && seen != member.mode().bits()
                 {
                     out.push(self.ordered.mode_key(
                         destination,
                         format!("{relative}:mode"),
-                        member.mode(),
+                        member.mode().bits(),
                         seen,
                     ));
                 }
@@ -149,17 +149,17 @@ impl<'a> Comparator<'a> {
         )
     }
 
-    /// Collect difference entries for one opaque handle against disk.
+    /// Collects the entries for one opaque document against the disk.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     fn compare_digest_handle(&mut self, document: &Document) -> ContextualResult<Vec<Difference>> {
         let Data::Opaque(found) = &document.data else {
             return Ok(Vec::new());
         };
         let sha = found.handle.sha();
-        let mode = found.mode;
+        let mode = found.mode.bits();
         DiskReader::digest(document, |FileDigest { digest, mode: seen }| {
             if *sha != digest.sha {
                 let recorded = self.recorded_label(&document.path, sha);
@@ -185,9 +185,9 @@ impl<'a> Comparator<'a> {
         })
     }
 
-    /// Collect difference entries for one present disk path.
+    /// Collects the entries for a destination that is present on disk.
     ///
-    /// - Unmanaged documents stay quiet.
+    /// - An unmanaged document produces no entry.
     fn compare_rendered(
         &self,
         document: &Document,
@@ -233,7 +233,7 @@ impl<'a> Comparator<'a> {
         out
     }
 
-    /// Append one mode entry for mode-carrying documents.
+    /// Appends one mode entry when the document carries a mode.
     fn append_mode(&self, document: &Document, disk_mode: Option<u32>, out: &mut Vec<Difference>) {
         let wanted = status::mode(document);
         if let Some(wanted) = wanted
@@ -247,7 +247,8 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Report structured entries with text fallback for unparsable disk.
+    /// Returns the structured entries, or one text difference for a disk that
+    /// does not parse.
     fn structured(
         &self,
         path: &Route,
@@ -263,7 +264,7 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Report text entries for equal-checked bytes.
+    /// Returns the text entries for the checked bytes.
     fn text(&self, path: &Route, recorded: &[u8], disk: &[u8]) -> Vec<Difference> {
         if recorded == disk {
             Vec::new()
@@ -272,7 +273,7 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Report one digest entry for opaque rendered bytes.
+    /// Returns one digest entry when the opaque bytes differ.
     fn digest_rendered(&self, path: &Route, recorded: &[u8], disk: &[u8]) -> Vec<Difference> {
         if recorded == disk {
             Vec::new()
@@ -286,14 +287,14 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Build one digest key entry from two labels.
+    /// Builds one digest key entry from the recorded and disk labels.
     fn digest(&self, path: &Route, key: &str, recorded: &str, disk: &str) -> Difference {
         self.ordered.key(path, key, recorded, disk)
     }
 
-    /// Label one recorded hash with its pool byte count.
+    /// Labels one recorded hash with its byte count from the pool.
     ///
-    /// - Missing pool entries fall back to the bare hash.
+    /// - An absent pool entry falls back to the bare hash.
     fn recorded_label(&mut self, route: &Route, sha: &Sha) -> String {
         use std::io::Read as _;
 
@@ -319,7 +320,7 @@ impl<'a> Comparator<'a> {
         }
     }
 
-    /// Parse disk bytes to a map by format.
+    /// Parses the disk bytes into a map for the document format.
     fn parse_table(
         format: StructuredFormat,
         disk: &[u8],

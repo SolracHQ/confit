@@ -1,5 +1,5 @@
 --- @meta confit.input
---- Read one prompted line.
+--- Asks for one line.
 --- @param prompt string The prompt text.
 --- @return string The input line.
 function input(prompt) end

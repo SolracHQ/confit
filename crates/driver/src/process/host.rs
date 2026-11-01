@@ -1,4 +1,4 @@
-//! Host process runs.
+//! Runs processes on the host.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -7,16 +7,16 @@ use confit_core::error::{ContextualCause, FilesystemError, HookRunError};
 
 use super::ProcessOutput;
 
-/// Run one argv with extended PATH and a timeout that kills late runs.
+/// Runs a command with an extended PATH and kills it on timeout.
 ///
-/// Partial output stays in the file when the timeout kills the child.
+/// The file holds the partial output after a timeout kills the child.
 ///
 /// # Errors
 ///
-/// - [`HookRunError::BinaryUnresolved`] for empty argv and missing binaries.
-/// - [`FilesystemError::FilePermissionDenied`] for denied execution.
-/// - [`FilesystemError::FileUnknown`] for unknown spawn and wait faults.
-/// - [`HookRunError::TimedOut`] for timed-out runs.
+/// - [`HookRunError::BinaryUnresolved`] when the argv is empty or the binary is missing.
+/// - [`FilesystemError::FilePermissionDenied`] when execution is denied.
+/// - [`FilesystemError::FileUnknown`] when the spawn or the wait fails.
+/// - [`HookRunError::TimedOut`] when the run times out.
 pub(super) fn spawn(
     argv: &[String],
     path_dirs: &[PathBuf],
@@ -57,7 +57,7 @@ pub(super) fn spawn(
     }
 }
 
-/// Map one spawn or wait fault to its bare cause.
+/// Converts a spawn or wait fault into a cause.
 fn io_cause(error: std::io::Error) -> ContextualCause {
     match error.kind() {
         std::io::ErrorKind::NotFound => ContextualCause::from(HookRunError::BinaryUnresolved),

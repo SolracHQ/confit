@@ -1,4 +1,4 @@
-//! Plain profile decode.
+//! Decodes one profile table.
 
 use lua_binding::Shape;
 
@@ -18,7 +18,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Build one profile.
+    /// Builds one profile.
     pub fn new(configs: Vec<Config>, documents: Vec<Document>) -> Self {
         Self { configs, documents }
     }

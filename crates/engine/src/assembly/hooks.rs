@@ -1,4 +1,4 @@
-//! Collect profile hooks with hook patches over declared hooks.
+//! Collects profile hooks.
 
 use std::collections::BTreeSet;
 
@@ -16,19 +16,21 @@ use lua_binding::value::{Decode, Encode};
 
 use super::patches::split_patches;
 
-/// Collect one profile's hooks in first-seen order.
+/// Collects one profile's hooks.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids, unknown targets,
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for repeated ids, unknown targets,
-///   unbuilt routes, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a hook id
+///   repeats, a patch target is unknown, or a changed condition targets an
+///   unbuilt route.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a hook fails to
+///   encode or a callback fails.
 pub(super) fn collect_hooks(
     lua: &Lua,
     profile: &Profile,
     documents: &[Document],
 ) -> TerminalResult<Vec<Hook>> {
-    check_hook_ids(profile)?;
+    validate_hook_ids(profile)?;
     let mut hooks = Vec::new();
     for config in &profile.configs {
         hooks.extend(config.hooks.iter().cloned());
@@ -38,12 +40,13 @@ pub(super) fn collect_hooks(
     Ok(hooks)
 }
 
-/// Reject repeated hook ids.
+/// Rejects repeated hook ids.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for repeated ids.
-fn check_hook_ids(profile: &Profile) -> TerminalResult<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when two hooks share
+///   an id.
+fn validate_hook_ids(profile: &Profile) -> TerminalResult<()> {
     let mut seen = BTreeSet::new();
     for config in &profile.configs {
         for hook in &config.hooks {
@@ -67,17 +70,19 @@ fn check_hook_ids(profile: &Profile) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Render the first declaration site of one hook id.
+/// Returns the first declaration site.
 fn declared_at(hook: &Hook) -> Option<String> {
     hook.id.trace.0.first().map(|site| site.to_string())
 }
 
-/// Run hook patches over declared hooks.
+/// Applies the hook patches.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown ids, bad shapes, and Lua failures.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown ids, bad shapes, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a target is
+///   unknown or a patch has a bad shape.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a hook fails to
+///   encode or a callback fails.
 fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> TerminalResult<()> {
     for owned in split_patches(profile).iter() {
         let Some(patch) = owned.hook() else {
@@ -130,11 +135,12 @@ fn apply_hook_patches(lua: &Lua, profile: &Profile, hooks: &mut [Hook]) -> Termi
     Ok(())
 }
 
-/// Reject changed conditions showing routes outside the built set.
+/// Rejects changed conditions on unbuilt routes.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for conditions showing unbuilt routes.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a changed
+///   condition targets an unbuilt route.
 fn validate_changed(hooks: &[Hook], documents: &[Document]) -> TerminalResult<()> {
     let built: BTreeSet<Route> = documents
         .iter()

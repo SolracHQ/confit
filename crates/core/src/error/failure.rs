@@ -1,10 +1,10 @@
 //! Non-blocking diff warnings.
 //!
-//! Warnings name the difference the run states without blocking it.
+//! A warning holds a difference, and the run continues.
 
 use super::contextual::ContextualCause;
 
-/// Non-blocking diff warning.
+/// A warning for one route whose diff failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffWarning {
     route: String,
@@ -12,7 +12,7 @@ pub struct DiffWarning {
 }
 
 impl DiffWarning {
-    /// Build one diff warning.
+    /// Wraps one cause into a warning for the route.
     pub fn warn(route: impl Into<String>, contextual: ContextualCause) -> Self {
         Self {
             route: route.into(),
@@ -20,22 +20,22 @@ impl DiffWarning {
         }
     }
 
-    /// Return the route under stating.
+    /// Returns the route that the warning concerns.
     pub fn route(&self) -> &str {
         &self.route
     }
 
-    /// Return the failed result.
+    /// Returns the cause that failed.
     pub fn cause(&self) -> &super::cause::ErrorCause {
         self.contextual.cause()
     }
 
-    /// Return where the operation ran.
+    /// Returns the location where the operation ran.
     pub fn context(&self) -> &super::context::ErrorContext {
         self.contextual.context()
     }
 
-    /// Render one honest warning line.
+    /// Formats one warning line.
     pub fn summary(&self) -> String {
         format!(
             "Cannot state the difference for '{}': {}",

@@ -9,8 +9,8 @@ use confit_engine::{assemble, assembly::Assembler};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, LinkDocument, OpaqueDocument, RcEntry, StructuredDocument, StructuredFormat,
-    TextDocument, TreeDocument, TreeMember,
+    Data, Document, FileMode, LinkDocument, OpaqueDocument, RcEntry, StructuredDocument,
+    StructuredFormat, TextDocument, TreeDocument, TreeMember,
 };
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
@@ -19,7 +19,7 @@ use mlua::Lua;
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
-fn duplicates_fail() {
+fn assemble_rejects_duplicate_destinations() {
     let lua = Lua::new();
     let profile = Profile::new(
         vec![
@@ -42,7 +42,7 @@ fn duplicates_fail() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "duplicate destinations fail"
+        "the assembler rejects duplicate destinations"
     );
     let lua = Lua::new();
     let profile = Profile::new(
@@ -64,7 +64,10 @@ fn duplicates_fail() {
         ],
         Vec::new(),
     );
-    assert!(assemble(&lua, &profile).is_err(), "repeated names fail");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects repeated config names"
+    );
     let lua = Lua::new();
     let profile = Profile::new(
         vec![Config::new(
@@ -78,7 +81,7 @@ fn duplicates_fail() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "duplicate destinations fail"
+        "the assembler rejects duplicate destinations"
     );
 }
 
@@ -95,10 +98,10 @@ fn top_level_documents_assemble() {
             let route = Route::new(RouteBase::Home, "top.txt").unwrap();
             assert!(
                 documents.iter().any(|document| document.path == route),
-                "top document assembles"
+                "the assembler keeps the top document"
             );
         }
-        Err(error) => panic!("top documents assemble: {error}"),
+        Err(error) => panic!("the top document fails to assemble: {error}"),
     }
 }
 
@@ -121,7 +124,7 @@ fn survivors_order_by_route() {
                 vec!["home('apple')".to_owned(), "home('zebra')".to_owned()]
             );
         }
-        Err(error) => panic!("distinct destinations assemble: {error}"),
+        Err(error) => panic!("the distinct destinations fail to assemble: {error}"),
     }
 }
 
@@ -138,14 +141,14 @@ fn placed_documents_convert_every_kind() {
         "sub/nested.txt".to_owned(),
         TreeMember::Full {
             handle: ResourceHandle::Cache(blob.clone()),
-            mode: 0o644,
+            mode: FileMode::new(0o644),
         },
     );
     members.insert(
         "top.txt".to_owned(),
         TreeMember::Full {
             handle: ResourceHandle::Cache(blob.clone()),
-            mode: 0o644,
+            mode: FileMode::new(0o644),
         },
     );
     let documents = vec![
@@ -173,7 +176,7 @@ fn placed_documents_convert_every_kind() {
                     .iter()
                     .find(|document| document.path.display() == display)
                     .map(|document| &document.data)
-                    .unwrap_or_else(|| panic!("{display} assembles"))
+                    .unwrap_or_else(|| panic!("expected {display}"))
             };
             match by_display("home('note.txt')") {
                 Data::Text(TextDocument {
@@ -182,23 +185,23 @@ fn placed_documents_convert_every_kind() {
                     unmanaged,
                 }) => {
                     assert_eq!(content, "hi");
-                    assert_eq!(*mode, 0o644);
+                    assert_eq!(mode.bits(), 0o644);
                     assert!(!unmanaged);
                 }
-                _ => panic!("text stays text"),
+                _ => panic!("the text document keeps its text"),
             }
             match by_display("home('config.json')") {
                 Data::Structured(StructuredDocument { format, data }) => {
                     assert_eq!(*format, StructuredFormat::Json);
                     assert_eq!(data.get("seed").and_then(|item| item.as_u64()), Some(0));
                 }
-                _ => panic!("structured stays structured"),
+                _ => panic!("the document is structured"),
             }
             match by_display("home('linked')") {
                 Data::Link(LinkDocument { target }) => {
                     assert_eq!(target.display(), "home('origin')")
                 }
-                _ => panic!("link stays link"),
+                _ => panic!("the document is a link"),
             }
             assert_eq!(
                 rc_names(by_display("home('.bashrc')")),
@@ -208,23 +211,23 @@ fn placed_documents_convert_every_kind() {
                 Data::Opaque(OpaqueDocument {
                     mode, unmanaged, ..
                 }) => {
-                    assert_eq!(*mode, 0o644);
+                    assert_eq!(mode.bits(), 0o644);
                     assert!(unmanaged);
                 }
-                _ => panic!("opaque stays opaque"),
+                _ => panic!("the document is opaque"),
             }
             match by_display("home('fonts')") {
                 Data::Tree(TreeDocument { members: found }) => {
                     assert_eq!(
                         found.keys().map(String::as_str).collect::<Vec<_>>(),
                         vec!["sub/nested.txt", "top.txt"],
-                        "tree members hold flat paths in key order"
+                        "the tree members hold flat paths in key order"
                     );
                 }
-                _ => panic!("tree stays tree"),
+                _ => panic!("the document is a tree"),
             }
         }
-        Err(error) => panic!("every kind assembles: {error}"),
+        Err(error) => panic!("the kinds fail to assemble: {error}"),
     }
 }
 
@@ -257,13 +260,13 @@ fn structured_patches_apply_in_priority_order() {
                     assert_eq!(
                         data.get("winner").and_then(|item| item.as_str()),
                         Some("major"),
-                        "higher levels apply first with first writes winning",
+                        "the higher level applies first and the first write wins",
                     );
                 }
-                _ => panic!("structured patches stay structured"),
+                _ => panic!("the document is structured"),
             }
         }
-        Err(error) => panic!("ranked patches merge: {error}"),
+        Err(error) => panic!("the ranked patches fail to merge: {error}"),
     }
 }
 
@@ -292,10 +295,10 @@ fn rc_patches_apply_in_priority_order() {
             assert_eq!(
                 rc_names(&documents.first().unwrap().data),
                 vec!["SEED".to_owned(), "HIGH".to_owned(), "LOW".to_owned(),],
-                "higher levels apply first",
+                "the higher levels apply first",
             );
         }
-        Err(error) => panic!("ranked rc patches merge: {error}"),
+        Err(error) => panic!("the ranked rc patches fail to merge: {error}"),
     }
 }
 
@@ -328,13 +331,13 @@ fn equal_priorities_keep_declaration_order() {
                     assert_eq!(
                         data.get("winner").and_then(|item| item.as_str()),
                         Some("first"),
-                        "equal levels keep declaration order with first writes winning",
+                        "the equal levels keep declaration order and the first write wins",
                     );
                 }
-                _ => panic!("structured patches stay structured"),
+                _ => panic!("the document is structured"),
             }
         }
-        Err(error) => panic!("equal priorities merge: {error}"),
+        Err(error) => panic!("the equal priorities fail to merge: {error}"),
     }
 }
 
@@ -364,15 +367,15 @@ fn rc_first_write_wins_shared_keys() {
             assert_eq!(
                 rc_names(data),
                 vec!["SEED".to_owned(), "DUP".to_owned()],
-                "later duplicates drop keeping the first entry",
+                "the first entry remains and the later duplicates drop",
             );
             assert_eq!(
                 rc_value(data, "DUP").as_deref(),
                 Some("2"),
-                "higher levels apply first with first writes winning",
+                "the higher level applies first and the first write wins",
             );
         }
-        Err(error) => panic!("shared keys merge: {error}"),
+        Err(error) => panic!("the shared keys fail to merge: {error}"),
     }
 }
 
@@ -398,13 +401,13 @@ fn structured_base_beats_every_patch() {
                     assert_eq!(
                         data.get("seed").and_then(|item| item.as_u64()),
                         Some(0),
-                        "base keys keep their values against later writes",
+                        "the base keys keep their values against later writes",
                     );
                 }
-                _ => panic!("structured patches stay structured"),
+                _ => panic!("the document is structured"),
             }
         }
-        Err(error) => panic!("base keys merge: {error}"),
+        Err(error) => panic!("the base keys fail to merge: {error}"),
     }
 }
 
@@ -428,15 +431,15 @@ fn rc_base_beats_every_patch() {
             assert_eq!(
                 rc_names(data),
                 vec!["SEED".to_owned()],
-                "base entries survive later writes",
+                "the base entries survive later writes",
             );
             assert_eq!(
                 rc_value(data, "SEED").as_deref(),
                 Some("0"),
-                "base keys keep their values against later writes",
+                "the base keys keep their values against later writes",
             );
         }
-        Err(error) => panic!("base keys merge: {error}"),
+        Err(error) => panic!("the base keys fail to merge: {error}"),
     }
 }
 
@@ -469,12 +472,12 @@ fn rc_patches_merge_entries() {
                 vec!["SEED".to_owned(), "FIRST".to_owned(), "SECOND".to_owned()]
             );
         }
-        Err(error) => panic!("rc patches merge: {error}"),
+        Err(error) => panic!("the rc patches fail to merge: {error}"),
     }
 }
 
 #[test]
-fn rc_missing_targets_fail_showing_targets() {
+fn assemble_rejects_an_absent_rc_target() {
     let lua = Lua::new();
     let patch = rc_patch_of(
         &lua,
@@ -483,7 +486,10 @@ fn rc_missing_targets_fail_showing_targets() {
         r#"return function(document) document.profile[#document.profile + 1] = { env = { name = "MADE", value = "yes" } } end"#,
     );
     let profile = profile_of(vec![], vec![Patch::Rc(patch)]);
-    assert!(assemble(&lua, &profile).is_err(), "missing rc target fails");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects a missing rc target"
+    );
 }
 
 #[test]
@@ -522,15 +528,15 @@ fn structured_patches_merge_data() {
                     assert_eq!(data.get("beta").and_then(|item| item.as_str()), Some("two"));
                     assert_eq!(data.get("seed").and_then(|item| item.as_u64()), Some(0));
                 }
-                _ => panic!("structured patches stay structured"),
+                _ => panic!("the document is structured"),
             }
         }
-        Err(error) => panic!("structured patches merge: {error}"),
+        Err(error) => panic!("the structured patches fail to merge: {error}"),
     }
 }
 
 #[test]
-fn structured_missing_targets_fail_showing_targets() {
+fn assemble_rejects_an_absent_structured_target() {
     let lua = Lua::new();
     let patch = structured_patch_of(
         &lua,
@@ -542,12 +548,12 @@ fn structured_missing_targets_fail_showing_targets() {
     let profile = profile_of(vec![], vec![Patch::Structured(patch)]);
     assert!(
         assemble(&lua, &profile).is_err(),
-        "missing structured target fails"
+        "the assembler rejects a missing structured target"
     );
 }
 
 #[test]
-fn structured_mixed_formats_fail_showing_formats() {
+fn assemble_rejects_mixed_structured_formats() {
     let lua = Lua::new();
     let first = structured_patch_of(
         &lua,
@@ -569,12 +575,12 @@ fn structured_mixed_formats_fail_showing_formats() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "mixed structured formats fail"
+        "the assembler rejects mixed structured formats"
     );
 }
 
 #[test]
-fn patches_rejected_foreign_bases() {
+fn assemble_rejects_patches_over_other_bases() {
     let lua = Lua::new();
     let patch = structured_patch_of(
         &lua,
@@ -589,7 +595,7 @@ fn patches_rejected_foreign_bases() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "structured patch over text fails"
+        "the assembler rejects a structured patch over text"
     );
     let lua = Lua::new();
     let patch = rc_patch_of(
@@ -604,7 +610,7 @@ fn patches_rejected_foreign_bases() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "rc patch over structured fails"
+        "the assembler rejects an rc patch over structured data"
     );
     let lua = Lua::new();
     let patch = rc_patch_of(
@@ -614,7 +620,10 @@ fn patches_rejected_foreign_bases() {
         r#"return function(document) return document end"#,
     );
     let profile = profile_of(vec![placed_text("note.txt", "hi")], vec![Patch::Rc(patch)]);
-    assert!(assemble(&lua, &profile).is_err(), "patched text fails");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects an rc patch over text"
+    );
     let lua = Lua::new();
     let patch = structured_patch_of(
         &lua,
@@ -629,12 +638,12 @@ fn patches_rejected_foreign_bases() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "format patch over rc fails"
+        "the assembler rejects a structured patch over rc data"
     );
 }
 
 #[test]
-fn rc_failing_callbacks_fail() {
+fn assemble_rejects_a_callback_error() {
     let lua = Lua::new();
     let patch = rc_patch_of(
         &lua,
@@ -648,12 +657,12 @@ fn rc_failing_callbacks_fail() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "failing rc callback fails"
+        "the assembler rejects a failing rc callback"
     );
 }
 
 #[test]
-fn rc_broken_bodies_fail_showing_entries() {
+fn assemble_rejects_a_broken_rc_body() {
     let lua = Lua::new();
     let patch = rc_patch_of(
         &lua,
@@ -665,11 +674,14 @@ fn rc_broken_bodies_fail_showing_entries() {
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
         vec![Patch::Rc(patch)],
     );
-    assert!(assemble(&lua, &profile).is_err(), "broken rc body fails");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects a broken rc body"
+    );
 }
 
 #[test]
-fn hooks_pass_through_without_merging() {
+fn collect_hooks_keeps_declared_order() {
     let lua = Lua::new();
     let profile = profile_with_hooks(vec![
         Config::new(
@@ -695,17 +707,17 @@ fn hooks_pass_through_without_merging() {
         Ok(hooks) => {
             assert_eq!(hooks.len(), 3);
             assert_eq!(Arg::join(&hooks[0].argv), "mise install");
-            assert_eq!(hooks[0].timeout_secs, 60);
+            assert_eq!(hooks[0].timeout_secs.secs(), 60);
             assert_eq!(Arg::join(&hooks[1].argv), "fc-cache");
             assert_eq!(Arg::join(&hooks[2].argv), "mise install");
-            assert_eq!(hooks[2].timeout_secs, 600);
+            assert_eq!(hooks[2].timeout_secs.secs(), 600);
         }
-        Err(error) => panic!("hooks collect: {error}"),
+        Err(error) => panic!("the hooks fail to collect: {error}"),
     }
 }
 
 #[test]
-fn repeated_hook_ids_fail_showing_ids() {
+fn collect_hooks_rejects_repeated_ids() {
     let lua = Lua::new();
     let profile = profile_with_hooks(vec![
         Config::new(
@@ -728,7 +740,7 @@ fn repeated_hook_ids_fail_showing_ids() {
         Assembler::new(&lua)
             .collect_hooks(&profile, &documents)
             .is_err(),
-        "repeated hook ids fail"
+        "the hook collector rejects repeated ids"
     );
 }
 
@@ -759,7 +771,7 @@ fn hook_patches_mutate_live_hooks_in_order() {
                 }
             );
         }
-        Err(error) => panic!("hook patch applies: {error}"),
+        Err(error) => panic!("the hook patch fails to apply: {error}"),
     }
 }
 
@@ -811,12 +823,12 @@ fn hook_patches_append_checks_through_all_unions() {
                 ])
             );
         }
-        Err(error) => panic!("hook patches append: {error}"),
+        Err(error) => panic!("the hook patches fail to append: {error}"),
     }
 }
 
 #[test]
-fn hook_patches_over_missing_ids_fail() {
+fn collect_hooks_rejects_an_absent_target() {
     let lua = Lua::new();
     let patch = hook_patch_of(
         &lua,
@@ -835,12 +847,12 @@ fn hook_patches_over_missing_ids_fail() {
         Assembler::new(&lua)
             .collect_hooks(&profile, &documents)
             .is_err(),
-        "missing hook target fails"
+        "the hook collector rejects a missing target"
     );
 }
 
 #[test]
-fn missing_requirements_fail_with_hints() {
+fn assemble_rejects_an_absent_requirement() {
     let lua = Lua::new();
     let profile = Profile::new(
         vec![Config::new(
@@ -857,12 +869,12 @@ fn missing_requirements_fail_with_hints() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "missing requirement fails"
+        "the assembler rejects a missing requirement"
     );
 }
 
 #[test]
-fn present_requirements_pass() {
+fn assemble_accepts_a_present_requirement() {
     let lua = Lua::new();
     let profile = Profile::new(
         vec![
@@ -888,12 +900,12 @@ fn present_requirements_pass() {
     );
     match assemble(&lua, &profile) {
         Ok(documents) => assert!(documents.is_empty()),
-        Err(error) => panic!("present requirement fails: {error}"),
+        Err(error) => panic!("the present requirement fails to assemble: {error}"),
     }
 }
 
 #[test]
-fn changed_conditions_over_unbuilt_routes_fail() {
+fn collect_hooks_rejects_changed_conditions_over_unbuilt_routes() {
     let lua = Lua::new();
     let present = Route::new(RouteBase::Home, "present").unwrap();
     let missing = Route::new(RouteBase::Home, "missing").unwrap();
@@ -912,7 +924,7 @@ fn changed_conditions_over_unbuilt_routes_fail() {
     let finished = assemble(&lua, &profile).unwrap();
     match Assembler::new(&lua).collect_hooks(&profile, &finished) {
         Ok(hooks) => assert_eq!(hooks.len(), 1),
-        Err(error) => panic!("built changed condition passes: {error}"),
+        Err(error) => panic!("the built changed condition fails to collect: {error}"),
     }
     let mut foreign_hook = hook_of(&["mise"], 60);
     foreign_hook.when = Condition::Changed { route: missing };
@@ -928,12 +940,12 @@ fn changed_conditions_over_unbuilt_routes_fail() {
         Assembler::new(&lua)
             .collect_hooks(&profile, &finished)
             .is_err(),
-        "changed condition over unbuilt route fails"
+        "the hook collector rejects a changed condition over an unbuilt route"
     );
 }
 
 #[test]
-fn rc_changed_guards_fail() {
+fn assemble_rejects_changed_rc_guards() {
     let lua = Lua::new();
     let target = Route::new(RouteBase::Home, ".bashrc").unwrap();
     let entry = RcEntry::Env {
@@ -944,7 +956,10 @@ fn rc_changed_guards_fail() {
         }),
     };
     let profile = profile_of(vec![placed_rc(".bashrc", vec![entry])], Vec::new());
-    assert!(assemble(&lua, &profile).is_err(), "changed rc guard fails");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects a changed rc guard"
+    );
     let lua = Lua::new();
     let smuggled = rc_patch_of(
         &lua,
@@ -958,12 +973,12 @@ fn rc_changed_guards_fail() {
     );
     assert!(
         assemble(&lua, &profile).is_err(),
-        "patch-smuggled changed guard fails"
+        "the assembler rejects a changed guard from a patch"
     );
 }
 
 #[test]
-fn rc_plain_guards_pass() {
+fn assemble_accepts_plain_rc_guards() {
     let lua = Lua::new();
     let entry = RcEntry::Env {
         name: "GUARDED".to_owned(),
@@ -977,9 +992,9 @@ fn rc_plain_guards_pass() {
         Ok(documents) => assert_eq!(
             rc_names(&documents.first().unwrap().data),
             vec!["GUARDED".to_owned()],
-            "guards without changed pass through",
+            "the plain guard survives assembly",
         ),
-        Err(error) => panic!("plain rc guard fails: {error}"),
+        Err(error) => panic!("the plain rc guard fails to assemble: {error}"),
     }
 }
 
@@ -1015,7 +1030,7 @@ fn structured_filters_reach_every_match_in_order() {
                         assert_eq!(
                             data.get("touched").and_then(|item| item.as_bool()),
                             Some(true),
-                            "every matched document takes the patch"
+                            "the matched document takes the patch"
                         );
                     }
                     _ => continue,
@@ -1027,7 +1042,7 @@ fn structured_filters_reach_every_match_in_order() {
                 .unwrap();
             assert_eq!(order, "apple.json,zebra.json");
         }
-        Err(error) => panic!("filter fan-out merges: {error}"),
+        Err(error) => panic!("the filter matches fail to merge: {error}"),
     }
 }
 
@@ -1058,7 +1073,7 @@ fn rc_filters_reach_every_match_in_order() {
                 if document.path.display().contains(".sh") {
                     assert!(
                         rc_names(&document.data).contains(&"TOUCHED".to_owned()),
-                        "every matched rc takes the patch"
+                        "the matched rc takes the patch"
                     );
                 }
             }
@@ -1068,7 +1083,7 @@ fn rc_filters_reach_every_match_in_order() {
                 .unwrap();
             assert_eq!(order, "apple.sh,zebra.sh");
         }
-        Err(error) => panic!("rc fan-out merges: {error}"),
+        Err(error) => panic!("the rc filter matches fail to merge: {error}"),
     }
 }
 
@@ -1100,10 +1115,10 @@ fn structured_apply_receives_document_path() {
                         Some("config.json")
                     );
                 }
-                _ => panic!("route patch stays structured"),
+                _ => panic!("the document is structured"),
             }
         }
-        Err(error) => panic!("route arg merges: {error}"),
+        Err(error) => panic!("the route argument fails to merge: {error}"),
     }
 }
 
@@ -1128,12 +1143,12 @@ fn rc_apply_receives_document_path() {
                 Some("home:.bashrc")
             );
         }
-        Err(error) => panic!("rc route arg merges: {error}"),
+        Err(error) => panic!("the rc route argument fails to merge: {error}"),
     }
 }
 
 #[test]
-fn absent_filter_matches_cover_all_of_kind() {
+fn absent_filter_matches_cover_every_document_of_the_kind() {
     let lua = Lua::new();
     let patch = structured_filter_of(
         &lua,
@@ -1163,12 +1178,12 @@ fn absent_filter_matches_cover_all_of_kind() {
                                 "default match covers every document of the kind"
                             );
                         }
-                        _ => panic!("default filter stays structured"),
+                        _ => panic!("the document is structured"),
                     }
                 }
             }
         }
-        Err(error) => panic!("default filter merges: {error}"),
+        Err(error) => panic!("the default filter fails to merge: {error}"),
     }
 }
 
@@ -1197,24 +1212,24 @@ fn false_filters_leave_documents_untouched() {
                     Data::Structured(StructuredDocument { data, .. }) => {
                         assert!(
                             data.get("touched").is_none(),
-                            "refused documents skip the patch"
+                            "the refused documents skip the patch"
                         );
                         assert_eq!(
                             data.get("seed").and_then(|item| item.as_u64()),
                             Some(0),
-                            "refused documents keep their base"
+                            "the refused documents keep their base"
                         );
                     }
-                    _ => panic!("untouched documents stay structured"),
+                    _ => panic!("the documents are structured"),
                 }
             }
         }
-        Err(error) => panic!("false filter merges: {error}"),
+        Err(error) => panic!("the false filter fails to merge: {error}"),
     }
 }
 
 #[test]
-fn failing_rc_filters_fail() {
+fn assemble_rejects_a_filter_error() {
     let lua = Lua::new();
     let patch = rc_filter_of(
         &lua,
@@ -1226,5 +1241,8 @@ fn failing_rc_filters_fail() {
         vec![placed_rc(".bashrc", vec![rc_entry("SEED", "0")])],
         vec![Patch::Rc(patch)],
     );
-    assert!(assemble(&lua, &profile).is_err(), "failing filter fails");
+    assert!(
+        assemble(&lua, &profile).is_err(),
+        "the assembler rejects a failing filter"
+    );
 }

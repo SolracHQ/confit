@@ -1,5 +1,4 @@
-//! Arg
-//! Text literal or late-bound route for command arguments.
+//! Command arguments as text literals or late-bound routes.
 
 use std::borrow::Cow;
 
@@ -8,23 +7,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
 
-/// Shell-safe bytes passing through unquoted.
+/// The bytes that the shell accepts without quotes.
 const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
-/// Text or route for command arguments.
+/// One command line argument.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Shape)]
 #[serde(untagged)]
 #[shape(table, untagged)]
 pub enum Arg {
-    /// Plain string argument.
+    /// An argument held as literal text.
     Text(String),
-    /// Destination route argument.
+    /// An argument held as a route.
     Route(Route),
 }
 
 impl Arg {
-    /// Render the portable argument display.
+    /// Renders the argument text for output.
     pub fn display(&self) -> String {
         match self {
             Self::Text(text) => text.clone(),
@@ -32,7 +31,7 @@ impl Arg {
         }
     }
 
-    /// Render argv args as one shell-safe display line.
+    /// Renders the argument list as one quoted line for the shell.
     pub fn join(argv: &[Arg]) -> String {
         argv.iter()
             .map(Arg::display)
@@ -60,7 +59,7 @@ impl From<Route> for Arg {
     }
 }
 
-/// Quote one word for shell use.
+/// Wraps one word in single quotes when a byte is unsafe for the shell.
 pub fn quote(text: &str) -> Cow<'_, str> {
     if !text.is_empty() && text.bytes().all(|byte| SAFE_CHARS.contains(&byte)) {
         Cow::Borrowed(text)

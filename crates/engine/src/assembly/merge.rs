@@ -1,4 +1,4 @@
-//! Merge patch callbacks under first-writer wins.
+//! Merges patch callbacks.
 
 use std::collections::BTreeMap;
 
@@ -19,14 +19,16 @@ use confit_core::error::{
 };
 
 impl Assembler<'_> {
-    /// Apply structured patch groups over declared bases.
+    /// Rebuilds the structured bases.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for missing targets, foreign bases,
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for missing targets, foreign bases,
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing targets, foreign bases,
-    ///   bad shapes, drifting paths, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a target is
+    ///   missing.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a base
+    ///   holds another shape.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+    ///   fails, a shape is bad, or a path drifts.
     pub(super) fn apply_structured(
         &self,
         placed: &[Document],
@@ -65,14 +67,16 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Apply rc patch groups over declared bases.
+    /// Rebuilds the rc bases.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for missing targets, foreign bases,
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for missing targets, foreign bases,
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing targets, foreign bases,
-    ///   bad shapes, drifting paths, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a target is
+    ///   missing.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a base
+    ///   holds another shape.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+    ///   fails, a shape is bad, or a path drifts.
     pub(super) fn apply_rc(
         &self,
         placed: &[Document],
@@ -102,14 +106,16 @@ impl Assembler<'_> {
         Ok(())
     }
 
-    /// Run patch callbacks over base data through live documents.
+    /// Runs the structured callbacks.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for format gaps, bad shapes, drifting
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for format gaps, bad shapes, drifting
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for format gaps, bad shapes, drifting
-    ///   paths, and Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a shape is
+    ///   bad.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a
+    ///   format changes.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+    ///   fails or a path drifts.
     pub(super) fn run_callbacks(
         &self,
         destination: &Route,
@@ -150,7 +156,7 @@ impl Assembler<'_> {
                     );
                 }
             };
-            check_live_path(destination, &back.path)?;
+            validate_live_path(destination, &back.path)?;
             if back.body.format != *format {
                 return error(
                     ErrorKind::RenderManifest,
@@ -162,13 +168,14 @@ impl Assembler<'_> {
         Ok(data)
     }
 
-    /// Run patch callbacks over rc sections through live documents.
+    /// Runs the rc callbacks.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for bad shapes, drifting paths, and
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for bad shapes, drifting paths, and
-    ///   Lua failures.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a shape is
+    ///   bad.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+    ///   fails or a path drifts.
     pub(super) fn run_rc_callbacks(
         &self,
         destination: &Route,
@@ -205,18 +212,19 @@ impl Assembler<'_> {
                     );
                 }
             };
-            check_live_path(destination, &back.path)?;
+            validate_live_path(destination, &back.path)?;
             document = merge_rc(display, &document, back.body, &mut owned, &patch.owner);
         }
         Ok(document)
     }
 }
 
-/// Build one live view from its shape for patch callbacks.
+/// Encodes one live document.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for shapes outside the table shape.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the shape falls
+///   outside the table shape.
 fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     match document.encode(lua) {
         Ok(Value::Table(table)) => Ok(table),
@@ -225,19 +233,20 @@ fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     }
 }
 
-/// Fail when one patch callback moves its live document off its target.
+/// Rejects a moved live path.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for paths apart from the target.
-fn check_live_path(destination: &Route, back: &Route) -> TerminalResult<()> {
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the path moves
+///   off the target.
+fn validate_live_path(destination: &Route, back: &Route) -> TerminalResult<()> {
     if back != destination {
         return error(ErrorKind::LuaFailed, contextual(EvalError::LuaFailed));
     }
     Ok(())
 }
 
-/// Seed key owners from base data under the base name.
+/// Seeds the key owners.
 fn seed_key_owners(data: &BTreeMap<String, serde_json::Value>) -> BTreeMap<String, String> {
     let mut owners = BTreeMap::new();
     for (key, value) in data {
@@ -246,7 +255,7 @@ fn seed_key_owners(data: &BTreeMap<String, serde_json::Value>) -> BTreeMap<Strin
     owners
 }
 
-/// Seed leaf owners under one path with one holder.
+/// Seeds the leaf owners.
 fn seed_leaves(
     value: &serde_json::Value,
     path: &str,
@@ -266,7 +275,7 @@ fn seed_leaves(
     }
 }
 
-/// Merge patch data over live data keeping first writes.
+/// Merges patch data over live data.
 fn merge(
     display: &str,
     live: BTreeMap<String, serde_json::Value>,
@@ -292,7 +301,7 @@ fn merge(
     merged
 }
 
-/// Fold one top-level entry into merged data with leaf owners.
+/// Folds one top-level entry.
 fn fold_entry(
     display: &str,
     merged: &mut BTreeMap<String, serde_json::Value>,
@@ -312,7 +321,7 @@ fn fold_entry(
     fold_value(display, &key, live, next_value, owners, loser);
 }
 
-/// Fold one patch value over one live value keeping first writes.
+/// Folds one patch value over a live value.
 fn fold_value(
     display: &str,
     path: &str,
@@ -344,7 +353,7 @@ fn fold_value(
     }
 }
 
-/// Fold one patch table over one live table keeping first writes.
+/// Folds one patch table over a live table.
 fn fold_maps(
     display: &str,
     path: &str,
@@ -378,7 +387,7 @@ fn fold_maps(
     }
 }
 
-/// Log owned leaves under one removed path with the losing owner.
+/// Logs the removed leaves.
 fn log_removed(
     display: &str,
     live: &serde_json::Value,
@@ -403,7 +412,7 @@ fn log_removed(
     }
 }
 
-/// Return the winning owner for one collision path.
+/// Returns the winning owner.
 fn winner_for(path: &str, owners: &BTreeMap<String, String>) -> Option<String> {
     if let Some(winner) = owners.get(path) {
         return Some(winner.clone());
@@ -417,7 +426,6 @@ fn winner_for(path: &str, owners: &BTreeMap<String, String>) -> Option<String> {
     None
 }
 
-/// Winner owner per rc collision feeding first-writer wins.
 #[derive(Default)]
 struct CollisionOwners {
     /// Collision owners in the profile section.
@@ -428,7 +436,7 @@ struct CollisionOwners {
     final_entries: BTreeMap<String, String>,
 }
 
-/// Seed collision owners from base entries under the base name.
+/// Seeds the collision owners.
 fn seed_collision_owners(document: &RcData) -> CollisionOwners {
     let mut owned = CollisionOwners::default();
     seed_section(&document.profile, &mut owned.profile);
@@ -437,7 +445,7 @@ fn seed_collision_owners(document: &RcData) -> CollisionOwners {
     owned
 }
 
-/// Seed one section map from its entries under the base name.
+/// Seeds one section.
 fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     for entry in entries {
         if let Some(name) = entry.collision_key() {
@@ -446,7 +454,7 @@ fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     }
 }
 
-/// Merge patch sections over live sections keeping first entries.
+/// Merges patch sections over live sections.
 fn merge_rc(
     display: &str,
     live: &RcData,
@@ -483,7 +491,7 @@ fn merge_rc(
     }
 }
 
-/// Merge one patch section over its live entries keeping first entries.
+/// Merges one patch section over its live entries.
 fn merge_section(
     display: &str,
     section: &str,
@@ -579,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_stay_whole_value_first_wins() {
+    fn lists_keep_the_first_write_whole() {
         let live: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
         let mut owners = BTreeMap::from([("items".to_owned(), "first".to_owned())]);

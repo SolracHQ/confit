@@ -1,4 +1,4 @@
-//! Expands struct declarations into table and object shapes.
+//! Expands struct declarations into table, object, and proxy shapes.
 
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;
@@ -34,11 +34,6 @@ fn has_foreign_field_markers(flags: &FieldOptions) -> bool {
         || flags.ignore
         || flags.flatten
         || flags.lua_trace
-        || flags.proxy.is_some()
-        || flags.decode_hook.is_some()
-        || flags.encode_hook.is_some()
-        || flags.key_decode.is_some()
-        || flags.value_decode.is_some()
         || flags.default.is_some()
 }
 
@@ -69,36 +64,6 @@ fn validate_epilogue(outer: &str, validate: &Option<syn::Path>) -> Tokens {
     }
 }
 
-/// Collects the key and value types of a map field.
-///
-/// # Errors
-///
-/// - `syn::Error` for types outside the HashMap and BTreeMap shapes.
-fn map_parts(
-    outer: &str,
-    field: &str,
-    ty: &Type,
-    span: &Option<syn::Ident>,
-) -> Result<(Type, Type), syn::Error> {
-    if let Type::Path(path) = ty
-        && let Some(last) = path.path.segments.last()
-        && (last.ident == "HashMap" || last.ident == "BTreeMap")
-        && let syn::PathArguments::AngleBracketed(args) = &last.arguments
-        && args.args.len() == 2
-    {
-        let mut inner = args.args.iter();
-        if let (Some(syn::GenericArgument::Type(key)), Some(syn::GenericArgument::Type(item))) =
-            (inner.next(), inner.next())
-        {
-            return Ok((key.clone(), item.clone()));
-        }
-    }
-    Err(syn::Error::new_spanned(
-        span,
-        format!("{outer}.{field}: HashMap or BTreeMap fields are expected for map converts"),
-    ))
-}
-
 /// Builds the table struct expansion.
 pub(crate) fn expand_struct_table(
     name: &syn::Ident,
@@ -122,7 +87,6 @@ pub(crate) fn expand_struct_table(
     let mut field_shapes = Vec::new();
     let mut decodes = Vec::new();
     let mut encodes = Vec::new();
-    let mut extras = Vec::new();
     let mut idents = Vec::new();
     let mut keys: Vec<String> = Vec::new();
     let mut flat: Option<(syn::Ident, Type)> = None;
@@ -206,186 +170,9 @@ pub(crate) fn expand_struct_table(
                 format!("{outer}.{field_name}: default needs a plain type"),
             ));
         }
-        if flags.decode_hook.is_some() && flags.proxy.is_none() {
-            if flags.optional || flags.default.is_some() || flags.name.is_some() {
-                return Err(syn::Error::new_spanned(
-                    &field.ident,
-                    format!(
-                        "{outer}.{field_name}: a sibling decode_hook reads the whole \
-                         table; drop key options"
-                    ),
-                ));
-            }
-            let decode_hook = flags.decode_hook.as_ref();
-            decodes.push(quote! {
-                let #ident: #ty = #decode_hook(lua, &table)?;
-            });
-            extras.push(quote! {
-                <#ty as ::lua_binding::shape::Shape>::collect(collector);
-            });
-            idents.push(ident);
-            continue;
-        }
-        if flags.key_decode.is_some() || flags.value_decode.is_some() {
-            if flags.proxy.is_some()
-                || flags.decode_hook.is_some()
-                || flags.encode_hook.is_some()
-                || flags.opaque
-            {
-                return Err(syn::Error::new_spanned(
-                    &field.ident,
-                    format!(
-                        "{outer}.{field_name}: map converts take key_decode and \
-                         value_decode together"
-                    ),
-                ));
-            }
-            if is_option(ty) {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    format!("{outer}.{field_name}: plain maps are expected for map converts"),
-                ));
-            }
-            let lua_key = flags.name.clone().unwrap_or_else(|| field_name.clone());
-            let docs = doc_lines(&field.attrs).join(" ");
-            let (key_ty, value_ty) = map_parts(&outer, &field_name, ty, &field.ident)?;
-            let decode_key: Tokens = match flags.key_decode.as_ref() {
-                Some(convert) => quote! {
-                    #convert(lua, &key_value).map_err(|mut error| {
-                        error.segments.insert(
-                            0,
-                            ::lua_binding::error::Segment::Field(#lua_key.to_owned()),
-                        );
-                        error
-                    })?
-                },
-                None => quote! {
-                    <#key_ty as ::lua_binding::value::Decode>::decode(&key_value, lua)
-                        .map_err(|mut error| {
-                            error.segments.insert(
-                                0,
-                                ::lua_binding::error::Segment::Field(#lua_key.to_owned()),
-                            );
-                            error
-                        })?
-                },
-            };
-            let decode_item: Tokens = match flags.value_decode.as_ref() {
-                Some(convert) => quote! {
-                    #convert(lua, &item_value).map_err(|mut error| {
-                        error.segments.insert(
-                            0,
-                            ::lua_binding::error::Segment::Field(#lua_key.to_owned()),
-                        );
-                        error
-                    })?
-                },
-                None => quote! {
-                    <#value_ty as ::lua_binding::value::Decode>::decode(&item_value, lua)
-                        .map_err(|mut error| {
-                            error.segments.insert(
-                                0,
-                                ::lua_binding::error::Segment::Field(#lua_key.to_owned()),
-                            );
-                            error
-                        })?
-                },
-            };
-            let decode_map = quote! {
-                let source = ::lua_binding::value::table_value(&raw_value)?;
-                let mut mapped: #ty = <#ty as ::std::default::Default>::default();
-                for pair in source.pairs::<::mlua::Value, ::mlua::Value>() {
-                    let (key_value, item_value) = pair.map_err(|error| {
-                        ::lua_binding::error::DecodeError {
-                            segments: ::std::vec::Vec::new(),
-                            reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
-                                require: "readable entries".to_owned(),
-                                found: error.to_string(),
-                            },
-                        }
-                    })?;
-                    let key: #key_ty = #decode_key;
-                    let item: #value_ty = #decode_item;
-                    mapped.insert(key, item);
-                }
-                mapped
-            };
-            if flags.default.is_some() || flags.optional {
-                let fallback = match flags.default.as_ref() {
-                    Some(path) => default_expr(ty, path),
-                    None => quote! { <#ty as ::std::default::Default>::default() },
-                };
-                field_shapes.push(quote! {
-                    ::lua_binding::shape::Field {
-                        name: #lua_key,
-                        description: #docs,
-                        shape: ::std::borrow::Cow::Owned(
-                            ::lua_binding::stub::emit_optional(
-                                &<#ty as ::lua_binding::shape::Shape>::name(),
-                            ),
-                        ),
-                        optional: true,
-                        collect: <#ty as ::lua_binding::shape::Shape>::collect,
-                    }
-                });
-                decodes.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    let #ident: #ty = if matches!(raw_value, ::mlua::Value::Nil) {
-                        #fallback
-                    } else {
-                        #decode_map
-                    };
-                });
-            } else {
-                field_shapes.push(quote! {
-                    ::lua_binding::shape::Field {
-                        name: #lua_key,
-                        description: #docs,
-                        shape: ::std::borrow::Cow::Owned(
-                            <#ty as ::lua_binding::shape::Shape>::name(),
-                        ),
-                        optional: false,
-                        collect: <#ty as ::lua_binding::shape::Shape>::collect,
-                    }
-                });
-                decodes.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    if matches!(raw_value, ::mlua::Value::Nil) {
-                        return ::std::result::Result::Err(
-                            ::lua_binding::error::DecodeError {
-                                segments: ::std::vec![::lua_binding::error::Segment::Field(
-                                    #lua_key.to_owned(),
-                                )],
-                                reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
-                                    require: <#ty as ::lua_binding::shape::Shape>::name(),
-                                    found: "nil".to_owned(),
-                                },
-                            },
-                        );
-                    }
-                    let #ident: #ty = #decode_map;
-                });
-            }
-            encodes.push(quote! {
-                table.set(
-                    #lua_key,
-                    <#ty as ::lua_binding::value::Encode>::encode(&self.#ident, lua)?,
-                )?;
-            });
-            idents.push(ident);
-            if !keys.iter().any(|key| key == &lua_key) {
-                keys.push(lua_key);
-            }
-            continue;
-        }
         let lua_key = flags.name.clone().unwrap_or_else(|| field_name.clone());
         let docs = doc_lines(&field.attrs).join(" ");
-        let shape_tokens: Tokens = match flags.proxy.as_ref() {
-            Some(proxy) => quote! { #proxy },
-            None => quote! { #ty },
-        };
+        let shape_tokens = ty;
         let inferred = is_option(ty);
         if flags.default.is_some() || inferred {
             field_shapes.push(quote! {
@@ -415,64 +202,7 @@ pub(crate) fn expand_struct_table(
                 }
             });
         }
-        if let Some(decode_hook) = flags.decode_hook.as_ref() {
-            if flags.optional || inferred {
-                decodes.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    let #ident = if matches!(raw_value, ::mlua::Value::Nil) {
-                        <#ty as ::std::default::Default>::default()
-                    } else {
-                        ::lua_binding::value::decode_proxy(
-                            lua,
-                            &raw_value,
-                            #lua_key,
-                            #decode_hook,
-                        )?
-                    };
-                });
-            } else if let Some(default) = flags.default.as_ref() {
-                let fallback = default_expr(ty, default);
-                decodes.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    let #ident = if matches!(raw_value, ::mlua::Value::Nil) {
-                        #fallback
-                    } else {
-                        ::lua_binding::value::decode_proxy(
-                            lua,
-                            &raw_value,
-                            #lua_key,
-                            #decode_hook,
-                        )?
-                    };
-                });
-            } else {
-                decodes.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    if matches!(raw_value, ::mlua::Value::Nil) {
-                        return ::std::result::Result::Err(
-                            ::lua_binding::error::DecodeError {
-                                segments: ::std::vec![::lua_binding::error::Segment::Field(
-                                    #lua_key.to_owned(),
-                                )],
-                                reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
-                                    require: <#shape_tokens as ::lua_binding::shape::Shape>::name(),
-                                    found: "nil".to_owned(),
-                                },
-                            },
-                        );
-                    }
-                    let #ident = ::lua_binding::value::decode_proxy(
-                        lua,
-                        &raw_value,
-                        #lua_key,
-                        #decode_hook,
-                    )?;
-                });
-            }
-        } else if flags.optional || inferred {
+        if flags.optional || inferred {
             decodes.push(quote! {
                 let raw_value: ::mlua::Value =
                     ::lua_binding::value::read_field(&table, #lua_key)?;
@@ -535,18 +265,12 @@ pub(crate) fn expand_struct_table(
                         })?;
             });
         }
-        if let Some(hook) = flags.encode_hook.as_ref() {
-            encodes.push(quote! {
-                table.set(#lua_key, #hook(lua, &self.#ident)?)?;
-            });
-        } else {
-            encodes.push(quote! {
-                table.set(
-                    #lua_key,
-                    <#ty as ::lua_binding::value::Encode>::encode(&self.#ident, lua)?,
-                )?;
-            });
-        }
+        encodes.push(quote! {
+            table.set(
+                #lua_key,
+                <#ty as ::lua_binding::value::Encode>::encode(&self.#ident, lua)?,
+            )?;
+        });
         idents.push(ident);
         if !keys.iter().any(|key| key == &lua_key) {
             keys.push(lua_key);
@@ -645,14 +369,12 @@ pub(crate) fn expand_struct_table(
                 &inner,
             ) {
                 shape.collect_referenced(collector);
-                #(#extras)*
             }
         },
         None => quote! {
             let data = <Self as ::lua_binding::shape::Shape>::shape_data();
             if collector.add(<Self as ::lua_binding::shape::Shape>::name(), &data) {
                 data.collect_referenced(collector);
-                #(#extras)*
             }
         },
     };
@@ -903,6 +625,48 @@ pub(crate) fn expand_struct_object(
     })
 }
 
+/// Builds the proxy struct expansion.
+pub(crate) fn expand_struct_proxy(
+    name: &syn::Ident,
+    proxy: &syn::Path,
+) -> Result<Tokens, syn::Error> {
+    Ok(quote! {
+        impl ::lua_binding::shape::Shape for #name {
+            fn name() -> ::std::string::String {
+                <#proxy as ::lua_binding::shape::Shape>::name()
+            }
+
+            fn shape_data() -> ::lua_binding::shape::ShapeData {
+                <#proxy as ::lua_binding::shape::Shape>::shape_data()
+            }
+
+            fn collect(collector: &mut ::lua_binding::generator::Generator) {
+                <#proxy as ::lua_binding::shape::Shape>::collect(collector);
+            }
+        }
+
+        impl ::lua_binding::value::Decode for #name {
+            fn decode(
+                value: &::mlua::Value,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<Self, ::lua_binding::error::DecodeError> {
+                let proxy = <#proxy as ::lua_binding::value::Decode>::decode(value, lua)?;
+                <#name as ::lua_binding::value::Hooked<#proxy>>::decode(lua, proxy)
+            }
+        }
+
+        impl ::lua_binding::value::Encode for #name {
+            fn encode(
+                &self,
+                lua: &::mlua::Lua,
+            ) -> ::std::result::Result<::mlua::Value, ::mlua::Error> {
+                let proxy = <#name as ::lua_binding::value::Hooked<#proxy>>::encode(self, lua)?;
+                <#proxy as ::lua_binding::value::Encode>::encode(&proxy, lua)
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +710,30 @@ mod tests {
         assert!(
             expand_struct_object(&input.ident, data, &input.attrs, &None, &None, true).is_err(),
             "foreign shape fails the build"
+        );
+    }
+
+    #[test]
+    fn proxy_struct_wires_the_hook_impls() {
+        let name: syn::Ident = syn::parse_quote!(Count);
+        let proxy: syn::Path = syn::parse_quote!(String);
+        let expanded = expand_struct_proxy(&name, &proxy).unwrap().to_string();
+        assert!(expanded.contains("Hooked"), "the expansion calls the hook");
+        assert!(
+            expanded.contains("< String as"),
+            "the expansion uses the proxy type"
+        );
+        assert!(
+            expanded.contains("impl :: lua_binding :: shape :: Shape for Count"),
+            "the expansion keeps the shape impl"
+        );
+        assert!(
+            expanded.contains("impl :: lua_binding :: value :: Decode for Count"),
+            "the expansion keeps the decode impl"
+        );
+        assert!(
+            expanded.contains("impl :: lua_binding :: value :: Encode for Count"),
+            "the expansion keeps the encode impl"
         );
     }
 

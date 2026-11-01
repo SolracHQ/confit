@@ -1,4 +1,4 @@
-//! Shape checks over the decode cores.
+//! Checks model shapes.
 
 use lua_binding::lua_module;
 use lua_binding::value::Decode;
@@ -12,10 +12,9 @@ use confit_model::document::RcEntry;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Validate module.
 pub struct Validate;
 
-/// Decode one value with its failure reason beside it.
+/// Decodes one value with its reason.
 fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Option<String>)> {
     match T::decode(value, lua) {
         Ok(found) => Ok((Some(found), None)),
@@ -25,11 +24,11 @@ fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Opti
 
 #[lua_module("confit.validate")]
 impl Validate {
-    /// Check one document table, else nil with reason.
+    /// Checks one document table.
     ///
     /// # Arguments
     ///
-    /// - [body] The document table under checking.
+    /// - [body] The document table.
     ///
     /// # Returns
     ///
@@ -39,11 +38,11 @@ impl Validate {
         checked(lua, &body)
     }
 
-    /// Check one config table, else nil with reason.
+    /// Checks one config table.
     ///
     /// # Arguments
     ///
-    /// - [config] The config table under checking.
+    /// - [config] The config table.
     ///
     /// # Returns
     ///
@@ -53,11 +52,11 @@ impl Validate {
         checked(lua, &config)
     }
 
-    /// Check one patch table, else nil with reason.
+    /// Checks one patch table.
     ///
     /// # Arguments
     ///
-    /// - [patch] The patch table under checking.
+    /// - [patch] The patch table.
     ///
     /// # Returns
     ///
@@ -67,11 +66,11 @@ impl Validate {
         checked(lua, &patch)
     }
 
-    /// Check one hook table, else nil with reason.
+    /// Checks one hook table.
     ///
     /// # Arguments
     ///
-    /// - [value] The hook table under checking.
+    /// - [value] The hook table.
     ///
     /// # Returns
     ///
@@ -81,11 +80,11 @@ impl Validate {
         checked(lua, &value)
     }
 
-    /// Check one condition table, else nil with reason.
+    /// Checks one condition table.
     ///
     /// # Arguments
     ///
-    /// - [value] The condition table under checking.
+    /// - [value] The condition table.
     ///
     /// # Returns
     ///
@@ -95,11 +94,11 @@ impl Validate {
         checked(lua, &value)
     }
 
-    /// Check one rc entry table, else nil with reason.
+    /// Checks one rc entry table.
     ///
     /// # Arguments
     ///
-    /// - [value] The rc entry table under checking.
+    /// - [value] The rc entry table.
     ///
     /// # Returns
     ///
@@ -109,11 +108,11 @@ impl Validate {
         checked(lua, &value)
     }
 
-    /// Check one route handle, else nil with reason.
+    /// Checks one route handle.
     ///
     /// # Arguments
     ///
-    /// - [value] The route handle under checking.
+    /// - [value] The route handle.
     ///
     /// # Returns
     ///
@@ -130,7 +129,7 @@ mod tests {
     use crate::api::global::Global;
     use mlua::{Lua, Value};
 
-    fn test_lua() -> Lua {
+    fn fresh_lua() -> Lua {
         let lua = Lua::new();
         let validate = Validate::add(&lua).unwrap();
         lua.globals().set("validate", validate).unwrap();
@@ -145,13 +144,13 @@ mod tests {
     fn reason_of(value: Value) {
         match value {
             Value::String(_) => {}
-            _ => panic!("validate reason returns a string"),
+            _ => panic!("expected a string reason"),
         }
     }
 
     #[test]
-    fn document_gave_true_with_nil_on_good_shapes() {
-        let lua = test_lua();
+    fn document_check_accepts_a_good_shape() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.document({ path = route("home", "subject"), text = "hi" })
             assert(found ~= nil and reason == nil)
@@ -159,13 +158,13 @@ mod tests {
         "#;
         match run(&lua, source) {
             Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-            _ => panic!("good document passes"),
+            _ => panic!("expected a string marker"),
         }
     }
 
     #[test]
-    fn document_gave_false_with_reason_on_bad_shapes() {
-        let lua = test_lua();
+    fn document_check_rejects_invalid_shapes() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.document({ nope = 1 })
             assert(found == nil and reason ~= nil)
@@ -181,8 +180,8 @@ mod tests {
     }
 
     #[test]
-    fn config_gave_true_with_nil_on_good_shapes() {
-        let lua = test_lua();
+    fn config_check_accepts_a_good_shape() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.config({
                 name = id("tools/test"),
@@ -193,13 +192,13 @@ mod tests {
         "#;
         match run(&lua, source) {
             Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-            _ => panic!("good config passes"),
+            _ => panic!("expected a string marker"),
         }
     }
 
     #[test]
-    fn config_gave_false_with_reason_on_bad_shapes() {
-        let lua = test_lua();
+    fn config_check_rejects_invalid_shapes() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.config({ name = id("tools/test"), nope = 1 })
             assert(found == nil and reason ~= nil)
@@ -209,8 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn config_gave_false_with_reason_on_missing_names() {
-        let lua = test_lua();
+    fn config_check_rejects_an_absent_name() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.config({
                 documents = { { path = route("home", ".bashrc"), text = "hi" } },
@@ -222,8 +221,8 @@ mod tests {
     }
 
     #[test]
-    fn patch_gave_true_with_nil_on_good_shapes() {
-        let lua = test_lua();
+    fn patch_check_accepts_a_good_shape() {
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.patch({
                 target = route("home", "app.json"),
@@ -235,13 +234,13 @@ mod tests {
         "#;
         match run(&lua, source) {
             Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-            _ => panic!("good patch passes"),
+            _ => panic!("expected a string marker"),
         }
     }
 
     #[test]
     fn patch_accepts_rc_shapes() {
-        let lua = test_lua();
+        let lua = fresh_lua();
         let source = r#"
             local found, reason = validate.patch({
                 target = route("home", "app.sh"),
@@ -252,13 +251,13 @@ mod tests {
         "#;
         match run(&lua, source) {
             Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-            _ => panic!("good rc patch passes"),
+            _ => panic!("expected a string marker"),
         }
     }
 
     #[test]
-    fn patch_gave_false_with_reason_on_bad_shapes() {
-        let lua = test_lua();
+    fn patch_check_rejects_invalid_shapes() {
+        let lua = fresh_lua();
         let cases = [
             r#"
                 local found, reason = validate.patch({
@@ -294,8 +293,8 @@ mod tests {
     }
 
     #[test]
-    fn patch_rejects_wrong_shapes_showing_keys() {
-        let lua = test_lua();
+    fn patch_check_rejects_unknown_keys() {
+        let lua = fresh_lua();
         let cases = [
             r#"
                 local found, reason = validate.patch({
@@ -333,7 +332,7 @@ mod tests {
     // Body shapes pin in model. Validate pins true/false alone.
     #[test]
     fn every_check_verb_rejects_numbers_with_reasons() {
-        let lua = test_lua();
+        let lua = fresh_lua();
         for verb in [
             "document",
             "config",
@@ -351,8 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn new_check_functions_pass_good_shapes() {
-        let lua = test_lua();
+    fn validate_verbs_accept_good_shapes() {
+        let lua = fresh_lua();
         for (verb, body) in [
             ("hook", r#"{ argv = { "true" }, id = id("tools/test") }"#),
             ("condition", r#"{ all = {} }"#),
@@ -364,7 +363,7 @@ mod tests {
             );
             match run(&lua, &source) {
                 Value::String(found) => assert_eq!(found.to_string_lossy(), "ok"),
-                _ => panic!("{verb} passes good shapes"),
+                _ => panic!("the {verb} check accepts a good shape"),
             }
         }
     }

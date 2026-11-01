@@ -1,5 +1,4 @@
-//! Bundle run
-//! Profile flags into written bundle files and named states.
+//! Writes a profile evaluation to a bundle file or a named state.
 
 use std::path::Path;
 
@@ -17,39 +16,37 @@ use confit_ui::UiHandles;
 use crate::cli;
 use crate::cli::BundleArgs;
 
-/// Successful bundle run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleReport {
-    /// Bundle path or named slot for display.
+    /// The bundle path or the named state as display text.
     pub text: String,
 }
 
-/// Bundle run from bundle flags to a written artifact.
 pub struct BundleRunner<'a> {
-    /// Bundle flags for the run.
+    /// The flags that pick the project, the profile, and the output.
     pub args: &'a BundleArgs,
-    /// Write capabilities for the run.
+    /// The stores that hold the project and the state.
     pub stores: Stores,
-    /// Renderer channels for prints and prompts.
+    /// The channels that carry the prints and the prompts.
     pub handles: UiHandles,
 }
 
 impl BundleRunner<'_> {
-    /// Evaluate the profile and write the bundle file or named state.
+    /// Evaluates the profile, then writes the bundle file or the named state.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::BundleSlot`] for malformed slots.
-    /// - [`confit_core::error::kind::ErrorKind::BundleState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
-    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles.
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable projects.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
-    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents.
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for render failures.
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
-    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for state writes.
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    /// - [`confit_core::error::kind::ErrorKind::BundleSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::BundleState`] when a state fails.
+    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] when the project folder is absent.
+    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the profile is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the profile evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when a document repeats.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a document fails to render.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] when the state write fails.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
     pub fn execute(self) -> TerminalResult<BundleReport> {
         let path = cli::resolve_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {
@@ -93,7 +90,7 @@ impl BundleRunner<'_> {
     }
 }
 
-/// Report whether one output value is a stored state.
+/// Returns whether the output path points at a stored state.
 fn is_named_output(raw: &Path) -> bool {
     raw.to_str().is_some_and(|text| text.starts_with('@'))
 }

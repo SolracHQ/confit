@@ -1,5 +1,4 @@
-//! Difference lines
-//! Display lines over core difference entries.
+//! Renders display lines over core difference entries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,7 +16,7 @@ pub struct LeafChange {
     pub new: Option<serde_json::Value>,
 }
 
-/// Render difference entries as display lines, one or more per entry.
+/// Renders each difference entry as one or more display lines.
 pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in entries {
@@ -44,7 +43,7 @@ pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
             }
             Difference::Missing { path } => {
                 lines.push(format!(
-                    "{}: manually deleted. changed outside config: add to config or the next apply loses them",
+                    "{}: deleted by hand. Add it to the config or the next apply overwrites it",
                     path.display()
                 ));
             }
@@ -56,7 +55,7 @@ pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
             }
             Difference::Unreadable { path, reason } => {
                 lines.push(format!(
-                    "cannot read '{}': {reason}. changed outside config: add to config or the next apply loses them",
+                    "cannot read '{}': {reason}. Add it to the config or the next apply overwrites it",
                     path.display()
                 ));
             }
@@ -65,7 +64,7 @@ pub fn difference_lines(entries: &[Difference]) -> Vec<String> {
     lines
 }
 
-/// Render one scalar leaf value as display text.
+/// Renders one scalar value, with text kept as is.
 pub fn leaf_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(text) => text.clone(),
@@ -77,7 +76,7 @@ pub fn leaf_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// Flatten one map into dotted leaf entries.
+/// Flattens one map into entries keyed by dotted path.
 pub fn flatten_table(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> BTreeMap<String, serde_json::Value> {
@@ -88,7 +87,7 @@ pub fn flatten_table(
     out
 }
 
-/// Collect leaf differences between two maps.
+/// Collects the leaf changes between the old and the new map.
 pub fn leaf_changes(
     old: &BTreeMap<String, serde_json::Value>,
     new: &BTreeMap<String, serde_json::Value>,
@@ -113,7 +112,7 @@ pub fn leaf_changes(
     out
 }
 
-/// Push one leaf change line for one destination.
+/// Pushes one line for one changed leaf on a destination.
 fn push_key_line(
     lines: &mut Vec<String>,
     path: &Route,
@@ -148,9 +147,9 @@ fn push_key_line(
     }
 }
 
-/// Flatten one value into dotted leaf entries.
+/// Flattens one value into entries keyed by dotted path.
 ///
-/// - Array positions echo from 1.
+/// - Array positions start at 1.
 fn flatten_value(
     key: &str,
     value: &serde_json::Value,

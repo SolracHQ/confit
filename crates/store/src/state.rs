@@ -1,4 +1,4 @@
-//! State files with picker resolution behind handles.
+//! Stored state files with picker resolution.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -13,26 +13,26 @@ use confit_driver as driver;
 use crate::StoreRoots;
 use crate::handles::StateHandle;
 
-/// Stored states kept before rotation drops the oldest.
+/// The number of stored states kept before rotation drops the oldest.
 const HISTORY_KEPT: usize = 5;
 
-/// State file name under the config base.
+/// The file name for the applied state.
 const STATE_FILE: &str = "state.json";
 
-/// History folder name under the config base.
+/// The folder name for history entries.
 const HISTORY_DIR: &str = "history";
 
-/// Named state folder name under the config base.
+/// The folder name for named states.
 const STATES_DIR: &str = "states";
 
-/// State picker for stored states.
+/// A picker for one stored state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picker {
     /// The applied state.
     Applied,
-    /// One named state.
+    /// A state selected by its stored name.
     Named(String),
-    /// One history pick newest-first from one.
+    /// A history entry numbered newest first from one.
     History(usize),
 }
 
@@ -41,7 +41,7 @@ impl FromStr for Picker {
 
     fn from_str(raw: &str) -> ContextualResult<Self> {
         if let Some(name) = raw.strip_prefix('@') {
-            check_state_name(name)?;
+            validate_state_name(name)?;
             return Ok(Self::Named(name.to_owned()));
         }
         if let Some(rest) = raw.strip_prefix('%') {
@@ -57,7 +57,7 @@ impl FromStr for Picker {
     }
 }
 
-/// State files with picker resolution.
+/// A store of state files, their history, and their picker choices.
 #[derive(Debug, Clone)]
 pub struct StateStore {
     state: PathBuf,
@@ -66,7 +66,7 @@ pub struct StateStore {
 }
 
 impl StateStore {
-    /// Build a file-backed state store under the config base.
+    /// Builds a state store under the config base.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
             state: roots.config_base.join(STATE_FILE),
@@ -75,35 +75,34 @@ impl StateStore {
         }
     }
 
-    /// Return the applied handle for the stored state.
+    /// Returns the handle for the applied state file.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] for absent states.
+    /// - [`SlotReason::MissingEntry`] when the state file is absent.
     pub fn applied(&self) -> ContextualResult<StateHandle> {
         checked(self.state.clone())
     }
 
-    /// Return one named handle for one stored name.
+    /// Returns the handle for one stored name.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::EmptyName`] for empty names.
-    /// - [`SlotReason::NameChars`] for forbidden characters.
-    /// - [`SlotReason::MissingEntry`] for absent states.
+    /// - [`SlotReason::EmptyName`] when the name is empty.
+    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
+    /// - [`SlotReason::MissingEntry`] when the state file is absent.
     pub fn named(&self, name: &str) -> ContextualResult<StateHandle> {
         let path = self.named_path(name)?;
         checked(path)
     }
 
-    /// Resolve one picker to its checked handle.
+    /// Resolves one picker into its state handle.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] for absent states.
-    /// - [`SlotReason::OutOfRange`] for out-of-range picks.
-    /// - [`FilesystemError::FileMissing`] for missing folders treated as empty.
-    /// - [`FilesystemError`] for unreadable folders.
+    /// - [`SlotReason::MissingEntry`] when the state file is absent.
+    /// - [`SlotReason::OutOfRange`] when the pick is zero or past the newest entry.
+    /// - [`FilesystemError`] when the history folder is unreadable.
     pub fn resolve(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
             Picker::Applied => self.applied(),
@@ -124,11 +123,11 @@ impl StateStore {
         }
     }
 
-    /// Read one handle into bytes.
+    /// Reads one state file.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for unreadable states.
+    /// - [`FilesystemError`] when the state file is unreadable.
     pub fn read(&self, handle: &StateHandle) -> ContextualResult<Vec<u8>> {
         let path = handle.canonical();
         std::fs::read(path)
@@ -136,14 +135,14 @@ impl StateStore {
             .with_fs_path(path)
     }
 
-    /// Create one state handle with an empty file.
+    /// Creates one empty state file and returns its handle.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::BareSlot`] for history variants.
-    /// - [`SlotReason::EmptyName`] for empty names.
-    /// - [`SlotReason::NameChars`] for forbidden characters.
-    /// - [`FilesystemError`] for state write faults.
+    /// - [`SlotReason::BareSlot`] when the picker picks a history entry.
+    /// - [`SlotReason::EmptyName`] when the name is empty.
+    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
+    /// - [`FilesystemError`] when the state file fails to write.
     pub fn create(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
             Picker::Applied => {
@@ -163,20 +162,20 @@ impl StateStore {
         }
     }
 
-    /// Write one source onto one state handle.
+    /// Writes one source into a state file.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for state write faults.
+    /// - [`FilesystemError`] when the state file fails to write.
     pub fn write(&self, handle: &StateHandle, mut source: impl Read) -> ContextualResult<()> {
         store_bytes(handle.canonical(), &mut source)
     }
 
-    /// Remove one handle file.
+    /// Removes one state file.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for removal failures.
+    /// - [`FilesystemError`] when the state file fails to remove.
     pub fn remove(&self, handle: &StateHandle) -> ContextualResult<()> {
         let path = handle.canonical();
         std::fs::remove_file(path)
@@ -184,22 +183,22 @@ impl StateStore {
             .with_fs_path(path)
     }
 
-    /// List history handles newest first.
+    /// Returns history handles in newest-first order.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for unreadable folders beyond missing folders.
+    /// - [`FilesystemError`] when the history folder is unreadable.
     pub fn list(&self) -> ContextualResult<Vec<StateHandle>> {
         let mut files = history_files(&self.history)?;
         files.reverse();
         Ok(files.into_iter().map(StateHandle::new).collect())
     }
 
-    /// List state handles.
+    /// Lists named state handles.
     ///
     /// # Errors
     ///
-    /// - [`FilesystemError`] for unreadable folders beyond missing folders.
+    /// - [`FilesystemError`] when the state folder is unreadable.
     pub fn list_named(&self) -> ContextualResult<Vec<StateHandle>> {
         Ok(history_files(&self.states)?
             .into_iter()
@@ -207,12 +206,12 @@ impl StateStore {
             .collect())
     }
 
-    /// Rotate one streamed source into a fresh history file.
+    /// Writes one streamed source into a new history file.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] for vanishing states.
-    /// - [`FilesystemError`] for clock and other write failures.
+    /// - [`SlotReason::MissingEntry`] when the state file vanishes.
+    /// - [`FilesystemError`] when a clock reading or a state write fails.
     pub fn rotate(&self, mut source: impl Read) -> ContextualResult<()> {
         let mut stamp = system_nanos()?;
         let mut destination = self.history.join(format!("{stamp}.json"));
@@ -233,28 +232,28 @@ impl StateStore {
         Ok(())
     }
 
-    /// Report whether this is the first run.
+    /// Returns whether this is the first run.
     pub fn is_first_run(&self) -> bool {
         !self.state.exists()
     }
 
-    /// Resolve the state path for one validated name.
+    /// Returns the file path for one validated state name.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::EmptyName`] for empty names.
-    /// - [`SlotReason::NameChars`] for forbidden characters.
+    /// - [`SlotReason::EmptyName`] when the name is empty.
+    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
     fn named_path(&self, name: &str) -> ContextualResult<PathBuf> {
-        check_state_name(name)?;
+        validate_state_name(name)?;
         Ok(self.states.join(format!("{name}.json")))
     }
 }
 
-/// Return one state handle for one present file.
+/// Returns the handle for one state file that exists.
 ///
 /// # Errors
 ///
-/// - [`SlotReason::MissingEntry`] for absent states.
+/// - [`SlotReason::MissingEntry`] when the state file is absent.
 fn checked(path: PathBuf) -> ContextualResult<StateHandle> {
     if !path.exists() {
         return Err(contextual(SlotReason::MissingEntry).with_fs_path(path));
@@ -262,11 +261,11 @@ fn checked(path: PathBuf) -> ContextualResult<StateHandle> {
     Ok(StateHandle::new(path))
 }
 
-/// List stored files oldest first.
+/// Returns stored files in oldest-first order.
 ///
 /// # Errors
 ///
-/// - [`FilesystemError`] for unreadable folders beyond missing folders.
+/// - [`FilesystemError`] when the folder is unreadable.
 fn history_files(directory: &Path) -> ContextualResult<Vec<PathBuf>> {
     match driver::fs::read_dir(directory) {
         Ok(files) => Ok(files),
@@ -282,11 +281,11 @@ fn history_files(directory: &Path) -> ContextualResult<Vec<PathBuf>> {
     }
 }
 
-/// Read wall-clock nanos for sortable history file names.
+/// Returns the clock reading in nanoseconds for history file names.
 ///
 /// # Errors
 ///
-/// - [`FilesystemError::FileUnknown`] for clock readings before the epoch.
+/// - [`FilesystemError::FileUnknown`] when the clock is before the epoch.
 fn system_nanos() -> ContextualResult<u128> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -294,13 +293,13 @@ fn system_nanos() -> ContextualResult<u128> {
         .map_err(ContextualCause::from)
 }
 
-/// Check one state name for a file stem.
+/// Validates one state name as a file name.
 ///
 /// # Errors
 ///
-/// - [`SlotReason::EmptyName`] for empty names.
-/// - [`SlotReason::NameChars`] for forbidden characters.
-fn check_state_name(name: &str) -> ContextualResult<()> {
+/// - [`SlotReason::EmptyName`] when the name is empty.
+/// - [`SlotReason::NameChars`] when the name holds a forbidden character.
+fn validate_state_name(name: &str) -> ContextualResult<()> {
     if name.is_empty() {
         return Err(contextual(SlotReason::EmptyName));
     }
@@ -319,11 +318,11 @@ fn check_state_name(name: &str) -> ContextualResult<()> {
     Ok(())
 }
 
-/// Store one streamed source onto one state path.
+/// Writes one streamed source into a state file.
 ///
 /// # Errors
 ///
-/// - [`FilesystemError`] for state write faults.
+/// - [`FilesystemError`] when the state file fails to write.
 fn store_bytes(path: &Path, source: &mut impl Read) -> ContextualResult<()> {
     driver::StagedFile::write(path, |file| {
         std::io::copy(&mut *source, file)?;

@@ -58,7 +58,7 @@ pub enum Doc {
     },
 }
 
-/// The parameters and returns behind a callable shape text.
+/// The parameters and returns of one callable.
 #[derive(Clone, Debug)]
 struct CallableSignature {
     /// The callable parameters in order.
@@ -67,7 +67,7 @@ struct CallableSignature {
     returns: Vec<Return>,
 }
 
-/// Collects Lua stub entries and renders them as LuaLS annotations.
+/// The LuaLS annotation collector.
 ///
 /// A name enters once, so shared and recursive shapes are safe to add.
 #[derive(Debug, Default)]

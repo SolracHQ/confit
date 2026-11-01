@@ -1,15 +1,14 @@
-//! Templates rendered into text.
+//! Renders templates into text.
 
 use mlua::{Lua, Value};
 
 use lua_binding::lua_module;
 
-/// Template module.
 pub struct Template;
 
 #[lua_module("confit.template")]
 impl Template {
-    /// Render one template string with plain vars.
+    /// Renders one template string with plain vars.
     ///
     /// # Arguments
     ///
@@ -29,7 +28,7 @@ impl Template {
         let context: serde_json::Value = match lua.from_value(vars) {
             Ok(found) => found,
             Err(error) => {
-                return Ok((None, Some(format!("cannot render template: {error}"))));
+                return Ok((None, Some(format!("the template fails to render: {error}"))));
             }
         };
         let mut environment = minijinja::Environment::new();
@@ -37,7 +36,7 @@ impl Template {
         let context = minijinja::Value::from(minijinja::value::Serde(context));
         match environment.render_str(&template, context) {
             Ok(text) => Ok((Some(text), None)),
-            Err(error) => Ok((None, Some(format!("cannot render template: {error}")))),
+            Err(error) => Ok((None, Some(format!("the template fails to render: {error}")))),
         }
     }
 }

@@ -1,9 +1,9 @@
-//! Patch tables under owner config names.
+//! Wraps patch tables with their owner.
 
 use crate::api::config::Config;
 use crate::api::patch::{HookPatch, Patch, RcPatch, StructuredPatch};
 
-/// One patch under its owner config name.
+/// One patch and its owner config.
 #[derive(Debug, Clone)]
 pub struct OwnedPatch {
     /// The owner config name.
@@ -13,7 +13,7 @@ pub struct OwnedPatch {
 }
 
 impl OwnedPatch {
-    /// Build one owned patch.
+    /// Builds one owned patch.
     pub fn join_patch(patch: Patch, owner: &str) -> Self {
         Self {
             owner: owner.to_owned(),
@@ -21,7 +21,7 @@ impl OwnedPatch {
         }
     }
 
-    /// Return the structured patch for structured payloads.
+    /// Returns the structured patch.
     pub fn structured(&self) -> Option<&StructuredPatch> {
         match &self.patch {
             Patch::Structured(found) => Some(found),
@@ -29,7 +29,7 @@ impl OwnedPatch {
         }
     }
 
-    /// Return the rc patch for rc sections.
+    /// Returns the rc patch.
     pub fn rc(&self) -> Option<&RcPatch> {
         match &self.patch {
             Patch::Rc(found) => Some(found),
@@ -37,7 +37,7 @@ impl OwnedPatch {
         }
     }
 
-    /// Return the hook patch for hook payloads.
+    /// Returns the hook patch.
     pub fn hook(&self) -> Option<&HookPatch> {
         match &self.patch {
             Patch::Hook(found) => Some(found),
@@ -46,7 +46,7 @@ impl OwnedPatch {
     }
 }
 
-/// Build owned patches from one config stamping the config name.
+/// Wraps the config patches.
 pub(crate) fn assemble_config(config: &Config) -> Vec<OwnedPatch> {
     config
         .patches

@@ -11,7 +11,7 @@ use confit_model::routes::Route;
 
 use super::Difference;
 
-/// Content hash.
+/// One content hash for a body of bytes.
 pub(crate) struct Digest {
     /// The content hash.
     pub(crate) sha: Sha,
@@ -20,52 +20,52 @@ pub(crate) struct Digest {
 }
 
 impl Digest {
-    /// Label one digest with its byte count.
+    /// Returns the digest label with its byte count.
     pub(crate) fn label(&self) -> String {
         self.sha.label(self.len)
     }
 }
 
-/// Disk read outcome.
+/// The state of one destination on disk.
 enum DiskOutcome<T> {
-    /// Missing destination.
+    /// An absent destination.
     Absent,
-    /// Unreadable destination with its boxed located fault.
+    /// An unreadable destination with its located fault.
     Unreadable {
         /// The fault cause for the failed read.
         fault: Box<ContextualCause>,
     },
-    /// Directory blocks the destination.
+    /// A directory that blocks the destination.
     Blocked,
-    /// Present destination.
+    /// A destination that the read finds present.
     Present(T),
 }
 
-/// Present bytes.
+/// The bytes of one present file.
 pub(crate) struct FileBytes {
     /// The destination bytes.
     pub(crate) bytes: Vec<u8>,
-    /// Unix permission bits.
+    /// The Unix permission bits of the file.
     pub(crate) mode: Option<u32>,
 }
 
-/// Present digest.
+/// The digest of one present file.
 pub(crate) struct FileDigest {
     /// The content digest.
     pub(crate) digest: Digest,
-    /// Unix permission bits.
+    /// The Unix permission bits of the file.
     pub(crate) mode: Option<u32>,
 }
 
-/// Kind-aware disk reader.
+/// A reader of document destinations on disk.
 pub(crate) struct DiskReader;
 
 impl DiskReader {
-    /// Read one document destination into bytes, mapping terminal states.
+    /// Reads one document destination into bytes.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     pub(crate) fn read_bytes(
         document: &Document,
         on_present: impl FnOnce(FileBytes) -> ContextualResult<Vec<Difference>>,
@@ -88,11 +88,11 @@ impl DiskReader {
         Self::mapped(outcome, &document.path, on_present)
     }
 
-    /// Digest one document destination into its hash, mapping terminal states.
+    /// Reads one document destination into its content hash.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     pub(crate) fn digest(
         document: &Document,
         on_present: impl FnOnce(FileDigest) -> ContextualResult<Vec<Difference>>,
@@ -124,7 +124,7 @@ impl DiskReader {
         Self::mapped(outcome, &document.path, on_present)
     }
 
-    /// Probe one tree member path under its expanded base.
+    /// Reads one tree member path under its expanded base.
     pub(crate) fn probe_member(
         base: &Path,
         relative: &str,
@@ -164,7 +164,7 @@ impl DiskReader {
         Self::mapped(outcome, path, on_present)
     }
 
-    /// Map one read outcome into entries, running the closure on presence.
+    /// Maps one read outcome into difference entries.
     fn mapped<T>(
         outcome: DiskOutcome<T>,
         path: &Route,
@@ -181,11 +181,11 @@ impl DiskReader {
         })
     }
 
-    /// Expand one document destination or fail the run.
+    /// Expands the destination route of one document.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
     fn expanded(document: &Document) -> ContextualResult<PathBuf> {
         document
             .path
@@ -193,7 +193,7 @@ impl DiskReader {
             .with_document(document.path.display())
     }
 
-    /// Resolve one expanded path through its symlink target.
+    /// Resolves one expanded path to its symlink target.
     fn resolve_target(expanded: &Path) -> PathBuf {
         match std::fs::read_link(expanded) {
             Ok(link) => Self::join_target(expanded, &link),
@@ -201,7 +201,7 @@ impl DiskReader {
         }
     }
 
-    /// Read one regular path into bytes with its mode.
+    /// Reads one regular path into bytes with its permission bits.
     fn read_path(path: &Path) -> DiskOutcome<FileBytes> {
         match std::fs::read(path) {
             Ok(bytes) => DiskOutcome::Present(FileBytes {
@@ -215,7 +215,7 @@ impl DiskReader {
         }
     }
 
-    /// Digest one regular path into its hash with its mode.
+    /// Reads one regular path into its content hash with its permission bits.
     fn digest_path(path: &Path) -> DiskOutcome<FileDigest> {
         let mode = Self::read_mode(path);
         match std::fs::File::open(path) {
@@ -235,7 +235,7 @@ impl DiskReader {
         }
     }
 
-    /// Join a link target against the link parent.
+    /// Joins a link target to the folder that holds the link.
     fn join_target(link: &Path, target: &Path) -> PathBuf {
         if target.is_absolute() {
             return target.to_path_buf();
@@ -256,7 +256,7 @@ impl DiskReader {
         out
     }
 
-    /// Read unix permission bits for one path.
+    /// Reads the Unix permission bits of one path.
     fn read_mode(path: &Path) -> Option<u32> {
         if path.is_symlink() {
             return None;

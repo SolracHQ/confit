@@ -1,4 +1,3 @@
-//! Cli
 //! Argument shapes for the terminal surface.
 
 use std::path::{Path, PathBuf};
@@ -6,14 +5,14 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Parser, Subcommand};
 use confit_driver::paths::BaseDirs;
 
-/// Configuration as code for one user and plan before apply.
+/// The parsed command line for one run.
 #[derive(Debug, Parser)]
 #[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
 pub struct Cli {
     /// subcommand to run
     #[command(subcommand)]
     pub command: Command,
-    /// logs dir path (default: per-process temp dir)
+    /// logs folder path (default: per-process temp folder)
     #[arg(long)]
     pub logs_dir: Option<PathBuf>,
     /// log level (default: warn)
@@ -21,7 +20,7 @@ pub struct Cli {
     pub log_level: log::LevelFilter,
 }
 
-/// Available subcommands.
+/// The subcommand the user picks.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// write the evaluated profile to a bundle file or named state
@@ -43,7 +42,6 @@ pub enum Command {
 /// Default profile file under the project.
 pub const DEFAULT_PROFILE: &str = "main.lua";
 
-/// Evaluate the profile and write the resulting bundle.
 #[derive(Debug, Args)]
 pub struct BundleArgs {
     /// project folder to evaluate
@@ -56,7 +54,6 @@ pub struct BundleArgs {
     pub output: PathBuf,
 }
 
-/// Evaluate the profile and preview the resulting differences.
 #[derive(Debug, Args)]
 pub struct CheckArgs {
     /// project folder to evaluate
@@ -66,7 +63,6 @@ pub struct CheckArgs {
     pub profile: Option<PathBuf>,
 }
 
-/// Apply one live project.
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
     /// project folder to evaluate
@@ -79,7 +75,6 @@ pub struct ApplyArgs {
     pub force: bool,
 }
 
-/// Restore one package.
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
     /// package to restore (`.cb`, `@name`, or `%N`)
@@ -89,7 +84,6 @@ pub struct RestoreArgs {
     pub force: bool,
 }
 
-/// Scaffold a profile or rewrite stubs and plugins in a folder.
 #[derive(Debug, Args)]
 pub struct InitArgs {
     /// folder to scaffold or refresh (default: current folder)
@@ -106,7 +100,6 @@ pub struct InitArgs {
     pub lsp: bool,
 }
 
-/// Pack one state into a bundle or print its manifest.
 #[derive(Debug, Args)]
 pub struct ExportArgs {
     /// state to export (`%N` history or `@name`, default: applied state)
@@ -119,14 +112,13 @@ pub struct ExportArgs {
     pub manifest: bool,
 }
 
-/// Delete one named state.
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
     /// state to delete (shaped `@name`)
     pub name: String,
 }
 
-/// Expand one leading `~` against the home folder.
+/// Expands a leading `~` into the home folder.
 pub fn expand_tilde(path: &Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
@@ -147,7 +139,7 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     home.join(rest)
 }
 
-/// Expand tildes across every path arg of one command.
+/// Expands tildes in the path arguments of the picked subcommand.
 pub fn expand_command(command: &mut Command) {
     fn opt(target: &mut Option<PathBuf>) {
         if let Some(path) = target {
@@ -181,16 +173,16 @@ pub fn expand_command(command: &mut Command) {
     }
 }
 
-/// Log env var filling the gap between the flag and the default.
+/// The environment variable that sets the logs folder.
 pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
 
-/// App log file name under the logs dir.
+/// The log file that the app writes under the logs folder.
 pub const APP_LOG_NAME: &str = "confit.log";
 
-/// Hook output folder name under the logs dir.
+/// The folder under the logs folder that holds the hook logs.
 pub const HOOKS_DIR_NAME: &str = "hooks";
 
-/// Resolve the logs dir from the flag with env and default fallbacks.
+/// Resolves the logs folder from the flag, the environment, or the default.
 pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(dir) = explicit {
         return expand_tilde(dir);
@@ -201,7 +193,7 @@ pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
     std::env::temp_dir().join(format!("confit-{}", std::process::id()))
 }
 
-/// Resolve the profile against the project folder.
+/// Resolves an explicit profile or the default against the project.
 pub fn resolve_profile(project: &Path, profile: Option<&Path>) -> PathBuf {
     match profile {
         Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
@@ -216,26 +208,26 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn resolve_profile_pins_path_contract() {
+    fn resolve_profile_resolves_the_default_and_explicit_paths() {
         assert_eq!(
             resolve_profile(Path::new("site"), None),
             PathBuf::from("site/main.lua"),
-            "omitted profiles use the default"
+            "the resolver picks the default profile"
         );
         assert_eq!(
             resolve_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
             PathBuf::from("site/laptop.lua"),
-            "relative names stay project relative"
+            "a relative name joins the project folder"
         );
         assert_eq!(
             resolve_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
             PathBuf::from("/elsewhere/laptop.lua"),
-            "absolute names stay as is"
+            "an absolute name keeps its path"
         );
     }
 
     #[test]
-    fn expand_tilde_pins_home_contract() {
+    fn expand_tilde_expands_the_home_folder() {
         let home = BaseDirs::new().home.unwrap();
         assert_eq!(expand_tilde(Path::new("~")), home);
         assert_eq!(
@@ -245,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn logs_dir_pins_explicit_and_default() {
+    fn logs_dir_prefers_the_flag_over_the_default() {
         let home = BaseDirs::new().home.unwrap();
         let out = resolve_logs_dir(Some(Path::new("~/logs")));
         assert_eq!(out, home.join("logs"));

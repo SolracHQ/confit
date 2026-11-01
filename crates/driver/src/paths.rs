@@ -1,29 +1,29 @@
-//! Base folders.
+//! Resolves the base folders for route expansion.
 
 use std::path::PathBuf;
 
-/// Base folders for route expansion.
+/// The host base folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseDirs {
-    /// User home folder.
+    /// The home folder of the current user.
     pub home: Option<PathBuf>,
-    /// Platform config folder.
+    /// The config folder of the platform.
     pub config: Option<PathBuf>,
-    /// Platform data folder.
+    /// The data folder of the platform.
     pub data: Option<PathBuf>,
-    /// Platform cache folder.
+    /// The cache folder of the platform.
     pub cache: Option<PathBuf>,
 }
 
 impl Default for BaseDirs {
-    /// Build base folders.
+    /// Builds the default base folders.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl BaseDirs {
-    /// Read base folders.
+    /// Builds the base folders from the host.
     pub fn new() -> Self {
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -43,7 +43,7 @@ impl BaseDirs {
 
 #[cfg(any(test, feature = "test-support"))]
 mod support {
-    //! Calling thread temp root.
+    //! Holds the temp root for the calling thread.
 
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -69,12 +69,12 @@ mod support {
             if slot.is_none() {
                 match tempfile::TempDir::new() {
                     Ok(dir) => *slot = Some(dir),
-                    Err(error) => panic!("test temp root: {error}"),
+                    Err(error) => panic!("fails to create the test temp root: {error}"),
                 }
             }
             match slot.as_ref() {
                 Some(dir) => dir.path().to_path_buf(),
-                None => panic!("test temp root missing"),
+                None => panic!("expected a test temp root"),
             }
         })
     }
@@ -85,18 +85,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_shares_one_temp_root_across_calls() {
+    fn base_dirs_share_one_temp_root_across_calls() {
         let first = BaseDirs::new();
         let second = BaseDirs::new();
-        assert_eq!(first, second, "repeated calls share one root");
+        assert_eq!(first, second, "both calls share one root");
         let home = first.home.unwrap();
         let parent = home.parent().unwrap().to_path_buf();
-        assert!(parent.is_dir(), "the shared root lives on disk");
+        assert!(parent.is_dir(), "the shared root exists on disk");
         for root in [&first.config, &first.data, &first.cache] {
             assert_eq!(
                 root.as_ref().unwrap().parent().unwrap(),
                 parent,
-                "every base shares the root"
+                "every base folder shares the root"
             );
         }
     }

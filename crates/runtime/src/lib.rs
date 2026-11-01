@@ -1,4 +1,3 @@
-//! Runtime
 //! Manifests, bundles, destination writes, differences, hook runs, and checks.
 
 #![deny(missing_docs)]

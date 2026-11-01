@@ -1,5 +1,4 @@
-//! Export run
-//! State picker into bundle files or manifest prints.
+//! Packs one state into a bundle file or prints its manifest.
 
 use std::path::PathBuf;
 
@@ -13,53 +12,51 @@ use confit_store::state::Picker;
 
 use crate::cli::ExportArgs;
 
-/// Auto-name stem for exports of the applied state.
-const APPLIED_STEM: &str = "applied";
-/// Auto-name stem prefix for exports of history entries.
-const HISTORY_STEM_PREFIX: &str = "prev-";
+/// The auto-name prefix for exports of the applied state.
+const APPLIED_PREFIX: &str = "applied";
+/// The auto-name prefix for exports of history entries.
+const HISTORY_PREFIX: &str = "prev-";
 
-/// Outcome of one export run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportReport {
-    /// The bundle path for file exports, `None` for manifest prints.
+    /// The bundle path for a file export, `None` for a manifest print.
     pub dest: Option<PathBuf>,
-    /// Pretty manifest JSON for manifest prints, `None` for file exports.
+    /// The pretty manifest JSON for a manifest print, `None` for a file export.
     pub manifest: Option<String>,
 }
 
-/// One export run from flags to a bundle file or manifest print.
 pub struct ExportRunner<'a> {
-    /// The export flags under running.
+    /// The flags that pick the state and the output.
     pub args: &'a ExportArgs,
-    /// The write capabilities for the run.
+    /// The stores that hold the state and the resources.
     pub stores: Stores,
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Run the full export flow from flags.
+    /// Runs the export flow and returns the report.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] for malformed slots.
-    /// - [`confit_core::error::kind::ErrorKind::ExportState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
     pub fn run(args: &'a ExportArgs, stores: Stores) -> TerminalResult<ExportReport> {
         Self { args, stores }.execute()
     }
 
-    /// Resolve the picker, then write the bundle file or render manifest JSON.
+    /// Resolves the picker, then writes the file or renders the manifest.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] for malformed slots.
-    /// - [`confit_core::error::kind::ErrorKind::ExportState`] for state faults.
-    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states.
-    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] for bundle writes.
+    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
     pub fn execute(self) -> TerminalResult<ExportReport> {
         let args = self.args;
         let stores = self.stores;
@@ -79,12 +76,12 @@ impl<'a> ExportRunner<'a> {
             },
         };
         let manifest = stored::resolve(&stores.states(), &picker)?;
-        let stem = match &picker {
-            Picker::Applied => APPLIED_STEM.to_owned(),
+        let prefix = match &picker {
+            Picker::Applied => APPLIED_PREFIX.to_owned(),
             Picker::Named(name) => name.clone(),
-            Picker::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
+            Picker::History(pick) => format!("{HISTORY_PREFIX}{pick}"),
         };
-        let auto = PathBuf::from(stem);
+        let auto = PathBuf::from(prefix);
         if args.manifest {
             let text = manifest
                 .json()

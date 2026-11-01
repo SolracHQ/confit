@@ -19,7 +19,7 @@ pub struct Stub {
     pub text: String,
 }
 
-/// Writes LuaLS stubs with a shared header.
+/// The LuaLS stub writer.
 ///
 /// The header leads every stub the emitter produces.
 pub struct Emitter {

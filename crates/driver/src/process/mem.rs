@@ -1,4 +1,4 @@
-//! Memory process runs.
+//! Serves scripted process runs.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -8,7 +8,7 @@ use confit_core::error::ContextualCause;
 
 use super::{ProcessCall, ProcessOutput};
 
-/// Scripted process run with the exit code and the log bytes.
+/// One scripted process result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptedRun {
     /// The process exit code.
@@ -29,22 +29,22 @@ thread_local! {
     }) };
 }
 
-/// Script one process outcome for the next run.
+/// Queues a process outcome for the next run.
 pub fn serve(outcome: Result<ScriptedRun, ContextualCause>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes.push_back(outcome));
 }
 
-/// Script process outcomes and replace the waiting queue.
+/// Replaces the waiting queue with the process outcomes.
 pub fn script(outcomes: VecDeque<Result<ScriptedRun, ContextualCause>>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes = outcomes);
 }
 
-/// Return the recorded process calls in order.
+/// Collects the recorded process calls in order.
 pub fn calls() -> Vec<ProcessCall> {
     SCRIPTS.with(|cell| cell.borrow().calls.clone())
 }
 
-/// Clear every scripted outcome and recorded call.
+/// Removes every scripted outcome and recorded call.
 pub fn clear() {
     SCRIPTS.with(|cell| {
         let mut scripts = cell.borrow_mut();
@@ -53,7 +53,7 @@ pub fn clear() {
     });
 }
 
-/// Serve one scripted outcome into the log and record the call.
+/// Writes a scripted outcome to the log and records the call.
 pub(super) fn run(
     argv: &[String],
     path_dirs: &[PathBuf],
@@ -77,7 +77,7 @@ pub(super) fn run(
             }
             Some(Err(contextual)) => Err(contextual),
             None => panic!(
-                "confit driver: no scripted process outcome for '{}'",
+                "the scripts hold no process outcome for '{}'",
                 argv.join(" ")
             ),
         }

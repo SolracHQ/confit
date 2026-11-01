@@ -244,6 +244,7 @@ name = "confit-core"
 version = "0.9.0"
 dependencies = [
  "crossbeam-channel",
+ "lua-binding",
  "mlua",
  "serde",
  "serde_json",

@@ -8,7 +8,7 @@ use super::parse::{AliasStrategy, ShapeStrategy, parse_header};
 use super::probe::expand_probe_enum;
 use super::signature::expand_struct_function;
 use super::str_alias::expand_str_alias_enum;
-use super::structs::{expand_struct_object, expand_struct_table};
+use super::structs::{expand_struct_object, expand_struct_proxy, expand_struct_table};
 use super::typed_alias::expand_typed_alias_enum;
 use super::untagged::expand_untagged_enum;
 
@@ -18,35 +18,41 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let identifier = declaration.ident.clone();
     let expanded = match &declaration.data {
         Data::Struct(data) => match parse_header(&identifier, &declaration.attrs, false) {
-            Ok(header) => match header.strategy {
-                Some(ShapeStrategy::Table) => expand_struct_table(
-                    &identifier,
-                    data,
-                    &declaration.attrs,
-                    &header.validate,
-                    &header.name,
-                ),
-                Some(ShapeStrategy::Function) => expand_struct_function(
-                    &identifier,
-                    data,
-                    &declaration.attrs,
-                    &header.validate,
-                    &header.name,
-                    &header.returns,
-                ),
-                Some(ShapeStrategy::Object) => expand_struct_object(
-                    &identifier,
-                    data,
-                    &declaration.attrs,
-                    &header.validate,
-                    &header.name,
-                    header.traced,
-                ),
-                None => Err(syn::Error::new_spanned(
-                    &identifier,
-                    format!("{identifier}: Shape derive wants a strategy marker"),
-                )),
-            },
+            Ok(header) => {
+                if let Some(proxy) = header.proxy.as_ref() {
+                    expand_struct_proxy(&identifier, proxy)
+                } else {
+                    match header.strategy {
+                        Some(ShapeStrategy::Table) => expand_struct_table(
+                            &identifier,
+                            data,
+                            &declaration.attrs,
+                            &header.validate,
+                            &header.name,
+                        ),
+                        Some(ShapeStrategy::Function) => expand_struct_function(
+                            &identifier,
+                            data,
+                            &declaration.attrs,
+                            &header.validate,
+                            &header.name,
+                            &header.returns,
+                        ),
+                        Some(ShapeStrategy::Object) => expand_struct_object(
+                            &identifier,
+                            data,
+                            &declaration.attrs,
+                            &header.validate,
+                            &header.name,
+                            header.traced,
+                        ),
+                        None => Err(syn::Error::new_spanned(
+                            &identifier,
+                            format!("{identifier}: Shape derive wants a strategy marker"),
+                        )),
+                    }
+                }
+            }
             Err(error) => Err(error),
         },
         Data::Enum(data) => match parse_header(&identifier, &declaration.attrs, true) {

@@ -1,4 +1,4 @@
-//! Init scaffolds over temp dirs.
+//! Init scaffolds over temporary folders.
 
 #![allow(clippy::unwrap_used)]
 
@@ -10,7 +10,7 @@ use confit_cli::actions::init::{InitOutcome, InitRunner};
 use confit_cli::cli::InitArgs;
 use confit_driver::fs;
 
-/// Scaffold one temp dir with default flags.
+/// Scaffolds the site folder with the default flags and returns the root.
 fn scaffold(dir: &Path) -> PathBuf {
     let root = dir.join("site");
     let args = InitArgs {
@@ -25,13 +25,13 @@ fn scaffold(dir: &Path) -> PathBuf {
             assert!(report.written > 0, "the scaffold writes files");
             root
         }
-        Some(_) => panic!("plain init scaffolds"),
-        None => panic!("plain init reports one outcome"),
+        Some(_) => panic!("expected a scaffold outcome"),
+        None => panic!("expected one outcome"),
     }
 }
 
 #[test]
-fn init_writes_scaffold_with_stubs_and_plugins() {
+fn init_writes_the_scaffold_with_stubs_and_plugins() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());
     for path in [root.join("main.lua"), root.join("project.toml")] {
@@ -44,7 +44,7 @@ fn init_writes_scaffold_with_stubs_and_plugins() {
 }
 
 #[test]
-fn init_rejected_present_scaffold() {
+fn init_rejects_a_present_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());
     let args = InitArgs {
@@ -56,8 +56,8 @@ fn init_rejected_present_scaffold() {
     let outcome = InitRunner { args: &args }.execute();
     match outcome {
         Err(error) if error.summary().contains("Cannot overwrite existing") => {}
-        Err(other) => panic!("present scaffold flattens: {other}"),
-        Ok(_) => panic!("present scaffold passes"),
+        Err(other) => panic!("the init fails to reject the present scaffold: {other}"),
+        Ok(_) => panic!("expected a refused scaffold"),
     }
 }
 

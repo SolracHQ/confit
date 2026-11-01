@@ -1,5 +1,4 @@
-//! Delete run
-//! Named state removal with unreferenced pruning.
+//! Removes one named state with its unreferenced pruning.
 
 use confit_core::error::{
     ContextualCause, Error, ErrorCause, SlotReason, Terminal, TerminalResult, contextual, error,
@@ -11,25 +10,24 @@ use confit_store::state::Picker;
 
 use crate::cli::DeleteArgs;
 
-/// Outcome of one delete run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteReport {
     /// The deleted state name.
     pub name: String,
-    /// Pruned unreferenced pool entry count from the removal.
+    /// The number of unreferenced pool entries the removal pruned.
     pub pruned: usize,
 }
 
-/// Remove one named manifest, then prune unreferenced pool entries.
+/// Removes one named manifest, then prunes the unreferenced pool entries.
 ///
-/// - Entries shared with remaining states survive the prune.
+/// - An entry shared with a remaining state survives the prune.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::DeleteNonNamed`] for non named inputs.
-/// - [`confit_core::error::kind::ErrorKind::DeleteSlot`] for malformed slots.
-/// - [`confit_core::error::kind::ErrorKind::DeleteState`] for state removals.
-/// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for unreferenced prunes.
+/// - [`confit_core::error::kind::ErrorKind::DeleteNonNamed`] when the name is not a named state.
+/// - [`confit_core::error::kind::ErrorKind::DeleteSlot`] when a slot is malformed.
+/// - [`confit_core::error::kind::ErrorKind::DeleteState`] when the state removal fails.
+/// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] when the unreferenced prune fails.
 pub fn run(args: &DeleteArgs, stores: Stores) -> TerminalResult<DeleteReport> {
     if !args.name.starts_with('@') {
         return error(
@@ -61,7 +59,7 @@ pub fn run(args: &DeleteArgs, stores: Stores) -> TerminalResult<DeleteReport> {
     })
 }
 
-/// Map one slot fault to its delete terminal.
+/// Maps one slot fault to the delete error kind.
 fn map_slot(contextual: ContextualCause) -> Error {
     match contextual.cause() {
         ErrorCause::SlotReason(_) => contextual.terminal(ErrorKind::DeleteSlot),

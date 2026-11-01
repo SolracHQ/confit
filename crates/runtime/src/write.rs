@@ -16,25 +16,25 @@ use crossbeam_channel::Sender;
 
 use crate::render::render_document;
 
-/// Destination writer.
+/// The writer for document destinations.
 pub struct Writer {
-    /// Write capabilities for one run.
+    /// The stores that serve the writes for one run.
     pub stores: Stores,
-    /// Write events.
+    /// The progress channel for write events.
     pub to_ui: Sender<ToUi>,
 }
 
 impl Writer {
-    /// Write every document to its resolved destination.
+    /// Writes the documents to their resolved destinations.
     ///
-    /// - Present unmanaged documents stay untouched while their destination
-    ///   is absent from the changed set.
+    /// - A present unmanaged document changes only when its destination is in
+    ///   the changed set.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases, write faults,
-    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for unresolvable bases, write faults,
-    ///   and render faults.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a base is unresolvable or a write fails.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when a base is unresolvable, a write
+    ///   fails, or a render fails.
     pub fn write_documents(
         &self,
         documents: &[Document],
@@ -77,7 +77,7 @@ impl Writer {
                     file.flush()
                 })
                 .terminal(ErrorKind::WriteDestination)?;
-                driver::fs::set_mode(&expanded, Some(found.mode))
+                driver::fs::set_mode(&expanded, Some(found.mode.bits()))
                     .terminal(ErrorKind::WriteDestination)?;
                 done += 1;
                 self.emit_written(&document.path, done, total);
@@ -109,8 +109,8 @@ impl Writer {
             };
             outcome?;
             let mode = match &document.data {
-                Data::Text(found) => Some(found.mode),
-                Data::Opaque(found) => Some(found.mode),
+                Data::Text(found) => Some(found.mode.bits()),
+                Data::Opaque(found) => Some(found.mode.bits()),
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
             };
             driver::fs::set_mode(&expanded, mode).terminal(ErrorKind::WriteDestination)?;
@@ -121,6 +121,7 @@ impl Writer {
         Ok(written)
     }
 
+    /// Sends one progress event for a written document.
     fn emit_written(&self, destination: &Route, done: usize, total: usize) {
         let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
             id: "write".to_owned(),
@@ -130,11 +131,11 @@ impl Writer {
         }));
     }
 
-    /// Write one tree destination member by member.
+    /// Writes the members of one tree destination one by one.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for unreadable members and unwritable members.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when a member is unreadable or cannot be written.
     fn write_tree_members(
         &self,
         dest: &Path,
@@ -157,18 +158,18 @@ impl Writer {
                 file.flush()
             })
             .terminal(ErrorKind::WriteDestination)?;
-            driver::fs::set_mode(&path, Some(member.mode()))
+            driver::fs::set_mode(&path, Some(member.mode().bits()))
                 .terminal(ErrorKind::WriteDestination)?;
         }
         Ok(1)
     }
 }
 
-/// Resolve one document destination or fail the write.
+/// Resolves the destination of one document.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable base folders.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a base folder is absent.
 fn expand_destination(document: &Document) -> TerminalResult<PathBuf> {
     document
         .path
@@ -177,7 +178,7 @@ fn expand_destination(document: &Document) -> TerminalResult<PathBuf> {
         .terminal(ErrorKind::Evaluate)
 }
 
-/// Remove one backend path and report whether anything remains.
+/// Removes one backend path and reports whether it held a file.
 fn remove(path: &Path) -> std::io::Result<bool> {
     if !path.exists() {
         return Ok(false);
@@ -187,12 +188,13 @@ fn remove(path: &Path) -> std::io::Result<bool> {
 }
 
 impl Writer {
-    /// Remove recorded destinations absent from desired documents.
+    /// Removes the recorded destinations that the desired documents lack.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases and removal faults.
-    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for unresolvable bases and removal faults.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a base is unresolvable or a removal fails.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when a base is unresolvable or a removal
+    ///   fails.
     pub fn remove_deleted(
         &self,
         recorded: &[Document],
@@ -223,12 +225,13 @@ impl Writer {
         Ok(removed)
     }
 
-    /// Remove dropped tree members between recorded and desired manifests.
+    /// Removes the tree members that the desired manifests drop.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unresolvable bases and removal faults.
-    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for unresolvable bases and removal faults.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a base is unresolvable or a removal fails.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when a base is unresolvable or a removal
+    ///   fails.
     pub fn remove_tree_members(
         &self,
         recorded: &[Document],
@@ -286,6 +289,7 @@ impl Writer {
         Ok(removed)
     }
 
+    /// Sends one progress event for a removed destination.
     fn emit_removed(&self, destination: &Route, done: usize, total: usize) {
         let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
             id: "remove".to_owned(),
@@ -299,7 +303,7 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_model::document::TextDocument;
+    use confit_model::document::{FileMode, TextDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
     use confit_ui::Event;
@@ -313,14 +317,14 @@ mod tests {
             path: literal(path),
             data: Data::Text(TextDocument {
                 content: "deleted bytes".into(),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
                 unmanaged: false,
             }),
         }
     }
 
     #[test]
-    fn remove_deleted_announces_document_removed() {
+    fn remove_deleted_announces_a_removed_document() {
         let dir = tempfile::tempdir().unwrap();
         let roots = StoreRoots {
             config_base: dir.path().join("config"),
@@ -337,8 +341,8 @@ mod tests {
         std::fs::write(&path, b"deleted bytes").unwrap();
         let recorded = vec![text_doc(&path)];
         match writer.remove_deleted(&recorded, &[]) {
-            Ok(removed) => assert_eq!(removed, 1, "deleted leaves disk"),
-            Err(error) => panic!("deleted remove: {error}"),
+            Ok(removed) => assert_eq!(removed, 1, "the removed document leaves the disk"),
+            Err(error) => panic!("the removal fails: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
@@ -353,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_moves_write_counters_across_documents() {
+    fn write_documents_counts_each_document() {
         use std::collections::BTreeSet;
 
         let dir = tempfile::tempdir().unwrap();
@@ -371,8 +375,8 @@ mod tests {
         let second = dir.path().join("second.txt");
         let documents = vec![text_doc(&first), text_doc(&second)];
         match writer.write_documents(&documents, &BTreeSet::new()) {
-            Ok(written) => assert_eq!(written, 2, "both documents land on disk"),
-            Err(error) => panic!("documents write: {error}"),
+            Ok(written) => assert_eq!(written, 2, "both documents land on the disk"),
+            Err(error) => panic!("the documents fail to write: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(

@@ -1,4 +1,3 @@
-//! Id
 //! Opaque identities with declaration stacks.
 
 use lua_binding::trace::LuaTrace;
@@ -17,7 +16,7 @@ pub struct Id {
 }
 
 impl PartialEq for Id {
-    /// Report whole string equality.
+    /// Returns whether both identities hold the same string.
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
@@ -26,7 +25,7 @@ impl PartialEq for Id {
 impl Eq for Id {}
 
 impl Serialize for Id {
-    /// Encode one id as its full string.
+    /// Writes the identity string with no trace.
     fn serialize<Encoder>(&self, encoder: Encoder) -> Result<Encoder::Ok, Encoder::Error>
     where
         Encoder: Serializer,
@@ -36,7 +35,7 @@ impl Serialize for Id {
 }
 
 impl<'de> Deserialize<'de> for Id {
-    /// Decode one bare string into an id with an empty trace.
+    /// Decodes a bare string into an identity with an empty trace.
     fn deserialize<Reader>(reader: Reader) -> Result<Self, Reader::Error>
     where
         Reader: Deserializer<'de>,
@@ -49,7 +48,7 @@ impl<'de> Deserialize<'de> for Id {
 }
 
 impl Id {
-    /// Build one id from its full string with an empty trace.
+    /// Returns an identity with the given string and an empty trace.
     pub fn of(name: impl Into<String>) -> Self {
         Self {
             id: name.into(),
@@ -57,7 +56,7 @@ impl Id {
         }
     }
 
-    /// Return the full identity string.
+    /// Returns the string that the identity holds.
     pub fn as_str(&self) -> &str {
         self.id.as_str()
     }
@@ -73,47 +72,53 @@ mod tests {
     use lua_binding::value::Decode;
     use mlua::{Lua, Value};
 
-    /// Foreign handle for id decode tests.
+    /// A second userdata shape for decode tests.
     #[allow(dead_code)]
     #[derive(Clone, Shape)]
     #[shape(object)]
-    struct Foreign {
+    struct OtherShape {
         seed: String,
     }
 
     #[lua_methods]
-    impl Foreign {}
+    impl OtherShape {}
 
     #[test]
-    fn id_decode_rejects_wrong_shapes() {
+    fn id_decode_rejects_text_tables_and_other_userdata() {
         let lua = Lua::new();
         let text = lua.create_string("same").unwrap();
         assert!(
             Id::decode(&Value::String(text), &lua).is_err(),
-            "string fails"
+            "the identity decoder rejects a string"
         );
         let table = lua.create_table().unwrap();
         assert!(
             Id::decode(&Value::Table(table), &lua).is_err(),
-            "table fails"
+            "the identity decoder rejects a table"
         );
-        assert!(Id::decode(&Value::Nil, &lua).is_err(), "nil fails");
+        assert!(
+            Id::decode(&Value::Nil, &lua).is_err(),
+            "the identity decoder rejects nil"
+        );
         let foreign = lua
-            .create_userdata(Foreign {
+            .create_userdata(OtherShape {
                 seed: "base".to_owned(),
             })
             .unwrap();
         assert!(
             Id::decode(&Value::UserData(foreign), &lua).is_err(),
-            "wrong userdata fails"
+            "the identity decoder rejects other userdata"
         );
     }
 
     #[test]
-    fn traced_outside_lua_holds_empty_trace() {
+    fn traced_id_starts_with_an_empty_trace() {
         let lua = Lua::new();
         let traced = Id::traced(&lua, Id::of("same"));
         assert_eq!(traced.as_str(), "same");
-        assert!(traced.trace.0.is_empty(), "bare state holds no frames");
+        assert!(
+            traced.trace.0.is_empty(),
+            "a fresh identity starts with an empty trace"
+        );
     }
 }

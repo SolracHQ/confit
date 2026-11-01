@@ -1,4 +1,3 @@
-//! Confit core
 //! Pure document types with rendering.
 
 #![deny(missing_docs)]

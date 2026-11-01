@@ -1,156 +1,156 @@
 --- @meta confit.validate
---- Check one document table, else nil with reason.
---- @param body any The document table under checking.
+--- Checks one document table.
+--- @param body any The document table.
 --- @return Document? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function document(body) end
 
---- Structured data file.
+--- A document with structured data in one format.
 --- @class Document_Structured
 --- @field path Route The destination route.
 --- @field format StructuredFormat The serialization format.
 --- @field data {[string]: any} Structured content for the file.
 
---- Portable route over standard folders.
+--- A destination route.
 --- @class Route
 --- @field base RouteBase The destination base.
 --- @field relative string The relative path.
 Route = {}
 
---- Render the portable route display in sugar call form.
---- @return string The sugar call display.
+--- Returns the route as a sugar call like `home('.bashrc')`.
+--- @return string The call text for the route.
 function Route:display() end
 
---- Portable standard folders enum.
+--- A standard userspace folder.
 --- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
 
---- Serialization format for structured documents.
+--- A serialization format for structured data.
 --- @alias StructuredFormat "json" | "toml" | "yaml"
 
---- Plain text file.
+--- A document with exact text.
 --- @class Document_Text
 --- @field path Route The destination route.
 --- @field text string The exact file text.
---- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
---- @field unmanaged boolean? Existence-only document flag.
+--- @field mode string? The file permission mode.
+--- @field unmanaged boolean? Whether the document checks the route for existence alone.
 
---- Symbolic link.
+--- A document that points at another route.
 --- @class Document_Link
 --- @field path Route The destination route.
 --- @field target Route The link target route.
 
---- Per-shell rc data object.
+--- A document with shell rc entries in three stages.
 --- @class Document_Rc
 --- @field path Route The destination route.
 --- @field profile RcEntry[]? Entries before the guard.
 --- @field config RcEntry[]? Entries after the guard.
---- @field final RcEntry[]? Entries last.
+--- @field final RcEntry[]? Entries that close the rc file.
 
 --- One rc entry in any section.
 --- @alias RcEntry { env: RcEntry_Env } | { path: RcEntry_Path } | { alias: RcEntry_Alias } | { eval: RcEntry_Eval } | { cmd: RcEntry_Cmd } | { source: RcEntry_Source }
 
---- Plain value export.
+--- A variable that the shell exports with a value.
 --- @class RcEntry_Env
 --- @field name string The variable name, like `EDITOR`.
---- @field value string The value under export.
+--- @field value string The exported value.
 --- @field when Condition? The shell session guard.
 
---- Shell session predicate.
+--- A condition over the shell session.
 --- @alias Condition { env_eq: Condition_EnvEq } | { env_set: Condition_EnvSet } | { in_path: Condition_InPath } | { exists: Condition_Exists } | { changed: Condition_Changed } | { all: Condition[] } | { any: Condition[] } | { nop: Condition }
 
---- Equality between a shell variable and a value.
+--- A condition that matches a shell variable against a value.
 --- @class Condition_EnvEq
 --- @field key string The variable name.
 --- @field value string The expected value.
 
---- Non-empty variable assertion.
+--- A condition that requires a shell variable to hold a value.
 --- @class Condition_EnvSet
 --- @field key string The variable name.
 
---- A binary on PATH assertion.
+--- A condition that requires a binary on PATH.
 --- @class Condition_InPath
 --- @field name string The binary name.
 
---- A path existence assertion.
+--- A condition that requires an existing path.
 --- @class Condition_Exists
---- @field route Route The route under testing.
+--- @field route Route The path to check.
 
---- A changed document assertion.
+--- A condition that targets a route with pending changes.
 --- @class Condition_Changed
---- @field route Route The document route under testing.
+--- @field route Route The route to check for changes.
 
---- PATH like variable around its current value.
+--- A variable that gains one directory on PATH.
 --- @class RcEntry_Path
 --- @field name string The variable name, like `PATH`.
---- @field dir Route The directory route for placement.
+--- @field dir Route The directory that the entry appends.
 --- @field when Condition? The shell session guard.
 
---- Interactive alias.
+--- A shell alias with its expansion.
 --- @class RcEntry_Alias
 --- @field name string The alias name, like `ll`.
 --- @field expansion string The alias expansion.
 --- @field when Condition? The shell session guard.
 
---- Command output evaluation through eval.
+--- A command whose output the shell evaluates.
 --- @class RcEntry_Eval
---- @field argv Arg[] Eval command.
+--- @field argv Arg[] The command whose output runs in the shell.
 --- @field when Condition? The shell session guard.
 
---- Text or route for command arguments.
+--- One command line argument.
 --- @alias Arg string | Route
 
---- Plain command line.
+--- A command that the shell runs as written.
 --- @class RcEntry_Cmd
---- @field argv Arg[] Plain command.
+--- @field argv Arg[] The command line.
 --- @field when Condition? The shell session guard.
 
---- File source for the shell.
+--- A file the shell sources.
 --- @class RcEntry_Source
---- @field path Route File route for sourcing.
+--- @field path Route The file to source.
 --- @field when Condition? The shell session guard.
 
---- Raw binary file.
+--- A document with bytes from a handle.
 --- @class Document_Opaque
 --- @field path Route The destination route.
 --- @field handle ResourceHandle The opaque file handle.
---- @field mode string? File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
---- @field unmanaged boolean? Existence-only document flag.
+--- @field mode string? The file permission mode.
+--- @field unmanaged boolean? Whether the document checks the route for existence alone.
 
---- Handle to a trusted resource.
+--- A handle to a trusted resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
---- Read file text.
---- @return string? File text, else nil.
---- @return string? Failure reason, else nil.
+--- Reads one trusted file as text.
+--- @return string? The decoded file text.
+--- @return string? The failure reason.
 function ResourceHandle:text() end
 
---- Read file content.
---- @return table? Decoded table, else nil.
---- @return string? Failure reason, else nil.
+--- Loads one file into its Lua table.
+--- @return table? The decoded table.
+--- @return string? The failure reason.
 function ResourceHandle:load() end
 
---- Open the input archive.
---- @return ArchiveHandle? Archive handle, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the archive handle for one trusted source.
+--- @return ArchiveHandle? The archive handle.
+--- @return string? The failure reason.
 function ResourceHandle:archive() end
 
---- Handle to a verified compressed archive.
+--- A handle to a verified compressed archive.
 --- @class ArchiveHandle
 ArchiveHandle = {}
 
---- List the archive member names, archive-relative with forward slashes.
---- @return string[]? Member names, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the archive member names in archive-relative form with forward slashes.
+--- @return string[]? The member names.
+--- @return string? The failure reason.
 function ArchiveHandle:members() end
 
---- Open one archive member.
---- @param name string Archive-relative member name.
---- @return ResourceHandle? Member handle, else nil.
---- @return string? Failure reason, else nil.
+--- Returns the handle for one archive member.
+--- @param name string The member path with forward slashes.
+--- @return ResourceHandle? The member handle.
+--- @return string? The failure reason.
 function ArchiveHandle:member(name) end
 
---- Managed file set.
+--- A document with a set of file members under one route.
 --- @class Document_Tree
 --- @field path Route The destination route.
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
@@ -158,16 +158,16 @@ function ArchiveHandle:member(name) end
 --- One tree member.
 --- @alias TreeMember ResourceHandle | TreeMember_Full
 
---- Handle with explicit mode.
+--- A member that carries a handle and an explicit mode.
 --- @class TreeMember_Full
 --- @field handle ResourceHandle The file payload.
---- @field mode string File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
+--- @field mode string The file permission mode.
 
---- One declared document.
+--- One configuration artifact, compared as one unit.
 --- @alias Document Document_Structured | Document_Text | Document_Link | Document_Rc | Document_Opaque | Document_Tree
 
---- Check one config table, else nil with reason.
---- @param config any The config table under checking.
+--- Checks one config table.
+--- @param config any The config table.
 --- @return Config? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function config(config) end
@@ -197,15 +197,15 @@ Id = {}
 StructuredPatch = {}
 
 --- The patch filter callback.
---- @param route Route Target route of the candidate document.
+--- @param route Route The target route of the candidate document.
 --- @return boolean
 function StructuredPatch.filter(route) end
 
 --- The patch callback over the live document.
---- @param document Document_Structured Live structured document under patching.
+--- @param document Document_Structured The live structured document.
 function StructuredPatch.apply(document) end
 
---- Patch merge level.
+--- The patch merge level.
 --- @alias Level "minor" | "low" | "normal" | "high" | "major"
 
 --- One rc patch table.
@@ -217,12 +217,12 @@ function StructuredPatch.apply(document) end
 RcPatch = {}
 
 --- The patch filter callback.
---- @param route Route Target route of the candidate document.
+--- @param route Route The target route of the candidate document.
 --- @return boolean
 function RcPatch.filter(route) end
 
 --- The patch callback over the live document.
---- @param document Document_Rc Live rc document under patching.
+--- @param document Document_Rc The live rc document.
 function RcPatch.apply(document) end
 
 --- One hook patch table.
@@ -232,45 +232,45 @@ function RcPatch.apply(document) end
 HookPatch = {}
 
 --- The hook callback over the live hook.
---- @param hook Hook Live hook under patching.
+--- @param hook Hook The live hook.
 function HookPatch.apply(hook) end
 
---- One post-config step with conditions and checks.
+--- A post-config step.
 --- @class Hook
---- @field argv Arg[] Command for the subprocess.
---- @field path Arg[]? PATH entries for the subprocess alone.
+--- @field argv Arg[] The command that the step runs.
+--- @field path Arg[]? The PATH entries that only the subprocess sees.
 --- @field id Id The hook identifier.
 --- @field requires Condition? The capability condition.
 --- @field when Condition? The need condition.
 --- @field check Condition? The run condition.
---- @field timeout string? The run cap in seconds.
+--- @field timeout string? The run limit.
 
---- Check one patch table, else nil with reason.
---- @param patch any The patch table under checking.
+--- Checks one patch table.
+--- @param patch any The patch table.
 --- @return Patch? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function patch(patch) end
 
---- Check one hook table, else nil with reason.
---- @param value any The hook table under checking.
+--- Checks one hook table.
+--- @param value any The hook table.
 --- @return Hook? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function hook(value) end
 
---- Check one condition table, else nil with reason.
---- @param value any The condition table under checking.
+--- Checks one condition table.
+--- @param value any The condition table.
 --- @return Condition? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function condition(value) end
 
---- Check one rc entry table, else nil with reason.
---- @param value any The rc entry table under checking.
+--- Checks one rc entry table.
+--- @param value any The rc entry table.
 --- @return RcEntry? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function entry(value) end
 
---- Check one route handle, else nil with reason.
---- @param value any The route handle under checking.
+--- Checks one route handle.
+--- @param value any The route handle.
 --- @return Route? The decoded value, else nil.
 --- @return string? The failure reason, else nil.
 function route(value) end

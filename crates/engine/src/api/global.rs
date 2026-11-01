@@ -1,4 +1,4 @@
-//! Bare constructor globals over model identities.
+//! Exposes the id and route constructors.
 
 use mlua::Lua;
 
@@ -7,12 +7,12 @@ use lua_binding::lua_globals;
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 
-/// Global constructors.
+/// The global constructors.
 pub struct Global;
 
 #[lua_globals("confit")]
 impl Global {
-    /// Build one opaque id.
+    /// Builds one traced id.
     ///
     /// # Arguments
     ///
@@ -32,7 +32,7 @@ impl Global {
         ))
     }
 
-    /// Build one route.
+    /// Builds one traced route.
     ///
     /// # Arguments
     ///
@@ -82,14 +82,14 @@ mod tests {
         root
     }
 
-    fn test_lua(stores: &Stores) -> Lua {
+    fn fresh_lua(stores: &Stores) -> Lua {
         let lua = Lua::new();
         lua.set_app_data(stores.clone());
         install(&lua).unwrap();
         lua
     }
 
-    /// Build disconnected renderer channels.
+    /// Builds silent renderer channels.
     fn silent_handles() -> UiHandles {
         let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
         let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
@@ -111,30 +111,30 @@ mod tests {
         std::fs::write(&nested, b"return require(\"helper\")").unwrap();
         let plugin = root.join("plugin.lua");
         std::fs::write(&plugin, b"return require(\"plugins.alice.tool\")").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match load_chunk(&lua, &chunk) {
             Ok(Value::UserData(found)) => {
                 let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
                 assert_eq!(decoded.as_str(), "chunk");
             }
-            Ok(_) => panic!("chunk id returns userdata"),
-            Err(error) => panic!("chunk id loads: {error}"),
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the chunk fails to return an id: {error}"),
         }
         match load_chunk(&lua, &nested) {
             Ok(Value::UserData(found)) => {
                 let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
                 assert_eq!(decoded.as_str(), "nested");
             }
-            Ok(_) => panic!("nested id returns userdata"),
-            Err(error) => panic!("nested id loads: {error}"),
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the nested chunk fails to return an id: {error}"),
         }
         match load_chunk(&lua, &plugin) {
             Ok(Value::UserData(found)) => {
                 let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
                 assert_eq!(decoded.as_str(), "plugin");
             }
-            Ok(_) => panic!("plugin id returns userdata"),
-            Err(error) => panic!("plugin id loads: {error}"),
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the plugin fails to return an id: {error}"),
         }
     }
 
@@ -156,37 +156,37 @@ mod tests {
             b"local make = require(\"plugins.alice.capture\")\nlocal myid = make()\nreturn myid",
         )
         .unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match load_chunk(&lua, &chunk) {
             Ok(Value::UserData(found)) => {
                 let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
                 assert_eq!(decoded.as_str(), "captured");
                 let trace = decoded.trace.0.clone();
-                assert!(trace.len() >= 2, "chain holds two frames");
+                assert!(trace.len() >= 2, "the trace holds two frames");
                 assert!(
                     trace[0].file.contains("init.lua"),
-                    "first frame shows the plugin file"
+                    "the first frame shows the plugin file"
                 );
                 assert!(
                     trace[0].line.parse::<usize>().unwrap_or(0) > 0,
-                    "first frame shows the line"
+                    "the first frame shows the line"
                 );
                 assert!(
                     trace[1].file.contains("test"),
-                    "second frame shows the chunk file"
+                    "the second frame shows the chunk file"
                 );
                 assert!(
                     trace[1].line.parse::<usize>().unwrap_or(0) > 0,
-                    "second frame shows the line"
+                    "the second frame shows the line"
                 );
             }
-            Ok(_) => panic!("captured id returns userdata"),
-            Err(error) => panic!("captured id loads: {error}"),
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the plugin fails to return an id: {error}"),
         }
     }
 
     #[test]
-    fn duplicate_same_ids_keep_terminal_bytes() {
+    fn duplicate_ids_keep_the_terminal_message() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(
@@ -214,7 +214,7 @@ mod tests {
         .unwrap();
         let engine = Engine::new(stores, silent_handles());
         match engine.evaluate(&profile) {
-            Ok(_) => panic!("duplicate ids pass"),
+            Ok(_) => panic!("the engine accepts duplicate ids"),
             Err(error) => assert_eq!(
                 error.to_string(),
                 "Cannot render the manifest, duplicate document 'same'"

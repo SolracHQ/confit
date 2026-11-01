@@ -1,4 +1,3 @@
-//! Condition
 //! Shell session predicates held as data.
 
 use lua_binding::Shape;
@@ -6,36 +5,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::routes::Route;
 
-/// Shell session predicate.
+/// A condition over the shell session.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Shape)]
 #[serde(rename_all = "snake_case")]
 #[shape(table, typed_alias)]
 pub enum Condition {
-    /// Equality between a shell variable and a value.
+    /// A condition that matches a shell variable against a value.
     EnvEq {
         /// The variable name.
         key: String,
         /// The expected value.
         value: String,
     },
-    /// Non-empty variable assertion.
+    /// A condition that requires a shell variable to hold a value.
     EnvSet {
         /// The variable name.
         key: String,
     },
-    /// A binary on PATH assertion.
+    /// A condition that requires a binary on PATH.
     InPath {
         /// The binary name.
         name: String,
     },
-    /// A path existence assertion.
+    /// A condition that requires an existing path.
     Exists {
-        /// The route under testing.
+        /// The path to check.
         route: Route,
     },
-    /// A changed document assertion.
+    /// A condition that targets a route with pending changes.
     Changed {
-        /// The document route under testing.
+        /// The route to check for changes.
         route: Route,
     },
     /// A conjunction of nested conditions.
@@ -48,29 +47,29 @@ pub enum Condition {
     Not(Box<Condition>),
 }
 
-/// N-ary operator for folding.
+/// The operator of an n-ary condition list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NaryKind {
-    /// `All` member list.
+    /// The operator that joins members in a conjunction.
     All,
-    /// `Any` member list.
+    /// The operator that joins members in a disjunction.
     Any,
 }
 
 impl Default for Condition {
-    /// Return the true condition.
+    /// Returns the empty `All` list that always holds.
     fn default() -> Self {
         Self::All(Vec::new())
     }
 }
 
 impl Condition {
-    /// Report whether one condition is true in simplified form.
+    /// Returns whether simplification leaves the true constant.
     pub fn is_true(&self) -> bool {
         self.simplified() == Self::default()
     }
 
-    /// Report whether condition trees hold a changed leaf.
+    /// Returns whether any leaf targets a changed route.
     pub fn holds_changed(&self) -> bool {
         match self {
             Self::Changed { .. } => true,
@@ -83,7 +82,7 @@ impl Condition {
         }
     }
 
-    /// Collect changed destinations in tree order.
+    /// Appends every changed route to the list in tree order.
     pub fn collect_changed(&self, out: &mut Vec<Route>) {
         match self {
             Self::Changed { route: dest } => out.push(dest.clone()),
@@ -100,7 +99,7 @@ impl Condition {
         }
     }
 
-    /// Return the simplified form of one condition tree.
+    /// Returns the tree after folding negations and flattening nested lists.
     pub fn simplified(&self) -> Self {
         let mut out = self.simplify_step();
         loop {
@@ -112,7 +111,7 @@ impl Condition {
         }
     }
 
-    /// Apply one simplification pass over already simple children.
+    /// Folds one layer of negations and nested lists over simple children.
     fn simplify_step(&self) -> Self {
         match self {
             Self::Not(inner) => match inner.simplified() {
@@ -125,7 +124,7 @@ impl Condition {
         }
     }
 
-    /// Simplify one `All` or `Any` member list.
+    /// Flattens, sorts, and dedupes one member list.
     fn nary(kind: NaryKind, items: &[Self]) -> Self {
         let mut simple: Vec<Self> = items.iter().map(Self::simplified).collect();
         let mut flat = Vec::with_capacity(simple.len());
@@ -164,7 +163,7 @@ impl Condition {
         }
     }
 
-    /// Build the empty `All` (true) or `Any` (false) constant.
+    /// Builds the constant that a cancelled list folds to.
     fn nary_empty(kind: NaryKind) -> Self {
         match kind {
             NaryKind::All => Self::All(Vec::new()),
@@ -172,13 +171,13 @@ impl Condition {
         }
     }
 
-    /// Report whether one member meets its complement in the list.
+    /// Returns whether a member and its negation both sit in the list.
     fn cancels(flat: &[Self], member: &Self) -> bool {
         let negated = Self::Not(Box::new(member.clone()));
         flat.contains(&negated)
     }
 
-    /// Report whether one branch absorbs into a sibling member.
+    /// Returns whether the branch holds a sibling member.
     fn absorbed(flat: &[Self], member: &Self, kind: NaryKind) -> bool {
         let inner = match (kind, member) {
             (NaryKind::All, Self::Any(inner)) | (NaryKind::Any, Self::All(inner)) => inner,
@@ -187,7 +186,7 @@ impl Condition {
         flat.iter().any(|sibling| inner.contains(sibling))
     }
 
-    /// Render one condition in compact form for condition text.
+    /// Renders the simplified condition as call text.
     pub fn describe(&self) -> String {
         fn render(cond: &Condition) -> String {
             match cond {

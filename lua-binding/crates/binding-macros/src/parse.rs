@@ -2,7 +2,7 @@
 
 use syn::{Attribute, Fields, Lit, Meta, Type, punctuated::Punctuated, token::Comma};
 
-/// Strategy marker reading on every derived type.
+/// The Lua form that a derived struct or enum picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShapeStrategy {
     Table,
@@ -10,7 +10,7 @@ pub(crate) enum ShapeStrategy {
     Object,
 }
 
-/// Alias strategy reading on derived enums.
+/// The table alias that a derived enum picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AliasStrategy {
     StrAlias,
@@ -19,7 +19,7 @@ pub(crate) enum AliasStrategy {
     Probe,
 }
 
-/// Parses variant options from a shape attribute.
+/// The variant options of one shape attribute.
 #[derive(Default, Debug)]
 pub(crate) struct VariantOptions {
     pub(crate) name: Option<String>,
@@ -27,7 +27,7 @@ pub(crate) struct VariantOptions {
     pub(crate) probe: Vec<String>,
 }
 
-/// Parses shape options from every derived type.
+/// The shape options of one derived type.
 #[derive(Default)]
 pub(crate) struct ShapeOptions {
     /// The strategy marker.
@@ -44,9 +44,11 @@ pub(crate) struct ShapeOptions {
     pub(crate) validate: Option<syn::Path>,
     /// The function return shape path.
     pub(crate) returns: Option<syn::Path>,
+    /// The proxy shape path for a proxy struct.
+    pub(crate) proxy: Option<syn::Path>,
 }
 
-/// Parses field options from a shape attribute.
+/// The field options of one shape attribute.
 #[derive(Default)]
 pub(crate) struct FieldOptions {
     /// The optional marker for plain types.
@@ -67,16 +69,6 @@ pub(crate) struct FieldOptions {
     pub(crate) set: bool,
     /// The Lua key override.
     pub(crate) name: Option<String>,
-    /// The Lua shape override.
-    pub(crate) proxy: Option<syn::Path>,
-    /// The decode hook path.
-    pub(crate) decode_hook: Option<syn::Path>,
-    /// The encode hook path.
-    pub(crate) encode_hook: Option<syn::Path>,
-    /// The map key decode function path.
-    pub(crate) key_decode: Option<syn::Path>,
-    /// The map value decode function path.
-    pub(crate) value_decode: Option<syn::Path>,
     /// The absent-key default.
     pub(crate) default: Option<Option<syn::Path>>,
 }
@@ -153,7 +145,7 @@ pub(crate) fn parse_header(
                                     "{type_name}: unknown shape marker '{ident}'; want \
                                      a shape marker: table, object, function, traced, \
                                      str_alias, untagged, typed_alias, probe, validate, \
-                                     or name"
+                                     name, or proxy"
                                 ),
                             ));
                         }
@@ -245,14 +237,29 @@ pub(crate) fn parse_header(
                             }
                             header.returns = Some(found.path.clone());
                         }
+                        "proxy" => {
+                            let syn::Expr::Path(found) = &pair.value else {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: shape option 'proxy' wants a shape type"),
+                                ));
+                            };
+                            if found.qself.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    &pair.value,
+                                    format!("{type_name}: shape option 'proxy' wants a shape type"),
+                                ));
+                            }
+                            header.proxy = Some(found.path.clone());
+                        }
                         _ => {
                             return Err(syn::Error::new_spanned(
                                 &pair.path,
                                 format!(
                                     "{type_name}: unknown shape option '{key}'; want \
                                      probe or validate with a hook path, name \
-                                     with a string literal, or returns \
-                                     with a shape type"
+                                     with a string literal, returns with a shape \
+                                     type, or proxy with a shape type"
                                 ),
                             ));
                         }
@@ -271,16 +278,57 @@ pub(crate) fn parse_header(
             }
         }
     }
-    let Some(kind) = header.strategy else {
+    if header.proxy.is_some() {
+        if is_enum {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!("{type_name}: proxy shapes take a struct"),
+            ));
+        }
+        if header.strategy.is_some() {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!("{type_name}: proxy takes no kind marker; drop table, object, or function"),
+            ));
+        }
+        if header.alias.is_some() {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!(
+                    "{type_name}: proxy takes no alias marker; drop str_alias, untagged, \
+                     typed_alias, or probe"
+                ),
+            ));
+        }
+        if header.validate.is_some() {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!("{type_name}: proxy takes no validate hook"),
+            ));
+        }
+        if header.name.is_some() {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!("{type_name}: proxy takes no name override"),
+            ));
+        }
+        if header.returns.is_some() {
+            return Err(syn::Error::new_spanned(
+                identifier,
+                format!("{type_name}: proxy takes no returns shape"),
+            ));
+        }
+    }
+    if header.strategy.is_none() && header.proxy.is_none() {
         return Err(syn::Error::new_spanned(
             identifier,
             format!(
                 "{type_name}: Shape derive wants one kind marker: \
-                 #[shape(table)], #[shape(object)], or #[shape(function)]"
+                 #[shape(table)], #[shape(object)], #[shape(function)], or \
+                 #[shape(proxy = Type)]"
             ),
         ));
-    };
-    header.strategy = Some(kind);
+    }
     if header.returns.is_some() && header.strategy != Some(ShapeStrategy::Function) {
         return Err(syn::Error::new_spanned(
             identifier,
@@ -415,7 +463,7 @@ pub(crate) fn parse_variant_flags(
 ///
 /// # Errors
 ///
-/// - `syn::Error` for unknown options and lone proxy markers.
+/// - `syn::Error` for unknown options and conflicting markers.
 pub(crate) fn parse_field_flags(
     outer: &str,
     field: &str,
@@ -450,9 +498,7 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown shape option '{ident}'; \
                                      want 'optional', 'opaque', 'borrowed', 'ignore', 'flatten', \
-                                     'lua_trace', 'get', 'set', 'proxy', 'decode_hook', \
-                                     'encode_hook', 'key_decode', 'value_decode', 'name', or \
-                                     'default'"
+                                     'lua_trace', 'get', 'set', 'name', or 'default'"
                                 ),
                             ));
                         }
@@ -465,101 +511,6 @@ pub(crate) fn parse_field_flags(
                         .map(ToString::to_string)
                         .unwrap_or_default();
                     match key.as_str() {
-                        "proxy" => {
-                            let syn::Expr::Path(found) = &pair.value else {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'proxy' wants a shape type"
-                                    ),
-                                ));
-                            };
-                            if found.qself.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'proxy' wants a shape type"
-                                    ),
-                                ));
-                            }
-                            flags.proxy = Some(found.path.clone());
-                        }
-                        "decode_hook" => {
-                            let syn::Expr::Path(found) = &pair.value else {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'decode_hook' wants a function path"
-                                    ),
-                                ));
-                            };
-                            if found.qself.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'decode_hook' wants a function path"
-                                    ),
-                                ));
-                            }
-                            flags.decode_hook = Some(found.path.clone());
-                        }
-                        "encode_hook" => {
-                            let syn::Expr::Path(found) = &pair.value else {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'encode_hook' wants a function path"
-                                    ),
-                                ));
-                            };
-                            if found.qself.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'encode_hook' wants a function path"
-                                    ),
-                                ));
-                            }
-                            flags.encode_hook = Some(found.path.clone());
-                        }
-                        "key_decode" => {
-                            let syn::Expr::Path(found) = &pair.value else {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'key_decode' wants a function path"
-                                    ),
-                                ));
-                            };
-                            if found.qself.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'key_decode' wants a function path"
-                                    ),
-                                ));
-                            }
-                            flags.key_decode = Some(found.path.clone());
-                        }
-                        "value_decode" => {
-                            let syn::Expr::Path(found) = &pair.value else {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'value_decode' wants a function path"
-                                    ),
-                                ));
-                            };
-                            if found.qself.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &pair.value,
-                                    format!(
-                                        "{outer}.{field}: shape option 'value_decode' wants a function path"
-                                    ),
-                                ));
-                            }
-                            flags.value_decode = Some(found.path.clone());
-                        }
                         "name" => {
                             let syn::Expr::Lit(lit) = &pair.value else {
                                 return Err(syn::Error::new_spanned(
@@ -608,9 +559,7 @@ pub(crate) fn parse_field_flags(
                                 format!(
                                     "{outer}.{field}: unknown shape option '{key}'; \
                                      want 'optional', 'opaque', 'borrowed', 'ignore', 'flatten', \
-                                     'lua_trace', 'get', 'set', 'proxy', 'decode_hook', \
-                                     'encode_hook', 'key_decode', 'value_decode', 'name', or \
-                                     'default'"
+                                     'lua_trace', 'get', 'set', 'name', or 'default'"
                                 ),
                             ));
                         }
@@ -622,19 +571,12 @@ pub(crate) fn parse_field_flags(
                         format!(
                             "{outer}.{field}: unknown shape marker; want 'optional', \
                              'opaque', 'borrowed', 'ignore', 'flatten', 'lua_trace', 'get', \
-                             'set', 'proxy', 'decode_hook', 'encode_hook', 'key_decode', \
-                             'value_decode', 'name', or 'default'"
+                             'set', 'name', or 'default'"
                         ),
                     ));
                 }
             }
         }
-    }
-    if flags.proxy.is_some() && flags.decode_hook.is_none() {
-        return Err(syn::Error::new_spanned(
-            attrs.first(),
-            format!("{outer}.{field}: proxy without decode_hook is not supported"),
-        ));
     }
     if flags.set && !flags.get {
         return Err(syn::Error::new_spanned(
@@ -653,11 +595,6 @@ pub(crate) fn parse_field_flags(
             || flags.opaque
             || flags.borrowed
             || flags.flatten
-            || flags.proxy.is_some()
-            || flags.decode_hook.is_some()
-            || flags.encode_hook.is_some()
-            || flags.key_decode.is_some()
-            || flags.value_decode.is_some()
             || flags.name.is_some()
             || flags.default.is_some())
     {
@@ -671,11 +608,6 @@ pub(crate) fn parse_field_flags(
             || flags.opaque
             || flags.borrowed
             || flags.ignore
-            || flags.proxy.is_some()
-            || flags.decode_hook.is_some()
-            || flags.encode_hook.is_some()
-            || flags.key_decode.is_some()
-            || flags.value_decode.is_some()
             || flags.name.is_some()
             || flags.default.is_some())
     {
@@ -690,11 +622,6 @@ pub(crate) fn parse_field_flags(
             || flags.borrowed
             || flags.ignore
             || flags.flatten
-            || flags.proxy.is_some()
-            || flags.decode_hook.is_some()
-            || flags.encode_hook.is_some()
-            || flags.key_decode.is_some()
-            || flags.value_decode.is_some()
             || flags.name.is_some()
             || flags.default.is_some())
     {

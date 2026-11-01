@@ -1,5 +1,4 @@
-//! Restore run
-//! Packages to disk writes with prompts.
+//! Writes one package onto the machine with prompts.
 
 use std::path::PathBuf;
 
@@ -16,18 +15,18 @@ use super::commit::{CommitRunner, WriteReport};
 use crate::cli::RestoreArgs;
 use confit_ui::UiHandles;
 
-/// Resolve desired documents from one package with explicit run fields.
+/// Resolves the desired documents from one package, then commits them.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::RestoreSlot`] for malformed slots.
-/// - [`confit_core::error::kind::ErrorKind::RestoreState`] for state faults and non-package sources.
-/// - [`confit_core::error::kind::ErrorKind::ReadBundle`] for unreadable bundles.
-/// - [`confit_core::error::kind::ErrorKind::UnpackMember`] for unreadable bundle members.
-/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states.
-/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unsupported states.
-/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for versionless states.
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for diff faults.
+/// - [`confit_core::error::kind::ErrorKind::RestoreSlot`] when a slot is malformed.
+/// - [`confit_core::error::kind::ErrorKind::RestoreState`] when a state fails or the source is not a package.
+/// - [`confit_core::error::kind::ErrorKind::ReadBundle`] when a bundle is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::UnpackMember`] when a bundle member is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+/// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the diff fails.
 pub fn run(
     args: &RestoreArgs,
     stores: Stores,

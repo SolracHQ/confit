@@ -54,13 +54,7 @@ fn build_inline_payload(
             &field_name,
             &field.attrs,
         )?;
-        if flags.proxy.is_some()
-            || flags.decode_hook.is_some()
-            || flags.encode_hook.is_some()
-            || flags.opaque
-            || flags.ignore
-            || flags.flatten
-        {
+        if flags.opaque || flags.ignore || flags.flatten {
             return Err(syn::Error::new_spanned(
                 &field_ident,
                 format!(

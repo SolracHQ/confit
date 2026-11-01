@@ -1,4 +1,4 @@
-//! Apply runs over temp project roots.
+//! Apply runs over temporary project roots.
 
 #![allow(clippy::unwrap_used)]
 
@@ -11,7 +11,7 @@ use confit_cli::cli::ApplyArgs;
 use confit_core::error::TerminalResult;
 use confit_driver::paths::BaseDirs;
 
-/// Build one profile with a single text document at the relative path.
+/// Builds a profile that writes one text document at the relative path.
 fn profile_text(relative: &str) -> String {
     format!(
         r#"
@@ -27,13 +27,13 @@ return {{
     )
 }
 
-/// Seed one project with the profile text.
+/// Seeds the site profile with the document text.
 fn seed_project(dir: &Path, relative: &str) {
     let site = dir.join("site");
     common::seed_file(&site.join("main.lua"), profile_text(relative).as_bytes());
 }
 
-/// Run one apply with the canned replies, the force flag, and the profile.
+/// Applies the project with the canned replies and returns the report.
 fn run_apply(
     dir: &Path,
     replies: &[&str],
@@ -52,25 +52,25 @@ fn run_apply(
     apply::run(&args, stores, common::replying_handles(replies), hooks)
 }
 
-/// Read one home destination under the shared test root.
+/// Reads one home destination under the shared test root.
 fn home_bytes(relative: &str) -> Vec<u8> {
     let home = BaseDirs::new().home.unwrap();
     std::fs::read(home.join(relative)).unwrap()
 }
 
-/// Report whether one home destination stays absent.
+/// Returns whether one home destination is absent.
 fn home_absent(relative: &str) -> bool {
     let home = BaseDirs::new().home.unwrap();
     !home.join(relative).exists()
 }
 
 #[test]
-fn apply_force_writes_without_prompt() {
+fn apply_force_skips_the_prompt() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-force-note");
     match run_apply(dir.path(), &[], true, None) {
-        Ok(report) => assert_eq!(report.written, 1, "one document lands"),
-        Err(error) => panic!("forced apply runs: {error}"),
+        Ok(report) => assert_eq!(report.written, 1, "the apply writes one document"),
+        Err(error) => panic!("the forced apply fails to run: {error}"),
     }
     assert_eq!(
         home_bytes("confit-force-note"),
@@ -80,12 +80,12 @@ fn apply_force_writes_without_prompt() {
 }
 
 #[test]
-fn apply_yes_writes_documents() {
+fn yes_reply_writes_the_documents() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-yes-note");
     match run_apply(dir.path(), &["yes"], false, None) {
-        Ok(report) => assert_eq!(report.written, 1, "one document lands"),
-        Err(error) => panic!("confirmed apply runs: {error}"),
+        Ok(report) => assert_eq!(report.written, 1, "the apply writes one document"),
+        Err(error) => panic!("the confirmed apply fails to run: {error}"),
     }
     assert_eq!(
         home_bytes("confit-yes-note"),
@@ -95,21 +95,21 @@ fn apply_yes_writes_documents() {
 }
 
 #[test]
-fn apply_no_leaves_disk_alone() {
+fn no_reply_keeps_the_disk_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-no-note");
     match run_apply(dir.path(), &["no"], false, None) {
-        Ok(report) => assert_eq!(report.written, 0, "refused apply writes nothing"),
-        Err(error) => panic!("refused apply stays quiet: {error}"),
+        Ok(report) => assert_eq!(report.written, 0, "the refused apply writes no document"),
+        Err(error) => panic!("the refused apply fails to run: {error}"),
     }
     assert!(
         home_absent("confit-no-note"),
-        "the refused destination stays absent"
+        "the refused destination is absent"
     );
 }
 
 #[test]
-fn apply_explicit_profile_beats_default() {
+fn apply_explicit_profile_beats_the_default() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-main-note");
     let site = dir.path().join("site");
@@ -118,16 +118,16 @@ fn apply_explicit_profile_beats_default() {
         profile_text("confit-alt-note").as_bytes(),
     );
     match run_apply(dir.path(), &[], true, Some(PathBuf::from("laptop.lua"))) {
-        Ok(report) => assert_eq!(report.written, 1, "one document lands"),
-        Err(error) => panic!("explicit profile runs: {error}"),
+        Ok(report) => assert_eq!(report.written, 1, "the apply writes one document"),
+        Err(error) => panic!("the explicit profile apply fails to run: {error}"),
     }
     assert_eq!(
         home_bytes("confit-alt-note"),
         b"hello",
-        "the chosen profile lands"
+        "the chosen profile writes the document"
     );
     assert!(
         home_absent("confit-main-note"),
-        "the default profile stays untouched"
+        "the default profile is untouched"
     );
 }

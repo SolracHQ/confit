@@ -359,26 +359,69 @@ mod tests {
     use mlua::{Lua, Value};
     use std::collections::{BTreeMap, HashMap};
 
-    use crate::error::DecodeError;
-    use crate::value::{Decode, Encode};
+    use crate::error::{DecodeError, DecodeTag};
+    use crate::value::{Decode, Encode, Hooked};
 
-    /// Table shape for map convert tests.
-    #[derive(Debug, Shape)]
-    #[shape(table)]
-    struct MapTable {
-        /// Entries keyed by name.
-        #[shape(key_decode = upper_key, value_decode = exclaim_value, default)]
-        entries: HashMap<String, String>,
+    /// A number that crosses Lua as text.
+    #[derive(Debug, PartialEq, Shape)]
+    #[shape(proxy = String)]
+    struct Count(u32);
+
+    impl Hooked<String> for Count {
+        fn decode(_lua: &Lua, text: String) -> Result<Self, DecodeError> {
+            text.parse::<u32>().map(Count).map_err(|_| DecodeError {
+                segments: Vec::new(),
+                reason: DecodeTag::ShapeMismatch {
+                    require: "a count".to_owned(),
+                    found: text,
+                },
+            })
+        }
+
+        fn encode(&self, _lua: &Lua) -> mlua::Result<String> {
+            Ok(self.0.to_string())
+        }
     }
 
-    /// Converts a map key to uppercase.
-    fn upper_key(lua: &Lua, value: &Value) -> Result<String, DecodeError> {
-        String::decode(value, lua).map(|key| key.to_uppercase())
+    #[test]
+    fn proxy_shape_takes_the_proxy_name() {
+        assert_eq!(Count::name(), "string", "the proxy carries the name");
     }
 
-    /// Converts a map value to its exclaimed form.
-    fn exclaim_value(lua: &Lua, value: &Value) -> Result<String, DecodeError> {
-        String::decode(value, lua).map(|item| format!("{item}!"))
+    #[test]
+    fn proxy_decode_parses_text_into_the_value() {
+        let lua = Lua::new();
+        let text = Value::String(lua.create_string("7").unwrap());
+        let decoded = <Count as Decode>::decode(&text, &lua).unwrap();
+        assert_eq!(decoded, Count(7), "the hook reads the text");
+    }
+
+    #[test]
+    fn proxy_encode_writes_the_value_as_text() {
+        let lua = Lua::new();
+        let encoded = <Count as Encode>::encode(&Count(7), &lua).unwrap();
+        let Value::String(text) = encoded else {
+            panic!("the proxy encodes a string");
+        };
+        assert_eq!(text.to_string_lossy(), "7", "the hook writes the text");
+    }
+
+    #[test]
+    fn proxy_decode_returns_the_hook_error() {
+        let lua = Lua::new();
+        let text = Value::String(lua.create_string("nope").unwrap());
+        let expected = DecodeError {
+            segments: Vec::new(),
+            reason: DecodeTag::ShapeMismatch {
+                require: "a count".to_owned(),
+                found: "nope".to_owned(),
+            },
+        };
+        assert_eq!(
+            <Count as Decode>::decode(&text, &lua).unwrap_err(),
+            expected,
+            "the hook error reaches the caller"
+        );
     }
 
     /// Table shape with a Rust-filled field beside its Lua shape.
@@ -556,40 +599,6 @@ mod tests {
         assert_eq!(
             BTreeMap::<String, NoDocs>::name(),
             "{[string]: NoDocs}".to_owned()
-        );
-        let mut collector = Generator::new();
-        MapTable::collect(&mut collector);
-        assert!(collector.contains("MapTable"));
-        assert!(collector.generate().contains("{[string]: string}"));
-    }
-
-    #[test]
-    fn map_converts_decode_entries() {
-        let lua = Lua::new();
-        let entries = lua.create_table().unwrap();
-        entries.set("alpha", "one").unwrap();
-        let table = lua.create_table().unwrap();
-        table.set("entries", entries).unwrap();
-        let decoded = MapTable::decode(&Value::Table(table), &lua).unwrap();
-        assert_eq!(
-            decoded.entries.get("ALPHA").map(String::as_str),
-            Some("one!")
-        );
-        let bare = lua.create_table().unwrap();
-        let decoded = MapTable::decode(&Value::Table(bare), &lua).unwrap();
-        assert!(decoded.entries.is_empty());
-    }
-
-    #[test]
-    fn map_convert_failures_keep_dotted_paths() {
-        let lua = Lua::new();
-        let entries = lua.create_table().unwrap();
-        entries.set("alpha", 1).unwrap();
-        let table = lua.create_table().unwrap();
-        table.set("entries", entries).unwrap();
-        assert!(
-            MapTable::decode(&Value::Table(table), &lua).is_err(),
-            "foreign entry fails"
         );
     }
 

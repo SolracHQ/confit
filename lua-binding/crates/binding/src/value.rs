@@ -43,6 +43,26 @@ pub trait Encode {
     fn encode(&self, lua: &Lua) -> mlua::Result<Value>;
 }
 
+/// Converts between a Rust value and the decoded proxy value.
+///
+/// The `Shape` derive reads this impl for a struct marked
+/// `#[shape(proxy = Type)]`. The proxy type carries the Lua shape.
+pub trait Hooked<Proxy>: Sized {
+    /// Builds the value from the decoded proxy.
+    ///
+    /// # Errors
+    ///
+    /// - [`DecodeError`] for a proxy value outside the accepted set.
+    fn decode(lua: &Lua, proxy: Proxy) -> Result<Self, DecodeError>;
+
+    /// Builds the proxy from the value.
+    ///
+    /// # Errors
+    ///
+    /// - [`mlua::Error`] for a Lua allocation failure.
+    fn encode(&self, lua: &Lua) -> mlua::Result<Proxy>;
+}
+
 /// Returns the key and value of a table that holds exactly one entry.
 ///
 /// # Errors
@@ -188,7 +208,7 @@ pub fn table_keys(table: &Table) -> Result<Vec<String>, DecodeError> {
     Ok(keys)
 }
 
-/// The result of routing a key set to an untagged variant.
+/// The untagged variant match for one key set.
 pub enum VariantRoute {
     /// One variant group covers every key.
     Match(usize),

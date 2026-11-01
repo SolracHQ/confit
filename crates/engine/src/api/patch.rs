@@ -1,4 +1,4 @@
-//! Patch declarations over routes with callbacks.
+//! Declares patches over routes with callbacks.
 
 use mlua::{Lua, Table, Value};
 
@@ -12,7 +12,6 @@ use confit_model::document::{RcData, StructuredDocument, StructuredFormat};
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
 
-/// Live structured document under patching.
 #[derive(Debug, Clone, PartialEq, Eq, Shape)]
 #[shape(table, name = "Document_Structured")]
 pub struct StructuredLiveDocument {
@@ -23,7 +22,6 @@ pub struct StructuredLiveDocument {
     pub body: StructuredDocument,
 }
 
-/// Live rc document under patching.
 #[derive(Debug, Clone, PartialEq, Eq, Shape)]
 #[shape(table, name = "Document_Rc")]
 pub struct RcLiveDocument {
@@ -34,46 +32,42 @@ pub struct RcLiveDocument {
     pub body: RcData,
 }
 
-/// Patch structured data in place.
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function)]
 pub struct StructuredApplyArgs {
-    /// Live structured document under patching.
+    /// The live structured document.
     #[shape(borrowed)]
     document: StructuredLiveDocument,
 }
 
-/// Patch rc sections in place.
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function)]
 pub struct RcApplyArgs {
-    /// Live rc document under patching.
+    /// The live rc document.
     #[shape(borrowed)]
     document: RcLiveDocument,
 }
 
-/// Run one hook patch.
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function)]
 pub struct HookArgs {
-    /// Live hook under patching.
+    /// The live hook.
     #[shape(borrowed)]
     hook: Hook,
 }
 
-/// Shape for patch filter callbacks.
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function, returns = bool)]
 pub struct FilterArgs {
-    /// Target route of the candidate document.
+    /// The target route of the candidate document.
     route: Route,
 }
 
-/// Patch merge level.
+/// The patch merge level.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Shape)]
 #[serde(rename_all = "lowercase")]
 #[shape(table, str_alias)]
@@ -92,7 +86,7 @@ pub enum Level {
 }
 
 impl Level {
-    /// Return the numeric rank.
+    /// Returns the numeric rank.
     pub fn rank(self) -> u8 {
         match self {
             Self::Minor => 0,
@@ -103,7 +97,7 @@ impl Level {
         }
     }
 
-    /// Parse one level name in any letter case.
+    /// Parses one level name in any letter case.
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "minor" => Some(Self::Minor),
@@ -128,7 +122,7 @@ impl<'de> Deserialize<'de> for Level {
     }
 }
 
-/// One patch destination over a single route or a filter.
+/// One route or a filter.
 #[derive(Debug, Clone)]
 pub enum PatchTarget {
     /// Single destination route.
@@ -191,11 +185,11 @@ pub enum Patch {
     Hook(HookPatch),
 }
 
-/// Route one patch table.
+/// Picks the patch shape.
 ///
 /// # Errors
 ///
-/// - [`DecodeError`] for unreadable tables.
+/// - [`DecodeError`] when the table is unreadable.
 fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, DecodeError> {
     let target = table.get::<Value>("target").map_err(|error| DecodeError {
         segments: Vec::new(),
@@ -221,11 +215,11 @@ fn probe_patch(lua: &Lua, table: &Table) -> std::result::Result<Patch, DecodeErr
     }
 }
 
-/// Decode one patch destination over a route or a filter.
+/// Resolves the patch destination.
 ///
 /// # Errors
 ///
-/// - [`DecodeError`] for missing and doubled destinations.
+/// - [`DecodeError`] when the destination is missing or doubled.
 pub fn join_destination(
     target: Option<Route>,
     filter: Option<Callable<FilterArgs>>,
@@ -250,22 +244,22 @@ pub fn join_destination(
     }
 }
 
-/// Reject structured shapes missing or doubling destinations.
+/// Rejects a structured shape with a missing or doubled destination.
 ///
 /// # Errors
 ///
-/// - [`mlua::Error`] for missing and doubled destinations.
+/// - [`mlua::Error`] when the destination is missing or doubled.
 fn reject_structured_destination(patch: &StructuredPatch) -> mlua::Result<()> {
     join_destination(patch.target.clone(), patch.filter.clone())
         .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))?;
     Ok(())
 }
 
-/// Reject rc shapes missing or doubling destinations.
+/// Rejects an rc shape with a missing or doubled destination.
 ///
 /// # Errors
 ///
-/// - [`mlua::Error`] for missing and doubled destinations.
+/// - [`mlua::Error`] when the destination is missing or doubled.
 fn reject_rc_destination(patch: &RcPatch) -> mlua::Result<()> {
     join_destination(patch.target.clone(), patch.filter.clone())
         .map_err(|mismatch| mlua::Error::external(mismatch.to_string()))?;
@@ -287,38 +281,44 @@ mod tests {
         let text = collector.generate();
         assert!(
             text.contains("fun(route: Route): boolean"),
-            "filter shows bool: {text}"
+            "the filter stub shows a boolean: {text}"
         );
         for holder in ["StructuredPatch", "RcPatch"] {
             assert!(
                 text.contains("@field filter (fun(route: Route): boolean)?"),
-                "filter field shows bool: {text}"
+                "the filter field shows a boolean: {text}"
             );
             let method = format!("function {holder}.filter(route) end");
-            assert!(text.contains(&method), "filter method stays: {text}");
+            assert!(
+                text.contains(&method),
+                "the filter method is present: {text}"
+            );
         }
         for block in text.split("\n\n") {
             if block.contains(".filter(route)") {
                 assert!(
                     block.contains("@return boolean"),
-                    "filter returns bool: {block}"
+                    "the filter returns a boolean: {block}"
                 );
             }
             if block.contains(".apply(") {
-                assert!(!block.contains("@return"), "apply stays bare: {block}");
+                assert!(
+                    !block.contains("@return"),
+                    "the apply callback is not wrapped: {block}"
+                );
             }
         }
         assert!(
             text.contains("@field apply fun(document: Document_Structured)"),
-            "structured apply stays bare: {text}"
+            "the structured apply callback is not wrapped: {text}"
         );
         assert!(
             text.contains("@field apply fun(document: Document_Rc)"),
-            "rc apply stays bare: {text}"
+            "the rc apply callback is not wrapped: {text}"
         );
         assert!(
             text.contains("@field apply fun(hook: Hook)"),
-            "hook apply stays bare: {text}"
+            "the hook apply callback is not wrapped: {text}"
         );
     }
 
@@ -337,7 +337,11 @@ mod tests {
             ("major", Level::Major),
             ("MAJOR", Level::Major),
         ] {
-            assert_eq!(Level::parse(name), Some(level), "parses any case: {name}");
+            assert_eq!(
+                Level::parse(name),
+                Some(level),
+                "the level parser accepts any case: {name}"
+            );
         }
         assert_eq!(Level::parse("urgent"), None);
     }

@@ -1,4 +1,4 @@
-//! Process verbs over host spawns with a memory backend under tests.
+//! Runs processes on the host or a scripted backend.
 
 use std::path::PathBuf;
 
@@ -12,34 +12,33 @@ mod mem;
 #[cfg(any(test, feature = "test-support"))]
 pub use mem::{ScriptedRun, calls, clear, script, serve};
 
-/// Outcome of one process run.
+/// The exit code of one process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessOutput {
     /// The process exit code.
     pub code: i32,
 }
 
-/// One recorded process run call.
+/// One recorded process call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessCall {
-    /// The resolved binary and arguments in order.
+    /// The binary and arguments after the binary resolves.
     pub argv: Vec<String>,
-    /// The PATH extension dirs under the run.
+    /// The PATH extension folders under the run.
     pub path_dirs: Vec<PathBuf>,
-    /// The run cap in seconds.
+    /// The run limit in seconds.
     pub timeout_secs: u64,
 }
 
-/// Run one argv with extended PATH and a timeout.
+/// Runs a command with an extended PATH and a timeout.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::HookRunError::BinaryUnresolved`] for empty argv and
-///   missing binaries.
-/// - [`confit_core::error::FilesystemError::FilePermissionDenied`] for denied execution.
-/// - [`confit_core::error::FilesystemError::FileUnknown`] for unknown spawn and wait
-///   faults.
-/// - [`confit_core::error::HookRunError::TimedOut`] for timed-out runs.
+/// - [`confit_core::error::HookRunError::BinaryUnresolved`] when the argv is empty
+///   or the binary is missing.
+/// - [`confit_core::error::FilesystemError::FilePermissionDenied`] when execution is denied.
+/// - [`confit_core::error::FilesystemError::FileUnknown`] when the spawn or the wait fails.
+/// - [`confit_core::error::HookRunError::TimedOut`] when the run times out.
 pub fn run(
     argv: &[String],
     path_dirs: &[PathBuf],

@@ -1,4 +1,3 @@
-//! Render
 //! Document payloads to on-disk bytes.
 
 use std::collections::BTreeMap;
@@ -9,17 +8,17 @@ use confit_model::condition::Condition;
 use confit_model::document::{Data, Document, RcData, RcEntry, StructuredFormat};
 use confit_model::routes::Route;
 
-/// Interactivity guard shared by every shell file.
+/// The guard that every shell file shares for an interactive shell.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
 
-/// Render one document to exact on-disk bytes.
+/// Encodes one document as the exact bytes for disk.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::OpaqueNotRenderable`] for opaque payloads.
-/// - [`confit_core::error::DocumentError::TreeNotRenderable`] for tree payloads.
-/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::OpaqueNotRenderable`] when the payload is opaque.
+/// - [`confit_core::error::DocumentError::TreeNotRenderable`] when the payload is a tree.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 pub fn render_document(document: &Document) -> std::result::Result<Vec<u8>, DocumentError> {
     match &document.data {
         Data::Structured(found) => match found.format {
@@ -35,44 +34,44 @@ pub fn render_document(document: &Document) -> std::result::Result<Vec<u8>, Docu
     }
 }
 
-/// Render one map to TOML text.
+/// Encodes one map as TOML text.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
 fn render_toml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     toml::to_string(value).map_err(|_| DocumentError::RenderFailed)
 }
 
-/// Render one map to pretty JSON text.
+/// Encodes one map as pretty JSON text.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
 fn render_json(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     serde_json::to_string_pretty(value).map_err(|_| DocumentError::RenderFailed)
 }
 
-/// Render one map to YAML text.
+/// Encodes one map as YAML text.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::RenderFailed`] for serializer failures.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
 fn render_yaml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     noyalib::to_string(value).map_err(|_| DocumentError::RenderFailed)
 }
 
-/// Render rc data to shell text with trailing newline.
+/// Encodes rc data as shell text with a trailing newline.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn render_rc(data: &RcData) -> std::result::Result<String, DocumentError> {
     let profile = section_lines(&data.profile)?;
     let config = section_lines(&data.config)?;
@@ -98,11 +97,11 @@ fn render_rc(data: &RcData) -> std::result::Result<String, DocumentError> {
     Ok(out)
 }
 
-/// Collect one section lines in declaration order.
+/// Collects the lines of one section in declaration order.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn section_lines(entries: &[RcEntry]) -> std::result::Result<Vec<String>, DocumentError> {
     let mut out = Vec::new();
     for entry in entries {
@@ -111,11 +110,11 @@ fn section_lines(entries: &[RcEntry]) -> std::result::Result<Vec<String>, Docume
     Ok(out)
 }
 
-/// Render one rc entry as shell lines.
+/// Encodes one rc entry as shell lines.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn render_entry(entry: &RcEntry) -> std::result::Result<Vec<String>, DocumentError> {
     let line = match entry {
         RcEntry::Env { name, value, .. } => {
@@ -150,11 +149,11 @@ fn render_entry(entry: &RcEntry) -> std::result::Result<Vec<String>, DocumentErr
     })
 }
 
-/// Render one condition as a Bourne test string.
+/// Encodes one condition as a Bourne test string.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn render_guard(guard: &Condition) -> std::result::Result<String, DocumentError> {
     match guard {
         Condition::EnvEq { key, value } => {
@@ -186,11 +185,11 @@ fn render_guard(guard: &Condition) -> std::result::Result<String, DocumentError>
     }
 }
 
-/// Join nested guards under one operator.
+/// Joins the nested guards with one operator.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn join_guards(items: &[Condition], op: &str) -> std::result::Result<String, DocumentError> {
     let mut rendered = Vec::with_capacity(items.len());
     for item in items {
@@ -199,11 +198,11 @@ fn join_guards(items: &[Condition], op: &str) -> std::result::Result<String, Doc
     Ok(rendered.join(&format!(" {op} ")))
 }
 
-/// Group one nested guard under an operator.
+/// Groups one nested guard with its operator.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn group_guard(item: &Condition, parent: &str) -> std::result::Result<String, DocumentError> {
     let rendered = render_guard(item)?;
     Ok(match item {
@@ -213,7 +212,7 @@ fn group_guard(item: &Condition, parent: &str) -> std::result::Result<String, Do
     })
 }
 
-/// Render argv as one shell line with Bourne quoting.
+/// Encodes the argv as one shell line with Bourne quoting.
 fn escape_argv(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| quote(arg).into_owned())
@@ -221,11 +220,11 @@ fn escape_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// Render args as one shell line with Bourne quoting.
+/// Encodes the args as one shell line with Bourne quoting.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn escape_args(args: &[Arg]) -> std::result::Result<String, DocumentError> {
     let mut rendered = Vec::with_capacity(args.len());
     for arg in args {
@@ -234,11 +233,11 @@ fn escape_args(args: &[Arg]) -> std::result::Result<String, DocumentError> {
     Ok(rendered.join(" "))
 }
 
-/// Render one arg with Bourne quoting.
+/// Encodes one arg with Bourne quoting.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn escape_arg(arg: &Arg) -> std::result::Result<String, DocumentError> {
     match arg {
         Arg::Text(text) => Ok(quote(text).into_owned()),
@@ -249,17 +248,17 @@ fn escape_arg(arg: &Arg) -> std::result::Result<String, DocumentError> {
     }
 }
 
-/// Expand one route field to its host path.
+/// Expands one route field to the path on the host.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn expand_field(found: &Route) -> std::result::Result<String, DocumentError> {
     found
         .expand()
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|contextual| match contextual.cause() {
             ErrorCause::DocumentError(leaf) => leaf.clone(),
-            _ => unreachable!("route expansion fails parsing alone"),
+            _ => unreachable!("expected a parse fault from route expansion"),
         })
 }

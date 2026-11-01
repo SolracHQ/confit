@@ -1,15 +1,14 @@
-//! Error
-//! Bare causes plus typed context plus closed terminal errors.
+//! Failure causes with typed context and closed terminal errors.
 
-/// Basic failure causes without location.
+/// Failure causes with no location.
 mod cause;
-/// Typed error context for log records.
+/// Typed location and values for log records.
 mod context;
-/// Contextual causes carrying context.
+/// Failure causes that carry where the operation ran.
 mod contextual;
 /// Non-blocking diff warnings.
 mod failure;
-/// Terminal error kinds naming required operations.
+/// Terminal error kinds for required operations.
 pub mod kind;
 /// Terminal errors shown to the user.
 mod terminal;

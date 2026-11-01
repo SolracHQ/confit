@@ -1,31 +1,30 @@
-//! Immediate host facts over closed names.
+//! Returns the host facts.
 
 use confit_core::version::VERSION;
 use lua_binding::{Shape, lua_module};
 use mlua::{Lua, Value};
 
-/// Closed host fact names.
+/// The host facts available to query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Shape)]
 #[shape(table, str_alias)]
 pub enum FactName {
-    /// Binary version triplet.
+    /// The binary version triplet.
     Version,
-    /// Host operating system name.
+    /// The host operating system name.
     Os,
-    /// Host processor architecture name.
+    /// The host processor architecture name.
     Arch,
 }
 
-/// Fact module.
 pub struct Fact;
 
 #[lua_module("confit.fact")]
 impl Fact {
-    /// Read one host fact.
+    /// Returns one host fact.
     ///
     /// # Arguments
     ///
-    /// - [name] The fact name under reading.
+    /// - [name] A fact name in any letter case.
     ///
     /// # Returns
     ///
@@ -47,7 +46,7 @@ mod tests {
     use super::*;
     use mlua::{Lua, Value};
 
-    fn test_lua() -> Lua {
+    fn fresh_lua() -> Lua {
         let lua = Lua::new();
         let fact = Fact::add(&lua).unwrap();
         lua.globals().set("fact", fact).unwrap();
@@ -59,35 +58,39 @@ mod tests {
     }
 
     #[test]
-    fn names_match_case_insensitively() {
-        let lua = test_lua();
+    fn fact_names_match_in_any_case() {
+        let lua = fresh_lua();
         match run(&lua, r#"return fact("OS")"#) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), std::env::consts::OS),
-            Ok(_) => panic!("fact names return strings"),
-            Err(error) => panic!("fact names fold case: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the fact reader matches the case: {error}"),
         }
     }
 
     #[test]
-    fn version_reads_binary_triplet() {
-        let lua = test_lua();
+    fn version_returns_the_binary_triplet() {
+        let lua = fresh_lua();
         match run(&lua, r#"return fact("version")"#) {
             Ok(Value::Table(found)) => {
                 let major: u8 = found.get(1).unwrap();
                 let minor: u8 = found.get(2).unwrap();
                 let fix: u8 = found.get(3).unwrap();
-                assert_eq!([major, minor, fix], VERSION, "version matches the binary");
+                assert_eq!(
+                    [major, minor, fix],
+                    VERSION,
+                    "the version matches the binary"
+                );
             }
-            _ => panic!("version reads a table"),
+            _ => panic!("expected a table"),
         }
     }
 
     #[test]
-    fn unknown_names_raise_showing_want() {
-        let lua = test_lua();
+    fn fact_rejects_unknown_names() {
+        let lua = fresh_lua();
         assert!(
             run(&lua, r#"return fact("shell")"#).is_err(),
-            "foreign fact fails"
+            "the fact reader rejects an unknown name"
         );
     }
 }

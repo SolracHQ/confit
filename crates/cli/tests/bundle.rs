@@ -11,7 +11,7 @@ use confit_cli::cli::BundleArgs;
 use confit_runtime::manifest::stored;
 use confit_store::state::Picker;
 
-/// Fetch-free profile over the shared sugar plugin.
+/// A profile that requires the shared sugar plugin and needs no fetch.
 const SUGAR_MAIN: &str = r#"
 local sugar = require("plugins._.sugar")
 return {
@@ -20,7 +20,7 @@ return {
 }
 "#;
 
-/// Seed the real example tree with the shared plugins beside it.
+/// Copies the example project and the shared plugins into the test folder.
 fn example_project(dir: &Path) -> PathBuf {
     let site = dir.join("nest").join("site");
     common::seed_tree(&common::repo_path("../../examples/0-basic_tool"), &site);
@@ -30,7 +30,7 @@ fn example_project(dir: &Path) -> PathBuf {
 }
 
 #[test]
-fn bundle_file_lands_non_empty_bytes() {
+fn bundle_file_holds_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     let output = dir.path().join("bundle.cb");
@@ -49,7 +49,7 @@ fn bundle_file_lands_non_empty_bytes() {
     .unwrap();
     assert!(
         report.text.contains("bundle.cb"),
-        "the report names the bundle: {}",
+        "the report shows the bundle: {}",
         report.text
     );
     let bytes = std::fs::read(&output).unwrap();
@@ -57,7 +57,7 @@ fn bundle_file_lands_non_empty_bytes() {
 }
 
 #[test]
-fn bundle_named_state_reads_back() {
+fn named_bundle_state_holds_documents() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     let stores = common::test_stores(dir.path(), "nest/site");
@@ -75,7 +75,7 @@ fn bundle_named_state_reads_back() {
     .unwrap();
     assert!(
         report.text.contains("@probe"),
-        "the report names the state: {}",
+        "the report shows the state: {}",
         report.text
     );
     let picker: Picker = "@probe".parse().unwrap();

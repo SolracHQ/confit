@@ -1,4 +1,3 @@
-//! Routes
 //! Late-bound destination routes.
 
 use std::path::{Path, PathBuf};
@@ -9,26 +8,26 @@ use lua_binding::trace::LuaTrace;
 use lua_binding::{Shape, lua_methods};
 use serde::{Deserialize, Serialize};
 
-/// Portable standard folders enum.
+/// A standard userspace folder.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Shape,
 )]
 #[serde(rename_all = "lowercase")]
 #[shape(table, str_alias)]
 pub enum RouteBase {
-    /// User home folder.
+    /// The user home folder.
     Home,
-    /// Platform config folder.
+    /// The platform config folder.
     Config,
-    /// Platform data folder.
+    /// The platform data folder.
     Data,
-    /// Platform cache folder.
+    /// The platform cache folder.
     Cache,
-    /// Host-specific literal path.
+    /// A host path taken verbatim.
     Literal,
 }
 
-/// Portable route over standard folders.
+/// A destination route.
 #[derive(Clone, Debug, Shape, Serialize, Deserialize)]
 #[shape(traced, object)]
 #[serde(deny_unknown_fields)]
@@ -46,7 +45,7 @@ pub struct Route {
 }
 
 impl PartialEq for Route {
-    /// Report whole route equality over base and relative.
+    /// Returns whether the base and the relative path match.
     fn eq(&self, other: &Self) -> bool {
         self.base == other.base && self.relative == other.relative
     }
@@ -55,7 +54,7 @@ impl PartialEq for Route {
 impl Eq for Route {}
 
 impl std::hash::Hash for Route {
-    /// Feed base and relative into the hasher.
+    /// Hashes the base and the relative path, and skips the trace.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.base.hash(state);
         self.relative.hash(state);
@@ -63,21 +62,21 @@ impl std::hash::Hash for Route {
 }
 
 impl PartialOrd for Route {
-    /// Report the base and relative order.
+    /// Returns the order of the two routes by base and relative path.
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Route {
-    /// Order routes by base and relative.
+    /// Orders routes by base first, then the relative path.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.base, &self.relative).cmp(&(other.base, &other.relative))
     }
 }
 
 impl RouteBase {
-    /// Return the lowercase base name.
+    /// Returns the base name as text in lowercase.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Home => "home",
@@ -90,11 +89,11 @@ impl RouteBase {
 }
 
 impl Route {
-    /// Build a destination route from a base and a path.
+    /// Builds a destination route that resolves under a base folder.
     ///
     /// # Errors
     ///
-    /// - [`DocumentError::ParseFailed`] for empty paths.
+    /// - [`DocumentError::ParseFailed`] when the path is empty.
     pub fn new(base: RouteBase, relative: impl Into<PathBuf>) -> ContextualResult<Self> {
         let relative = relative.into();
         if relative.as_os_str().is_empty() {
@@ -109,24 +108,24 @@ impl Route {
         })
     }
 
-    /// Expand one destination route to its host path.
+    /// Resolves the route under its base folder into a host path.
     ///
     /// # Errors
     ///
-    /// - [`DocumentError::ParseFailed`] for unresolvable base folders.
+    /// - [`DocumentError::ParseFailed`] when a base folder is missing.
     pub fn expand(&self) -> ContextualResult<PathBuf> {
         let bases = BaseDirs::new();
         let base = match self.base {
             RouteBase::Literal => return Ok(self.relative.clone()),
-            RouteBase::Home => dir_or_fail(RouteBase::Home, bases.home)?,
-            RouteBase::Config => dir_or_fail(RouteBase::Config, bases.config)?,
-            RouteBase::Data => dir_or_fail(RouteBase::Data, bases.data)?,
-            RouteBase::Cache => dir_or_fail(RouteBase::Cache, bases.cache)?,
+            RouteBase::Home => require_base_folder(RouteBase::Home, bases.home)?,
+            RouteBase::Config => require_base_folder(RouteBase::Config, bases.config)?,
+            RouteBase::Data => require_base_folder(RouteBase::Data, bases.data)?,
+            RouteBase::Cache => require_base_folder(RouteBase::Cache, bases.cache)?,
         };
         Ok(base.join(&self.relative))
     }
 
-    /// Join one member segment onto the route.
+    /// Returns a route with one path segment appended.
     pub fn join(&self, segment: &str) -> Self {
         if segment.is_empty() {
             return self.clone();
@@ -138,17 +137,17 @@ impl Route {
         }
     }
 
-    /// Return the relative path.
+    /// Returns the path below the base folder.
     pub fn relative_path(&self) -> &Path {
         &self.relative
     }
 
-    /// Return the destination base.
+    /// Returns the base folder that anchors the route.
     pub fn base(&self) -> RouteBase {
         self.base
     }
 
-    /// Return the relative path text.
+    /// Returns the path below the base folder as display text.
     pub fn relative(&self) -> String {
         self.relative.display().to_string()
     }
@@ -156,11 +155,11 @@ impl Route {
 
 #[lua_methods]
 impl Route {
-    /// Render the portable route display in sugar call form.
+    /// Returns the route as a sugar call like `home('.bashrc')`.
     ///
     /// # Returns
     ///
-    /// - The sugar call display.
+    /// - The call text for the route.
     pub fn display(&self) -> String {
         match self.base {
             RouteBase::Literal => self.relative.display().to_string(),
@@ -169,12 +168,12 @@ impl Route {
     }
 }
 
-/// Resolve one base folder or fail the run.
+/// Returns the base folder, or a parse failure when it is absent.
 ///
 /// # Errors
 ///
-/// - [`DocumentError::ParseFailed`] for missing base folders.
-fn dir_or_fail(_base: RouteBase, found: Option<PathBuf>) -> ContextualResult<PathBuf> {
+/// - [`DocumentError::ParseFailed`] when the base folder is missing.
+fn require_base_folder(_base: RouteBase, found: Option<PathBuf>) -> ContextualResult<PathBuf> {
     found.ok_or_else(|| {
         contextual(DocumentError::ParseFailed {
             require: Require::BaseFolder,
@@ -191,16 +190,16 @@ mod tests {
     use lua_binding::value::{Decode, Encode};
     use mlua::{Lua, Value};
 
-    /// Foreign handle for route decode tests.
+    /// A second userdata shape for decode tests.
     #[allow(dead_code)]
     #[derive(Clone, Shape)]
     #[shape(object)]
-    struct Foreign {
+    struct OtherShape {
         seed: String,
     }
 
     #[lua_methods]
-    impl Foreign {}
+    impl OtherShape {}
 
     #[test]
     fn route_decode_rejects_table_literals() {
@@ -210,30 +209,36 @@ mod tests {
         table.set("relative", "a").unwrap();
         assert!(
             Route::decode(&Value::Table(table), &lua).is_err(),
-            "table fails"
+            "the route decoder rejects a table"
         );
         let text = lua.create_string("home").unwrap();
         assert!(
             Route::decode(&Value::String(text), &lua).is_err(),
-            "string fails"
+            "the route decoder rejects a string"
         );
-        assert!(Route::decode(&Value::Nil, &lua).is_err(), "nil fails");
+        assert!(
+            Route::decode(&Value::Nil, &lua).is_err(),
+            "the route decoder rejects nil"
+        );
         let foreign = lua
-            .create_userdata(Foreign {
+            .create_userdata(OtherShape {
                 seed: "base".to_owned(),
             })
             .unwrap();
         assert!(
             Route::decode(&Value::UserData(foreign), &lua).is_err(),
-            "wrong userdata fails"
+            "the route decoder rejects other userdata"
         );
     }
 
     #[test]
-    fn traced_outside_lua_holds_empty_trace() {
+    fn traced_route_starts_with_an_empty_trace() {
         let lua = Lua::new();
         let traced = Route::traced(&lua, Route::new(RouteBase::Home, "same").unwrap());
-        assert!(traced.trace.0.is_empty(), "bare state holds no frames");
+        assert!(
+            traced.trace.0.is_empty(),
+            "the fresh route holds an empty trace"
+        );
         assert_eq!(traced.relative(), "same");
     }
 
@@ -272,17 +277,20 @@ mod tests {
     }
 
     #[test]
-    fn serde_keeps_table_shape_without_trace() {
+    fn serde_keeps_the_table_shape_with_an_empty_trace() {
         let route = Route::new(RouteBase::Home, "a/b").unwrap();
         let text = serde_json::to_string(&route).unwrap();
         assert_eq!(text, r#"{"base":"home","relative":"a/b"}"#);
         let back: Route = serde_json::from_str(&text).unwrap();
         assert_eq!(back, route);
-        assert!(back.trace.0.is_empty(), "decoded trace stays empty");
+        assert!(
+            back.trace.0.is_empty(),
+            "the decoded route holds an empty trace"
+        );
     }
 
     #[test]
-    fn route_built_for_every_base() {
+    fn route_builds_for_every_base() {
         for base in [
             RouteBase::Home,
             RouteBase::Config,
@@ -299,7 +307,7 @@ mod tests {
     #[test]
     fn route_rejects_empty_path() {
         let error = match Route::new(RouteBase::Home, "") {
-            Ok(_) => panic!("empty route passes"),
+            Ok(_) => panic!("the route builder accepts an empty path"),
             Err(error) => error,
         };
         assert!(matches!(
@@ -309,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn expand_joins_each_base_under_shared_root() {
+    fn expand_joins_the_relative_path_to_each_base() {
         let relative = Path::new("starship/starship.toml");
         let bases = BaseDirs::new();
         let cases = [
@@ -328,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn expand_carries_literal_unchanged() {
+    fn expand_returns_the_literal_path() {
         for path in ["/opt/confit/tool", "relative/tool"] {
             let route = Route::new(RouteBase::Literal, path).unwrap();
             assert_eq!(route.expand().unwrap(), Path::new(path));
@@ -336,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn display_renders_sugar_calls_with_bare_literals() {
+    fn display_renders_sugar_calls_and_bare_literals() {
         let home = Route::new(RouteBase::Home, ".bashrc").unwrap();
         assert_eq!(home.display(), "home('.bashrc')");
         let config = Route::new(RouteBase::Config, "a/b").unwrap();

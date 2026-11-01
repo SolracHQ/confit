@@ -22,8 +22,6 @@ struct InlinePayload {
     lua_keys: Vec<String>,
     /// The payload field types in field order.
     shapes: Vec<syn::Type>,
-    /// The per-field encode hook paths in field order.
-    hooks: Vec<Option<syn::Path>>,
     /// The keyed payload field names for encoding.
     encode_idents: Vec<syn::Ident>,
 }
@@ -38,7 +36,7 @@ struct VariantArm {
     fields: Vec<syn::Ident>,
 }
 
-/// A key group holding untagged variants with equal field sets.
+/// A key group of untagged variants that share one field set.
 struct VariantGroup {
     /// The sorted Lua keys shared by every arm.
     keys: Vec<String>,
@@ -86,12 +84,10 @@ fn build_inline_payload(
     let mut declarations = Vec::new();
     let mut field_shapes = Vec::new();
     let mut decoders = Vec::new();
-    let mut members = Vec::new();
     let mut field_idents = Vec::new();
     let mut field_names = Vec::new();
     let mut field_lua_keys = Vec::new();
     let mut field_types = Vec::new();
-    let mut field_hooks: Vec<Option<syn::Path>> = Vec::new();
     let mut encode_idents = Vec::new();
     for field in &named.named {
         let Some(field_ident) = field.ident.clone() else {
@@ -115,7 +111,7 @@ fn build_inline_payload(
                 ),
             ));
         }
-        if flags.opaque || flags.key_decode.is_some() || flags.value_decode.is_some() {
+        if flags.opaque {
             return Err(syn::Error::new_spanned(
                 &field_ident,
                 format!(
@@ -162,36 +158,11 @@ fn build_inline_payload(
             field_idents.push(field_ident);
             continue;
         }
-        if flags.decode_hook.is_some() && flags.proxy.is_none() {
-            if flags.optional || flags.default.is_some() || flags.name.is_some() {
-                return Err(syn::Error::new_spanned(
-                    &field_ident,
-                    format!(
-                        "{outer}.{variant_name}.{field_name}: a sibling decode_hook reads the whole \
-                         table; drop key options"
-                    ),
-                ));
-            }
-            let decode_hook = flags.decode_hook.as_ref();
-            declarations.push(quote! { #[doc = #field_docs] pub #field_ident: #field_type });
-            decoders.push(quote! {
-                let #field_ident: #field_type = #decode_hook(lua, &table)?;
-            });
-            members.push(quote! {
-                <#field_type as ::lua_binding::shape::Shape>::collect(collector);
-            });
-            field_idents.push(field_ident);
-            continue;
-        }
         declarations.push(quote! { #[doc = #field_docs] pub #field_ident: #field_type });
         encode_idents.push(field_ident.clone());
         field_lua_keys.push(lua_key.clone());
         field_types.push(field.ty.clone());
-        field_hooks.push(flags.encode_hook.clone());
-        let shape_tokens: Tokens = match flags.proxy.as_ref() {
-            Some(proxy) => quote! { #proxy },
-            None => quote! { #field_type },
-        };
+        let shape_tokens = field_type;
         let inferred = is_option_shape(field_type);
         if flags.default.is_some() || inferred {
             field_shapes.push(quote! {
@@ -221,67 +192,7 @@ fn build_inline_payload(
                 }
             });
         }
-        if let Some(decode_hook) = flags.decode_hook.as_ref() {
-            if flags.optional || inferred {
-                decoders.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
-                        <#field_type as ::std::default::Default>::default()
-                    } else {
-                        ::lua_binding::value::decode_proxy(
-                            lua,
-                            &raw_value,
-                            #lua_key,
-                            #decode_hook,
-                        )?
-                    };
-                });
-            } else if let Some(default) = flags.default.as_ref() {
-                let fallback: Tokens = match default {
-                    Some(path) => quote! { #path() },
-                    None => quote! { <#field_type as ::std::default::Default>::default() },
-                };
-                decoders.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    let #field_ident = if matches!(raw_value, ::mlua::Value::Nil) {
-                        #fallback
-                    } else {
-                        ::lua_binding::value::decode_proxy(
-                            lua,
-                            &raw_value,
-                            #lua_key,
-                            #decode_hook,
-                        )?
-                    };
-                });
-            } else {
-                decoders.push(quote! {
-                    let raw_value: ::mlua::Value =
-                        ::lua_binding::value::read_field(&table, #lua_key)?;
-                    if matches!(raw_value, ::mlua::Value::Nil) {
-                        return ::std::result::Result::Err(
-                            ::lua_binding::error::DecodeError {
-                                segments: ::std::vec![::lua_binding::error::Segment::Field(
-                                    #lua_key.to_owned(),
-                                )],
-                                reason: ::lua_binding::error::DecodeTag::ShapeMismatch {
-                                    require: <#field_type as ::lua_binding::shape::Shape>::name(),
-                                    found: "nil".to_owned(),
-                                },
-                            },
-                        );
-                    }
-                    let #field_ident = ::lua_binding::value::decode_proxy(
-                        lua,
-                        &raw_value,
-                        #lua_key,
-                        #decode_hook,
-                    )?;
-                });
-            }
-        } else if flags.optional || inferred {
+        if flags.optional || inferred {
             decoders.push(quote! {
                 let raw_value: ::mlua::Value =
                     ::lua_binding::value::read_field(&table, #lua_key)?;
@@ -354,27 +265,20 @@ fn build_inline_payload(
     }
     let fields = field_idents.clone();
     let mut encode_stmts = Vec::new();
-    for (((ident, key), shape), hook) in encode_idents
+    for ((ident, key), shape) in encode_idents
         .iter()
         .zip(field_lua_keys.iter())
         .zip(field_types.iter())
-        .zip(field_hooks.iter())
     {
-        if let Some(hook) = hook {
-            encode_stmts.push(quote! {
-                table.set(#key, #hook(lua, &self.#ident)?)?;
-            });
-        } else {
-            encode_stmts.push(quote! {
-                table.set(
-                    #key,
-                    <#shape as ::lua_binding::value::Encode>::encode(
-                        &self.#ident,
-                        lua,
-                    )?,
-                )?;
-            });
-        }
+        encode_stmts.push(quote! {
+            table.set(
+                #key,
+                <#shape as ::lua_binding::value::Encode>::encode(
+                    &self.#ident,
+                    lua,
+                )?,
+            )?;
+        });
     }
     let expansion = quote! {
         #[allow(non_camel_case_types)]
@@ -401,7 +305,6 @@ fn build_inline_payload(
                 let data = <Self as ::lua_binding::shape::Shape>::shape_data();
                 if collector.add(<Self as ::lua_binding::shape::Shape>::name(), &data) {
                     data.collect_referenced(collector);
-                    #(#members)*
                 }
             }
         }
@@ -451,7 +354,6 @@ fn build_inline_payload(
         keys: field_names,
         lua_keys: field_lua_keys,
         shapes: field_types,
-        hooks: field_hooks,
         encode_idents,
     })
 }
@@ -724,28 +626,21 @@ pub(crate) fn expand_untagged_enum(
                 let field_idents = payload.fields.clone();
                 let encode_idents = payload.encode_idents.clone();
                 let mut arm_stmts = Vec::new();
-                for (((ident, key), shape), hook) in payload
+                for ((ident, key), shape) in payload
                     .encode_idents
                     .iter()
                     .zip(payload.lua_keys.iter())
                     .zip(payload.shapes.iter())
-                    .zip(payload.hooks.iter())
                 {
-                    if let Some(hook) = hook {
-                        arm_stmts.push(quote! {
-                            table.set(#key, #hook(lua, #ident)?)?;
-                        });
-                    } else {
-                        arm_stmts.push(quote! {
-                            table.set(
-                                #key,
-                                <#shape as ::lua_binding::value::Encode>::encode(
-                                    #ident,
-                                    lua,
-                                )?,
-                            )?;
-                        });
-                    }
+                    arm_stmts.push(quote! {
+                        table.set(
+                            #key,
+                            <#shape as ::lua_binding::value::Encode>::encode(
+                                #ident,
+                                lua,
+                            )?,
+                        )?;
+                    });
                 }
                 payloads.push(payload.expansion);
                 let arm_fields = payload.field_shapes.clone();

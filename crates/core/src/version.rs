@@ -1,11 +1,11 @@
 //! Binary version triplet with manifest compatibility.
+//!
+//! Every version stamp in confit uses one triplet that moves with the binary.
 
-//! Every version stamp in confit reads one triplet moving with the binary.
-
-/// Binary version triplet: major, minor, fix.
+/// The binary version triplet.
 pub const VERSION: [u8; 3] = triplet(env!("CARGO_PKG_VERSION").as_bytes());
 
-/// Report whether one manifest version loads under this binary.
+/// Returns whether one manifest version loads under this binary.
 pub fn compatible(manifest: [u8; 3]) -> bool {
     loads(VERSION, manifest)
 }
@@ -44,7 +44,7 @@ const fn triplet(raw: &[u8]) -> [u8; 3] {
 
 const fn narrow(value: u16) -> u8 {
     if value > 255 {
-        panic!("confit version parts stay under 256");
+        panic!("expected version parts under 256");
     }
     value as u8
 }
@@ -54,28 +54,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identical_triplet_loads() {
+    fn compatible_loads_its_own_stamp() {
         assert!(compatible(VERSION), "the binary loads its own stamp");
     }
 
     #[test]
-    fn fix_drift_loads() {
-        assert!(loads([0, 9, 4], [0, 9, 7]), "fix drift never blocks");
+    fn loads_accepts_fix_drift() {
+        assert!(loads([0, 9, 4], [0, 9, 7]), "the loader accepts fix drift");
     }
 
     #[test]
-    fn minor_drift_refuses_before_one() {
-        assert!(!loads([0, 9, 0], [0, 10, 0]), "zero majors break per minor");
+    fn loads_rejects_minor_drift_before_one() {
+        assert!(
+            !loads([0, 9, 0], [0, 10, 0]),
+            "the loader rejects minor drift before 1.0.0"
+        );
     }
 
     #[test]
-    fn minor_drift_loads_past_one() {
-        assert!(loads([1, 4, 0], [1, 7, 2]), "stable majors ignore minors");
+    fn loads_accepts_minor_drift_past_one() {
+        assert!(
+            loads([1, 4, 0], [1, 7, 2]),
+            "the loader accepts minor drift past 1.0.0"
+        );
     }
 
     #[test]
-    fn major_drift_refuses() {
-        assert!(!loads([0, 9, 0], [1, 0, 0]), "majors always gate");
-        assert!(!loads([1, 0, 0], [2, 0, 0]), "majors always gate");
+    fn loads_rejects_major_drift() {
+        assert!(
+            !loads([0, 9, 0], [1, 0, 0]),
+            "the loader rejects major drift"
+        );
+        assert!(
+            !loads([1, 0, 0], [2, 0, 0]),
+            "the loader rejects major drift"
+        );
     }
 }

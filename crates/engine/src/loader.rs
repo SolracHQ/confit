@@ -1,4 +1,4 @@
-//! Provide stock require with project containment and plugin audit.
+//! Runs the scoped require.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -26,7 +26,6 @@ const PLUGIN_ROOT: &str = "plugins";
 
 const INIT_ENTRY: &str = "init.lua";
 
-/// Module cache key over builtin names with canonical file paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CacheKey {
     /// Builtin module under its dotted name.
@@ -35,7 +34,7 @@ enum CacheKey {
     File(PathBuf),
 }
 
-/// Shared loader state.
+/// The loader state.
 struct Session {
     /// Module values under builtin names with canonical paths.
     cache: RefCell<HashMap<CacheKey, Value>>,
@@ -77,11 +76,12 @@ impl Session {
     }
 }
 
-/// Install the scoped require function.
+/// Puts the scoped require in the globals.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for failed app data and global writes.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when an app data
+///   write or a global write fails.
 pub fn install(lua: &Lua) -> TerminalResult<()> {
     lua.set_app_data(Session::new());
     let require = lua
@@ -97,12 +97,14 @@ pub fn install(lua: &Lua) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Load one profile chunk under the sandbox.
+/// Runs one profile chunk.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles and Lua failures.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable profiles and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the profile is
+///   unreadable.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the chunk fails
+///   to load.
 pub fn load_chunk(lua: &Lua, path: &Path) -> TerminalResult<Value> {
     let text = read_text(path)
         .with_profile(path)
@@ -121,12 +123,13 @@ pub fn load_chunk(lua: &Lua, path: &Path) -> TerminalResult<Value> {
     }
 }
 
-/// Read one chunk file as text.
+/// Reads one chunk file.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for unreadable files.
-/// - [`confit_core::error::DocumentError::ParseFailed`] for non-UTF8 files.
+/// - [`confit_core::error::FilesystemError`] when the file is unreadable.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when the file holds
+///   non-UTF8 bytes.
 fn read_text(path: &Path) -> ContextualResult<String> {
     let bytes = std::fs::read(path)
         .map_err(ContextualCause::from)
@@ -136,11 +139,12 @@ fn read_text(path: &Path) -> ContextualResult<String> {
         .with_fs_path(path)
 }
 
-/// Build one sandboxed environment.
+/// Builds one sandbox environment.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unreadable globals and unwritable tables.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a global read or
+///   a table write fails.
 fn environment(lua: &Lua, caller: Option<PathBuf>) -> TerminalResult<Table> {
     let env = lua
         .create_table()
@@ -180,7 +184,7 @@ fn environment(lua: &Lua, caller: Option<PathBuf>) -> TerminalResult<Table> {
     Ok(env)
 }
 
-/// Compile one source text.
+/// Compiles one source text.
 fn compile<'chunk>(
     lua: &'chunk Lua,
     source: &'chunk str,
@@ -190,14 +194,16 @@ fn compile<'chunk>(
     lua.load(source).set_name(name).set_environment(env)
 }
 
-/// Run one require call for builtins with file modules.
+/// Runs one require call.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown names, bad names, escapes,
-/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names, bad names, escapes,
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names, bad names, escapes,
-///   cycles, unreadable files, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a name is bad or
+///   escapes the scope, or a cycle appears.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] when a name is
+///   unknown or a file is missing.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a chunk fails to
+///   load.
 fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<Value> {
     if name.starts_with("confit.") {
         return builtin_require(lua, name);
@@ -205,13 +211,15 @@ fn run_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<V
     file_require(lua, name, caller)
 }
 
-/// Run one builtin require.
+/// Serves one builtin module.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unknown names, cycles, and Lua failures.
-/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for unknown names, cycles, and Lua failures.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for unknown names, cycles, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a cycle appears.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] when the name is
+///   unknown.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a module fails
+///   to build.
 fn builtin_require(lua: &Lua, name: &str) -> TerminalResult<Value> {
     let key = CacheKey::Builtin(name.to_owned());
     if let Some(hit) = with_session(lua, |session| session.cached(&key))? {
@@ -231,14 +239,17 @@ fn builtin_require(lua: &Lua, name: &str) -> TerminalResult<Value> {
     Ok(value)
 }
 
-/// Run one file require.
+/// Serves one file module.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for bad names, escapes, cycles, missing
-/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for bad names, escapes, cycles, missing
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for bad names, escapes, cycles, missing
-///   files, unreadable files, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a name is bad or
+///   escapes the scope, a cycle appears, or a plugin caller steps outside the
+///   tree.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] when a file is
+///   missing or unreadable.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a chunk fails to
+///   load.
 fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<Value> {
     let root = stored_root(lua)?;
     let root_real = canonical_root(&root)
@@ -296,24 +307,26 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<
     Ok(value)
 }
 
-/// Canonicalize one project root.
+/// Returns the canonical root.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for unreadable roots.
+/// - [`confit_core::error::FilesystemError`] when the root is unreadable.
 fn canonical_root(root: &Path) -> ContextualResult<PathBuf> {
     std::fs::canonicalize(root)
         .map_err(ContextualCause::from)
         .with_fs_path(root)
 }
 
-/// Resolve path parts to their contained canonical path.
+/// Returns the scoped path.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::RequireEscapesScope`] for escaping names.
-/// - [`confit_core::error::FilesystemError::FileMissing`] for missing files.
-/// - [`confit_core::error::FilesystemError`] for unreadable files.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] when a name
+///   escapes the scope.
+/// - [`confit_core::error::FilesystemError::FileMissing`] when a file is
+///   missing.
+/// - [`confit_core::error::FilesystemError`] when a file is unreadable.
 fn resolve(base: &Path, scope: &Path, parts: &[String]) -> ContextualResult<PathBuf> {
     let mut direct = base.to_path_buf();
     for part in parts {
@@ -337,11 +350,12 @@ fn resolve(base: &Path, scope: &Path, parts: &[String]) -> ContextualResult<Path
     scoped(scope, found)
 }
 
-/// Map one require name to its path parts.
+/// Splits one require name into parts.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::BadRequireName`] for malformed names.
+/// - [`confit_core::error::EvalError::BadRequireName`] when the name holds a
+///   backslash, a drive prefix, or an absolute path.
 fn map_name(name: &str) -> ContextualResult<Vec<String>> {
     if name.contains('\\') {
         return Err(contextual(EvalError::BadRequireName {
@@ -369,11 +383,12 @@ fn map_name(name: &str) -> ContextualResult<Vec<String>> {
         .collect())
 }
 
-/// Hold one plugin caller inside the plugin tree.
+/// Rejects an escaping plugin caller.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::RequireEscapesScope`] for plugin callers outside the tree.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] when a plugin
+///   caller reaches outside the tree.
 fn audit(plugins: &Path, caller: Option<&Path>, target: &Path) -> ContextualResult<()> {
     let Some(caller) = caller else {
         return Ok(());
@@ -387,11 +402,12 @@ fn audit(plugins: &Path, caller: Option<&Path>, target: &Path) -> ContextualResu
     Ok(())
 }
 
-/// Hold one canonical path inside its canonical scope.
+/// Rejects an escaping path.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::RequireEscapesScope`] for escaping names.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] when the path
+///   escapes the scope.
 fn scoped(scope: &Path, full: PathBuf) -> ContextualResult<PathBuf> {
     if !full.starts_with(scope) {
         return Err(contextual(EvalError::RequireEscapesScope)
@@ -401,13 +417,14 @@ fn scoped(scope: &Path, full: PathBuf) -> ContextualResult<PathBuf> {
     Ok(full)
 }
 
-/// Load one file module.
+/// Loads one file module.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::OpenModule`] for missing files, unreadable files,
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for missing files, unreadable files,
-///   non-UTF8 files, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::OpenModule`] when the file is
+///   missing, unreadable, or holds non-UTF8 bytes.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the chunk fails
+///   to load.
 fn load_file(lua: &Lua, path: &Path, name: &str) -> TerminalResult<Value> {
     let bytes = std::fs::read(path)
         .map_err(ContextualCause::from)
@@ -433,11 +450,12 @@ fn load_file(lua: &Lua, path: &Path, name: &str) -> TerminalResult<Value> {
     }
 }
 
-/// Run one closure against shared loader state.
+/// Runs one closure over the loader state.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for an uninstalled loader.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the loader is not
+///   installed.
 fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> TerminalResult<T> {
     match lua.app_data_ref::<Session>() {
         Some(session) => Ok(op(&session)),
@@ -445,16 +463,17 @@ fn with_session<T>(lua: &Lua, op: impl FnOnce(&Session) -> T) -> TerminalResult<
     }
 }
 
-/// Resolve the plugin root from the shared app data.
+/// Returns the plugin root.
 fn stored_plugins(lua: &Lua) -> Option<PluginRoot> {
     lua.app_data_ref::<PluginRoot>().map(|scope| scope.clone())
 }
 
-/// Resolve the project root from the shared stores.
+/// Returns the project root.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for an uninstalled api.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the api is not
+///   installed.
 fn stored_root(lua: &Lua) -> TerminalResult<PathBuf> {
     match lua.app_data_ref::<Stores>() {
         Some(stores) => Ok(stores.resources().roots.project_root.clone()),
@@ -485,7 +504,7 @@ mod tests {
         root
     }
 
-    fn test_lua(stores: &Stores) -> Lua {
+    fn fresh_lua(stores: &Stores) -> Lua {
         let lua = Lua::new();
         lua.set_app_data(stores.clone());
         install(&lua).unwrap();
@@ -498,16 +517,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_profiles_fail_structured() {
+    fn load_chunk_rejects_an_absent_profile() {
         use confit_core::error::{ErrorCause, FilesystemError};
 
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         let missing = root.join("absent.lua");
         match load_chunk(&lua, &missing) {
-            Ok(_) => panic!("missing profile passes"),
+            Ok(_) => panic!("the chunk loader accepts a missing profile"),
             Err(error) => {
                 assert!(
                     matches!(
@@ -524,14 +543,14 @@ mod tests {
                     Some(found) => {
                         assert_eq!(found, &missing, "the profile slot shows the file: {error}")
                     }
-                    None => panic!("the profile slot shows the file: {error}"),
+                    None => panic!("expected a recorded profile path: {error}"),
                 }
             }
         }
     }
 
     #[test]
-    fn encoded_profiles_fail_structured() {
+    fn load_chunk_rejects_non_utf8_text() {
         use confit_core::error::{DocumentError, ErrorCause, Require};
 
         let dir = tempfile::tempdir().unwrap();
@@ -539,9 +558,9 @@ mod tests {
         let root = project_root(dir.path());
         let profile = root.join("profile.lua");
         std::fs::write(&profile, [0xff, 0xfe]).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match load_chunk(&lua, &profile) {
-            Ok(_) => panic!("encoded profile passes"),
+            Ok(_) => panic!("the chunk loader accepts encoded text"),
             Err(error) => {
                 assert!(
                     matches!(
@@ -560,23 +579,23 @@ mod tests {
                     Some(found) => {
                         assert_eq!(found, &profile, "the profile slot shows the file: {error}")
                     }
-                    None => panic!("the profile slot shows the file: {error}"),
+                    None => panic!("expected a recorded profile path: {error}"),
                 }
             }
         }
     }
 
     #[test]
-    fn encoded_modules_fail_structured() {
+    fn file_require_rejects_non_utf8_text() {
         use confit_core::error::{DocumentError, ErrorCause, Require};
 
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         std::fs::write(root.join("broken.lua"), [0xff, 0xfe]).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"broken\")") {
-            Ok(_) => panic!("encoded module passes"),
+            Ok(_) => panic!("the module loader accepts encoded text"),
             Err(error) => match error.downcast_ref::<Error>() {
                 Some(terminal) => {
                     assert!(
@@ -597,33 +616,33 @@ mod tests {
                             module, "broken",
                             "the module slot shows the name: {terminal}"
                         ),
-                        None => panic!("the module slot shows the name: {terminal}"),
+                        None => panic!("expected a recorded module name: {terminal}"),
                     }
                     match &terminal.context().fs_path {
                         Some(path) => assert!(
                             path.ends_with("broken.lua"),
                             "the fs slot shows the file: {terminal}"
                         ),
-                        None => panic!("the fs slot shows the file: {terminal}"),
+                        None => panic!("expected a recorded file path: {terminal}"),
                     }
                 }
-                None => panic!("encoded module stays terminal: {error}"),
+                None => panic!("expected a terminal error: {error}"),
             },
         }
     }
 
     #[test]
-    fn unknown_names_fail() {
+    fn require_rejects_unknown_names() {
         use confit_core::error::{ErrorCause, FilesystemError};
 
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         for name in ["confit.nope", "absent"] {
             let source = format!("return require({name:?})");
             match run(&lua, &source) {
-                Ok(_) => panic!("unknown module passes: {name}"),
+                Ok(_) => panic!("the require function accepts an unknown name: {name}"),
                 Err(error) => match error.downcast_ref::<Error>() {
                     Some(terminal) => {
                         assert!(
@@ -642,10 +661,10 @@ mod tests {
                                 found, name,
                                 "the module slot shows the name: {terminal}"
                             ),
-                            None => panic!("the module slot shows the name: {terminal}"),
+                            None => panic!("expected a recorded module name: {terminal}"),
                         }
                     }
-                    None => panic!("unknown module stays terminal: {error}"),
+                    None => panic!("expected a terminal error: {error}"),
                 },
             }
         }
@@ -657,11 +676,11 @@ mod tests {
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         std::fs::write(root.join("helper.lua"), b"return 41").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
-            Ok(_) => panic!("file module returns an integer"),
-            Err(error) => panic!("file modules load: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the module loader reads the file: {error}"),
         }
     }
 
@@ -673,11 +692,11 @@ mod tests {
         let folder = root.join("nested");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"nested.helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
-            Ok(_) => panic!("dotted module returns an integer"),
-            Err(error) => panic!("dotted names load: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the require function resolves a dotted name: {error}"),
         }
     }
 
@@ -689,13 +708,13 @@ mod tests {
         let folder = root.join("nested");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         for name in ["nested..helper", "nested//helper"] {
             let source = format!("return require({name:?})");
             match run(&lua, &source) {
                 Ok(Value::Integer(found)) => assert_eq!(found, 41),
-                Ok(_) => panic!("collapsed module returns an integer: {name}"),
-                Err(error) => panic!("collapsed names load: {error}"),
+                Ok(_) => panic!("expected an integer: {name}"),
+                Err(error) => panic!("the require function resolves a collapsed name: {error}"),
             }
         }
     }
@@ -713,24 +732,24 @@ mod tests {
             b"return require(\"../tools\") * 14",
         )
         .unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match load_chunk(&lua, &nested.join("mainframe.lua")) {
             Ok(Value::Integer(found)) => assert_eq!(found, 42),
-            Ok(_) => panic!("collapsed parent returns an integer"),
-            Err(error) => panic!("collapsed parents load: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the require function resolves a parent path: {error}"),
         }
     }
 
     #[test]
-    fn lua_suffix_misses_like_stock() {
+    fn lua_suffix_names_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         std::fs::write(root.join("helper.lua"), b"return 41").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         assert!(
             run(&lua, "return require(\"helper.lua\")").is_err(),
-            "suffixed name fails"
+            "the require function rejects a suffixed name"
         );
     }
 
@@ -751,9 +770,9 @@ mod tests {
             b"local _ = require(\"loop_a\") return 2",
         )
         .unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"loop_a\")") {
-            Ok(_) => panic!("require cycle passes"),
+            Ok(_) => panic!("the require function accepts a cycle"),
             Err(error) => match error.downcast_ref::<Error>() {
                 Some(terminal) => {
                     assert!(
@@ -771,7 +790,7 @@ mod tests {
                         "the chain returns to its start: {terminal}"
                     );
                 }
-                None => panic!("require cycle stays terminal: {error}"),
+                None => panic!("expected a terminal error: {error}"),
             },
         }
     }
@@ -793,7 +812,7 @@ mod tests {
         assert_eq!(
             session.cycle("absent"),
             None,
-            "names outside the stack stay clean"
+            "the cycle ignores a name outside the stack"
         );
     }
 
@@ -802,11 +821,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return confit") {
             Ok(Value::Nil) => {}
-            Ok(_) => panic!("bare confit global stays nil"),
-            Err(error) => panic!("sandbox loads the global: {error}"),
+            Ok(_) => panic!("the sandbox exposes a confit global"),
+            Err(error) => panic!("the sandbox chunk fails to return the global: {error}"),
         }
     }
 
@@ -815,23 +834,23 @@ mod tests {
         let lua = Lua::new();
         match run(&lua, "return type(os)") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "nil"),
-            Ok(_) => panic!("unknown globals return strings"),
-            Err(error) => panic!("sandbox loads unknown globals: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the sandbox chunk fails to return an unknown global: {error}"),
         }
     }
 
     #[test]
-    fn audited_globals_with_libraries_return() {
+    fn audited_globals_and_libraries_load() {
         let lua = Lua::new();
         match run(&lua, "return type(pairs)") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "function"),
-            Ok(_) => panic!("audited globals return strings"),
-            Err(error) => panic!("sandbox loads audited globals: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the sandbox chunk fails to return an audited global: {error}"),
         }
         match run(&lua, "return (\"hi\"):upper()") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "HI"),
-            Ok(_) => panic!("string libraries return strings"),
-            Err(error) => panic!("sandbox loads libraries: {error}"),
+            Ok(_) => panic!("expected a string"),
+            Err(error) => panic!("the sandbox chunk fails to return a library: {error}"),
         }
     }
 
@@ -840,14 +859,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         project_root(dir.path());
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         assert!(
             run(
                 &lua,
                 "local validate = require(\"confit.validate\") validate.document = 1",
             )
             .is_err(),
-            "proxy write fails"
+            "the module proxy rejects a write"
         );
     }
 
@@ -859,11 +878,11 @@ mod tests {
         let entry = root.join("plugins").join("alice").join("tool");
         std::fs::create_dir_all(&entry).unwrap();
         std::fs::write(entry.join("init.lua"), b"return 77").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"plugins.alice.tool\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 77),
-            Ok(_) => panic!("plugin entry returns an integer"),
-            Err(error) => panic!("plugin entry loads: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the require function loads an init entry: {error}"),
         }
     }
 
@@ -880,11 +899,11 @@ mod tests {
             b"local helper = require(\"plugins._.sugar.helper\") return helper * 6",
         )
         .unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"plugins._.sugar\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 42),
-            Ok(_) => panic!("deep plugin path returns an integer"),
-            Err(error) => panic!("deep plugin paths load: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the require function loads a deep plugin path: {error}"),
         }
     }
 
@@ -899,26 +918,28 @@ mod tests {
         let entry = root.join("plugins").join("_").join("sugar");
         std::fs::create_dir_all(&entry).unwrap();
         std::fs::write(entry.join("init.lua"), b"return require(\"tools.helper\")").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         assert!(
             run(&lua, "return require(\"plugins._.sugar\")").is_err(),
-            "plugin escape fails"
+            "the audit rejects a plugin caller outside the tree"
         );
     }
 
     #[test]
-    fn project_callers_require_anything_contained() {
+    fn project_callers_read_contained_plugins() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let root = project_root(dir.path());
         let entry = root.join("plugins").join("_").join("sugar");
         std::fs::create_dir_all(&entry).unwrap();
         std::fs::write(entry.join("init.lua"), b"return 9").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"plugins._.sugar\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 9),
-            Ok(_) => panic!("project caller returns an integer"),
-            Err(error) => panic!("project callers load plugins: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => {
+                panic!("the require function loads a plugin for a project caller: {error}")
+            }
         }
     }
 
@@ -929,10 +950,10 @@ mod tests {
         let scope = PathBuf::from("/project");
         match scoped(&scope, PathBuf::from("/project/tools.lua")) {
             Ok(_) => {}
-            Err(error) => panic!("contained path fails: {error}"),
+            Err(error) => panic!("the scope accepts a contained path: {error}"),
         }
         match scoped(&scope, PathBuf::from("/outside/secret.lua")) {
-            Ok(_) => panic!("escaping path passes"),
+            Ok(_) => panic!("the scope accepts an escaping path"),
             Err(error) => {
                 assert!(
                     matches!(
@@ -945,7 +966,7 @@ mod tests {
                     Some(found) => {
                         assert_eq!(found, &scope, "the scope slot shows the scope: {error}")
                     }
-                    None => panic!("the scope slot shows the scope: {error}"),
+                    None => panic!("expected a recorded scope: {error}"),
                 }
             }
         }
@@ -959,11 +980,11 @@ mod tests {
         let folder = root.join("nested");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("helper.lua"), b"return 41").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         match run(&lua, "return require(\"nested/helper\")") {
             Ok(Value::Integer(found)) => assert_eq!(found, 41),
-            Ok(_) => panic!("nested module returns an integer"),
-            Err(error) => panic!("nested modules load: {error}"),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => panic!("the require function loads a nested module: {error}"),
         }
     }
 }

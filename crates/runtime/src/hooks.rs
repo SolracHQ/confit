@@ -20,23 +20,23 @@ use crossbeam_channel::Sender;
 
 use crate::checks::{Checks, Unmet, find_executable};
 
-/// One hook run decision.
+/// The decision for one hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// Blocked hook with its bare run failure.
+    /// A hook closed by its bare run failure.
     RequiresClosed(HookRunError),
-    /// Unmet need condition with its fault.
+    /// An unmet `when` condition and its fault.
     WhenClosed(Condition, Unmet),
-    /// Passing check with done work.
+    /// A hook whose check passes and needs no run.
     ChecksPass,
-    /// Runnable hook with its resolved binary.
+    /// A hook that runs, with its resolved binary.
     Run(PathBuf),
 }
 
-/// One finished hook spawn.
+/// One finished hook process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spawned {
-    /// The joined argv under running.
+    /// The joined argv of the run.
     pub argv: String,
     /// The process exit code.
     pub code: i32,
@@ -44,26 +44,26 @@ pub struct Spawned {
     pub log: PathBuf,
 }
 
-/// One hook runner with spawns and post-checks.
+/// The runner for hook spawns and post-checks.
 pub struct HookRunner {
-    /// Hook events.
+    /// The progress channel for hook events.
     pub to_ui: Sender<ToUi>,
 }
 
-/// Decided hooks.
+/// The decision for every hook.
 pub struct DecidedHooks {
-    /// Hook verdicts in plan order.
+    /// The decisions in plan order.
     pub decisions: Vec<HookDecision>,
-    /// Host facts behind hook conditions and post-checks.
+    /// The host facts that hook conditions and post-checks test.
     pub checks: Checks,
 }
 
 impl HookRunner {
-    /// Decide every hook against fresh host facts.
+    /// Decides every hook and returns the decisions with the facts in use.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unresolvable binaries and commands.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when a binary or command fails to resolve.
     pub fn decide_all(
         &self,
         hooks: &[Hook],
@@ -77,11 +77,11 @@ impl HookRunner {
         Ok(DecidedHooks { decisions, checks })
     }
 
-    /// Decide one hook outcome.
+    /// Decides one hook and returns its decision.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unresolvable binaries and commands.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when a binary or command fails to resolve.
     pub fn decide(
         &self,
         hook: &Hook,
@@ -115,12 +115,12 @@ impl HookRunner {
         Ok(HookDecision::Run(binary))
     }
 
-    /// Spawn one hook with extended PATH and a timeout.
+    /// Spawns one hook with the hook PATH entries first and the hook timeout.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for failed arg materialization and hook runs.
-    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for failed process spawns.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when an arg fails to materialize or a hook run fails.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] when the process fails to spawn.
     pub fn spawn(
         &self,
         hook: &Hook,
@@ -151,15 +151,14 @@ impl HookRunner {
         let log = hooks_dir.join(hook_file_name(hook.id.as_str()));
         let header = format!("hook {position} of {total}: {argv_text}");
         let file = open_hook_log(&log, &header)?;
-        let outcome = driver::process::run(&spawn, &path_dirs, hook.timeout_secs, &file).map_err(
-            |contextual| {
+        let outcome = driver::process::run(&spawn, &path_dirs, hook.timeout_secs.secs(), &file)
+            .map_err(|contextual| {
                 let kind = match contextual.cause() {
                     ErrorCause::HookRunError(_) => ErrorKind::RunHook,
                     _ => ErrorKind::SpawnHook,
                 };
                 Error::new(kind, contextual.with_argv(&argv_text).with_fs_path(&log))
-            },
-        )?;
+            })?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
         let _ = self.to_ui.send(ToUi::Progress(Event::Finished {
             id: argv_text.clone(),
@@ -172,11 +171,11 @@ impl HookRunner {
         })
     }
 
-    /// Confirm one spawn code.
+    /// Confirms that one spawn exits with code zero.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for nonzero exit codes.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when the exit code is nonzero.
     pub fn confirm(&self, spawned: &Spawned) -> TerminalResult<()> {
         if spawned.code != 0 {
             return error(
@@ -188,11 +187,11 @@ impl HookRunner {
         Ok(())
     }
 
-    /// Verify post-checks after one run.
+    /// Checks the hook conditions after one run.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for unmet post-checks.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when a post-check is unmet.
     pub fn verify(
         &self,
         hook: &Hook,
@@ -213,11 +212,11 @@ impl HookRunner {
     }
 }
 
-/// Open one hook log file with the header line written.
+/// Creates one hook log file and writes the header line.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for failed log writes.
+/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when a log write fails.
 fn open_hook_log(path: &Path, header: &str) -> TerminalResult<std::fs::File> {
     use std::io::Write as _;
 
@@ -239,7 +238,7 @@ fn open_hook_log(path: &Path, header: &str) -> TerminalResult<std::fs::File> {
     Ok(file)
 }
 
-/// Build one hook log file name from its id slug plus short hash.
+/// Builds one log file name from the hook id and a short hash of it.
 fn hook_file_name(id: &str) -> String {
     let mut slug = id
         .split(|cell: char| !cell.is_ascii_alphanumeric())
@@ -257,11 +256,11 @@ fn hook_file_name(id: &str) -> String {
     format!("{slug}-{hash}.log")
 }
 
-/// Scope host facts to one hook with its path entries first.
+/// Extends the host facts with the hook PATH entries in front.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn scoped_checks(hook: &Hook, checks: &Checks) -> ContextualResult<Checks> {
     let mut dirs = Vec::with_capacity(hook.path.len());
     for entry in &hook.path {
@@ -270,7 +269,7 @@ fn scoped_checks(hook: &Hook, checks: &Checks) -> ContextualResult<Checks> {
     Ok(checks.extended(dirs))
 }
 
-/// Resolve one hook binary with routes expanded inline.
+/// Resolves one hook binary and expands its routes inline.
 fn resolve_binary(hook: &Hook, scoped: &Checks) -> ContextualResult<Option<PathBuf>> {
     let Some(first) = hook.argv.first() else {
         return Ok(None);
@@ -279,11 +278,11 @@ fn resolve_binary(hook: &Hook, scoped: &Checks) -> ContextualResult<Option<PathB
     Ok(find_executable(&head, &scoped.path_dirs))
 }
 
-/// Materialize one hook arg into a host path.
+/// Expands one hook arg into a host path.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::ParseFailed`] for unresolvable base folders.
+/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn materialize_arg(arg: &Arg) -> ContextualResult<PathBuf> {
     match arg {
         Arg::Text(text) => Ok(PathBuf::from(text)),
@@ -298,7 +297,8 @@ mod tests {
 
     use confit_model::document::Data;
     use confit_model::document::Document;
-    use confit_model::document::TextDocument;
+    use confit_model::document::{FileMode, TextDocument};
+    use confit_model::hook::HookTimeout;
     use confit_model::id::Id;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
@@ -314,7 +314,7 @@ mod tests {
             path: literal(path),
             data: Data::Text(TextDocument {
                 content: "probe bytes".into(),
-                mode,
+                mode: FileMode::new(mode),
                 unmanaged: false,
             }),
         }
@@ -342,7 +342,7 @@ mod tests {
         let changed = BTreeSet::from([document.path.clone()]);
         match writer.write_documents(std::slice::from_ref(document), &changed) {
             Ok(_) => changed,
-            Err(error) => panic!("documents write: {error}"),
+            Err(error) => panic!("the documents fail to write: {error}"),
         }
     }
 
@@ -354,7 +354,7 @@ mod tests {
             requires: Condition::default(),
             when: Condition::default(),
             check: Condition::default(),
-            timeout_secs: 60,
+            timeout_secs: HookTimeout::new(60),
         }
     }
 
@@ -366,12 +366,12 @@ mod tests {
             requires: Condition::default(),
             when: Condition::default(),
             check: Condition::default(),
-            timeout_secs: 60,
+            timeout_secs: HookTimeout::new(60),
         }
     }
 
     #[test]
-    fn landed_mise_binary_resolves_post_write() {
+    fn written_mise_binary_resolves_after_the_write() {
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
@@ -380,17 +380,17 @@ mod tests {
         let decided = match runner().decide_all(std::slice::from_ref(&mise_hook(&bindir)), &changed)
         {
             Ok(decided) => decided,
-            Err(error) => panic!("hooks decide: {error}"),
+            Err(error) => panic!("the hooks fail to decide: {error}"),
         };
         assert_eq!(
             decided.decisions,
             vec![HookDecision::Run(binary)],
-            "document-landed mise runs post-write"
+            "the written mise binary runs after the write"
         );
     }
 
     #[test]
-    fn requires_sees_hook_path_dirs() {
+    fn requires_condition_sees_the_hook_path_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("mise");
@@ -402,17 +402,17 @@ mod tests {
         };
         let decided = match runner().decide_all(std::slice::from_ref(&hook), &changed) {
             Ok(decided) => decided,
-            Err(error) => panic!("hooks decide: {error}"),
+            Err(error) => panic!("the hooks fail to decide: {error}"),
         };
         assert_eq!(
             decided.decisions,
             vec![HookDecision::Run(binary)],
-            "hook path dirs meet requires"
+            "the hook path dirs meet the requires condition"
         );
     }
 
     #[test]
-    fn exists_condition_sees_just_written_file() {
+    fn exists_condition_sees_a_written_file() {
         let dir = tempfile::tempdir().unwrap();
         let bindir = dir.path().join("bin");
         let binary = bindir.join("tool");
@@ -426,22 +426,22 @@ mod tests {
         };
         let closed = match runner().decide_all(std::slice::from_ref(&hook), &BTreeSet::new()) {
             Ok(decided) => decided,
-            Err(error) => panic!("hooks decide: {error}"),
+            Err(error) => panic!("the hooks fail to decide: {error}"),
         };
         assert!(
             matches!(closed.decisions[0], HookDecision::RequiresClosed(_)),
-            "missing sentinel fails the condition"
+            "the requires condition rejects an absent sentinel"
         );
         let writer = writer_in(dir.path());
         let changed = write_doc(&writer, &text_doc(&sentinel, 0o644));
         let decided = match runner().decide_all(std::slice::from_ref(&hook), &changed) {
             Ok(decided) => decided,
-            Err(error) => panic!("hooks decide: {error}"),
+            Err(error) => panic!("the hooks fail to decide: {error}"),
         };
         assert_eq!(
             decided.decisions,
             vec![HookDecision::Run(binary)],
-            "written sentinel meets the condition"
+            "the written sentinel meets the condition"
         );
     }
 }

@@ -1,5 +1,4 @@
-//! Commit run
-//! Prepared manifests to disk writes shared by apply and restore.
+//! Writes prepared manifests to disk for apply and restore.
 
 use std::path::PathBuf;
 
@@ -16,36 +15,34 @@ use confit_ui::{ToUi, UiHandles};
 use crate::presentation::difference;
 use crate::presentation::summary;
 
-/// Successful commit run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteReport {
-    /// Count of documents written to disk.
+    /// The number of documents the run wrote to disk.
     pub written: usize,
-    /// Count of deleted documents and dropped tree members removed from disk.
+    /// The number of documents and tree members the run removed.
     pub removed: usize,
 }
 
-/// Commit run from prepared manifests to disk writes.
 pub struct CommitRunner {
-    /// Prepared manifests with differences and changed routes.
+    /// The manifests to write, with their differences and changed routes.
     pub prepared: Prepared,
-    /// First prompt skip with difference re-prompt.
+    /// The flag that skips the prompts.
     pub force: bool,
-    /// Write capabilities for the run.
+    /// The stores that hold the project and the state.
     pub stores: Stores,
-    /// Renderer channels for prints and prompts.
+    /// The channels that carry the prints and the prompts.
     pub handles: UiHandles,
-    /// Hook output folder holding one file per hook.
+    /// The folder that holds one log file per hook.
     pub hooks_dir: PathBuf,
 }
 
 impl CommitRunner {
-    /// Send one line to the renderer.
+    /// Sends one line to the renderer and ignores a closed channel.
     fn print(&self, line: impl Into<String>) {
         let _ = self.handles.to_ui.send(ToUi::Print(line.into()));
     }
 
-    /// Ask one yes question on the renderer.
+    /// Asks the confirmation question and accepts a trimmed yes.
     fn confirm(&self) -> TerminalResult<bool> {
         let reply = self
             .handles
@@ -55,24 +52,24 @@ impl CommitRunner {
         Ok(reply.trim() == "yes")
     }
 
-    /// Write prepared manifests with preview, difference prompts, and rotation.
+    /// Writes the prepared manifests after the preview and the prompts.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadReply`] for prompt failures.
-    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for state refresh faults.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for state refresh faults.
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for state refresh faults.
-    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for hook runs.
-    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for hook runs.
-    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::ReadReply`] when the prompt reply fails.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] when the state refresh fails.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the state refresh evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the state refresh Lua run fails.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when the destination write fails.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when the destination removal fails.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the removal evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] when the state write fails.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] when the state refresh fails.
+    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] when the history rotation fails.
+    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] when the blob prune fails.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when a hook run fails.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] when a hook spawn fails.
+    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when a hook log write fails.
     pub fn execute(self) -> TerminalResult<WriteReport> {
         self.print(summary::render_prepared(&self.prepared));
         for warning in &self.prepared.warnings {
@@ -84,7 +81,7 @@ impl CommitRunner {
             );
         }
         if !self.force && !self.confirm()? {
-            self.print("no yes passed, bye");
+            self.print("no confirmation, the run stops");
             return Ok(WriteReport {
                 written: 0,
                 removed: 0,
@@ -104,7 +101,7 @@ impl CommitRunner {
                 self.print(line);
             }
             if !self.confirm()? {
-                self.print("no yes passed, bye");
+                self.print("no confirmation, the run stops");
                 return Ok(WriteReport {
                     written: 0,
                     removed: 0,
@@ -116,17 +113,17 @@ impl CommitRunner {
         Ok(report)
     }
 
-    /// Write built documents with deleted document removal and pool rotation.
+    /// Writes the built documents, removes deleted ones, and rotates the pool.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for destination writes and removals.
-    /// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] for stored states.
-    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] for pruned blobs.
+    /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when the destination write fails.
+    /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when the destination removal fails.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the removal evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::StoreState`] when the state write fails.
+    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] when the keep set fails.
+    /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] when the history rotation fails.
+    /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] when the blob prune fails.
     fn commit(&self) -> TerminalResult<WriteReport> {
         let built = &self.prepared.desired;
         let previous = &self.prepared.previous;
@@ -148,13 +145,13 @@ impl CommitRunner {
         Ok(WriteReport { written, removed })
     }
 
-    /// Run built hooks after files, state, and history land.
+    /// Runs the built hooks after the files, the state, and the history land.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] for hook runs.
-    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] for hook runs.
-    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] for hook runs.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when a hook run fails.
+    /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] when a hook spawn fails.
+    /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when a hook log write fails.
     fn run_hooks(&self) -> TerminalResult<()> {
         let runner = HookRunner {
             to_ui: self.handles.to_ui.clone(),

@@ -1,4 +1,4 @@
-//! Project config from `project.toml` beside the profile.
+//! Loads the project config.
 
 use std::path::{Path, PathBuf};
 
@@ -8,18 +8,17 @@ use confit_core::error::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Project file name under the project root.
+/// The project file name.
 pub const FILE: &str = "project.toml";
 
-/// Project config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Project {
-    /// Scaffolded confit version.
+    /// The scaffolded confit version.
     pub version: String,
-    /// Plugin tree config.
+    /// The plugin tree config.
     pub plugins: PluginConf,
-    /// Stubs folder config.
+    /// The stubs folder config.
     pub stubs: StubConf,
 }
 
@@ -33,13 +32,12 @@ impl Default for Project {
     }
 }
 
-/// Plugin tree config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PluginConf {
-    /// Plugin tree folder, project relative unless absolute.
+    /// The plugin tree folder, project relative unless absolute.
     pub folder: PathBuf,
-    /// Whether the folder is outside the project root.
+    /// Whether the folder sits outside the project root.
     pub allow_external_folders: bool,
 }
 
@@ -52,11 +50,10 @@ impl Default for PluginConf {
     }
 }
 
-/// Stubs folder config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct StubConf {
-    /// Stubs folder, project relative unless absolute.
+    /// The stubs folder, project relative unless absolute.
     pub folder: PathBuf,
 }
 
@@ -68,19 +65,19 @@ impl Default for StubConf {
     }
 }
 
-/// Resolved plugin tree root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginRoot {
-    /// Canonical plugin folder.
+    /// The canonical plugin folder.
     pub dir: PathBuf,
 }
 
 impl Project {
-    /// Read one project file with defaults for missing files.
+    /// Loads one project file.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable and malformed files.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the file
+    ///   is unreadable or malformed.
     pub fn read(root: &Path) -> TerminalResult<Self> {
         let path = root.join(FILE);
         let bytes = match std::fs::read(&path) {
@@ -107,11 +104,12 @@ impl Project {
         Self::parse(&text, &path)
     }
 
-    /// Parse one project text.
+    /// Parses one project text.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for malformed text.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the text
+    ///   is malformed.
     pub fn parse(text: &str, path: &Path) -> TerminalResult<Self> {
         match toml::from_str(text) {
             Ok(found) => Ok(found),
@@ -124,22 +122,25 @@ impl Project {
         }
     }
 
-    /// Render one project text.
+    /// Renders the project as TOML.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::DocumentError::RenderFailed`] for unrenderable projects.
+    /// - [`confit_core::error::DocumentError::RenderFailed`] when the
+    ///   project fails to render.
     pub fn render(&self) -> ContextualResult<String> {
         toml::to_string_pretty(self)
             .map_err(|_| contextual(DocumentError::RenderFailed).with_fs_path(PathBuf::from(FILE)))
     }
 
-    /// Resolve the plugin tree against one project root.
+    /// Resolves the plugin root.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable roots and outside folders.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable roots and outside folders.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the root
+    ///   or the folder is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the folder
+    ///   sits outside the project root.
     pub fn plugin_root(&self, root: &Path) -> TerminalResult<PluginRoot> {
         let joined = root.join(&self.plugins.folder);
         let root_real = match std::fs::canonicalize(root) {
@@ -178,7 +179,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_fields_read_defaults() {
+    fn absent_fields_take_their_defaults() {
         let project = Project::parse("", Path::new("project.toml")).unwrap();
         assert_eq!(project.plugins.folder, PathBuf::from("plugins"));
         assert_eq!(project.stubs.folder, PathBuf::from("stubs"));
@@ -186,13 +187,16 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_fail() {
+    fn project_parse_rejects_unknown_fields() {
         let result = Project::parse("[plugins]\nbogus = true", Path::new("project.toml"));
-        assert!(result.is_err(), "unknown fields fail");
+        assert!(
+            result.is_err(),
+            "the project parser rejects an unknown field"
+        );
     }
 
     #[test]
-    fn explicit_folders_parse() {
+    fn project_parse_accepts_explicit_folders() {
         let text = "[plugins]\nfolder = \"../shared\"\nallow_external_folders = true\n[stubs]\nfolder = \"types\"";
         let project = Project::parse(text, Path::new("project.toml")).unwrap();
         assert_eq!(project.plugins.folder, PathBuf::from("../shared"));
@@ -201,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn malformed_text_fails_showing_path() {
+    fn project_parse_rejects_malformed_text() {
         use confit_core::error::{ErrorCause, ProjectError};
 
         match Project::parse("[plugins", Path::new("some/project.toml")) {
-            Ok(_) => panic!("malformed text passes"),
+            Ok(_) => panic!("the project parser accepts malformed text"),
             Err(error) => {
                 assert!(
                     matches!(
@@ -220,7 +224,7 @@ mod tests {
                         &Path::new("some/project.toml"),
                         "the fs slot shows the file: {error}"
                     ),
-                    None => panic!("the fs slot shows the file: {error}"),
+                    None => panic!("expected a recorded file path: {error}"),
                 }
             }
         }

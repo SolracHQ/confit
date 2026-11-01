@@ -1,4 +1,4 @@
-//! Group structured with rc patches over matched destinations.
+//! Groups patches by destination.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
@@ -18,7 +18,7 @@ use confit_core::error::{
 };
 use confit_core::suggest;
 
-/// Split one profile's patches into owned patches in return order.
+/// Splits one profile's patches.
 pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
     let mut owned = Vec::new();
     for config in &profile.configs {
@@ -27,13 +27,14 @@ pub(super) fn split_patches(profile: &Profile) -> Vec<OwnedPatch> {
     owned
 }
 
-/// Group structured patches over matched destinations.
+/// Groups the structured patches.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for doubled destinations, missing
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for doubled destinations, missing
-///   destinations, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a destination
+///   repeats or a destination is missing.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a destination
+///   fails to join or a callback fails.
 pub(super) fn grouped_structured<'a>(
     lua: &Lua,
     placed: &[Document],
@@ -61,13 +62,14 @@ pub(super) fn grouped_structured<'a>(
     Ok(grouped)
 }
 
-/// Group rc patches over matched destinations.
+/// Groups the rc patches.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for doubled destinations, missing
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for doubled destinations, missing
-///   destinations, and Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a destination
+///   repeats or a destination is missing.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a destination
+///   fails to join or a callback fails.
 pub(super) fn grouped_rc<'a>(
     lua: &Lua,
     placed: &[Document],
@@ -95,7 +97,7 @@ pub(super) fn grouped_rc<'a>(
     Ok(grouped)
 }
 
-/// Push one patch onto its destination group in first-seen order.
+/// Adds one patch to its destination group.
 fn push_grouped<'a>(
     grouped: &mut Vec<(Route, Vec<&'a OwnedPatch>)>,
     index: &mut HashMap<Route, usize>,
@@ -111,7 +113,7 @@ fn push_grouped<'a>(
     }
 }
 
-/// Return the merge rank of one owned patch.
+/// Returns the merge rank.
 fn rank_of(patch: &OwnedPatch) -> u8 {
     match &patch.patch {
         Patch::Structured(found) => found.priority.rank(),
@@ -120,11 +122,12 @@ fn rank_of(patch: &OwnedPatch) -> u8 {
     }
 }
 
-/// Collect patch destinations over its target.
+/// Collects the patch destinations.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+///   fails.
 fn expanded_destinations(
     lua: &Lua,
     placed: &[Document],
@@ -137,11 +140,12 @@ fn expanded_destinations(
     }
 }
 
-/// Collect filter destinations over callback matches.
+/// Collects the filter destinations.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for Lua failures.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a callback
+///   fails.
 fn matched_destinations(
     lua: &Lua,
     placed: &[Document],
@@ -169,22 +173,24 @@ fn matched_destinations(
     Ok(matched)
 }
 
-/// Report whether documents hold structured data.
+/// Returns whether documents hold structured data.
 fn is_structured(document: &Document) -> bool {
     matches!(document.data, Data::Structured { .. })
 }
 
-/// Report whether documents hold rc sections.
+/// Returns whether documents hold rc sections.
 fn is_rc(document: &Document) -> bool {
     matches!(document.data, Data::Rc(_))
 }
 
-/// Build one structured patch base with its live data.
+/// Builds the structured base.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::PatchTargetUnknown`] for missing targets.
-/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
+/// - [`confit_core::error::EvalError::PatchTargetUnknown`] when the target is
+///   missing.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the base holds
+///   another shape.
 pub(super) fn structured_base_of(
     placed: &[Document],
     target: &Route,
@@ -196,11 +202,12 @@ pub(super) fn structured_base_of(
     }
 }
 
-/// Build one declared structured patch base with its live data.
+/// Builds the declared structured base.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the base holds
+///   another shape.
 fn structured_declared_base(
     body: &Data,
     patches: &[&StructuredPatch],
@@ -222,12 +229,14 @@ fn structured_declared_base(
     }
 }
 
-/// Build one rc patch base with its live sections.
+/// Builds the rc base.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::PatchTargetUnknown`] for missing targets.
-/// - [`confit_core::error::DocumentError::RenderFailed`] for foreign bases with gaps.
+/// - [`confit_core::error::EvalError::PatchTargetUnknown`] when the target is
+///   missing.
+/// - [`confit_core::error::DocumentError::RenderFailed`] when the base holds
+///   another shape.
 pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> ContextualResult<RcData> {
     match placed.iter().find(|document| document.path == *target) {
         Some(document) => match &document.data {
@@ -242,7 +251,7 @@ pub(super) fn rc_base_of(placed: &[Document], target: &Route) -> ContextualResul
     }
 }
 
-/// Build one missing patch target error naming near documents.
+/// Builds the unknown target error.
 fn unknown_target(target: &Route, placed: &[Document]) -> ContextualCause {
     let wanted = target.display();
     let candidates: Vec<String> = placed
@@ -261,12 +270,12 @@ mod tests {
     use super::*;
     use crate::api::config::Config;
     use crate::api::patch::{Level, Patch, RcPatch, StructuredPatch};
-    use confit_model::document::{StructuredDocument, TextDocument};
+    use confit_model::document::{FileMode, StructuredDocument, TextDocument};
     use confit_model::id::Id;
     use confit_model::routes::RouteBase;
     use mlua::{Function, Lua};
 
-    /// Build one profile with declared documents and patches.
+    /// Builds one profile.
     fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
         Profile::new(
             vec![Config::new(
@@ -307,7 +316,7 @@ mod tests {
         }
     }
 
-    /// Build one seeded json document with its destination path.
+    /// Builds one seeded structured document.
     fn placed_structured(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
@@ -318,7 +327,7 @@ mod tests {
         )
     }
 
-    /// Build one empty rc document with its destination path.
+    /// Builds one empty rc document.
     fn placed_rc(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
@@ -326,13 +335,13 @@ mod tests {
         )
     }
 
-    /// Build one text document with its destination path.
+    /// Builds one text document.
     fn placed_text(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
             Data::Text(TextDocument {
                 content: "hi".to_owned(),
-                mode: 0o644,
+                mode: FileMode::new(0o644),
                 unmanaged: false,
             }),
         )
@@ -416,11 +425,11 @@ mod tests {
                 let target = match &item.patch {
                     Patch::Structured(found) => &found.target,
                     Patch::Rc(found) => &found.target,
-                    Patch::Hook(_) => panic!("document patches hold routes"),
+                    Patch::Hook(_) => panic!("expected a document patch"),
                 };
                 match target {
                     Some(route) => route.display(),
-                    None => panic!("target means route"),
+                    None => panic!("expected a target route"),
                 }
             })
             .collect();
@@ -436,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_filters_fan_out_in_destination_order() {
+    fn structured_filters_reach_every_match_in_order() {
         let lua = Lua::new();
         let placed = vec![
             placed_structured("apple.json"),
@@ -461,12 +470,12 @@ mod tests {
                     ]
                 );
             }
-            Err(error) => panic!("filter groups: {error}"),
+            Err(error) => panic!("the structured filter fails to group: {error}"),
         }
     }
 
     #[test]
-    fn absent_structured_matches_cover_all_of_kind() {
+    fn absent_structured_matches_cover_every_document_of_the_kind() {
         let lua = Lua::new();
         let placed = vec![
             placed_structured("apple.json"),
@@ -487,12 +496,12 @@ mod tests {
                         .all(|(route, _)| route.display().contains(".json"))
                 );
             }
-            Err(error) => panic!("default filter groups: {error}"),
+            Err(error) => panic!("the default filter fails to group: {error}"),
         }
     }
 
     #[test]
-    fn rc_filters_fan_out_in_destination_order() {
+    fn rc_filters_reach_every_match_in_order() {
         let lua = Lua::new();
         let placed = vec![
             placed_rc("apple.sh"),
@@ -513,7 +522,7 @@ mod tests {
                     vec!["home('apple.sh')".to_owned(), "home('zebra.sh')".to_owned()]
                 );
             }
-            Err(error) => panic!("rc filter groups: {error}"),
+            Err(error) => panic!("the rc filter fails to group: {error}"),
         }
     }
 
@@ -531,14 +540,17 @@ mod tests {
         );
         match grouped_structured(&lua, &placed, &[patch]) {
             Ok(grouped) => {
-                assert!(grouped.is_empty(), "false keeps every document out");
+                assert!(
+                    grouped.is_empty(),
+                    "the false filter keeps every document out"
+                );
             }
-            Err(error) => panic!("false filter groups: {error}"),
+            Err(error) => panic!("the false filter fails to group: {error}"),
         }
     }
 
     #[test]
-    fn failing_structured_filters_fail() {
+    fn structured_filter_rejects_a_callback_error() {
         let lua = Lua::new();
         let placed = vec![placed_structured("config.json")];
         let patch = structured_filter_of(
@@ -548,7 +560,7 @@ mod tests {
         );
         assert!(
             grouped_structured(&lua, &placed, &[patch]).is_err(),
-            "failing filter fails"
+            "the structured filter rejects a failing callback"
         );
     }
 
@@ -591,7 +603,7 @@ mod tests {
                     ]
                 );
             }
-            Err(error) => panic!("target groups: {error}"),
+            Err(error) => panic!("the target grouping fails to order: {error}"),
         }
     }
 }

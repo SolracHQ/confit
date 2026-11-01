@@ -1,5 +1,4 @@
-//! Apply run
-//! Project folders to disk writes with prompts.
+//! Writes project documents to disk with prompts.
 
 use std::path::PathBuf;
 
@@ -15,19 +14,19 @@ use super::commit::{CommitRunner, WriteReport};
 use crate::cli;
 use crate::cli::ApplyArgs;
 
-/// Resolve desired documents from the project folder with explicit run fields.
+/// Resolves the desired documents from the project folder, then commits them.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
-/// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles.
-/// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable projects.
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
-/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for unrenderable documents.
-/// - [`confit_core::error::kind::ErrorKind::StoreState`] for stored states.
-/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable stored states.
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for unreadable stored states.
+/// - [`confit_core::error::kind::ErrorKind::MissingProject`] when the project folder is absent.
+/// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the profile is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the profile evaluation fails.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua evaluation fails.
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a document fails to render.
+/// - [`confit_core::error::kind::ErrorKind::StoreState`] when the state store fails.
+/// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a stored manifest fails to evaluate.
 pub fn run(
     args: &ApplyArgs,
     stores: Stores,

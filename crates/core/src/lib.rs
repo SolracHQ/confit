@@ -1,13 +1,12 @@
-//! Core
 //! Shared vocabulary across crates.
 
 #![deny(missing_docs)]
 
-/// Shared error with cause plus context layers.
+/// Shared failures with causes, context, and terminal kinds.
 pub mod error;
 /// Verified content hashes.
 pub mod sha;
 /// Near-match suggestions for unknown names.
 pub mod suggest;
-/// Binary version triplet with manifest compatibility.
+/// The binary version and the manifest versions it loads.
 pub mod version;

@@ -1,14 +1,15 @@
-//! Freeze assembled documents with rc guard checks.
+//! Freezes assembled documents.
 
 use confit_core::error::{DocumentError, TerminalResult, contextual, error, kind::ErrorKind};
 use confit_model::document::{Data, Document};
 
-/// Reject rc guards with hooks-only changed leaves.
+/// Rejects rc guards with changed leaves.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for guards with changed leaves.
-pub(super) fn check_rc_guards(finished: &[Document]) -> TerminalResult<()> {
+/// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when an rc guard
+///   holds a changed condition.
+pub(super) fn validate_rc_guards(finished: &[Document]) -> TerminalResult<()> {
     for document in finished {
         let Data::Rc(found) = &document.data else {
             continue;

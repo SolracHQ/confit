@@ -1,4 +1,3 @@
-//! Handles
 //! Unforgeable identity for trusted sources and pooled bytes.
 
 use std::path::{Path, PathBuf};
@@ -10,22 +9,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::Stores;
 
-/// Handle to a trusted resource.
+/// A handle to a trusted resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Shape)]
 #[shape(object)]
 pub enum ResourceHandle {
-    /// Content-addressed cache entry, trusted by its hash.
+    /// A cache entry identified by its content hash.
     Cache(Sha),
-    /// Path plus identity sha, hashed once at construction, trusted after.
+    /// A project path with the identity hash taken at construction.
     Project(PathBuf, Sha),
 }
 
 impl Serialize for ResourceHandle {
-    /// Serialize one handle as its content hash.
+    /// Writes the handle as its content hash.
     ///
     /// # Errors
     ///
-    /// - Underlying serializer failures.
+    /// - when the serializer rejects the handle.
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -35,11 +34,11 @@ impl Serialize for ResourceHandle {
 }
 
 impl<'de> Deserialize<'de> for ResourceHandle {
-    /// Deserialize one handle from its content hash.
+    /// Decodes one handle from its content hash.
     ///
     /// # Errors
     ///
-    /// - Custom serde error for malformed hashes.
+    /// - when the hash is malformed.
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -50,7 +49,7 @@ impl<'de> Deserialize<'de> for ResourceHandle {
 }
 
 impl ResourceHandle {
-    /// Return the trusted content hash.
+    /// Returns the content hash that identifies the handle.
     pub fn sha(&self) -> &Sha {
         match self {
             Self::Cache(sha) | Self::Project(_, sha) => sha,
@@ -58,7 +57,7 @@ impl ResourceHandle {
     }
 }
 
-/// Handle to a verified compressed archive.
+/// A handle to a verified compressed archive.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Shape)]
 #[shape(object)]
 pub struct ArchiveHandle {
@@ -67,35 +66,35 @@ pub struct ArchiveHandle {
 }
 
 impl ArchiveHandle {
-    /// Return the content hash.
+    /// Returns the hash that identifies the archive.
     pub fn sha256(&self) -> &Sha {
         &self.sha
     }
 
-    /// Return the archive path.
+    /// Returns the path of the archive file.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Build an archive handle from verified source identity.
+    /// Builds a handle from a verified archive hash and path.
     pub(crate) fn new(sha: Sha, path: PathBuf) -> Self {
         Self { sha, path }
     }
 }
 
-/// Handle to a stored state file.
+/// The path of one stored state file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StateHandle {
     path: PathBuf,
 }
 
 impl StateHandle {
-    /// Return the state file path.
+    /// Returns the path of the state file.
     pub fn canonical(&self) -> &Path {
         &self.path
     }
 
-    /// Build a state handle from its file path.
+    /// Builds a handle for one state file path.
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -103,42 +102,42 @@ impl StateHandle {
 
 #[lua_methods]
 impl ResourceHandle {
-    /// Read file text.
+    /// Reads one trusted file as text.
     ///
     /// # Returns
     ///
-    /// - File text, else nil.
-    /// - Failure reason, else nil.
+    /// - The decoded file text.
+    /// - The failure reason.
     fn text(&self, lua: &Lua) -> mlua::Result<(Option<String>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.resources().read_text(self) {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
     }
 
-    /// Read file content.
+    /// Loads one file into its Lua table.
     ///
     /// # Returns
     ///
-    /// - Decoded table, else nil.
-    /// - Failure reason, else nil.
+    /// - The decoded table.
+    /// - The failure reason.
     fn load(&self, lua: &Lua) -> mlua::Result<(Option<Table>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.resources().load_table(lua, self) {
             Ok(found) => Ok((Some(found), None)),
             Err(reason) => Ok((None, Some(reason))),
         }
     }
 
-    /// Open the input archive.
+    /// Returns the archive handle for one trusted source.
     ///
     /// # Returns
     ///
-    /// - Archive handle, else nil.
-    /// - Failure reason, else nil.
+    /// - The archive handle.
+    /// - The failure reason.
     fn archive(&self, lua: &Lua) -> mlua::Result<(Option<ArchiveHandle>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.archives().archive(self) {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
@@ -148,36 +147,36 @@ impl ResourceHandle {
 
 #[lua_methods]
 impl ArchiveHandle {
-    /// List the archive member names, archive-relative with forward slashes.
+    /// Returns the archive member names in archive-relative form with forward slashes.
     ///
     /// # Returns
     ///
-    /// - Member names, else nil.
-    /// - Failure reason, else nil.
+    /// - The member names.
+    /// - The failure reason.
     fn members(&self, lua: &Lua) -> mlua::Result<(Option<Vec<String>>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.archives().members(self) {
             Ok(names) => Ok((Some(names), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
     }
 
-    /// Open one archive member.
+    /// Returns the handle for one archive member.
     ///
     /// # Arguments
     ///
-    /// - [name] Archive-relative member name.
+    /// - [name] The member path with forward slashes.
     ///
     /// # Returns
     ///
-    /// - Member handle, else nil.
-    /// - Failure reason, else nil.
+    /// - The member handle.
+    /// - The failure reason.
     fn member(
         &self,
         lua: &Lua,
         name: String,
     ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
-        let stores = stores_of(lua)?;
+        let stores = stores_from(lua)?;
         match stores.archives().member(self, &name) {
             Ok(found) => Ok((Some(found), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
@@ -185,16 +184,16 @@ impl ArchiveHandle {
     }
 }
 
-/// Read the shared stores from one Lua instance.
+/// Returns the stores installed in the Lua app data.
 ///
 /// # Errors
 ///
-/// - [`mlua::Error`] for an uninstalled api.
-fn stores_of(lua: &Lua) -> mlua::Result<Stores> {
+/// - [`mlua::Error`] when the api is not installed.
+fn stores_from(lua: &Lua) -> mlua::Result<Stores> {
     match lua.app_data_ref::<Stores>() {
         Some(stores) => Ok(stores.clone()),
         None => Err(mlua::Error::RuntimeError(
-            "confit api is not installed".to_owned(),
+            "the confit api is not installed".to_owned(),
         )),
     }
 }
@@ -213,13 +212,13 @@ mod tests {
     }
 
     #[test]
-    fn cache_handle_kept_hash_alone() {
+    fn cache_handle_keeps_its_hash() {
         let handle = ResourceHandle::Cache(fixture_sha());
         assert_eq!(handle, ResourceHandle::Cache(fixture_sha()));
     }
 
     #[test]
-    fn project_handle_kept_path_alone() {
+    fn project_handle_keeps_its_path() {
         let sha = Sha::hash(b"starship");
         let handle = ResourceHandle::Project(PathBuf::from("/proj/starship.toml"), sha.clone());
         match &handle {
@@ -227,12 +226,12 @@ mod tests {
                 assert_eq!(path, Path::new("/proj/starship.toml"));
                 assert_eq!(found, &sha);
             }
-            ResourceHandle::Cache(_) => panic!("project keeps its path"),
+            ResourceHandle::Cache(_) => panic!("expected a project handle"),
         }
     }
 
     #[test]
-    fn archive_handle_built_verified() {
+    fn archive_handle_keeps_verified_identity() {
         let handle = ArchiveHandle::new(fixture_sha(), PathBuf::from("archive.tar.gz"));
         assert_eq!(handle.sha256(), &fixture_sha());
         assert_eq!(handle.path(), Path::new("archive.tar.gz"));
@@ -265,7 +264,7 @@ mod tests {
         )
     }
 
-    fn test_lua(stores: &Stores) -> Lua {
+    fn fresh_lua(stores: &Stores) -> Lua {
         let lua = Lua::new();
         let _ = lua.set_app_data(stores.clone());
         lua
@@ -280,7 +279,7 @@ mod tests {
     fn open_input(stores: &Stores, relative: &str) -> ResourceHandle {
         match stores.resources().resource(relative) {
             Ok(handle) => handle,
-            Err(error) => panic!("project opens: {error}"),
+            Err(error) => panic!("the project fails to open: {error}"),
         }
     }
 
@@ -294,12 +293,12 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture setup failed: {error}");
+                panic!("the fixture fails to build: {error}");
             }
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
@@ -309,34 +308,34 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture setup failed: {error}");
+                panic!("the fixture fails to build: {error}");
             }
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
     #[test]
-    fn parsed_text_with_hash_through_lua() {
+    fn resource_text_reads_through_lua() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         std::fs::write(project.join("note.txt"), b"hello").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "note.txt"))
             .unwrap();
         match run(&lua, "return assert(input:text())") {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
             Ok(_) => panic!("expected a string for project text"),
-            Err(error) => panic!("project loads its text: {error}"),
+            Err(error) => panic!("the project fails to load its text: {error}"),
         }
     }
 
     #[test]
-    fn loads_toml_through_lua() {
+    fn resource_load_decodes_toml_through_lua() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
@@ -345,7 +344,7 @@ mod tests {
             b"title = \"starship\"\n[settings]\nenabled = true\n",
         )
         .unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "payload.txt"))
             .unwrap();
@@ -357,19 +356,19 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::Boolean(found)) => assert!(found),
-            Ok(_) => panic!("expected its table for toml load"),
-            Err(error) => panic!("toml loads: {error}"),
+            Ok(_) => panic!("expected a table for the toml load"),
+            Err(error) => panic!("the toml fails to load: {error}"),
         }
     }
 
     #[test]
-    fn tarball_round_trips_through_archive() {
+    fn archive_tarball_round_trips_members() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))
             .unwrap();
@@ -388,19 +387,19 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "beta"),
-            Ok(_) => panic!("expected its text for tarball member"),
-            Err(error) => panic!("tarball round trips: {error}"),
+            Ok(_) => panic!("expected a member text for the tarball"),
+            Err(error) => panic!("the tarball fails to round trip: {error}"),
         }
     }
 
     #[test]
-    fn zip_round_trips_through_archive() {
+    fn archive_zip_round_trips_members() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = zipball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
         std::fs::write(project.join("fonts.zip"), &raw).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.zip"))
             .unwrap();
@@ -419,19 +418,19 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "beta"),
-            Ok(_) => panic!("expected its text for zip member"),
-            Err(error) => panic!("zip round trips: {error}"),
+            Ok(_) => panic!("expected a member text for the zip"),
+            Err(error) => panic!("the zip fails to round trip: {error}"),
         }
     }
 
     #[test]
-    fn missing_member_names_member() {
+    fn archive_member_reports_an_absent_name() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(&[("a.txt", b"alpha")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))
             .unwrap();
@@ -443,18 +442,18 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("expected nil with reason for missing member"),
-            Err(error) => panic!("missing members stay soft: {error}"),
+            Ok(_) => panic!("expected a reason for an absent member"),
+            Err(error) => panic!("the absent member fails to report a reason: {error}"),
         }
     }
 
     #[test]
-    fn non_archive_reports_reason() {
+    fn archive_open_reports_a_reason_for_text() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let project = project_root(dir.path());
         std::fs::write(project.join("note.txt"), b"plain text").unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "note.txt"))
             .unwrap();
@@ -465,19 +464,19 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(_)) => {}
-            Ok(_) => panic!("expected nil with reason for non-archive"),
-            Err(error) => panic!("non-archives stay soft: {error}"),
+            Ok(_) => panic!("expected a reason for a text file"),
+            Err(error) => panic!("the text file fails to report a reason: {error}"),
         }
     }
 
     #[test]
-    fn member_reread_reuses_unpack() {
+    fn archive_member_reread_reuses_the_unpack() {
         let dir = tempfile::tempdir().unwrap();
         let (stores, receiver) = test_stores_with_events(dir.path());
         let project = project_root(dir.path());
         let raw = tarball(&[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
         std::fs::write(project.join("fonts.tar.gz"), &raw).unwrap();
-        let lua = test_lua(&stores);
+        let lua = fresh_lua(&stores);
         lua.globals()
             .set("input", open_input(&stores, "fonts.tar.gz"))
             .unwrap();
@@ -490,17 +489,17 @@ mod tests {
         "#;
         match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "alpha"),
-            Ok(_) => panic!("expected its text for repeated member"),
-            Err(error) => panic!("repeated members reuse the extract: {error}"),
+            Ok(_) => panic!("expected a member text for the repeated member"),
+            Err(error) => panic!("the repeated member fails to reuse the extract: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
-        assert_eq!(events.len(), 2, "repeat unpack fires once per run");
+        assert_eq!(events.len(), 2, "the repeated unpack writes two events");
         match events.last() {
             Some(ToUi::Progress(Event::Finished { label, .. })) => assert!(
                 label.contains("(2 members)"),
-                "repeat unpack announces itself: {label}"
+                "the repeated unpack counts every member: {label}"
             ),
-            other => panic!("repeat unpack announces itself: {other:?}"),
+            other => panic!("expected a finished event: {other:?}"),
         }
     }
 }

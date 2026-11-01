@@ -1,4 +1,4 @@
-//! Archive member listing and extraction for compressed archives.
+//! Member listing and extraction for compressed archives.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -18,13 +18,13 @@ use crate::handles::{ArchiveHandle, ResourceHandle};
 use crate::resources::Resources;
 use confit_driver as driver;
 
-/// Head window for every probe, wide enough for tar magic.
+/// The number of leading bytes that identify an archive format.
 const HEAD_LEN: u64 = 512;
 
-/// Archive index of member names to content hashes with modes.
+/// An index that maps each member name to its content hash and mode.
 type Map = BTreeMap<String, (Sha, u32)>;
 
-/// File-backed archive member listing and extraction.
+/// A file-backed store that lists archive members and extracts them into the cache.
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     resources: Arc<Resources>,
@@ -33,7 +33,7 @@ pub struct ArchiveStore {
 }
 
 impl ArchiveStore {
-    /// Build an archive store over the shared cache.
+    /// Builds a store over the shared resource cache.
     pub fn new(resources: Arc<Resources>, to_ui: Sender<ToUi>) -> Self {
         Self {
             resources,
@@ -42,12 +42,12 @@ impl ArchiveStore {
         }
     }
 
-    /// Register one trusted source as a verified archive.
+    /// Verifies one trusted source and returns its archive handle.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for non-archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable sources.
+    /// - [`confit_core::error::ArchiveError`] when the source is not an archive.
+    /// - [`confit_core::error::FilesystemError`] when the source is unreadable.
     pub fn archive(&self, source: &ResourceHandle) -> ContextualResult<ArchiveHandle> {
         match source {
             ResourceHandle::Project(path, sha) => {
@@ -63,12 +63,12 @@ impl ArchiveStore {
         }
     }
 
-    /// Reject non-archive bytes at one path.
+    /// Checks one path for a supported archive format.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::NotArchive`] for non-archives.
-    /// - [`FilesystemError`] for unreadable sources.
+    /// - [`ArchiveError::NotArchive`] when the source is not an archive.
+    /// - [`FilesystemError`] when the source is unreadable.
     fn probe(&self, path: &Path) -> ContextualResult<()> {
         use std::io::Read as _;
 
@@ -85,12 +85,12 @@ impl ArchiveStore {
         Err(contextual(ArchiveError::NotArchive).with_fs_path(path))
     }
 
-    /// List member names from the archive index.
+    /// Returns the member names held by the archive index.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::ArchiveError`] for unreadable and corrupt archives.
-    /// - [`confit_core::error::FilesystemError`] for unreadable and missing archives.
+    /// - [`confit_core::error::ArchiveError`] when the archive is unreadable or corrupt.
+    /// - [`confit_core::error::FilesystemError`] when the archive is unreadable or absent.
     pub fn members(&self, archive: &ArchiveHandle) -> ContextualResult<Vec<String>> {
         if let Some(map) = self.read_map(archive.sha256()) {
             return Ok(map.keys().cloned().collect());
@@ -98,12 +98,12 @@ impl ArchiveStore {
         Ok(self.unpack_all(archive)?.keys().cloned().collect())
     }
 
-    /// Pick one archive member by its archive-relative name.
+    /// Resolves one member to a trusted resource handle.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError`] for unreadable and corrupt archives.
-    /// - [`FilesystemError`] for unreadable, missing, and absent members.
+    /// - [`ArchiveError`] when the archive is unreadable or corrupt.
+    /// - [`FilesystemError`] when the archive is unreadable, absent, or the member is absent.
     pub fn member(&self, archive: &ArchiveHandle, name: &str) -> ContextualResult<ResourceHandle> {
         let archive_path = archive.path().to_path_buf();
         if let Some(map) = self.read_map(archive.sha256()) {
@@ -142,12 +142,12 @@ impl ArchiveStore {
         }
     }
 
-    /// Derive the index path for one archive sha.
+    /// Returns the archive index path under the cache.
     fn map_path(&self, sha: &Sha) -> PathBuf {
         self.resources.cache_path(sha).with_extension("map")
     }
 
-    /// Load one archive index.
+    /// Loads the archive index from its cache file.
     fn read_map(&self, sha: &Sha) -> Option<Map> {
         if let Ok(guard) = self.maps.read()
             && let Some(map) = guard.get(sha)
@@ -162,12 +162,12 @@ impl ArchiveStore {
         Some(map)
     }
 
-    /// Rewrite one archive index atomically.
+    /// Writes one archive index through a staged file.
     ///
     /// # Errors
     ///
-    /// - [`DocumentError::RenderFailed`] for index encode faults.
-    /// - [`FilesystemError`] for index write faults.
+    /// - [`DocumentError::RenderFailed`] when the index fails to encode.
+    /// - [`FilesystemError`] when the index fails to write.
     fn write_map(&self, archive: &ArchiveHandle, map: &Map) -> ContextualResult<()> {
         let archive_path = archive.path().to_path_buf();
         let map_path = self.map_path(archive.sha256());
@@ -181,12 +181,12 @@ impl ArchiveStore {
         Ok(())
     }
 
-    /// Unpack every member into the cache with a fresh index.
+    /// Extracts every member into the cache and writes a fresh index.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError`] for unreadable and corrupt archives.
-    /// - [`FilesystemError`] for unreadable archives and cache write faults.
+    /// - [`ArchiveError`] when the archive is unreadable or corrupt.
+    /// - [`FilesystemError`] when the archive is unreadable or a cache write fails.
     fn unpack_all(&self, archive: &ArchiveHandle) -> ContextualResult<Map> {
         let archive_path = archive.path().to_path_buf();
         let _ = self.to_ui.send(ToUi::Progress(Event::Started {
@@ -210,18 +210,18 @@ impl ArchiveStore {
     }
 }
 
-/// One archive walk landing members in the cache.
+/// The extraction state of one archive.
 struct Unpack<'a> {
-    /// Resources landing member bytes.
+    /// The resources that store member bytes.
     resources: &'a Resources,
-    /// Archive cache path for errors.
+    /// The archive path for errors.
     archive_path: PathBuf,
-    /// Landed members by name with modes.
+    /// The extracted members keyed by name with their mode.
     entries: Map,
 }
 
 impl<'a> Unpack<'a> {
-    /// Build one archive walk.
+    /// Builds an empty walk for one archive path.
     fn new(resources: &'a Resources, archive_path: &Path) -> Self {
         Self {
             resources,
@@ -230,12 +230,12 @@ impl<'a> Unpack<'a> {
         }
     }
 
-    /// Run one walk into the landed index.
+    /// Extracts every archive entry into the landed index.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError`] for unreadable and corrupt archives.
-    /// - [`FilesystemError`] for unreadable archives and cache write faults.
+    /// - [`ArchiveError`] when the archive is unreadable or corrupt.
+    /// - [`FilesystemError`] when the archive is unreadable or a cache write fails.
     fn run(mut self, file: std::fs::File) -> ContextualResult<Map> {
         let archive_path = self.archive_path.clone();
         driver::archive::uncompress(file, |entry| self.entry(entry)).map_err(
@@ -247,22 +247,22 @@ impl<'a> Unpack<'a> {
         Ok(self.entries)
     }
 
-    /// Receive one walk entry into the cache.
+    /// Stores one extracted entry in the cache.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::FilesystemError`] for cache write faults.
+    /// - [`confit_core::error::FilesystemError`] when a cache write fails.
     fn entry(&mut self, entry: driver::archive::Entry<'_>) -> ContextualResult<()> {
         let driver::archive::Entry { name, mode, reader } = entry;
         self.land(name, mode, reader)
     }
 
-    /// Land one member body in the cache under its hash.
+    /// Stores one member body in the cache under its content hash.
     ///
     /// # Errors
     ///
-    /// - [`ContentError::ProjectHandleInCache`] for project handles landing in cache.
-    /// - [`FilesystemError`] for cache write faults.
+    /// - [`ContentError::ProjectHandleInCache`] when a project handle lands in the cache.
+    /// - [`FilesystemError`] when a cache write fails.
     fn land(
         &mut self,
         name: String,
@@ -280,7 +280,7 @@ impl<'a> Unpack<'a> {
     }
 }
 
-/// Build one unknown member error with its archive path.
+/// Creates the error for an absent member with its archive path.
 fn member_missing(archive_path: &Path, name: &str) -> ContextualCause {
     contextual(FilesystemError::FileMissing)
         .with_fs_path(archive_path)
@@ -324,12 +324,12 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture builds: {error}");
+                panic!("the fixture fails to build: {error}");
             }
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
@@ -343,7 +343,7 @@ mod tests {
     }
 
     fn project_source(dir: &Path, path: PathBuf) -> ResourceHandle {
-        assert!(path.starts_with(dir), "project stays under its root");
+        assert!(path.starts_with(dir), "the project is under its root");
         let sha = std::fs::read(&path)
             .map(|bytes| Sha::hash(&bytes))
             .unwrap_or_else(|_| Sha::hash(b"absent"));
@@ -360,7 +360,7 @@ mod tests {
         let source = project_source(dir, path);
         match store.archive(&source) {
             Ok(handle) => handle,
-            Err(error) => panic!("source registers: {error}"),
+            Err(error) => panic!("the source fails to register: {error}"),
         }
     }
 
@@ -379,12 +379,12 @@ mod tests {
                 reader.read_to_end(&mut found).unwrap();
                 found
             }
-            Err(error) => panic!("member opens: {error}"),
+            Err(error) => panic!("the member fails to open: {error}"),
         }
     }
 
     #[test]
-    fn create_registers_project_without_copy() {
+    fn create_registers_the_project_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = tar_gz_bytes(&[("a.txt", b"alpha")]);
@@ -396,57 +396,59 @@ mod tests {
                 assert_eq!(
                     handle.path(),
                     path.as_path(),
-                    "handle keeps the project path"
+                    "the handle keeps the project path"
                 );
                 assert!(
                     !cache_path(dir.path(), handle.sha256()).exists(),
-                    "project bytes stay in place"
+                    "the project bytes match"
                 );
             }
-            Err(error) => panic!("source registers: {error}"),
+            Err(error) => panic!("the source fails to register: {error}"),
         }
     }
 
     #[test]
-    fn create_rejects_plain_and_missing_sources() {
+    fn create_rejects_plain_and_absent_sources() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let path = write_archive(dir.path(), "note.txt", b"plain text");
         let source = project_source(dir.path(), path.clone());
         match store.archive(&source) {
-            Ok(_) => panic!("plain source passes"),
+            Ok(_) => panic!("expected a text source"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::NotArchive)
                     ),
-                    "plain keeps not-archive: {error}"
+                    "the text source keeps its not-archive cause: {error}"
                 );
                 match &error.context.fs_path {
-                    Some(found) => assert_eq!(found, &path, "plain keeps the archive path"),
-                    None => panic!("plain keeps the archive path: {error}"),
+                    Some(found) => {
+                        assert_eq!(found, &path, "the text source keeps the archive path")
+                    }
+                    None => panic!("expected the archive path: {error}"),
                 };
             }
         }
         let missing = dir.path().join("absent.tar.gz");
         let absent = project_source(dir.path(), missing.clone());
         match store.archive(&absent) {
-            Ok(_) => panic!("absent source passes"),
+            Ok(_) => panic!("expected an absent source"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
-                    "absent keeps missing: {error}"
+                    "the absent source reports a missing file: {error}"
                 );
             }
         }
     }
 
     #[test]
-    fn members_lists_files_skipping_folders() {
+    fn members_lists_files_and_skips_folders() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(
@@ -457,12 +459,12 @@ mod tests {
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
-            Err(error) => panic!("members list: {error}"),
+            Err(error) => panic!("the members fail to list: {error}"),
         }
     }
 
     #[test]
-    fn members_serve_from_index_without_archive_bytes() {
+    fn members_serve_from_the_index_only() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(
@@ -473,17 +475,17 @@ mod tests {
         );
         match store.members(&archive) {
             Ok(_) => {}
-            Err(error) => panic!("index builds: {error}"),
+            Err(error) => panic!("the index fails to build: {error}"),
         }
         std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
-            Err(error) => panic!("present index skips archive bytes: {error}"),
+            Err(error) => panic!("the present index fails to list: {error}"),
         }
     }
 
     #[test]
-    fn member_resolves_from_cache_without_archive_bytes() {
+    fn member_resolves_from_the_cache_only() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
@@ -495,18 +497,18 @@ mod tests {
         );
         match store.member(&archive, "a.txt") {
             Ok(ResourceHandle::Cache(sha)) => assert_eq!(sha, Sha::hash(b"alpha")),
-            Ok(ResourceHandle::Project(..)) => panic!("member lands content-addressed"),
-            Err(error) => panic!("member resolves: {error}"),
+            Ok(ResourceHandle::Project(..)) => panic!("expected a cache handle"),
+            Err(error) => panic!("the member fails to resolve: {error}"),
         }
         std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
         match store.member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"alpha"),
-            Err(error) => panic!("present member skips archive bytes: {error}"),
+            Err(error) => panic!("the member fails to resolve from the index: {error}"),
         }
     }
 
     #[test]
-    fn member_rewrites_missing_index() {
+    fn member_rewrites_an_absent_index() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(
@@ -517,23 +519,23 @@ mod tests {
         );
         match store.member(&archive, "a.txt") {
             Ok(_) => {}
-            Err(error) => panic!("member resolves: {error}"),
+            Err(error) => panic!("the member fails to resolve: {error}"),
         }
         std::fs::remove_file(map_path(dir.path(), &archive)).unwrap();
         let store = test_store(dir.path());
         match store.member(&archive, "sub/b.txt") {
             Ok(ResourceHandle::Cache(sha)) => assert_eq!(sha, Sha::hash(b"beta")),
-            Ok(ResourceHandle::Project(..)) => panic!("member lands content-addressed"),
-            Err(error) => panic!("missing index repacks: {error}"),
+            Ok(ResourceHandle::Project(..)) => panic!("expected a cache handle"),
+            Err(error) => panic!("the absent index fails to rebuild: {error}"),
         }
         assert!(
             map_path(dir.path(), &archive).exists(),
-            "repack rewrites the index"
+            "the rebuild writes the index"
         );
     }
 
     #[test]
-    fn member_repacks_missing_member_bytes() {
+    fn member_repacks_absent_member_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
@@ -545,17 +547,17 @@ mod tests {
         );
         match store.member(&archive, "a.txt") {
             Ok(_) => {}
-            Err(error) => panic!("member resolves: {error}"),
+            Err(error) => panic!("the member fails to resolve: {error}"),
         }
         std::fs::remove_file(cache_path(dir.path(), &Sha::hash(b"beta"))).unwrap();
         match store.member(&archive, "sub/b.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
-            Err(error) => panic!("missing member bytes repack: {error}"),
+            Err(error) => panic!("the absent member bytes fail to repack: {error}"),
         }
     }
 
     #[test]
-    fn member_rejects_absent_without_archive_bytes() {
+    fn member_rejects_an_absent_archive_and_member() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(
@@ -566,56 +568,60 @@ mod tests {
         );
         match store.members(&archive) {
             Ok(_) => {}
-            Err(error) => panic!("index builds: {error}"),
+            Err(error) => panic!("the index fails to build: {error}"),
         }
         std::fs::remove_file(map_path(dir.path(), &archive)).unwrap();
         std::fs::remove_file(dir.path().join("fonts.tar.gz")).unwrap();
         let store = test_store(dir.path());
         match store.member(&archive, "a.txt") {
-            Ok(_) => panic!("absent archive passes"),
+            Ok(_) => panic!("expected an absent archive"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
-                    "absent keeps missing: {error}"
+                    "the absent archive reports a missing file: {error}"
                 );
                 match &error.context.fs_path {
                     Some(found) => assert_eq!(
                         found,
                         &dir.path().join("fonts.tar.gz"),
-                        "absent keeps the archive path"
+                        "the absent archive keeps the archive path"
                     ),
-                    None => panic!("absent keeps the archive path: {error}"),
+                    None => panic!("expected the archive path: {error}"),
                 }
                 match &error.context.member {
-                    Some(member) => assert_eq!(member, "a.txt", "absent keeps the member"),
-                    None => panic!("absent keeps the member: {error}"),
+                    Some(member) => {
+                        assert_eq!(member, "a.txt", "the absent archive keeps the member")
+                    }
+                    None => panic!("expected the member name: {error}"),
                 }
             }
         }
         match store.member(&archive, "absent.txt") {
-            Ok(_) => panic!("absent member passes"),
+            Ok(_) => panic!("expected an absent member"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
-                    "absent keeps missing: {error}"
+                    "the absent member reports a missing file: {error}"
                 );
                 match &error.context.fs_path {
                     Some(found) => assert_eq!(
                         found,
                         &dir.path().join("fonts.tar.gz"),
-                        "absent keeps the archive path"
+                        "the absent member keeps the archive path"
                     ),
-                    None => panic!("absent keeps the archive path: {error}"),
+                    None => panic!("expected the archive path: {error}"),
                 }
                 match &error.context.member {
-                    Some(member) => assert_eq!(member, "absent.txt", "absent keeps the member"),
-                    None => panic!("absent keeps the member: {error}"),
+                    Some(member) => {
+                        assert_eq!(member, "absent.txt", "the absent member keeps the member")
+                    }
+                    None => panic!("expected the member name: {error}"),
                 }
             }
         }
@@ -634,39 +640,42 @@ mod tests {
         );
         match store.member(&archive, "sub/b.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
-            Err(error) => panic!("member resolves: {error}"),
+            Err(error) => panic!("the member fails to resolve: {error}"),
         }
         let text = match std::fs::read_to_string(map_path(dir.path(), &archive)) {
             Ok(text) => text,
-            Err(error) => panic!("index load: {error}"),
+            Err(error) => panic!("the index fails to load: {error}"),
         };
         assert!(
             text.contains(&Sha::hash(b"beta").hex()),
-            "index records hashes: {text}"
+            "the index holds every hash: {text}"
         );
-        assert!(text.contains("sub/b.txt"), "index records names: {text}");
+        assert!(
+            text.contains("sub/b.txt"),
+            "the index holds every name: {text}"
+        );
         match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(serde_json::Value::Object(map)) => match map.get("a.txt") {
                 Some(serde_json::Value::Array(pair)) => {
-                    assert_eq!(pair.len(), 2, "index pairs hashes with modes");
+                    assert_eq!(pair.len(), 2, "the index pairs each hash with its mode");
                     assert_eq!(
                         pair[0],
                         serde_json::Value::String(Sha::hash(b"alpha").hex())
                     );
                     assert_eq!(pair[1], serde_json::Value::Number(0o644.into()));
                 }
-                other => panic!("index shapes pairs: {other:?}"),
+                other => panic!("expected a hash and mode pair: {other:?}"),
             },
-            other => panic!("index holds an object: {other:?}"),
+            other => panic!("expected an object index: {other:?}"),
         }
         assert!(
             !dir.path().join("temp").join("extract").exists(),
-            "unpack leaves no extract folder"
+            "the unpack leaves no extract folder"
         );
     }
 
     #[test]
-    fn gzip_lists_and_opens_derived_member() {
+    fn bare_gzip_rejects_listing_and_lookup() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
@@ -678,45 +687,45 @@ mod tests {
         std::fs::write(&landed, &raw).unwrap();
         let archive = ArchiveHandle::new(Sha::hash(&raw), landed);
         match store.members(&archive) {
-            Ok(_) => panic!("bare gzip passes"),
+            Ok(_) => panic!("expected a bare gzip error"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::BareGzip)
                     ),
-                    "bare keeps bare-gzip: {error}"
+                    "the bare gzip keeps its not-archive cause: {error}"
                 );
             }
         }
         match store.member(&archive, "note.txt") {
-            Ok(_) => panic!("bare gzip passes"),
+            Ok(_) => panic!("expected a bare gzip error"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::BareGzip)
                     ),
-                    "bare keeps bare-gzip: {error}"
+                    "the bare gzip keeps its not-archive cause: {error}"
                 );
             }
         }
     }
 
     #[test]
-    fn members_rejects_missing_archive() {
+    fn members_rejects_an_absent_archive() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let handle = ArchiveHandle::new(Sha::hash(b"absent"), dir.path().join("absent.cb"));
         match store.members(&handle) {
-            Ok(_) => panic!("absent archive passes"),
+            Ok(_) => panic!("expected an absent archive"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::FilesystemError(FilesystemError::FileMissing)
                     ),
-                    "absent keeps missing: {error}"
+                    "the absent archive reports a missing file: {error}"
                 );
             }
         }
@@ -731,18 +740,18 @@ mod tests {
         let raw_b = tar_gz_bytes(&[("b.txt", b"alpha")]);
         let sha_a = Sha::hash(&raw_a);
         let sha_b = Sha::hash(&raw_b);
-        assert_ne!(sha_a, sha_b, "fixtures diverge by member name");
+        assert_ne!(sha_a, sha_b, "the fixtures differ by member name");
         let first = fixture_archive(&store, dir.path(), "a.tar.gz", &raw_a);
         let second = fixture_archive(&store, dir.path(), "b.tar.gz", &raw_b);
         assert_eq!(first.sha256(), &sha_a);
         assert_eq!(second.sha256(), &sha_b);
         let first_handle = match store.member(&first, "a.txt") {
             Ok(handle) => handle,
-            Err(error) => panic!("first member resolves: {error}"),
+            Err(error) => panic!("the first member fails to resolve: {error}"),
         };
         let second_handle = match store.member(&second, "b.txt") {
             Ok(handle) => handle,
-            Err(error) => panic!("second member resolves: {error}"),
+            Err(error) => panic!("the second member fails to resolve: {error}"),
         };
         assert_eq!(first_handle, second_handle);
         assert_ne!(map_path(dir.path(), &first), map_path(dir.path(), &second));
@@ -755,7 +764,7 @@ mod tests {
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
-        assert!(raw.len() > 8 * 1024, "payload spans many chunks");
+        assert!(raw.len() > 8 * 1024, "the payload spans many chunks");
         let archive = fixture_archive(
             &store,
             dir.path(),
@@ -764,11 +773,11 @@ mod tests {
         );
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["big.bin"]),
-            Err(error) => panic!("large members list: {error}"),
+            Err(error) => panic!("the large members fail to list: {error}"),
         }
         match store.member(&archive, "big.bin") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), raw),
-            Err(error) => panic!("large member resolves: {error}"),
+            Err(error) => panic!("the large member fails to resolve: {error}"),
         }
     }
 
@@ -778,12 +787,12 @@ mod tests {
         for (name, bytes) in members {
             let mut reader = std::io::Cursor::new(*bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture builds: {error}");
+                panic!("the fixture fails to build: {error}");
             }
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
@@ -792,7 +801,7 @@ mod tests {
         let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
         let mut empty = std::io::Cursor::new(b"" as &[u8]);
         if let Err(error) = builder.member("sub/", 0o755, 0, &mut empty) {
-            panic!("fixture builds: {error}");
+            panic!("the fixture fails to build: {error}");
         }
         for (name, bytes) in [
             ("a.txt", b"alpha" as &[u8]),
@@ -800,12 +809,12 @@ mod tests {
         ] {
             let mut reader = std::io::Cursor::new(bytes);
             if let Err(error) = builder.member(name, 0o644, bytes.len() as u64, &mut reader) {
-                panic!("fixture builds: {error}");
+                panic!("the fixture fails to build: {error}");
             }
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
@@ -814,16 +823,16 @@ mod tests {
         let mut builder = Builder::create(sink, Algorithm::Zip, Level::None);
         let mut reader = std::io::Cursor::new(b"a.txt" as &[u8]);
         if let Err(error) = builder.member("link.txt", 0o120777, 5, &mut reader) {
-            panic!("fixture builds: {error}");
+            panic!("the fixture fails to build: {error}");
         }
         match builder.finish() {
             Ok(sink) => sink.into_inner(),
-            Err(error) => panic!("fixture finishes: {error}"),
+            Err(error) => panic!("the fixture fails to finish: {error}"),
         }
     }
 
     #[test]
-    fn zip_create_registers_and_rejects_plain() {
+    fn zip_create_registers_the_project_and_rejects_text() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let raw = zip_bytes(&[("a.txt", b"alpha")]);
@@ -835,39 +844,39 @@ mod tests {
                 assert_eq!(
                     handle.path(),
                     path.as_path(),
-                    "handle keeps the project path"
+                    "the handle keeps the project path"
                 );
                 assert!(
                     !cache_path(dir.path(), handle.sha256()).exists(),
-                    "zip bytes stay in place"
+                    "the zip bytes match"
                 );
             }
-            Err(error) => panic!("zip source registers: {error}"),
+            Err(error) => panic!("the zip source fails to register: {error}"),
         }
         let plain = write_archive(dir.path(), "note.txt", b"plain text");
         let plain_source = project_source(dir.path(), plain.clone());
         match store.archive(&plain_source) {
-            Ok(_) => panic!("plain source passes"),
+            Ok(_) => panic!("expected a text source"),
             Err(error) => {
                 assert!(
                     matches!(
                         error.cause(),
                         ErrorCause::ArchiveError(ArchiveError::NotArchive)
                     ),
-                    "plain keeps not-archive: {error}"
+                    "the text source keeps its not-archive cause: {error}"
                 );
             }
         }
     }
 
     #[test]
-    fn zip_members_lists_files_skipping_dirs() {
+    fn zip_members_list_files_and_skip_folders() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let archive = fixture_archive(&store, dir.path(), "fonts.zip", &zip_bytes_with_dir());
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["a.txt", "sub/b.txt"]),
-            Err(error) => panic!("zip members list: {error}"),
+            Err(error) => panic!("the zip members fail to list: {error}"),
         }
     }
 
@@ -884,36 +893,36 @@ mod tests {
         );
         match store.member(&archive, "sub/b.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"beta"),
-            Err(error) => panic!("zip member resolves: {error}"),
+            Err(error) => panic!("the zip member fails to resolve: {error}"),
         }
         match store.member(&archive, "a.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"alpha"),
-            Err(error) => panic!("repeat member reuses the cache: {error}"),
+            Err(error) => panic!("the repeated member fails to reuse the cache: {error}"),
         }
         assert!(
             !dir.path().join("temp").join("extract").exists(),
-            "zip unpack leaves no extract folder"
+            "the zip unpack leaves no extract folder"
         );
     }
 
     #[test]
-    fn zip_high_mode_extracts_as_file() {
+    fn zip_symlink_mode_extracts_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(dir.path());
         let resources = test_resources(dir.path());
         let archive = fixture_archive(&store, dir.path(), "link.zip", &symlink_zip_bytes());
         match store.members(&archive) {
             Ok(names) => assert_eq!(names, vec!["link.txt"]),
-            Err(error) => panic!("symlink members list: {error}"),
+            Err(error) => panic!("the symlink members fail to list: {error}"),
         }
         match store.member(&archive, "link.txt") {
             Ok(handle) => assert_eq!(open_text(&resources, &handle), b"a.txt"),
-            Err(error) => panic!("symlink member resolves: {error}"),
+            Err(error) => panic!("the symlink member fails to resolve: {error}"),
         }
     }
 
     #[test]
-    fn unpack_announces_unpacked_with_counts() {
+    fn unpack_announces_the_member_count() {
         use confit_ui::Event;
 
         let dir = tempfile::tempdir().unwrap();
@@ -930,17 +939,17 @@ mod tests {
         );
         match store.members(&archive) {
             Ok(names) => {
-                assert_eq!(names.len(), 2, "unpack lists two members")
+                assert_eq!(names.len(), 2, "the unpack lists two members")
             }
-            Err(error) => panic!("archive unpacks: {error}"),
+            Err(error) => panic!("the archive fails to unpack: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
-        assert_eq!(events.len(), 2, "unpack fires start and finish");
+        assert_eq!(events.len(), 2, "the unpack writes two events");
         match &events[1] {
             ToUi::Progress(Event::Finished { id: seen, label }) => {
                 assert!(
                     label.contains("(2 members)"),
-                    "unpack counts every member: {label}"
+                    "the unpack counts every member: {label}"
                 );
                 assert_eq!(
                     seen,
@@ -948,10 +957,10 @@ mod tests {
                         .join("fonts.tar.gz")
                         .to_string_lossy()
                         .into_owned(),
-                    "unpack names the archive path: {seen}"
+                    "the unpack reports the archive path: {seen}"
                 );
             }
-            other => panic!("unpack announces itself: {other:?}"),
+            other => panic!("expected a finished event: {other:?}"),
         }
     }
 }

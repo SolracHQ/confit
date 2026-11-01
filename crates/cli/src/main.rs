@@ -50,7 +50,7 @@ fn main() {
     }
 }
 
-/// Run the selected subcommand to completion.
+/// Runs the picked subcommand to completion.
 fn run() -> TerminalResult<()> {
     let mut cli = Cli::parse();
     cli::expand_command(&mut cli.command);
@@ -59,7 +59,7 @@ fn run() -> TerminalResult<()> {
     let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
     if let Err(error) = std::fs::create_dir_all(&hooks_dir) {
         eprintln!(
-            "error: cannot create hooks dir '{}': {error}",
+            "error: cannot create the hooks folder '{}': {error}",
             hooks_dir.display()
         );
         std::process::exit(1);
@@ -67,7 +67,10 @@ fn run() -> TerminalResult<()> {
     let log_file = match fern::log_file(&log_path) {
         Ok(found) => found,
         Err(error) => {
-            eprintln!("error: cannot open log '{}': {error}", log_path.display());
+            eprintln!(
+                "error: cannot open the log '{}': {error}",
+                log_path.display()
+            );
             std::process::exit(1);
         }
     };
@@ -130,7 +133,7 @@ fn run() -> TerminalResult<()> {
     outcome
 }
 
-/// Run bundle and print the written artifact path.
+/// Writes the bundle and prints the artifact path.
 fn run_bundle(args: &BundleArgs, handles: UiHandles) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
@@ -145,7 +148,7 @@ fn run_bundle(args: &BundleArgs, handles: UiHandles) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Run check with summary output.
+/// Checks the project and prints the summary.
 fn run_check(args: &CheckArgs, handles: UiHandles, log_path: &Path) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
@@ -161,7 +164,7 @@ fn run_check(args: &CheckArgs, handles: UiHandles, log_path: &Path) -> TerminalR
     Ok(())
 }
 
-/// Run apply with preview and prompts.
+/// Applies the plan after the preview and the prompts.
 fn run_apply(
     args: &ApplyArgs,
     handles: UiHandles,
@@ -184,7 +187,7 @@ fn run_apply(
     Ok(())
 }
 
-/// Run restore with preview and prompts.
+/// Restores the package after the preview and the prompts.
 fn run_restore(
     args: &RestoreArgs,
     handles: UiHandles,
@@ -205,7 +208,7 @@ fn run_restore(
     Ok(())
 }
 
-/// Run export and write a bundle file or print its manifest.
+/// Exports the state to a bundle file or prints its manifest.
 fn run_export(args: &ExportArgs, handles: UiHandles) -> TerminalResult<()> {
     let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
     let report = ExportRunner::run(args, stores)?;
@@ -217,7 +220,7 @@ fn run_export(args: &ExportArgs, handles: UiHandles) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Run delete and drop one named state and unreferenced entries.
+/// Deletes the named state and its unreferenced entries.
 fn run_delete(args: &DeleteArgs, handles: UiHandles) -> TerminalResult<()> {
     let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
     let report = delete::run(args, stores)?;
@@ -229,7 +232,7 @@ fn run_delete(args: &DeleteArgs, handles: UiHandles) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Run init with project scaffolding.
+/// Scaffolds the project or refreshes the flagged artifacts.
 fn run_init(args: &InitArgs) -> TerminalResult<()> {
     let runner = InitRunner { args };
     for outcome in runner.execute()? {

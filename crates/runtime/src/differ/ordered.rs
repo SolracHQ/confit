@@ -7,7 +7,7 @@ use confit_model::routes::Route;
 use super::Difference;
 use super::DifferenceOrder;
 
-/// Ordered leaf values.
+/// One ordered pair of leaf values.
 pub(crate) struct Sides {
     /// The old leaf value.
     pub(crate) old: serde_json::Value,
@@ -15,19 +15,19 @@ pub(crate) struct Sides {
     pub(crate) new: serde_json::Value,
 }
 
-/// Difference side order.
+/// The order of the old and new sides in a difference.
 pub(crate) struct Ordered {
-    /// The side order under comparing.
+    /// The side order in use.
     order: DifferenceOrder,
 }
 
 impl Ordered {
-    /// Build one ordered swapper.
+    /// Builds one swapper for the side order.
     pub(crate) fn new(order: DifferenceOrder) -> Self {
         Self { order }
     }
 
-    /// Pair one recorded string with one disk string in order.
+    /// Pairs one recorded string with one disk string for the side order.
     fn pair(&self, recorded: String, disk: String) -> Sides {
         let (old, new) = match self.order {
             DifferenceOrder::RecordedFirst => (recorded, disk),
@@ -39,7 +39,7 @@ impl Ordered {
         }
     }
 
-    /// Build one key entry from recorded and disk labels.
+    /// Builds one leaf key entry with the sides in order.
     pub(crate) fn key(&self, path: &Route, key: &str, recorded: &str, disk: &str) -> Difference {
         let sides = self.pair(recorded.to_string(), disk.to_string());
         Difference::Key {
@@ -50,7 +50,7 @@ impl Ordered {
         }
     }
 
-    /// Build one mode entry from wanted and seen bits.
+    /// Builds one mode entry from the wanted and seen permission bits.
     pub(crate) fn mode_key(&self, path: &Route, key: String, wanted: u32, seen: u32) -> Difference {
         let sides = self.pair(format!("{wanted:o}"), format!("{seen:o}"));
         Difference::Key {
@@ -61,7 +61,7 @@ impl Ordered {
         }
     }
 
-    /// Build one text diff entry from recorded and disk bytes.
+    /// Builds one text difference from the recorded and disk bytes.
     pub(crate) fn text_diff(&self, path: &Route, recorded: &[u8], disk: &[u8]) -> Difference {
         let (first, second) = match self.order {
             DifferenceOrder::RecordedFirst => (recorded, disk),
@@ -76,7 +76,7 @@ impl Ordered {
         }
     }
 
-    /// Report one path-level entry for differing structured maps.
+    /// Returns one path-level entry for differing structured maps.
     pub(crate) fn structured(
         &self,
         path: &Route,
@@ -98,7 +98,7 @@ impl Ordered {
         }
     }
 
-    /// Build render-ready diff content from first text to second text.
+    /// Builds diff text from the first text to the second text.
     fn strip_headers(first: &str, second: &str) -> String {
         diffy::create_patch(first, second)
             .to_string()
@@ -122,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn key_swaps_sides_with_order() {
+    fn key_entry_swaps_sides_with_the_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = literal(&dir.path().join("file.txt"));
         let recorded_first =
@@ -147,7 +147,7 @@ mod tests {
                 assert_eq!(c, serde_json::Value::String("disk".to_string()));
                 assert_eq!(d, serde_json::Value::String("rec".to_string()));
             }
-            _ => panic!("ordered keys carry sides"),
+            _ => panic!("expected a key entry"),
         }
     }
 }

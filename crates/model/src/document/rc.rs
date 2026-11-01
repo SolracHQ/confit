@@ -1,4 +1,3 @@
-//! Rc
 //! Shell entry shapes for rc files.
 
 use lua_binding::Shape;
@@ -14,25 +13,25 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[shape(table, typed_alias)]
 pub enum RcEntry {
-    /// Plain value export.
+    /// A variable that the shell exports with a value.
     Env {
         /// The variable name, like `EDITOR`.
         name: String,
-        /// The value under export.
+        /// The exported value.
         value: String,
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// PATH like variable around its current value.
+    /// A variable that gains one directory on PATH.
     Path {
         /// The variable name, like `PATH`.
         name: String,
-        /// The directory route for placement.
+        /// The directory that the entry appends.
         dir: Route,
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// Interactive alias.
+    /// A shell alias with its expansion.
     Alias {
         /// The alias name, like `ll`.
         name: String,
@@ -41,23 +40,23 @@ pub enum RcEntry {
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// Command output evaluation through eval.
+    /// A command whose output the shell evaluates.
     Eval {
-        /// Eval command.
+        /// The command whose output runs in the shell.
         argv: Vec<Arg>,
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// Plain command line.
+    /// A command that the shell runs as written.
     Cmd {
-        /// Plain command.
+        /// The command line.
         argv: Vec<Arg>,
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// File source for the shell.
+    /// A file the shell sources.
     Source {
-        /// File route for sourcing.
+        /// The file to source.
         path: Route,
         /// The shell session guard.
         when: Option<Condition>,
@@ -65,7 +64,7 @@ pub enum RcEntry {
 }
 
 impl RcEntry {
-    /// Return the collision key.
+    /// Returns the name that two entries collide on.
     pub fn collision_key(&self) -> Option<&str> {
         match self {
             Self::Env { name, .. } | Self::Path { name, .. } | Self::Alias { name, .. } => {
@@ -75,7 +74,7 @@ impl RcEntry {
         }
     }
 
-    /// Return the shell session guard.
+    /// Returns the condition that guards the entry.
     pub fn when(&self) -> Option<&Condition> {
         match self {
             Self::Env { when, .. }
@@ -88,7 +87,7 @@ impl RcEntry {
     }
 }
 
-/// Shell RC Document.
+/// Shell entries in three sections.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[serde(deny_unknown_fields)]
 #[shape(table)]
@@ -99,13 +98,13 @@ pub struct RcData {
     /// Entries after the guard.
     #[shape(default)]
     pub config: Vec<RcEntry>,
-    /// Entries last.
+    /// Entries that close the rc file.
     #[shape(default)]
     pub r#final: Vec<RcEntry>,
 }
 
 impl RcData {
-    /// Build rc data from three entry lists.
+    /// Assembles the three sections into an rc document.
     pub fn new(profile: Vec<RcEntry>, config: Vec<RcEntry>, r#final: Vec<RcEntry>) -> Self {
         Self {
             profile,

@@ -1,4 +1,4 @@
-//! Share builders for engine integration tests.
+//! Shares builders for the engine tests.
 
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used)]
@@ -14,10 +14,10 @@ use confit_engine::api::profile::Profile;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, OpaqueDocument, RcData, RcEntry, StructuredDocument, StructuredFormat,
-    TextDocument,
+    Data, Document, FileMode, OpaqueDocument, RcData, RcEntry, StructuredDocument,
+    StructuredFormat, TextDocument,
 };
-use confit_model::hook::Hook;
+use confit_model::hook::{Hook, HookTimeout};
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
@@ -498,19 +498,19 @@ pub const HOOKS_THROUGH: &str = r#"
             }
         "#;
 
-/// Build one text document with its destination path.
+/// Wraps text in a document.
 pub fn placed_text(relative: &str, text: &str) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Text(TextDocument {
             content: text.to_owned(),
-            mode: 0o644,
+            mode: FileMode::new(0o644),
             unmanaged: false,
         }),
     )
 }
 
-/// Build one rc document with profile entries and its destination path.
+/// Wraps profile entries in a document.
 pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
@@ -518,7 +518,7 @@ pub fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
     )
 }
 
-/// Build one seeded json document with its destination path.
+/// Wraps seeded json in a document.
 pub fn placed_structured(relative: &str) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
@@ -529,7 +529,7 @@ pub fn placed_structured(relative: &str) -> Document {
     )
 }
 
-/// Build isolated stores over one fresh tempdir.
+/// Returns isolated stores in a fresh tempdir.
 pub fn test_stores() -> (tempfile::TempDir, Stores) {
     let dir = tempfile::tempdir().unwrap();
     let (sender, _) = crossbeam_channel::unbounded();
@@ -544,7 +544,7 @@ pub fn test_stores() -> (tempfile::TempDir, Stores) {
     (dir, stores)
 }
 
-/// Build one opaque document backed by a project blob with its destination path.
+/// Wraps a project blob in a document.
 pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
     let root = stores.resources().roots.project_root.clone();
     std::fs::create_dir_all(&root).unwrap();
@@ -553,13 +553,13 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Opaque(OpaqueDocument {
             handle: ResourceHandle::Cache(Sha::hash(b"hi")),
-            mode: 0o644,
+            mode: FileMode::new(0o644),
             unmanaged: true,
         }),
     )
 }
 
-/// Build one profile with declared documents and patches.
+/// Builds one profile from the documents and patches.
 pub fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
     Profile::new(
         vec![Config::new(
@@ -573,7 +573,7 @@ pub fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
     )
 }
 
-/// Build one env rc entry with its name and value.
+/// Builds one env entry.
 pub fn rc_entry(name: &str, value: &str) -> RcEntry {
     RcEntry::Env {
         name: name.to_owned(),
@@ -582,7 +582,7 @@ pub fn rc_entry(name: &str, value: &str) -> RcEntry {
     }
 }
 
-/// Build one structured patch over its Lua callback source.
+/// Builds one structured patch with its callback.
 pub fn structured_patch_of(
     lua: &Lua,
     relative: &str,
@@ -600,7 +600,7 @@ pub fn structured_patch_of(
     }
 }
 
-/// Build one rc patch over its Lua callback source.
+/// Builds one rc patch with its callback.
 pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
     RcPatch {
@@ -611,7 +611,7 @@ pub fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> 
     }
 }
 
-/// Build one structured filter patch over its Lua callback source.
+/// Builds one structured filter patch.
 pub fn structured_filter_of(
     lua: &Lua,
     filter_source: &str,
@@ -630,7 +630,7 @@ pub fn structured_filter_of(
     }
 }
 
-/// Build one rc filter patch over its Lua callback source.
+/// Builds one rc filter patch.
 pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &str) -> RcPatch {
     let filter: Function = lua.load(filter_source).call(()).unwrap();
     let apply: Function = lua.load(source).call(()).unwrap();
@@ -642,7 +642,7 @@ pub fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &st
     }
 }
 
-/// Collect profile collision keys from one finished rc payload.
+/// Returns the profile collision keys.
 pub fn rc_names(data: &Data) -> Vec<String> {
     match data {
         Data::Rc(found) => found
@@ -650,11 +650,11 @@ pub fn rc_names(data: &Data) -> Vec<String> {
             .iter()
             .filter_map(|entry| entry.collision_key().map(str::to_owned))
             .collect(),
-        _ => panic!("rc patch stays rc"),
+        _ => panic!("expected an rc document"),
     }
 }
 
-/// Collect one env value from the profile section by name.
+/// Returns one profile env value.
 pub fn rc_value(data: &Data, name: &str) -> Option<String> {
     match data {
         Data::Rc(found) => found.profile.iter().find_map(|entry| match entry {
@@ -663,11 +663,11 @@ pub fn rc_value(data: &Data, name: &str) -> Option<String> {
             } if key == name => Some(value.clone()),
             _ => None,
         }),
-        _ => panic!("rc patch stays rc"),
+        _ => panic!("expected an rc document"),
     }
 }
 
-/// Build one hook with argv words and a timeout.
+/// Builds one hook from argv words and a timeout.
 pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
     Hook {
         argv: argv
@@ -679,18 +679,18 @@ pub fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
         requires: Condition::default(),
         when: Condition::default(),
         check: Condition::default(),
-        timeout_secs,
+        timeout_secs: HookTimeout::new(timeout_secs),
     }
 }
 
-/// Build one identified hook with argv words and a timeout.
+/// Builds one hook with an id.
 pub fn identified_hook_of(id: &str, argv: &[&str], timeout_secs: u64) -> Hook {
     let mut hook = hook_of(argv, timeout_secs);
     hook.id = Id::of(id);
     hook
 }
 
-/// Build one hook patch over its Lua callback source.
+/// Builds one hook patch.
 pub fn hook_patch_of(lua: &Lua, target: &str, source: &str) -> HookPatch {
     let apply: Function = lua.load(source).call(()).unwrap();
     let table = lua.create_table().unwrap();
@@ -698,16 +698,16 @@ pub fn hook_patch_of(lua: &Lua, target: &str, source: &str) -> HookPatch {
     table.set("apply", apply).unwrap();
     match HookPatch::decode(&Value::Table(table), lua) {
         Ok(patch) => patch,
-        Err(error) => panic!("hook patch decodes: {error}"),
+        Err(error) => panic!("the hook patch fails to decode: {error}"),
     }
 }
 
-/// Build one profile with hooks and zero documents.
+/// Builds one profile with hooks.
 pub fn profile_with_hooks(configs: Vec<Config>) -> Profile {
     Profile::new(configs, Vec::new())
 }
 
-/// Build one engine over isolated stores under the given dir.
+/// Returns one engine over isolated stores.
 pub fn test_engine(dir: &Path) -> Engine {
     let (sender, _) = crossbeam_channel::unbounded::<ToUi>();
     let stores = Stores::new(
@@ -723,14 +723,14 @@ pub fn test_engine(dir: &Path) -> Engine {
     Engine::new(stores, UiHandles { to_ui, from_ui })
 }
 
-/// Create the project root under the given dir.
+/// Creates the project root.
 pub fn project_root(dir: &Path) -> PathBuf {
     let root = dir.join("project");
     std::fs::create_dir_all(&root).unwrap();
     root
 }
 
-/// Write one Lua profile file under the project root.
+/// Writes the profile file and returns both paths.
 pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     let root = project_root(dir);
     let profile = root.join("profile.lua");
@@ -738,7 +738,7 @@ pub fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
     (root, profile)
 }
 
-/// Collect text content from one finished payload.
+/// Returns the text content.
 pub fn text_of(data: &Data) -> &str {
     match data {
         Data::Text(found) => &found.content,

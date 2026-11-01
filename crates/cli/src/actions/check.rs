@@ -1,5 +1,4 @@
-//! Check run
-//! Profile flags into rendered differences without writes.
+//! Renders the differences of a profile evaluation.
 
 use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kind::ErrorKind};
 use confit_engine::Engine;
@@ -11,38 +10,36 @@ use crate::cli;
 use crate::cli::CheckArgs;
 use crate::presentation::summary;
 
-/// Successful check run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
-    /// Rendered summary text for display.
+    /// The summary lines the check renders.
     pub text: String,
 }
 
-/// Check run from check flags to a rendered preview.
 pub struct CheckRunner<'a> {
-    /// Check flags for the run.
+    /// The flags that pick the project and the profile.
     pub args: &'a CheckArgs,
-    /// Write capabilities for the run.
+    /// The stores that hold the project and the state.
     pub stores: Stores,
-    /// Renderer channels for prints and prompts.
+    /// The channels that carry the prints and the prompts.
     pub handles: UiHandles,
 }
 
 impl CheckRunner<'_> {
-    /// Evaluate the profile and render the preview without writes.
+    /// Evaluates the profile, then renders the preview text.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] for absent projects.
-    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] for unreadable profiles.
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] for unreadable projects.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] for evaluation failures.
-    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated documents.
-    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] for render failures.
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] for evaluation failures.
-    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] for unreadable states.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] for unreadable states.
-    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] for unreadable states.
+    /// - [`confit_core::error::kind::ErrorKind::MissingProject`] when the project folder is absent.
+    /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the profile is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the profile evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when a document repeats.
+    /// - [`confit_core::error::kind::ErrorKind::RenderManifest`] when a document fails to render.
+    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua evaluation fails.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
     pub fn execute(self) -> TerminalResult<CheckReport> {
         let path = cli::resolve_profile(&self.args.project, self.args.profile.as_deref());
         if self.args.profile.is_none() && !path.exists() {

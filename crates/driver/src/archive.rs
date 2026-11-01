@@ -1,4 +1,4 @@
-//! Archive containers.
+//! Reads and writes zip and gzipped tar containers.
 
 use std::io::{self, Read as _};
 
@@ -7,67 +7,67 @@ use confit_core::error::{ArchiveError, ContextualCause, ContextualResult};
 mod targz;
 mod zip_ext;
 
-/// Zip local file magic.
+/// The magic bytes at the start of a zip local file header.
 const ZIP_LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
 
-/// Zip empty archive magic.
+/// The magic bytes of an empty zip archive.
 const ZIP_EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 
-/// Gzip magic for deflated streams.
+/// The magic bytes that open a gzip stream.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-/// Offset of the tar format tag.
+/// The byte offset of the tar format tag.
 const TAR_MAGIC_OFFSET: usize = 257;
 
-/// Tar magic tag for the format.
+/// The tag that marks the tar format.
 const TAR_MAGIC: &[u8] = b"ustar";
 
-/// Head window for probes.
+/// The number of head bytes a probe checks.
 const HEAD_LEN: usize = 512;
 
-/// Fallback mode for missing permission bits.
+/// The permission bits used when an entry holds no mode.
 const FALLBACK_MODE: u32 = 0o644;
 
-/// Permission mask for exposed modes.
+/// The mask that keeps the exposed permission bits.
 const MODE_MASK: u32 = 0o777;
 
-/// Archive container shape.
+/// The container format of an archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Algorithm {
-    /// Zip container with per-member deflation.
+    /// A zip container that deflates each member.
     Zip,
-    /// Gzipped tar container with whole-stream compression.
+    /// A gzipped tar container that compresses the whole stream.
     #[default]
     TarGz,
 }
 
-/// Compression strength for archive builders.
+/// The compression strength.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
-    /// Raw storage.
+    /// Raw storage with no compression.
     None,
-    /// Fast output.
+    /// Fast compression.
     Low,
-    /// Balanced output.
+    /// Balanced compression.
     Mid,
-    /// Dense output.
+    /// Dense compression.
     #[default]
     High,
-    /// Densest output.
+    /// The densest compression.
     Max,
 }
 
 /// One archive member.
 pub struct Entry<'a> {
-    /// Container name with forward slashes.
+    /// The name of the member with forward slashes.
     pub name: String,
-    /// Unix permission bits.
+    /// The permission bits of the member.
     pub mode: u32,
-    /// Reader for the member body bytes.
+    /// The stream that holds the member body.
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Map one zip backend failure to its bare core cause.
+/// Converts a zip failure into a core cause.
 fn zip_error(error: zip::result::ZipError) -> ContextualCause {
     use zip::result::ZipError as Zip;
     let message = error.to_string();
@@ -83,29 +83,29 @@ fn zip_error(error: zip::result::ZipError) -> ContextualCause {
     }
 }
 
-/// Streaming archive writer over one seekable sink.
+/// A writer that streams an archive into a seekable sink.
 pub struct Builder<W: io::Write + io::Seek> {
     inner: Inner<W>,
 }
 
-/// Builder storage for zip writers and gzipped tar builders.
+/// The writer storage for the zip and gzipped tar formats.
 enum Inner<W: io::Write + io::Seek> {
-    /// Zip writer with its level.
+    /// The zip writer and the level it applies.
     Zip {
-        /// Zip writer over the sink.
+        /// The zip writer bound to the sink.
         writer: Box<zip::ZipWriter<W>>,
-        /// Compression strength.
+        /// The compression strength the writer applies.
         level: Level,
     },
-    /// Gzipped tar builder.
+    /// The builder that writes a gzipped tar.
     Tar {
-        /// Tar builder over the gzip encoder.
+        /// The tar builder that writes through the gzip encoder.
         builder: Box<tar::Builder<flate2::write::GzEncoder<W>>>,
     },
 }
 
 impl Level {
-    /// Return the numeric strength for one level.
+    /// Returns the level as a numeric strength.
     pub fn value(&self) -> u32 {
         match self {
             Self::None => 0,
@@ -118,7 +118,7 @@ impl Level {
 }
 
 impl<W: io::Write + io::Seek> Builder<W> {
-    /// Build one writer over one sink with one algorithm and one level.
+    /// Creates an archive writer over the sink.
     pub fn create(sink: W, algorithm: Algorithm, level: Level) -> Self {
         match algorithm {
             Algorithm::Zip => Self {
@@ -138,12 +138,12 @@ impl<W: io::Write + io::Seek> Builder<W> {
         }
     }
 
-    /// Append one member with its body bytes.
+    /// Writes a member and its body into the archive.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::BackendCorrupt`] for rejected framing.
-    /// - [`confit_core::error::FilesystemError`] for denied access and failed sinks.
+    /// - [`ArchiveError::BackendCorrupt`] when the backend rejects the framing.
+    /// - [`confit_core::error::FilesystemError`] when access is denied or the write fails.
     pub fn member<R: io::Read>(
         &mut self,
         name: &str,
@@ -186,12 +186,12 @@ impl<W: io::Write + io::Seek> Builder<W> {
         }
     }
 
-    /// Flush archive tails and return the sink.
+    /// Writes the archive tail and returns the sink.
     ///
     /// # Errors
     ///
-    /// - [`ArchiveError::BackendCorrupt`] for broken tails.
-    /// - [`confit_core::error::FilesystemError`] for denied access and failed tails.
+    /// - [`ArchiveError::BackendCorrupt`] when the backend rejects the tail.
+    /// - [`confit_core::error::FilesystemError`] when access is denied or the tail write fails.
     pub fn finish(self) -> ContextualResult<W> {
         match self.inner {
             Inner::Zip { writer, .. } => Ok((*writer).finish().map_err(zip_error)?),
@@ -203,20 +203,20 @@ impl<W: io::Write + io::Seek> Builder<W> {
     }
 }
 
-/// Report whether archive bytes fill one head window.
+/// Returns whether the head bytes hold a supported archive.
 pub fn supported(head: &[u8]) -> bool {
     is_zip(head) || is_gzip(head) || is_tar_tag(head)
 }
 
-/// Walk archive members with one visitor.
+/// Calls the visitor for each archive member.
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::NotArchive`] for foreign bytes.
-/// - [`ArchiveError::BackendCorrupt`] for corrupt archives and cut streams.
-/// - [`ArchiveError::PasswordLocked`] for locked archives.
-/// - [`ArchiveError::AlgorithmUnknown`] for unknown features and methods.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`ArchiveError::NotArchive`] when the bytes hold no archive.
+/// - [`ArchiveError::BackendCorrupt`] when the archive is corrupt or a stream ends early.
+/// - [`ArchiveError::PasswordLocked`] when the archive is locked.
+/// - [`ArchiveError::AlgorithmUnknown`] when the archive uses an unknown feature.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub fn uncompress<R: io::Read + io::Seek>(
     mut reader: R,
     visit: impl FnMut(Entry<'_>) -> ContextualResult<()>,
@@ -231,15 +231,15 @@ pub fn uncompress<R: io::Read + io::Seek>(
     Err(ContextualCause::from(ArchiveError::NotArchive))
 }
 
-/// Return member names in archive order.
+/// Collects the member names in archive order.
 ///
 /// # Errors
 ///
-/// - [`ArchiveError::NotArchive`] for foreign bytes.
-/// - [`ArchiveError::BackendCorrupt`] for corrupt archives and cut streams.
-/// - [`ArchiveError::PasswordLocked`] for locked archives.
-/// - [`ArchiveError::AlgorithmUnknown`] for unknown features and methods.
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`ArchiveError::NotArchive`] when the bytes hold no archive.
+/// - [`ArchiveError::BackendCorrupt`] when the archive is corrupt or a stream ends early.
+/// - [`ArchiveError::PasswordLocked`] when the archive is locked.
+/// - [`ArchiveError::AlgorithmUnknown`] when the archive uses an unknown feature.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 pub fn names<R: io::Read + io::Seek>(mut reader: R) -> ContextualResult<Vec<String>> {
     let head = peek_head(&mut reader)?;
     if is_zip(&head) {
@@ -251,11 +251,11 @@ pub fn names<R: io::Read + io::Seek>(mut reader: R) -> ContextualResult<Vec<Stri
     Err(ContextualCause::from(ArchiveError::NotArchive))
 }
 
-/// Read one head window and restore the cursor.
+/// Reads the head bytes and restores the cursor position.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::FilesystemError`] for denied access and missing input.
+/// - [`confit_core::error::FilesystemError`] when access is denied or the input is missing.
 fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> ContextualResult<Vec<u8>> {
     let pos = reader.stream_position()?;
     let mut head = Vec::with_capacity(HEAD_LEN);
@@ -267,17 +267,17 @@ fn peek_head<R: io::Read + io::Seek>(reader: &mut R) -> ContextualResult<Vec<u8>
     Ok(head)
 }
 
-/// Report whether zip bytes fill one head window.
+/// Returns whether the head bytes hold a zip container.
 fn is_zip(head: &[u8]) -> bool {
     head.starts_with(&ZIP_LOCAL_MAGIC) || head.starts_with(&ZIP_EMPTY_MAGIC)
 }
 
-/// Report whether gzip bytes fill one head window.
+/// Returns whether the head bytes hold a gzip stream.
 fn is_gzip(head: &[u8]) -> bool {
     head.starts_with(&GZIP_MAGIC)
 }
 
-/// Report whether tar bytes fill one head window.
+/// Returns whether the head bytes hold a tar tag.
 fn is_tar_tag(head: &[u8]) -> bool {
     head.get(TAR_MAGIC_OFFSET..TAR_MAGIC_OFFSET + TAR_MAGIC.len())
         .is_some_and(|tag| tag == TAR_MAGIC)

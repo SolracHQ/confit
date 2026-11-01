@@ -1,5 +1,4 @@
-//! Document
-//! Desired state payloads reaching disk.
+//! Desired state payloads that reach disk.
 
 pub mod rc;
 #[cfg(test)]
@@ -12,30 +11,81 @@ use confit_core::error::{ContextualResult, DocumentError, contextual};
 use confit_store::handles::ResourceHandle;
 use lua_binding::Shape;
 use lua_binding::error::{DecodeError, DecodeTag};
-use lua_binding::value::Decode;
-use mlua::{Lua, Value};
+use lua_binding::value::Hooked;
+use mlua::Lua;
 use serde::{Deserialize, Serialize};
 
 pub use rc::{RcData, RcEntry};
 
-/// Default unix permission bits for files without explicit modes.
+/// The unix permission bits used when a document carries no mode.
 pub const DEFAULT_FILE_MODE: u32 = 0o644;
 
-/// Serialization format for structured documents.
+/// A file permission mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Shape)]
+#[serde(transparent)]
+#[shape(proxy = String)]
+pub struct FileMode {
+    /// The permission bits.
+    bits: u32,
+}
+
+impl FileMode {
+    /// Builds a mode from permission bits.
+    pub const fn new(bits: u32) -> Self {
+        Self { bits }
+    }
+
+    /// Returns the permission bits.
+    pub const fn bits(&self) -> u32 {
+        self.bits
+    }
+}
+
+impl Default for FileMode {
+    fn default() -> Self {
+        Self::new(DEFAULT_FILE_MODE)
+    }
+}
+
+impl From<u32> for FileMode {
+    fn from(bits: u32) -> Self {
+        Self::new(bits)
+    }
+}
+
+impl Hooked<String> for FileMode {
+    fn decode(_lua: &Lua, text: String) -> Result<Self, DecodeError> {
+        parse_mode_bits(&text)
+            .map(Self::new)
+            .ok_or_else(|| DecodeError {
+                segments: Vec::new(),
+                reason: DecodeTag::ShapeMismatch {
+                    require: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
+                    found: format!("'{text}'"),
+                },
+            })
+    }
+
+    fn encode(&self, _lua: &Lua) -> mlua::Result<String> {
+        Ok(format!("{:o}", self.bits))
+    }
+}
+
+/// A serialization format for structured data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Shape)]
 #[serde(rename_all = "lowercase")]
 #[shape(table, str_alias)]
 pub enum StructuredFormat {
-    /// JSON format.
+    /// The format that writes JSON text.
     Json,
-    /// TOML format.
+    /// The format that writes TOML text.
     Toml,
-    /// YAML format.
+    /// The format that writes YAML text.
     Yaml,
 }
 
 impl StructuredFormat {
-    /// Return the lowercase format name.
+    /// Returns the name that text output uses for the format.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -44,7 +94,7 @@ impl StructuredFormat {
         }
     }
 
-    /// Parse a format name in any letter case.
+    /// Returns the format that the text selects, in any letter case.
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "json" => Some(Self::Json),
@@ -61,7 +111,7 @@ impl std::fmt::Display for StructuredFormat {
     }
 }
 
-/// Symbolic link content.
+/// A symbolic link.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct LinkDocument {
@@ -70,53 +120,53 @@ pub struct LinkDocument {
 }
 
 impl LinkDocument {
-    /// Render target display bytes for hashing.
+    /// Returns the target display text as bytes for hashing.
     pub fn bytes(&self) -> Vec<u8> {
         self.target.display().as_bytes().to_vec()
     }
 }
 
-/// Plain text file content.
+/// A plain text file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct TextDocument {
     /// The exact file text.
     #[shape(name = "text")]
     pub content: String,
-    /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
-    #[serde(default = "default_file_mode")]
-    #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
-    pub mode: u32,
-    /// Existence-only document flag.
+    /// The file permission mode.
+    #[serde(default)]
+    #[shape(default)]
+    pub mode: FileMode,
+    /// Whether the document checks the route for existence alone.
     #[serde(default)]
     #[shape(default)]
     pub unmanaged: bool,
 }
 
 impl TextDocument {
-    /// Render text bytes for hashing.
+    /// Returns the file text as bytes for hashing.
     pub fn bytes(&self) -> Vec<u8> {
         self.content.as_bytes().to_vec()
     }
 }
 
-/// Binary file content.
+/// A binary file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct OpaqueDocument {
     /// The opaque file handle.
     pub handle: ResourceHandle,
-    /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
-    #[serde(default = "default_file_mode")]
-    #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode, default = default_file_mode)]
-    pub mode: u32,
-    /// Existence-only document flag.
+    /// The file permission mode.
+    #[serde(default)]
+    #[shape(default)]
+    pub mode: FileMode,
+    /// Whether the document checks the route for existence alone.
     #[serde(default)]
     #[shape(default)]
     pub unmanaged: bool,
 }
 
-/// Structured file content.
+/// A structured data file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct StructuredDocument {
@@ -127,11 +177,11 @@ pub struct StructuredDocument {
 }
 
 impl StructuredDocument {
-    /// Render canonical bytes for hashing.
+    /// Returns the rendered data as bytes for hashing.
     ///
     /// # Errors
     ///
-    /// - [`DocumentError::RenderFailed`] for serializer failures.
+    /// - [`DocumentError::RenderFailed`] when the serializer fails.
     pub fn bytes(&self) -> ContextualResult<Vec<u8>> {
         match self.format {
             StructuredFormat::Toml => Ok(render_toml(&self.data)?.into_bytes()),
@@ -146,36 +196,35 @@ impl StructuredDocument {
 #[serde(untagged)]
 #[shape(table, untagged, name = "TreeMember")]
 pub enum TreeMember {
-    /// Bare handle with default mode.
+    /// A member that carries a handle and the default mode.
     Handle(ResourceHandle),
-    /// Handle with explicit mode.
+    /// A member that carries a handle and an explicit mode.
     Full {
         /// The file payload.
         handle: ResourceHandle,
-        /// File mode as octal (`755`) or symbolic (`rwxr-xr-x`) text.
-        #[shape(proxy = String, decode_hook = decode_mode, encode_hook = render_mode)]
-        mode: u32,
+        /// The file permission mode.
+        mode: FileMode,
     },
 }
 
 impl TreeMember {
-    /// Return the member payload.
+    /// Returns the handle that the member carries.
     pub fn handle(&self) -> &ResourceHandle {
         match self {
             Self::Handle(handle) | Self::Full { handle, .. } => handle,
         }
     }
 
-    /// Return the unix permission bits for the member file.
-    pub fn mode(&self) -> u32 {
+    /// Returns the mode that the member applies.
+    pub fn mode(&self) -> FileMode {
         match self {
-            Self::Handle(_) => DEFAULT_FILE_MODE,
+            Self::Handle(_) => FileMode::default(),
             Self::Full { mode, .. } => *mode,
         }
     }
 }
 
-/// Managed file set.
+/// A file tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct TreeDocument {
@@ -188,21 +237,21 @@ pub struct TreeDocument {
 #[serde(untagged)]
 #[shape(table, untagged)]
 pub enum Data {
-    /// Structured data file.
+    /// A document with structured data in one format.
     Structured(StructuredDocument),
-    /// Plain text file.
+    /// A document with exact text.
     Text(TextDocument),
-    /// Symbolic link.
+    /// A document that points at another route.
     Link(LinkDocument),
-    /// Per-shell rc data object.
+    /// A document with shell rc entries in three stages.
     Rc(RcData),
-    /// Raw binary file.
+    /// A document with bytes from a handle.
     Opaque(OpaqueDocument),
-    /// Managed file set.
+    /// A document with a set of file members under one route.
     Tree(TreeDocument),
 }
 
-/// One declared document.
+/// One configuration artifact, compared as one unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Shape)]
 #[shape(table)]
 pub struct Document {
@@ -215,13 +264,13 @@ pub struct Document {
 }
 
 impl Document {
-    /// Build one document from its path with its payload.
+    /// Pairs a destination route with its payload.
     pub fn new(path: Route, data: Data) -> Self {
         Self { path, data }
     }
 }
 
-/// Count changed members between two tree manifests.
+/// Counts the tree members that differ between two member maps.
 pub fn tree_changed(
     old: &BTreeMap<String, TreeMember>,
     new: &BTreeMap<String, TreeMember>,
@@ -243,50 +292,7 @@ pub fn tree_changed(
     changed
 }
 
-/// Render mode bits as octal digits.
-pub fn render_mode(_lua: &Lua, mode: &u32) -> mlua::Result<String> {
-    Ok(format!("{:o}", mode))
-}
-
-/// Return the default unix permission bits for decode.
-pub(crate) fn default_file_mode() -> u32 {
-    DEFAULT_FILE_MODE
-}
-
-/// Decode mode text into permission bits.
-///
-/// # Errors
-///
-/// - [`DecodeError`] for values outside octal or symbolic text.
-pub(crate) fn decode_mode(lua: &Lua, value: &Value) -> std::result::Result<u32, DecodeError> {
-    let text = String::decode(value, lua).map_err(|error| {
-        let found = match error.reason {
-            DecodeTag::ShapeMismatch { found, .. } => found,
-            DecodeTag::UnknownVariant { found, .. } => found,
-        };
-        DecodeError {
-            segments: Vec::new(),
-            reason: DecodeTag::ShapeMismatch {
-                require: "expected a string".to_owned(),
-                found,
-            },
-        }
-    })?;
-    parse_mode_bits(&text).map_or_else(
-        || {
-            Err(DecodeError {
-                segments: Vec::new(),
-                reason: DecodeTag::ShapeMismatch {
-                    require: "octal like '755' or symbolic like 'rwxr-xr-x'".to_owned(),
-                    found: format!("'{text}'"),
-                },
-            })
-        },
-        Ok,
-    )
-}
-
-/// Parse octal or symbolic permission text.
+/// Returns permission bits from octal or symbolic text.
 fn parse_mode_bits(text: &str) -> Option<u32> {
     if text.starts_with('d') {
         return None;
@@ -323,29 +329,29 @@ fn parse_mode_bits(text: &str) -> Option<u32> {
     }
 }
 
-/// Render one map to TOML text.
+/// Returns the TOML text of one map.
 ///
 /// # Errors
 ///
-/// - [`DocumentError::RenderFailed`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] when the serializer fails.
 fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
     toml::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }
 
-/// Render one map to pretty JSON text.
+/// Returns the JSON text of one map, with indentation.
 ///
 /// # Errors
 ///
-/// - [`DocumentError::RenderFailed`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] when the serializer fails.
 fn render_json(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
     serde_json::to_string_pretty(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }
 
-/// Render one map to YAML text.
+/// Returns the YAML text of one map.
 ///
 /// # Errors
 ///
-/// - [`DocumentError::RenderFailed`] for serializer failures.
+/// - [`DocumentError::RenderFailed`] when the serializer fails.
 fn render_yaml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
     noyalib::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }

@@ -1,4 +1,4 @@
-//! Collect profile documents in destination order.
+//! Collects profile documents.
 
 use std::collections::BTreeSet;
 
@@ -10,12 +10,13 @@ use confit_core::suggest;
 use crate::api::profile::Profile;
 use confit_model::document::Document;
 
-/// Reject repeated config names.
+/// Rejects repeated config names.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated names.
-pub(super) fn check_names(profile: &Profile) -> TerminalResult<()> {
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when two
+///   configs share a name.
+pub(super) fn validate_names(profile: &Profile) -> TerminalResult<()> {
     let mut names = BTreeSet::new();
     for config in &profile.configs {
         let name = config.name.as_str().to_owned();
@@ -38,12 +39,13 @@ pub(super) fn check_names(profile: &Profile) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Reject requirement edges showing unknown configs.
+/// Rejects unknown requirements.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] for edges showing unknown configs.
-pub(super) fn check_requirements(profile: &Profile) -> TerminalResult<()> {
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a requirement
+///   points at an unknown config.
+pub(super) fn validate_requirements(profile: &Profile) -> TerminalResult<()> {
     let mut present = BTreeSet::new();
     for config in &profile.configs {
         present.insert(config.name.as_str().to_owned());
@@ -65,11 +67,12 @@ pub(super) fn check_requirements(profile: &Profile) -> TerminalResult<()> {
     Ok(())
 }
 
-/// Collect one profile's documents in destination order.
+/// Collects one document per destination.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] for repeated destinations.
+/// - [`confit_core::error::kind::ErrorKind::DuplicateDocument`] when two
+///   documents share a destination.
 pub(super) fn dedupe(profile: &Profile) -> TerminalResult<Vec<Document>> {
     let mut seen = BTreeSet::new();
     let mut placed = Vec::new();

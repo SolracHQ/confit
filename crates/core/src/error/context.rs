@@ -1,23 +1,23 @@
-//! Typed error context for log records.
+//! Typed context for log records.
 //!
-//! Context names where and with what one operation ran.
+//! The context holds where an operation ran and the values it used.
 
 use std::path::PathBuf;
 
-/// Document source as a fixed fact.
+/// A document source.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Source {
     /// The source kind.
     pub kind: SourceKind,
     /// The source name.
     pub name: String,
-    /// The declaring location, when one names it.
+    /// The declaring location, when the source has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub declared_at: Option<String>,
 }
 
 impl Source {
-    /// Build one document source.
+    /// Builds a source for the log context.
     pub fn new(kind: SourceKind, name: impl Into<String>, declared_at: Option<String>) -> Self {
         Self {
             kind,
@@ -27,18 +27,18 @@ impl Source {
     }
 }
 
-/// Document source kind as a fixed fact.
+/// A document source kind.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
-    /// Profile source.
+    /// A source that comes from a profile.
     Profile,
-    /// Config source.
+    /// A source that comes from a config.
     Config,
 }
 
 impl std::fmt::Display for SourceKind {
-    /// Render one source kind.
+    /// Writes the source kind as text.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Profile => write!(formatter, "profile"),
@@ -47,207 +47,207 @@ impl std::fmt::Display for SourceKind {
     }
 }
 
-/// Typed error context for log records.
+/// The typed context of one failure.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ErrorContext {
-    /// Attempted filesystem path.
+    /// The path that the operation attempted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fs_path: Option<PathBuf>,
-    /// Canonical filesystem path.
+    /// The path after canonical resolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_path: Option<PathBuf>,
-    /// Cache path.
+    /// The path of the content cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_path: Option<PathBuf>,
-    /// Bundle path.
+    /// The path of the bundle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_path: Option<PathBuf>,
-    /// Bundle member.
+    /// The name of the bundle member.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
-    /// Module name.
+    /// The name of the module under load.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
-    /// Scope path.
+    /// The path of the active scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<PathBuf>,
-    /// Profile path.
+    /// The path of the profile file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<PathBuf>,
-    /// Project path.
+    /// The path of the project folder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<PathBuf>,
-    /// Document route.
+    /// The route of the open document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<String>,
-    /// Lookup id.
+    /// The id used for the lookup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Near-match candidates.
+    /// The candidates near the wanted name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<String>,
-    /// Request url.
+    /// The url of the request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Require cycle.
+    /// The cycle in the require chain.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cycle: Vec<String>,
-    /// Document sources.
+    /// The sources of the document.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<Source>,
-    /// Hook argv.
+    /// The argv of the hook.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub argv: Option<String>,
-    /// Slot name.
+    /// The name of the store slot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
-    /// Command name.
+    /// The name of the command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Conflicting flags.
+    /// The flags that conflict.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<String>,
-    /// Backend detail.
+    /// The detail from the backend.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Stack trace lines.
+    /// The lines of the stack trace.
     #[serde(skip_serializing)]
     pub trace: Vec<String>,
 }
 
 impl ErrorContext {
-    /// Build one empty error context.
+    /// Builds one empty context.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set the attempted filesystem path.
+    /// Records the path that the operation attempted.
     pub fn with_fs_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.fs_path = Some(path.into());
         self
     }
 
-    /// Set the canonical filesystem path.
+    /// Records the path after canonical resolution.
     pub fn with_canonical_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.canonical_path = Some(path.into());
         self
     }
 
-    /// Set the cache path.
+    /// Records the path of the content cache.
     pub fn with_cache_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.cache_path = Some(path.into());
         self
     }
 
-    /// Set the bundle path.
+    /// Records the path of the bundle.
     pub fn with_bundle_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.bundle_path = Some(path.into());
         self
     }
 
-    /// Set the bundle member.
+    /// Records the name of the bundle member.
     pub fn with_member(mut self, member: impl Into<String>) -> Self {
         self.member = Some(member.into());
         self
     }
 
-    /// Set the module name.
+    /// Records the name of the module under load.
     pub fn with_module(mut self, name: impl Into<String>) -> Self {
         self.module = Some(name.into());
         self
     }
 
-    /// Set the scope path.
+    /// Records the path of the active scope.
     pub fn with_scope(mut self, path: impl Into<PathBuf>) -> Self {
         self.scope = Some(path.into());
         self
     }
 
-    /// Set the profile path.
+    /// Records the path of the profile file.
     pub fn with_profile(mut self, path: impl Into<PathBuf>) -> Self {
         self.profile = Some(path.into());
         self
     }
 
-    /// Set the project path.
+    /// Records the path of the project folder.
     pub fn with_project(mut self, path: impl Into<PathBuf>) -> Self {
         self.project = Some(path.into());
         self
     }
 
-    /// Set the document route.
+    /// Records the route of the open document.
     pub fn with_document(mut self, route: impl Into<String>) -> Self {
         self.document = Some(route.into());
         self
     }
 
-    /// Set the lookup id.
+    /// Records the id used for the lookup.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
     }
 
-    /// Set the near-match candidates.
+    /// Records the candidates near the wanted name.
     pub fn with_suggestions(mut self, suggestions: Vec<String>) -> Self {
         self.suggestions = suggestions;
         self
     }
 
-    /// Set the request url.
+    /// Records the url of the request.
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
         self
     }
 
-    /// Set the require cycle.
+    /// Records the cycle in the require chain.
     pub fn with_cycle(mut self, chain: Vec<String>) -> Self {
         self.cycle = chain;
         self
     }
 
-    /// Set the hook argv.
+    /// Records the argv of the hook.
     pub fn with_argv(mut self, argv: impl Into<String>) -> Self {
         self.argv = Some(argv.into());
         self
     }
 
-    /// Set the slot name.
+    /// Records the name of the store slot.
     pub fn with_slot(mut self, slot: impl Into<String>) -> Self {
         self.slot = Some(slot.into());
         self
     }
 
-    /// Set the command name.
+    /// Records the name of the command.
     pub fn with_command(mut self, command: impl Into<String>) -> Self {
         self.command = Some(command.into());
         self
     }
 
-    /// Set the conflicting flags.
+    /// Records the flags that conflict.
     pub fn with_flags(mut self, flags: Vec<String>) -> Self {
         self.flags = flags;
         self
     }
 
-    /// Set the backend detail.
+    /// Records the detail from the backend.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }
 
-    /// Set the stack trace lines.
+    /// Records the lines of the stack trace.
     pub fn with_trace(mut self, trace: Vec<String>) -> Self {
         self.trace = trace;
         self
     }
 
-    /// Push one document source.
+    /// Adds one document source to the context.
     pub fn push_source(mut self, source: Source) -> Self {
         self.sources.push(source);
         self
     }
 
-    /// Report whether every slot stays unset.
+    /// Returns whether every slot is unset.
     pub fn is_empty(&self) -> bool {
         self.fs_path.is_none()
             && self.canonical_path.is_none()
@@ -272,14 +272,14 @@ impl ErrorContext {
             && self.sources.is_empty()
     }
 
-    /// Render the set slots as one JSON object for the log record.
+    /// Builds the log object from the slots that are set.
     pub fn log_value(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
 }
 
 impl std::fmt::Display for ErrorContext {
-    /// Render the log object for direct printing.
+    /// Prints the context as its log object.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_empty() {
             return write!(formatter, "no context");
