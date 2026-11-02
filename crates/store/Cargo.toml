@@ -20,7 +20,7 @@ noyalib.workspace = true
 serini = "0.3.0"
 flate2.workspace = true
 confit-core = { path = "../core" }
-confit-ui = { path = "../ui" }
+confit-events = { path = "../events" }
 crossbeam-channel.workspace = true
 
 [dev-dependencies]

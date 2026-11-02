@@ -13,7 +13,7 @@ use confit_store::state::Picker;
 
 use super::commit::{CommitRunner, WriteReport};
 use crate::cli::RestoreArgs;
-use confit_ui::UiHandles;
+use confit_events::EventHandles;
 
 /// Resolves the desired documents from one package, then commits them.
 ///
@@ -30,7 +30,7 @@ use confit_ui::UiHandles;
 pub fn run(
     args: &RestoreArgs,
     stores: Stores,
-    handles: UiHandles,
+    handles: EventHandles,
     hooks_dir: PathBuf,
 ) -> TerminalResult<WriteReport> {
     let positional = args.source.as_path();

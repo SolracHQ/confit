@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, WithContext};
 use confit_driver as driver;
+use confit_events::ProgressEvent;
+use confit_events::ToUi;
 use confit_model::document::{Data, Document, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
-use confit_ui::Event;
-use confit_ui::ToUi;
 use crossbeam_channel::Sender;
 
 use crate::render::render_document;
@@ -123,7 +123,7 @@ impl Writer {
 
     /// Sends one progress event for a written document.
     fn emit_written(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
             id: "write".to_owned(),
             label: format!("writing {done}/{total}: {}", destination.display()),
             done: u64::try_from(done).unwrap_or(u64::MAX),
@@ -291,7 +291,7 @@ impl Writer {
 
     /// Sends one progress event for a removed destination.
     fn emit_removed(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
             id: "remove".to_owned(),
             label: format!("removing {done}/{total}: {}", destination.display()),
             done: u64::try_from(done).unwrap_or(u64::MAX),
@@ -303,10 +303,10 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_events::ProgressEvent;
     use confit_model::document::{FileMode, TextDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
-    use confit_ui::Event;
 
     fn literal(path: &Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
@@ -347,7 +347,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![ToUi::Progress(Event::Progress {
+            vec![ToUi::Progress(ProgressEvent::Progress {
                 id: "remove".to_owned(),
                 label: format!("removing 1/1: {}", path.display()),
                 done: 1,
@@ -382,13 +382,13 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(Event::Progress {
+                ToUi::Progress(ProgressEvent::Progress {
                     id: "write".to_owned(),
                     label: format!("writing 1/2: {}", first.display()),
                     done: 1,
                     total: Some(2),
                 }),
-                ToUi::Progress(Event::Progress {
+                ToUi::Progress(ProgressEvent::Progress {
                     id: "write".to_owned(),
                     label: format!("writing 2/2: {}", second.display()),
                     done: 2,

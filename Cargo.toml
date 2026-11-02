@@ -8,7 +8,7 @@ members = [
   "crates/cli",
   "crates/store",
   "crates/runtime",
-  "crates/ui",
+  "crates/events",
   "lua-binding/crates/binding",
   "lua-binding/crates/binding-macros",
 ]

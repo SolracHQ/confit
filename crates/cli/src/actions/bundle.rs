@@ -6,12 +6,12 @@ use confit_core::error::{
     ErrorCause, FilesystemError, SlotReason, TerminalResult, contextual, error, kind::ErrorKind,
 };
 use confit_engine::Engine;
+use confit_events::EventHandles;
 use confit_runtime::bundle::Bundler;
 use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
-use confit_ui::UiHandles;
 
 use crate::cli;
 use crate::cli::BundleArgs;
@@ -28,7 +28,7 @@ pub struct BundleRunner<'a> {
     /// The stores that hold the project and the state.
     pub stores: Stores,
     /// The channels that carry the prints and the prompts.
-    pub handles: UiHandles,
+    pub handles: EventHandles,
 }
 
 impl BundleRunner<'_> {

@@ -5,10 +5,10 @@ use std::path::Path;
 use confit_core::error::{EvalError, TerminalResult, contextual, error, kind::ErrorKind};
 use mlua::Lua;
 
+use confit_events::EventHandles;
 use confit_model::document::Document;
 use confit_model::hook::Hook;
 use confit_store::Stores;
-use confit_ui::UiHandles;
 use lua_binding::value::Decode;
 
 use crate::api::profile::Profile;
@@ -31,12 +31,12 @@ pub struct Engine {
     /// The shared stores.
     stores: Stores,
     /// The renderer handles for Lua input.
-    handles: UiHandles,
+    handles: EventHandles,
 }
 
 impl Engine {
     /// Builds one engine.
-    pub fn new(stores: Stores, handles: UiHandles) -> Self {
+    pub fn new(stores: Stores, handles: EventHandles) -> Self {
         Self {
             lua: Lua::new(),
             stores,

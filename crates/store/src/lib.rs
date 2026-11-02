@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use confit_driver::paths::BaseDirs;
-use confit_ui::ToUi;
+use confit_events::ToUi;
 use crossbeam_channel::Sender;
 
 pub mod archive;

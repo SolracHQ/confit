@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use confit_core::error::{
     ContextualCause, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
 };
+use confit_events::{EventHandles, ToUi};
 use confit_model::arg::Arg;
 use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
@@ -12,7 +13,6 @@ use confit_runtime::snapshot;
 use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
 use confit_store::state::Picker;
-use confit_ui::{ToUi, UiHandles};
 
 use crate::presentation::difference;
 use crate::presentation::summary;
@@ -35,7 +35,7 @@ pub struct CommitRunner {
     /// The stores that hold the project and the state.
     pub stores: Stores,
     /// The channels that carry the prints and the prompts.
-    pub handles: UiHandles,
+    pub handles: EventHandles,
     /// The folder that holds one log file per hook.
     pub hooks_dir: PathBuf,
 }

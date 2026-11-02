@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use confit_driver::fs;
+use confit_events::{EventHandles, FromUi, ToUi};
 use confit_store::{StoreRoots, Stores};
-use confit_ui::{FromUi, ToUi, UiHandles};
 
 /// Builds stores under one temporary folder with a silent progress sink.
 pub fn test_stores(dir: &Path, project: &str) -> Stores {
@@ -23,14 +23,14 @@ pub fn test_stores(dir: &Path, project: &str) -> Stores {
 }
 
 /// Builds UI handles with no reader and no reply.
-pub fn test_handles() -> UiHandles {
+pub fn test_handles() -> EventHandles {
     let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
     let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
-    UiHandles { to_ui, from_ui }
+    EventHandles { to_ui, from_ui }
 }
 
 /// Builds UI handles whose answers come from a canned list.
-pub fn replying_handles(replies: Vec<String>) -> UiHandles {
+pub fn replying_handles(replies: Vec<String>) -> EventHandles {
     let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
     let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
     std::thread::spawn(move || {
@@ -44,7 +44,7 @@ pub fn replying_handles(replies: Vec<String>) -> UiHandles {
             }
         }
     });
-    UiHandles { to_ui, from_ui }
+    EventHandles { to_ui, from_ui }
 }
 
 /// Writes one file and creates the parent folders first.

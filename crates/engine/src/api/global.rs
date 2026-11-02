@@ -55,9 +55,9 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
+    use confit_events::{EventHandles, FromUi, ToUi};
     use confit_model::id::Id;
     use confit_store::{StoreRoots, Stores};
-    use confit_ui::{FromUi, ToUi, UiHandles};
     use lua_binding::value::Decode;
     use mlua::Value;
 
@@ -90,10 +90,10 @@ mod tests {
     }
 
     /// Builds silent renderer channels.
-    fn silent_handles() -> UiHandles {
+    fn silent_handles() -> EventHandles {
         let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
         let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
-        UiHandles { to_ui, from_ui }
+        EventHandles { to_ui, from_ui }
     }
 
     #[test]

@@ -9,8 +9,8 @@ use confit_core::error::{
     ContextualCause, ContextualResult, ErrorCause, FilesystemError, WithContext, contextual,
 };
 use confit_core::sha::{Sha, ShaWriter};
-use confit_ui::Event;
-use confit_ui::ToUi;
+use confit_events::ProgressEvent;
+use confit_events::ToUi;
 use crossbeam_channel::Sender;
 use sha2::Digest as _;
 
@@ -95,7 +95,7 @@ impl PoolStore {
         }
         staged.persist(&dest).with_cache_path(&dest)?;
         let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.to_ui.send(ToUi::Progress(Event::Progress {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
             id: "pool".to_owned(),
             label: format!("compressing pool entries ({done})"),
             done: u64::try_from(done).unwrap_or(u64::MAX),
@@ -324,7 +324,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![ToUi::Progress(Event::Progress {
+            vec![ToUi::Progress(ProgressEvent::Progress {
                 id: "pool".to_owned(),
                 label: "compressing pool entries (1)".to_owned(),
                 done: 1,
@@ -352,7 +352,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![ToUi::Progress(Event::Progress {
+            vec![ToUi::Progress(ProgressEvent::Progress {
                 id: "pool".to_owned(),
                 label: "compressing pool entries (1)".to_owned(),
                 done: 1,
@@ -380,7 +380,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![ToUi::Progress(Event::Progress {
+            vec![ToUi::Progress(ProgressEvent::Progress {
                 id: "pool".to_owned(),
                 label: "compressing pool entries (1)".to_owned(),
                 done: 1,

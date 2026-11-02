@@ -2,9 +2,9 @@
 
 use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kind::ErrorKind};
 use confit_engine::Engine;
+use confit_events::{EventHandles, ToUi};
 use confit_runtime::prepare;
 use confit_store::Stores;
-use confit_ui::{ToUi, UiHandles};
 
 use crate::cli;
 use crate::cli::CheckArgs;
@@ -22,7 +22,7 @@ pub struct CheckRunner<'a> {
     /// The stores that hold the project and the state.
     pub stores: Stores,
     /// The channels that carry the prints and the prompts.
-    pub handles: UiHandles,
+    pub handles: EventHandles,
 }
 
 impl CheckRunner<'_> {

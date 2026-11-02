@@ -20,7 +20,7 @@ log.workspace = true
 diffy.workspace = true
 sha2.workspace = true
 confit-core = { path = "../core" }
-confit-ui = { path = "../ui" }
+confit-events = { path = "../events" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

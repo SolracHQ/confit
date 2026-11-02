@@ -10,12 +10,12 @@ use confit_core::error::{
 };
 use confit_core::sha::Sha;
 use confit_driver as driver;
+use confit_events::ProgressEvent;
+use confit_events::ToUi;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
-use confit_ui::Event;
-use confit_ui::ToUi;
 use crossbeam_channel::Sender;
 
 use crate::checks::{Checks, Unmet, find_executable};
@@ -144,7 +144,7 @@ impl HookRunner {
                 .terminal(ErrorKind::RunHook)?;
             path_dirs.push(materialized);
         }
-        let _ = self.to_ui.send(ToUi::Progress(Event::Started {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Started {
             id: argv_text.clone(),
             label: format!("hook {position} of {total}: {argv_text}"),
         }));
@@ -160,7 +160,7 @@ impl HookRunner {
                 Error::new(kind, contextual.with_argv(&argv_text).with_fs_path(&log))
             })?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
-        let _ = self.to_ui.send(ToUi::Progress(Event::Finished {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Finished {
             id: argv_text.clone(),
             label: format!("hook {position} of {total} done: {argv_text}"),
         }));

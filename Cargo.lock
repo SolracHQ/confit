@@ -224,10 +224,10 @@ dependencies = [
  "confit-core",
  "confit-driver",
  "confit-engine",
+ "confit-events",
  "confit-model",
  "confit-runtime",
  "confit-store",
- "confit-ui",
  "crossbeam-channel",
  "diffy",
  "fern",
@@ -276,9 +276,9 @@ version = "0.9.0"
 dependencies = [
  "confit-core",
  "confit-driver",
+ "confit-events",
  "confit-model",
  "confit-store",
- "confit-ui",
  "crossbeam-channel",
  "log",
  "lua-binding",
@@ -289,6 +289,15 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "confit-events"
+version = "0.9.0"
+dependencies = [
+ "crossbeam-channel",
+ "indicatif",
+ "log",
 ]
 
 [[package]]
@@ -315,9 +324,9 @@ version = "0.9.0"
 dependencies = [
  "confit-core",
  "confit-driver",
+ "confit-events",
  "confit-model",
  "confit-store",
- "confit-ui",
  "crossbeam-channel",
  "diffy",
  "log",
@@ -336,7 +345,7 @@ version = "0.9.0"
 dependencies = [
  "confit-core",
  "confit-driver",
- "confit-ui",
+ "confit-events",
  "crossbeam-channel",
  "file-format",
  "flate2",
@@ -350,15 +359,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
-]
-
-[[package]]
-name = "confit-ui"
-version = "0.9.0"
-dependencies = [
- "crossbeam-channel",
- "indicatif",
- "log",
 ]
 
 [[package]]

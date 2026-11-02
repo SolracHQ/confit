@@ -10,8 +10,8 @@ use confit_core::error::{
     FilesystemError, WithContext, contextual,
 };
 use confit_core::sha::Sha;
-use confit_ui::Event;
-use confit_ui::ToUi;
+use confit_events::ProgressEvent;
+use confit_events::ToUi;
 use crossbeam_channel::Sender;
 
 use crate::handles::{ArchiveHandle, ResourceHandle};
@@ -189,7 +189,7 @@ impl ArchiveStore {
     /// - [`FilesystemError`] when the archive is unreadable or a cache write fails.
     fn unpack_all(&self, archive: &ArchiveHandle) -> ContextualResult<Map> {
         let archive_path = archive.path().to_path_buf();
-        let _ = self.to_ui.send(ToUi::Progress(Event::Started {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Started {
             id: archive_path.display().to_string(),
             label: format!("collecting artifacts: {}", archive_path.display()),
         }));
@@ -199,7 +199,7 @@ impl ArchiveStore {
         let map = Unpack::new(&self.resources, &archive_path).run(file)?;
         self.write_map(archive, &map)?;
         let total = map.len();
-        let _ = self.to_ui.send(ToUi::Progress(Event::Finished {
+        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Finished {
             id: archive_path.display().to_string(),
             label: format!(
                 "collecting artifacts: {} ({total} members)",
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn unpack_announces_the_member_count() {
-        use confit_ui::Event;
+        use confit_events::ProgressEvent;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
@@ -946,7 +946,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(events.len(), 2, "the unpack writes two events");
         match &events[1] {
-            ToUi::Progress(Event::Finished { id: seen, label }) => {
+            ToUi::Progress(ProgressEvent::Finished { id: seen, label }) => {
                 assert!(
                     label.contains("(2 members)"),
                     "the unpack counts every member: {label}"

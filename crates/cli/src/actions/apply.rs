@@ -6,9 +6,9 @@ use confit_core::error::{
     FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
 };
 use confit_engine::Engine;
+use confit_events::EventHandles;
 use confit_runtime::prepare;
 use confit_store::Stores;
-use confit_ui::UiHandles;
 
 use super::commit::{CommitRunner, WriteReport};
 use crate::cli;
@@ -30,7 +30,7 @@ use crate::cli::ApplyArgs;
 pub fn run(
     args: &ApplyArgs,
     stores: Stores,
-    handles: UiHandles,
+    handles: EventHandles,
     hooks_dir: PathBuf,
 ) -> TerminalResult<WriteReport> {
     let path = cli::resolve_profile(&args.project, args.profile.as_deref());

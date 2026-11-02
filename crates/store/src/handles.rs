@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use crate::StoreRoots;
     use confit_driver::archive::{Algorithm, Builder, Level};
-    use confit_ui::{Event, ToUi};
+    use confit_events::{ProgressEvent, ToUi};
     use crossbeam_channel::Receiver;
     use mlua::Value;
 
@@ -495,7 +495,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(events.len(), 2, "the repeated unpack writes two events");
         match events.last() {
-            Some(ToUi::Progress(Event::Finished { label, .. })) => assert!(
+            Some(ToUi::Progress(ProgressEvent::Finished { label, .. })) => assert!(
                 label.contains("(2 members)"),
                 "the repeated unpack counts every member: {label}"
             ),

@@ -7,8 +7,8 @@ use confit_core::error::{
     ContentError, ContextualCause, ContextualResult, ErrorCause, WithContext, contextual,
 };
 use confit_core::sha::Sha;
-use confit_ui::Event;
-use confit_ui::ToUi;
+use confit_events::ProgressEvent;
+use confit_events::ToUi;
 use crossbeam_channel::Sender;
 
 use crate::handles::ResourceHandle;
@@ -110,10 +110,13 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
     fn run(&mut self) -> ContextualResult<ResourceHandle> {
-        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Started {
-            id: self.url.to_owned(),
-            label: format!("collecting artifacts: {}", self.url),
-        }));
+        let _ = self
+            .cache
+            .to_ui
+            .send(ToUi::Progress(ProgressEvent::Started {
+                id: self.url.to_owned(),
+                label: format!("collecting artifacts: {}", self.url),
+            }));
         if let Some(hit) = self.hit() {
             return hit;
         }
@@ -134,14 +137,17 @@ impl<'a> Fetch<'a> {
         let bytes = std::fs::metadata(&path)
             .map(|facts| usize::try_from(facts.len()).unwrap_or(0))
             .unwrap_or(0);
-        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Finished {
-            id: self.url.to_owned(),
-            label: format!(
-                "collecting artifacts: {} ({} cached)",
-                self.url,
-                human_bytes(bytes_as_u64(bytes))
-            ),
-        }));
+        let _ = self
+            .cache
+            .to_ui
+            .send(ToUi::Progress(ProgressEvent::Finished {
+                id: self.url.to_owned(),
+                label: format!(
+                    "collecting artifacts: {} ({} cached)",
+                    self.url,
+                    human_bytes(bytes_as_u64(bytes))
+                ),
+            }));
         match self.check(sha) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
@@ -185,14 +191,17 @@ impl<'a> Fetch<'a> {
         };
         self.check(&sha)?;
         self.write_index(&sha)?;
-        let _ = self.cache.to_ui.send(ToUi::Progress(Event::Finished {
-            id: self.url.to_owned(),
-            label: format!(
-                "collecting artifacts: {} ({})",
-                self.url,
-                human_bytes(bytes_as_u64(usize::try_from(self.bytes).unwrap_or(0)))
-            ),
-        }));
+        let _ = self
+            .cache
+            .to_ui
+            .send(ToUi::Progress(ProgressEvent::Finished {
+                id: self.url.to_owned(),
+                label: format!(
+                    "collecting artifacts: {} ({})",
+                    self.url,
+                    human_bytes(bytes_as_u64(usize::try_from(self.bytes).unwrap_or(0)))
+                ),
+            }));
         Ok(ResourceHandle::Cache(sha))
     }
 
@@ -200,12 +209,15 @@ impl<'a> Fetch<'a> {
     fn report(&mut self) {
         if self.bytes - self.reported >= PROGRESS_STEP_BYTES {
             self.reported = self.bytes;
-            let _ = self.cache.to_ui.send(ToUi::Progress(Event::Progress {
-                id: self.url.to_owned(),
-                label: progress_label(self.url, self.bytes, self.total),
-                done: self.bytes,
-                total: self.total,
-            }));
+            let _ = self
+                .cache
+                .to_ui
+                .send(ToUi::Progress(ProgressEvent::Progress {
+                    id: self.url.to_owned(),
+                    label: progress_label(self.url, self.bytes, self.total),
+                    done: self.bytes,
+                    total: self.total,
+                }));
         }
     }
 
@@ -495,11 +507,11 @@ mod tests {
                 assert_eq!(
                     events,
                     vec![
-                        ToUi::Progress(Event::Started {
+                        ToUi::Progress(ProgressEvent::Started {
                             id: URL.to_string(),
                             label: format!("collecting artifacts: {URL}"),
                         }),
-                        ToUi::Progress(Event::Finished {
+                        ToUi::Progress(ProgressEvent::Finished {
                             id: URL.to_string(),
                             label: format!("collecting artifacts: {URL} (5 B cached)"),
                         }),
@@ -538,27 +550,27 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(Event::Started {
+                ToUi::Progress(ProgressEvent::Started {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL}"),
                 }),
-                ToUi::Progress(Event::Finished {
+                ToUi::Progress(ProgressEvent::Finished {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL} (5 B)"),
                 }),
-                ToUi::Progress(Event::Started {
+                ToUi::Progress(ProgressEvent::Started {
                     id: FILE_URL.to_string(),
                     label: format!("collecting artifacts: {FILE_URL}"),
                 }),
-                ToUi::Progress(Event::Finished {
+                ToUi::Progress(ProgressEvent::Finished {
                     id: FILE_URL.to_string(),
                     label: format!("collecting artifacts: {FILE_URL} (6 B)"),
                 }),
-                ToUi::Progress(Event::Started {
+                ToUi::Progress(ProgressEvent::Started {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL}"),
                 }),
-                ToUi::Progress(Event::Finished {
+                ToUi::Progress(ProgressEvent::Finished {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL} (5 B cached)"),
                 }),
@@ -725,11 +737,11 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(Event::Started {
+                ToUi::Progress(ProgressEvent::Started {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL}"),
                 }),
-                ToUi::Progress(Event::Finished {
+                ToUi::Progress(ProgressEvent::Finished {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL} (5 B)"),
                 }),
@@ -755,11 +767,11 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(Event::Started {
+                ToUi::Progress(ProgressEvent::Started {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL}"),
                 }),
-                ToUi::Progress(Event::Finished {
+                ToUi::Progress(ProgressEvent::Finished {
                     id: URL.to_string(),
                     label: format!("collecting artifacts: {URL} (5 B cached)"),
                 }),
@@ -808,7 +820,7 @@ mod tests {
         }
         let mut seen: Vec<u64> = Vec::new();
         for event in receiver.try_iter() {
-            if let ToUi::Progress(Event::Progress { done, total, .. }) = event {
+            if let ToUi::Progress(ProgressEvent::Progress { done, total, .. }) = event {
                 assert_eq!(
                     total,
                     Some(raw.len() as u64),

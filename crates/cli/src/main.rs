@@ -13,8 +13,8 @@ use confit_cli::cli::{
     HOOKS_DIR_NAME, InitArgs, RestoreArgs,
 };
 use confit_core::error::TerminalResult;
+use confit_events::{EventHandles, Ui};
 use confit_store::{StoreRoots, Stores};
-use confit_ui::{Ui, UiHandles};
 
 fn main() {
     if let Err(error) = run() {
@@ -134,7 +134,7 @@ fn run() -> TerminalResult<()> {
 }
 
 /// Writes the bundle and prints the artifact path.
-fn run_bundle(args: &BundleArgs, handles: UiHandles) -> TerminalResult<()> {
+fn run_bundle(args: &BundleArgs, handles: EventHandles) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
     let stores = Stores::new(roots, handles.to_ui.clone());
@@ -149,7 +149,7 @@ fn run_bundle(args: &BundleArgs, handles: UiHandles) -> TerminalResult<()> {
 }
 
 /// Checks the project and prints the summary.
-fn run_check(args: &CheckArgs, handles: UiHandles, log_path: &Path) -> TerminalResult<()> {
+fn run_check(args: &CheckArgs, handles: EventHandles, log_path: &Path) -> TerminalResult<()> {
     let mut roots = StoreRoots::standard();
     roots.project_root = args.project.clone();
     let stores = Stores::new(roots, handles.to_ui.clone());
@@ -176,7 +176,7 @@ fn has_previous(stores: &Stores) -> bool {
 /// Applies the plan after the preview and the prompts.
 fn run_apply(
     args: &ApplyArgs,
-    handles: UiHandles,
+    handles: EventHandles,
     log_path: &Path,
     hooks_dir: &Path,
 ) -> TerminalResult<()> {
@@ -202,7 +202,7 @@ fn run_apply(
 /// Restores the package after the preview and the prompts.
 fn run_restore(
     args: &RestoreArgs,
-    handles: UiHandles,
+    handles: EventHandles,
     log_path: &Path,
     hooks_dir: &Path,
 ) -> TerminalResult<()> {
@@ -224,7 +224,7 @@ fn run_restore(
 }
 
 /// Exports the state to a bundle file or prints its manifest.
-fn run_export(args: &ExportArgs, handles: UiHandles) -> TerminalResult<()> {
+fn run_export(args: &ExportArgs, handles: EventHandles) -> TerminalResult<()> {
     let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
     let report = ExportRunner::run(args, stores)?;
     if let Some(dest) = report.dest {
@@ -236,7 +236,7 @@ fn run_export(args: &ExportArgs, handles: UiHandles) -> TerminalResult<()> {
 }
 
 /// Deletes the named state and its unreferenced entries.
-fn run_delete(args: &DeleteArgs, handles: UiHandles) -> TerminalResult<()> {
+fn run_delete(args: &DeleteArgs, handles: EventHandles) -> TerminalResult<()> {
     let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
     let report = delete::run(args, stores)?;
     anstream::println!(

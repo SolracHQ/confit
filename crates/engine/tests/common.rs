@@ -11,6 +11,7 @@ use confit_engine::Engine;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
 use confit_engine::api::profile::Profile;
+use confit_events::{EventHandles, FromUi, ToUi};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
@@ -22,7 +23,6 @@ use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
 use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
-use confit_ui::{FromUi, ToUi, UiHandles};
 use lua_binding::callable::Callable;
 use lua_binding::value::Decode;
 use mlua::{Function, Lua, Value};
@@ -720,7 +720,7 @@ pub fn test_engine(dir: &Path) -> Engine {
     );
     let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
     let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
-    Engine::new(stores, UiHandles { to_ui, from_ui })
+    Engine::new(stores, EventHandles { to_ui, from_ui })
 }
 
 /// Creates the project root.

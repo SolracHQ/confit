@@ -1,6 +1,6 @@
 //! Prompts one line.
 
-use confit_ui::UiHandles;
+use confit_events::EventHandles;
 use mlua::Lua;
 
 use lua_binding::lua_module;
@@ -25,8 +25,8 @@ impl Input {
 }
 
 /// Returns the renderer handles.
-fn handles_of(lua: &Lua) -> mlua::Result<UiHandles> {
-    match lua.app_data_ref::<UiHandles>() {
+fn handles_of(lua: &Lua) -> mlua::Result<EventHandles> {
+    match lua.app_data_ref::<EventHandles>() {
         Some(handles) => Ok(handles.clone()),
         None => Err(mlua::Error::RuntimeError(
             "the confit input is not installed".to_owned(),
@@ -37,7 +37,7 @@ fn handles_of(lua: &Lua) -> mlua::Result<UiHandles> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_ui::{FromUi, ToUi};
+    use confit_events::{FromUi, ToUi};
     use mlua::Value;
 
     fn fresh_lua(replies: Vec<String>) -> Lua {
@@ -55,7 +55,7 @@ mod tests {
             }
         });
         let lua = Lua::new();
-        let _ = lua.set_app_data(UiHandles { to_ui, from_ui });
+        let _ = lua.set_app_data(EventHandles { to_ui, from_ui });
         let input = Input::add(&lua).unwrap();
         lua.globals().set("input", input).unwrap();
         lua
