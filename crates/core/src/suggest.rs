@@ -1,7 +1,4 @@
 //! Near-match suggestions for unknown names.
-//!
-//! The distance follows Damerau-Levenshtein, so a swapped pair counts as one
-//! edit.
 
 /// The farthest edit distance that keeps a candidate.
 pub const MAX_SUGGESTION_DISTANCE: usize = 3;
@@ -10,7 +7,7 @@ pub const MAX_SUGGESTION_COUNT: usize = 5;
 
 /// Finds candidates near one wanted name.
 ///
-/// Candidates come nearest first, with ties broken by name.
+/// - Candidates come nearest first, with ties broken by name.
 pub fn nearby(wanted: &str, candidates: &[String]) -> Vec<String> {
     let mut scored: Vec<(usize, &str)> = candidates
         .iter()

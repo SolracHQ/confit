@@ -1,6 +1,4 @@
 //! Terminal errors shown to the user.
-//!
-//! One error joins the required operation, its cause, and its context.
 
 use super::cause::{ErrorCause, EvalError, HookRunError, ManifestError};
 use super::context::ErrorContext;

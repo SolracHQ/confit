@@ -21,10 +21,6 @@ pub enum ResourceHandle {
 
 impl Serialize for ResourceHandle {
     /// Writes the handle as its content hash.
-    ///
-    /// # Errors
-    ///
-    /// - when the serializer rejects the handle.
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -35,10 +31,6 @@ impl Serialize for ResourceHandle {
 
 impl<'de> Deserialize<'de> for ResourceHandle {
     /// Decodes one handle from its content hash.
-    ///
-    /// # Errors
-    ///
-    /// - when the hash is malformed.
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

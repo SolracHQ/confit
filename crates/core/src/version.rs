@@ -1,6 +1,4 @@
 //! Binary version triplet with manifest compatibility.
-//!
-//! Every version stamp in confit uses one triplet that moves with the binary.
 
 /// The binary version triplet.
 pub const VERSION: [u8; 3] = triplet(env!("CARGO_PKG_VERSION").as_bytes());

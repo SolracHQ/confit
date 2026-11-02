@@ -1,7 +1,4 @@
 //! Failure causes that carry where the operation ran.
-//!
-//! One contextual cause joins a failure with its location. A terminal layer
-//! adds the required operation.
 
 use super::cause::{ErrorCause, EvalError};
 use super::context::{ErrorContext, Source};

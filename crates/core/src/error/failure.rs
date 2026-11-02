@@ -1,6 +1,4 @@
 //! Non-blocking diff warnings.
-//!
-//! A warning holds a difference, and the run continues.
 
 use super::contextual::ContextualCause;
 

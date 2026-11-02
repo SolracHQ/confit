@@ -1,6 +1,4 @@
 //! Typed context for log records.
-//!
-//! The context holds where an operation ran and the values it used.
 
 use std::path::PathBuf;
 

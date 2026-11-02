@@ -1,5 +1,4 @@
-//! Worker threads send progress, plans, prints, and
-//! prompts to the render thread.
+//! Workers send progress, plans, prints, and prompts to the render thread.
 
 mod protocol;
 
@@ -73,8 +72,7 @@ impl EventHandles {
 
     /// Builds memory channels with no render thread.
     ///
-    /// Use it in tests. Prompt calls fail with a closed
-    /// channel error because no render thread answers.
+    /// - Prompt calls fail with a closed channel error.
     pub fn silent() -> Self {
         let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
         let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();

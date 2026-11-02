@@ -9,7 +9,7 @@ use super::ProcessOutput;
 
 /// Runs a command with an extended PATH and kills it on timeout.
 ///
-/// The file holds the partial output after a timeout kills the child.
+/// - The log holds the partial output after a timeout.
 ///
 /// # Errors
 ///

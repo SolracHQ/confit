@@ -8,7 +8,7 @@ use confit_core::error::FetchError;
 
 /// Opens a URL body as a stream with its total length.
 ///
-/// Each failure records the request URL in its context.
+/// - Each failure records the request URL in its context.
 ///
 /// # Errors
 ///

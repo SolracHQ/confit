@@ -1,7 +1,4 @@
 //! Terminal error kinds for required operations.
-//!
-//! A kind states the operation. A cause holds the failed result. The context
-//! holds where the operation ran.
 
 /// The required operation that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

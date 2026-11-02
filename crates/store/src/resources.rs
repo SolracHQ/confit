@@ -286,10 +286,6 @@ impl Resources {
 }
 
 /// Splits one relative path into checked components.
-///
-/// # Errors
-///
-/// - when the path is absolute, escaped, or empty.
 fn split_checked(raw: &str) -> std::result::Result<Vec<String>, String> {
     if raw.contains('\\') {
         return Err("expected a path without backslashes".to_owned());

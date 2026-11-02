@@ -1,7 +1,4 @@
 //! Failure causes for required operations.
-//!
-//! A cause holds the failed result, and its location lives in
-//! [`ErrorContext`](super::ErrorContext).
 
 use crate::sha::Sha;
 
