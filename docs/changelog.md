@@ -45,7 +45,7 @@
 - Added the 3-fonts example. The dotfiles tools moved to
   4-dotfiles.
 - Added stub generation from live faces. Stub files cover
-  `confit.fetch`, `confit.open`, `confit.template`,
+  `confit.fetch`, `confit.open`, `confit.render`,
   `confit.fact` and `confit.validate`. Committed copies
   refresh through `just stubs`.
 - Added the plugins folder mount to the test container as
@@ -118,13 +118,13 @@
 - Removed the core crate.
 - Removed the confit global. Profiles call `require`
   with `confit.fetch`, `confit.open`,
-  `confit.validate`, `confit.template` and `confit.fact`.
+  `confit.validate`, `confit.render` and `confit.fact`.
 - Removed the shells list. Profiles list rc documents
   beside configs now.
 - Removed the solrachq globals plugins. Core plugins moved
   to `plugins/_`. Profiles `require` them as dotted paths.
 - Removed the merge and template globals plugins.
-  `confit.template` renders templates now. `tab.clone`
+  `confit.render` renders templates now. `tab.clone`
   clones tables now.
 - Removed the `--root`, `--plugins` and `--re-fetch`
   flags. Project folders with `project.toml` replace them.

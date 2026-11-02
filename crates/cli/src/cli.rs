@@ -95,7 +95,7 @@ pub struct InitArgs {
     /// rewrite the core plugins folder under the target
     #[arg(long)]
     pub plugins: bool,
-    /// write the editor config beside the profile
+    /// refresh the editor config beside the profile
     #[arg(long)]
     pub lsp: bool,
 }

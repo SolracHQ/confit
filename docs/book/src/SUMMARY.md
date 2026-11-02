@@ -1,39 +1,34 @@
 # Summary
 
-# Start
+# Build
 
 - [Introduction](manual/introduction.md)
-- [Quickstart](manual/quickstart.md)
-
-# Write
-
-- [Profile](manual/profile.md)
-- [Config](manual/config.md)
-- [Document](manual/document.md)
-- [Shell lines](manual/shell-rc.md)
-- [Patch](manual/patch.md)
-- [Plugin](manual/plugin.md)
-
-# Run
-
+- [Setup](manual/setup.md)
+- [Shell](manual/shell.md)
+- [Packages](manual/packages.md)
+- [Shell init](manual/post-config.md)
+- [Binary](manual/binary.md)
+- [Trees](manual/trees.md)
+- [Templates](manual/templates.md)
+- [Plugins](manual/plugins.md)
 - [Machines](manual/machines.md)
-- [Applying safely](manual/applying.md)
-- [Troubleshooting](manual/troubleshooting.md)
+- [Safety](manual/safety.md)
 
-# Look up
+# Reference
 
-- [Reference](manual/reference.md)
-- [Philosophy](manual/philosophy.md)
-
-# Spec
-
-- [Spec](spec/index.md)
+- [Specification](spec/index.md)
 - [CLI](spec/cli.md)
-- [Plan](spec/plan.md)
-- [Difference](spec/drift.md)
-- [Apply](spec/apply.md)
-- [Storage](spec/storage.md)
+- [Project](spec/project.md)
+- [Profile](spec/profile.md)
 - [Documents](spec/documents.md)
-- [Lua](spec/lua.md)
+- [Patches](spec/patches.md)
+- [Conditions](spec/conditions.md)
+- [Hooks](spec/hooks.md)
+- [Lua surface](spec/lua.md)
+- [Plugins](spec/plugins.md)
+- [State](spec/state.md)
+- [Difference](spec/difference.md)
+- [Apply](spec/apply.md)
+- [Restore](spec/restore.md)
 - [Output](spec/output.md)
 - [Init](spec/init.md)

@@ -8,7 +8,7 @@ pub mod input;
 pub mod open;
 pub mod patch;
 pub mod profile;
-pub mod template;
+pub mod render;
 pub mod validate;
 
 use mlua::{Lua, Value};
@@ -22,7 +22,7 @@ use crate::api::fact::Fact;
 use crate::api::fetch::Fetch;
 use crate::api::input::Input;
 use crate::api::open::Open;
-use crate::api::template::Template;
+use crate::api::render::Render;
 use crate::api::validate::Validate;
 
 /// Builds the named builtin module.
@@ -50,7 +50,7 @@ pub fn builtin(lua: &Lua, name: &str) -> TerminalResult<Value> {
         Input::MODULE => Input::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
-        Template::MODULE => Template::add(lua)
+        Render::MODULE => Render::add(lua)
             .map_err(ContextualCause::from)
             .terminal(ErrorKind::LuaFailed),
         _ => error(

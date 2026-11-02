@@ -7,7 +7,7 @@ local bashrc = sugar.home(".bashrc")
 
 -- A config groups your changes under one name. Start with one
 -- per tool or area. Configs hold patches, which modify
--- documents. Run `confit plan` to preview, `confit apply`
+-- documents. Run `confit check` to preview, `confit apply`
 -- to write.
 local shell = {
 	name = id("shell"),

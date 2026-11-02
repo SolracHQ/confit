@@ -258,6 +258,10 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<
     let held = stored_plugins(lua);
     let fallback = root_real.join(PLUGIN_ROOT);
     let plugins = held.as_ref().map(|scope| &scope.dir).unwrap_or(&fallback);
+    let external = held
+        .as_ref()
+        .map(|scope| scope.allow_external)
+        .unwrap_or(false);
     let parts = map_name(name).terminal(ErrorKind::Evaluate)?;
     if parts.is_empty() {
         return error(
@@ -265,11 +269,13 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<
             contextual(FilesystemError::FileMissing).with_module(name),
         );
     }
-    let (base, scope, rest) = match parts.first() {
-        Some(first) if first == PLUGIN_ROOT => (plugins.as_path(), plugins.as_path(), &parts[1..]),
-        _ => (root.as_path(), root_real.as_path(), &parts[..]),
+    let (base, scope, rest, contained) = match parts.first() {
+        Some(first) if first == PLUGIN_ROOT => {
+            (plugins.as_path(), plugins.as_path(), &parts[1..], !external)
+        }
+        _ => (root.as_path(), root_real.as_path(), &parts[..], true),
     };
-    let path = match resolve(base, scope, rest) {
+    let path = match resolve(base, scope, rest, contained) {
         Ok(found) => found,
         Err(contextual) => match contextual.cause() {
             ErrorCause::EvalError(EvalError::RequireEscapesScope) => {
@@ -280,7 +286,7 @@ fn file_require(lua: &Lua, name: &str, caller: Option<&Path>) -> TerminalResult<
             }
         },
     };
-    if let Err(contextual) = audit(plugins, caller, &path) {
+    if !external && let Err(contextual) = audit(plugins, caller, &path) {
         return error(
             ErrorKind::Evaluate,
             contextual.with_module(name).with_fs_path(&path),
@@ -322,12 +328,17 @@ fn canonical_root(root: &Path) -> ContextualResult<PathBuf> {
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::EvalError::RequireEscapesScope`] when a name
-///   escapes the scope.
+/// - [`confit_core::error::EvalError::RequireEscapesScope`] when a contained
+///   path escapes the scope.
 /// - [`confit_core::error::FilesystemError::FileMissing`] when a file is
 ///   missing.
 /// - [`confit_core::error::FilesystemError`] when a file is unreadable.
-fn resolve(base: &Path, scope: &Path, parts: &[String]) -> ContextualResult<PathBuf> {
+fn resolve(
+    base: &Path,
+    scope: &Path,
+    parts: &[String],
+    contained: bool,
+) -> ContextualResult<PathBuf> {
     let mut direct = base.to_path_buf();
     for part in parts {
         direct.push(part);
@@ -347,7 +358,11 @@ fn resolve(base: &Path, scope: &Path, parts: &[String]) -> ContextualResult<Path
             return Err(ContextualCause::from(error).with_fs_path(&direct));
         }
     };
-    scoped(scope, found)
+    if contained {
+        scoped(scope, found)
+    } else {
+        Ok(found)
+    }
 }
 
 /// Splits one require name into parts.
@@ -905,6 +920,55 @@ mod tests {
             Ok(_) => panic!("expected an integer"),
             Err(error) => panic!("the require function loads a deep plugin path: {error}"),
         }
+    }
+
+    #[test]
+    fn external_plugin_symlinks_load_when_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let root = project_root(dir.path());
+        let outside = dir.path().join("shared");
+        let entry = outside.join("_").join("sugar");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return 9").unwrap();
+        let plugins = root.join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::os::unix::fs::symlink(outside.join("_"), plugins.join("_")).unwrap();
+        let lua = fresh_lua(&stores);
+        lua.set_app_data(PluginRoot {
+            dir: plugins,
+            allow_external: true,
+        });
+        match run(&lua, "return require(\"plugins._.sugar\")") {
+            Ok(Value::Integer(found)) => assert_eq!(found, 9),
+            Ok(_) => panic!("expected an integer"),
+            Err(error) => {
+                panic!("the require function loads a symlinked plugin when allowed: {error}")
+            }
+        }
+    }
+
+    #[test]
+    fn external_plugin_symlinks_fail_when_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let root = project_root(dir.path());
+        let outside = dir.path().join("shared");
+        let entry = outside.join("_").join("sugar");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return 9").unwrap();
+        let plugins = root.join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::os::unix::fs::symlink(outside.join("_"), plugins.join("_")).unwrap();
+        let lua = fresh_lua(&stores);
+        lua.set_app_data(PluginRoot {
+            dir: plugins,
+            allow_external: false,
+        });
+        assert!(
+            run(&lua, "return require(\"plugins._.sugar\")").is_err(),
+            "the scope rejects a symlinked plugin when denied"
+        );
     }
 
     #[test]

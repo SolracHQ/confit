@@ -11,6 +11,7 @@ mod hooks;
 pub mod manifest;
 pub mod prepare;
 mod render;
+pub mod snapshot;
 mod write;
 
 pub use checks::{Checks, DEFAULT_HOOK_TIMEOUT_SECS, Unmet, find_executable, unmet_names};

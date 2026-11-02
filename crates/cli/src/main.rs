@@ -164,6 +164,15 @@ fn run_check(args: &CheckArgs, handles: UiHandles, log_path: &Path) -> TerminalR
     Ok(())
 }
 
+/// Returns whether a previous entry exists.
+fn has_previous(stores: &Stores) -> bool {
+    stores
+        .states()
+        .list()
+        .map(|entries| entries.len() > 1)
+        .unwrap_or(false)
+}
+
 /// Applies the plan after the preview and the prompts.
 fn run_apply(
     args: &ApplyArgs,
@@ -180,7 +189,10 @@ fn run_apply(
         report.written,
         report.removed
     );
-    if report.written > 0 || report.removed > 0 {
+    if report.saved > 0 {
+        anstream::println!("saved: {} files, confit restore @!", report.saved);
+    }
+    if (report.written > 0 || report.removed > 0) && has_previous(&stores) {
         anstream::println!("restore: confit restore %1");
     }
     anstream::eprintln!("log: {}", log_path.display());
@@ -201,7 +213,10 @@ fn run_restore(
         report.written,
         report.removed
     );
-    if report.written > 0 || report.removed > 0 {
+    if report.saved > 0 {
+        anstream::println!("saved: {} files, confit restore @!", report.saved);
+    }
+    if (report.written > 0 || report.removed > 0) && has_previous(&stores) {
         anstream::println!("restore: confit restore %1");
     }
     anstream::eprintln!("log: {}", log_path.display());

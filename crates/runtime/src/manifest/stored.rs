@@ -16,7 +16,7 @@ use confit_store::state::StateStore;
 use super::Manifest;
 use confit_core::version::{self, VERSION};
 
-/// Loads the applied manifest and returns an empty manifest for an absent state.
+/// Loads the stored manifest and returns an empty manifest for absent history.
 ///
 /// # Errors
 ///
@@ -34,19 +34,16 @@ pub fn load(states: &StateStore) -> TerminalResult<Manifest> {
     }
 }
 
-/// Writes the applied state and adds it to the history.
+/// Stores the manifest.
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::StoreState`] when the manifest render or the state write fails.
+/// - [`confit_core::error::kind::ErrorKind::StoreState`] when the manifest render fails.
 /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] when the history rotation fails.
 pub fn store(states: &StateStore, manifest: &Manifest) -> TerminalResult<()> {
     let text = manifest.json().terminal(ErrorKind::StoreState)?;
-    let bytes = text.into_bytes();
-    let picker = Picker::Applied;
-    store_bytes(states, &picker, &bytes).terminal(ErrorKind::StoreState)?;
     states
-        .rotate(bytes.as_slice())
+        .rotate(text.as_bytes())
         .terminal(ErrorKind::RotateHistory)?;
     Ok(())
 }
@@ -127,7 +124,7 @@ fn empty() -> Manifest {
     }
 }
 
-/// Writes bytes to one state handle and skips the history.
+/// Writes bytes to one state handle.
 fn store_bytes(states: &StateStore, picker: &Picker, bytes: &[u8]) -> ContextualResult<()> {
     let handle = match states.resolve(picker) {
         Ok(handle) => handle,

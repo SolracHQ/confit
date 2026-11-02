@@ -1,191 +1,346 @@
 # CLI
 
-## Commands
-
-### plan
-
-```sh
-confit plan PROFILE [-o PATH | -o @name] [--root DIR] [--plugins DIR] [--re-fetch]
-```
-
-`confit plan` evaluates one profile file into documents and
-hooks and diffs difference against the fixed slot. The run previews
-by default. The positional holds the profile path.
-
-`-o PATH` writes a bundle file, adding `.cb` to names missing
-it. The match reads case-insensitively, so `plan.CB` keeps its
-spelling. `-o @name` writes a slot manifest under the plans
-folder and adds no suffix. Omitted output writes nothing;
-the run previews only.
-
-Stdout carries the summary every run. Stderr carries a `log: {path}` line. Failures exit 1.
-Plan-shaped failures print `confit: plan error: {message}` on
-stderr; remaining failures print `confit: {message}`. The
-prefix wraps command messages from every subcommand. Difference
-leaves the exit at 0.
-
-### apply
+Every run accepts one command and the two global flags. The global flags come
+before the command name.
 
 ```sh
-confit apply SOURCE [--force] [--root DIR] [--plugins DIR] [--re-fetch]
+confit [--logs-dir DIR] [--log-level LEVEL] COMMAND ...
 ```
 
-SOURCE is a required positional. Values starting with `@` or
-`%` load a slot manifest with preview and prompts. Values ending
-in `.cb` in any letter case load a bundle file and run from
-that file alone. The preview renders. Remaining values
-evaluate as a profile path in any extension, extensionless
-included. A missing profile path fails as a plan error:
+| Command | Purpose |
+| --- | --- |
+| `bundle` | evaluate a profile into a bundle or named state |
+| `check` | preview the profile against the machine |
+| `apply` | write the live project onto the machine |
+| `restore` | write one bundle or stored state onto the machine |
+| `export` | pack one state into a bundle or print its manifest |
+| `delete` | delete one named state and prune unreferenced content |
+| `init` | scaffold a project or refresh one generated target |
+
+The complete synopsis:
 
 ```sh
-apply reads no profile '{path}'
+confit bundle PROJECT [--profile FILE] -o PATH|@name
+confit check PROJECT [--profile FILE]
+confit apply PROJECT [--profile FILE] [--force]
+confit restore SOURCE [--force]
+confit export [PICKER] [-o PATH] [-m|--manifest]
+confit delete @name
+confit init [DIR] [--stubs] [--plugins] [--lsp]
 ```
 
-Slot failures carry the command name as an `apply: ` prefix.
-The preview stream and the prompt flow live on the apply
-page. With `--force`, the first confirmation prompt drops out.
-A fresh difference check ahead of writes still asks again.
+`PROJECT` is a folder. The default profile is `main.lua` inside that folder. A
+missing default profile fails with the message
+`Cannot load the project, the folder '{PROJECT}' is absent`. An explicit profile
+that is missing fails as an unreadable profile.
 
-Stdout carries `applied: {written} files, {removed} removed`,
-and `previous: {history path}`. The `previous:` line names
-the fresh history entry. Stderr carries a `log: {path}` line
-on success and failure runs. Failures exit 1 under the same
-`confit: ` shapes as plan. Difference leaves the exit at 0.
+`--profile FILE` resolves relative to the project folder. An absolute path is
+kept. A leading `~` expands before resolution. The [project](project.md) page
+states profile selection in full.
 
-### export
+Every path argument expands a leading `~` before use:
+
+- the project folder and the profile of `bundle`, `check`, and `apply`
+- the source of `restore`
+- the output of `bundle` and `export`
+- the folder of `init`
+- the value of `--logs-dir`
+
+A state picker stays literal. `@name` and `%N` are never paths.
+
+The run creates the logs folder and opens `confit.log` before it dispatches a
+command. A folder or file failure stops the run with exit 1.
+
+## bundle
 
 ```sh
-confit export [PICKER] [-o PATH] [-m | --manifest]
+confit bundle PROJECT [--profile FILE] -o PATH|@name
 ```
 
-The picker selects the slot. Omitted pickers read the applied
-slot. `@name` reads a named slot. `%N` reads history
-newest-first from 1. `-o PATH` writes a bundle file at the
-literal path, adding `.cb` to names missing it, in any letter
-case. Without `-o`, the name follows the slot: `applied.cb`,
-`{name}.cb`, or `prev-{N}.cb`. `-m` renders the manifest as
-pretty JSON on stdout instead and writes no bundle file. The
-JSON carries content hashes only; document bytes stay in the
-pool.
+| Flag | Value | Rule |
+| --- | --- | --- |
+| `-p`, `--profile` | file | defaults to `main.lua` |
+| `-o`, `--output` | path or `@name` | required |
 
-A file export answers with `export: {path}` on stdout.
-Manifest runs print the JSON alone to stdout. Export refuses `-o` and `--manifest`
-together:
+`bundle` evaluates the profile and builds the manifest. It does not preview the
+difference, prompt, or write a home document. Hooks are recorded in the manifest
+and do not run.
+
+A path output writes a bundle file. A path without a `.cb` extension gains it.
+An existing `.cb` or `.CB` extension is kept. The command prints the path:
+
+```text
+bundle: target/dotfiles.cb
+```
+
+An `@name` output writes a named state at `states/{name}.json` and prints the
+picker:
+
+```text
+bundle: @laptop
+```
+
+A named output stores only the manifest. It writes no content bytes. A restore
+reads content from the pool or the cache, so those bytes must already be there.
+A file output embeds the content that the manifest references.
+
+A name fails when it is empty, contains `/` or `\`, is `.` or `..`, or contains
+a NUL byte. A bare output that starts with `@` is a state. Any other output is a
+file.
+
+## check
 
 ```sh
-export: '-o' plus '--manifest' refuse together, pick one
+confit check PROJECT [--profile FILE]
 ```
 
-Picker failures carry the command name as an `export: `
-prefix. The exact shapes live under Pickers and slot names.
+`check` evaluates the profile, builds the manifest, and compares it with the
+applied state and with the disk. It writes the summary to stdout and the log
+path to stderr.
 
-### delete
+```text
+Resources
++ home('.bashrc'): rc
+  + alias ll = ls -l
+Summary
+Documents: 1 to add, 0 to change, 0 to destroy.
+log: /tmp/confit-4812/confit.log
+```
+
+A summary can include a difference section titled
+`Changes outside Confit will be overwritten on next apply`, then `Resources`,
+`Hooks`, and `Summary`. The `Documents:` line is always present. The `Hooks:`
+line appears when a hook changes. A first run compares the manifest with the
+disk. A later run compares it with the applied state.
+
+`check` never writes a home document, a state file, or a hook log. It writes the
+run log only. It exits 0 when the summary shows changes. The
+[output](output.md) page states the line formats.
+
+## apply
+
+```sh
+confit apply PROJECT [--profile FILE] [--force]
+```
+
+`apply` evaluates the profile, stores content in the pool, prints the preview,
+asks for confirmation, then writes.
+
+The preview is the same summary that `check` prints, and it goes to stderr. The
+prompt also goes to stderr:
+
+```text
+Apply these changes? Type 'yes' to continue:
+```
+
+The answer comes from stdin. A trimmed answer equal to `yes` proceeds. Any other
+answer prints `no confirmation, the run stops` to stderr, writes nothing, and
+exits 0 with these counts:
+
+```text
+applied: 0 files, 0 removed
+log: /tmp/confit-4812/confit.log
+```
+
+`--force` skips this first prompt. Before the write, the run checks the
+difference against the disk again. A changed difference prints its lines and
+asks again. `--force` does not skip this second prompt.
+
+After the confirmation, the run writes documents, removes dropped documents and
+tree members, stores the applied state, rotates history, prunes unreferenced
+pool entries, and runs the hooks. Hook lines go to stderr. Counts go to stdout:
+
+```text
+hook 1 of 2: mise install
+applied: 4 files, 1 removed
+restore: confit restore %1
+log: /tmp/confit-4812/confit.log
+```
+
+The `restore:` line appears when the written count or the removed count is above
+zero. It is the previous history entry, so the command undoes the run.
+
+When the run saves unmanaged files, it prints a saved line before the hint:
+
+```text
+saved: 3 files, confit restore @!
+```
+
+The line is the rescue slot. It prints only when the capture holds at
+least one file. [State](state.md) covers the slot.
+
+A failure during evaluation, writing, state storage, or a hook stops the run
+with exit 1. The [apply](apply.md) page states the write sequence.
+
+## restore
+
+```sh
+confit restore SOURCE [--force]
+```
+
+`SOURCE` takes one of three forms:
+
+| Form | Resolution |
+| --- | --- |
+| path ending in `.cb` | bundle file, case-insensitive extension |
+| `@name` | named state |
+| `@!` | rescue slot, the pre-run capture |
+| `%N` | history entry, previous runs, newest first from 1 |
+
+A source without `.cb` and without an `@` or `%` prefix fails as an invalid
+restore source. `restore` reads no project and accepts no profile. The bundle or
+state carries the manifest and its hooks.
+
+`restore` uses the apply sequence: preview, prompt, fresh difference check,
+write, store the applied state, rotate history, prune the pool, and run hooks.
+`--force` has the same meaning as for `apply`. Counts and the restore hint go to
+stdout:
+
+```text
+restored: 3 files, 0 removed
+restore: confit restore %1
+log: /tmp/confit-4812/confit.log
+```
+
+After a restore, the restored manifest is the applied state. The
+[restore](restore.md) page states bundle content rules.
+
+## export
+
+```sh
+confit export [PICKER] [-o PATH] [-m|--manifest]
+```
+
+| Argument | Rule |
+| --- | --- |
+| `PICKER` | `@name` or `%N`; default is applied |
+| `-o`, `--output` | bundle path; a missing `.cb` is added |
+| `-m`, `--manifest` | print the manifest as pretty JSON |
+
+`-o` and `--manifest` conflict. Both flags in one run are a usage error with
+exit 2.
+
+A file export reads the state and writes a bundle. The automatic output name
+sits in the current folder:
+
+| Picker | Name |
+| --- | --- |
+| applied | `applied.cb` |
+| `@name` | `{name}.cb` |
+| `%N` | `prev-{N}.cb` |
+
+The command prints the written path:
+
+```text
+export: applied.cb
+```
+
+`--manifest` prints the manifest as pretty JSON to stdout and prints no path
+line. Content for a bundle comes from the pool or the cache. A missing entry
+fails the run. A picker that names no stored state fails.
+
+## delete
 
 ```sh
 confit delete @name
 ```
 
-The positional names one slot with a leading `@`. Delete
-removes the named manifest first. A pool prune follows and
-drops entries unreferenced by the removal. The prune keeps entries
-still referenced by remaining slots.
+`delete` accepts only an `@name`. A bare name and `%N` fail. The command
+removes `states/{name}.json`, then removes every pool entry that no remaining
+state references. The applied state, the history entries, and the other named
+states keep their entries.
 
-Stdout prints the slot name and the pruned count:
-
-```sh
-delete: @{name} ({m} entries pruned)
+```text
+delete: @laptop (12 entries pruned)
 ```
 
-Shapes outside `@name` fail with the want named:
+`delete` writes no home document and asks no question. A missing name fails
+because the state does not exist.
+
+## init
 
 ```sh
-delete: '{value}' reads unsupported, want '@name'; history and the current slot never delete
+confit init [DIR] [--stubs] [--plugins] [--lsp]
 ```
 
-Absent slots fail as:
+`DIR` defaults to the current folder. A plain run scaffolds the profile, the
+project file, the stubs, the core plugins, and the editor config. The run
+refuses a present destination.
 
-```sh
-delete: '@{name}' reads absent
+```text
+init: site/main.lua (18 files)
 ```
 
-Names behind the sigil follow the slot-name rules below. `@`
-alone fails as `slot name reads empty`.
+`--stubs`, `--plugins`, and `--lsp` refresh one generated target and overwrite
+the present files. The plain scaffold does not run when a refresh flag is
+present. Flags combine, and each flagged target prints one line:
 
-### init
-
-```sh
-confit init [DIR]
+```text
+stubs: site/stubs (7 files)
+plugins: site/plugins (8 files)
+lsp: site/.luarc.json (1 files)
 ```
 
-`confit init` fills DIR with a fresh profile and editor
-stubs. Omitted DIR means the current folder. The stage flow
-and the clash matrix live on the init page.
+The [init](init.md) page states the scaffold contents and the clash rules.
 
 ## Global flags
 
-Three flags tune the run:
-
-- `--root DIR` sets the require base for plan and apply runs. Omitted roots fall back to the profile parent, then to the current folder.
-- `--plugins DIR` sets the plugin folder shaped `{user}/{name}/plugin.lua`. Omitted plugin folders fall back to `{root}/plugins`.
-- `--re-fetch` refetches remotes past the sidecar cache. Omitted runs trust the sidecar cache.
-
-The three flags ride plan and apply only.
-
-`--log-file PATH` sets the log path for the run. Omitted log
-paths resolve to a per-process file named `confit-{pid}.log`
-under the OS temp folder. Collision lines land in the log
-file; the run prints the path after the summary. `--log-level
-LEVEL` controls verbosity. Levels span `off`, `error`, `warn`,
-`info`, `debug`, `trace`, matched in any letter case. Omitted
-levels mean `warn`. Version output answers `-V` and
-`--version` with `confit {version}`.
-
-Every path arg expands one leading `~` against the home
-folder. Bare `~` and `~/`-led values resolve; all other
-values pass through untouched. The expansion covers the plan
-profile, `--root`, `--plugins`, plan `-o`, the apply source,
-the init dir, export `-o`, and `--log-file`. Slot pickers
-stay literal.
-
-## Pickers and slot names
-
-A picker names one stored manifest. Omitted pickers read the
-applied slot. An absent applied slot fails as:
-
 ```sh
-the applied slot reads absent, apply first
+confit --logs-dir DIR --log-level LEVEL COMMAND ...
 ```
 
-`@name` reads a named slot. An absent name fails as
-`'@{name}' reads absent`. `%N` reads history newest-first
-from 1. A non-number fails as:
+`--logs-dir DIR` sets the folder for `confit.log` and the `hooks` subfolder. A
+leading `~` expands. The flag wins over `CONFIT_LOG_DIR`. The environment
+variable applies when the flag is absent. The default is the OS temp folder and
+`confit-{pid}`.
 
-```sh
-'{raw}' reads unsupported, want '%N' holding a number from 1
-```
+`--log-level LEVEL` accepts `off`, `error`, `warn`, `info`, `debug`, and
+`trace`. The default is `warn`. The level filters the messages in `confit.log`.
+The command output on stdout and stderr does not change.
 
-A pick past the stored count fails as:
+## Pickers and state names
 
-```sh
-'{raw}' reads out of range, holding {total} stored manifests
-```
+A picker selects one stored manifest:
 
-Bare values fail as:
+| Picker | File |
+| --- | --- |
+| applied | newest file under `history` |
+| `@name` | `states/{name}.json` |
+| `%N` | the Nth previous file under `history`, newest first |
 
-```sh
-'{raw}' reads unsupported, want '%N', '@name', or nothing
-```
+A name is one path component. It is non-empty, with no `/` or `\`, and is
+not `.` or `..`. A NUL byte fails. The store adds `.json` to the name.
 
-Apply prefixes each shape with `apply: `, export with
-`export: `. Names hold one normal path component with no
-separators. Refusals read:
+`%N` accepts a decimal number from 1 through the count of previous entries.
+The store keeps five previous entries. `%0` fails as an out-of-range slot. A
+number past the oldest entry fails.
 
-```sh
-slot name reads empty
-slot name '{name}' holds separators
-slot name '{name}' reads unsupported
-```
+`bundle -o` accepts only `@name` among the pickers. `delete` accepts only
+`@name`.
+`export` accepts the default applied state, `@name`, and `%N`. `restore`
+accepts `@name`, `%N`, and a bundle path. A picker is literal text; it does not
+expand a leading `~`.
 
-Empty names hit the first shape, separator carriers the
-second, dot segments, NUL, and other non-normal
-components the third.
+## Streams and exits
+
+| Command | stdout | stderr |
+| --- | --- | --- |
+| `bundle` | `bundle: {path}` or `bundle: @name` | `log:` on failure |
+| `check` | the summary | `log: {path}` |
+| `apply` | counts, restore hint | preview, hook lines, prompt, `log:` |
+| `restore` | counts, restore hint | preview, hook lines, prompt, `log:` |
+| `export` | `export: {path}` or the manifest | `log:` on failure |
+| `delete` | `delete: @{name} ({n} pruned)` | `log:` on failure |
+| `init` | one line per target | `log:` on failure |
+
+The prompt goes to stderr and the answer comes from stdin. A result line goes to
+stdout.
+
+Exit 0 means success. A declined `apply` or `restore` exits 0 and writes
+nothing. `check` exits 0 when the summary shows changes.
+
+Exit 1 means a failed run. The run prints `log: {path}` and an `error:` line to
+stderr, then an optional closing hint.
+
+Exit 2 means a usage error from the argument parser. The message and the usage
+line go to stderr. No log file is written. `--help` and `--version` exit 0.

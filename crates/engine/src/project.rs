@@ -69,6 +69,8 @@ impl Default for StubConf {
 pub struct PluginRoot {
     /// The canonical plugin folder.
     pub dir: PathBuf,
+    /// Whether plugin files may resolve outside the project root.
+    pub allow_external: bool,
 }
 
 impl Project {
@@ -170,7 +172,10 @@ impl Project {
                     .with_scope(&dir),
             );
         }
-        Ok(PluginRoot { dir })
+        Ok(PluginRoot {
+            dir,
+            allow_external: self.plugins.allow_external_folders,
+        })
     }
 }
 

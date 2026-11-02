@@ -8,7 +8,7 @@ use crate::api::fetch::Fetch;
 use crate::api::global::Global;
 use crate::api::input::Input;
 use crate::api::open::Open;
-use crate::api::template::Template;
+use crate::api::render::Render;
 use crate::api::validate::Validate;
 
 /// Generates stubs from live shapes.
@@ -25,7 +25,7 @@ pub fn generate_stubs() -> ContextualResult<Vec<Stub>> {
         Validate::stub(),
         Fact::stub(),
         Input::stub(),
-        Template::stub(),
+        Render::stub(),
     ];
     for stub in &stubs {
         validate_stub_parse(&stub.module, &stub.text)?;

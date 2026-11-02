@@ -1,88 +1,199 @@
-# Scaffold a project
+# Init
 
-The init command fills a target folder with one profile and
-editor stubs. DIR defaults to the current folder. One leading
-`~` expands against the home folder before parsing.
+`init` scaffolds a project folder from resources in the binary and from the live
+API shapes. A plain run writes the profile, the project file, the stubs, the
+core plugins, and the editor config. A refresh flag rewrites one generated
+target and overwrites it. Run `--lsp` again after changing a folder name in
+`project.toml`, so the editor config maps the new folders.
+
+```sh
+confit init [DIR]
+confit init [DIR] --stubs
+confit init [DIR] --plugins
+confit init [DIR] --lsp
+```
+
+`DIR` defaults to the current folder. The command reads `project.toml` under
+that folder before it writes. A missing file uses the default folders. The
+[project](project.md) page states the fields, and the [CLI](cli.md) page states
+the flags.
 
 ## Stages
 
-### Parse
+One run follows these stages:
 
-Parse reads DIR with `.` as the default and expands the tilde
-first. The profile path joins as `{DIR}/profile.lua`. Every
-stub path joins under the same DIR.
+1. Resolve `DIR`, or the current folder.
+2. Read `project.toml`. A malformed file fails before any write.
+3. Choose the plain scaffold or the refresh path. A refresh flag skips the plain
+   scaffold.
+4. For the plain scaffold, check every destination for a clash. A clash fails
+   before any write.
+5. Write the target files and create parent folders.
+6. Print one result line per target.
 
-### Clash check
+`init` does not evaluate the profile. A broken `main.lua` does not stop
+`init --stubs` or `init --lsp`. A failed write stops the run, and files that the
+run wrote before the failure stay.
 
-The check stats the `stubs` folder first, then the profile
-path and every stub path in write order. A present path
-aborts the run before any write lands. The exact message and
-the full path list live under Clash matrix.
+## Scaffold
 
-### Write profile
+The plain run writes five targets:
 
-The run writes the embedded starter profile to
-`{DIR}/profile.lua`. The starter evaluates to one rc document
-through the Lua framework.
+| Target | Path | Files |
+| --- | --- | --- |
+| profile | `{DIR}/main.lua` | 1 |
+| project | `{DIR}/project.toml` | 1 |
+| stubs | `{DIR}/{stubs.folder}/` | 7 |
+| plugins | `{DIR}/{plugins.folder}/` | 8 |
+| lsp | `{DIR}/.luarc.json` | 1 |
 
-### Write stubs
+With the default folders the run writes 18 files. The project file:
 
-The run copies each embedded stub to its target-relative path
-under DIR. Namespace stubs land under `stubs/`, plugin stubs
-sit under `plugins/` next to their plugin names. The full
-path list lives under Clash matrix.
+```toml
+version = "0.9.0"
 
-### Report
+[plugins]
+folder = "plugins"
+allow_external_folders = false
 
-The run reports the profile path and the written file count.
-The count covers the profile and every stub.
-
-## Clash matrix
-
-Each present path aborts the run before any write lands. The
-message shows the first clash:
-
-```sh
-init: '{path}' already exists, remove it or pick another target
+[stubs]
+folder = "stubs"
 ```
 
-The check covers these paths:
+A present `project.toml` refuses the plain run, so the scaffold writes the
+default file only. Write a custom file after the scaffold.
+
+The generated profile requires the `sugar` plugin, declares a config named
+`shell` with one patch, and returns one rc document at `~/.bashrc`:
+
+```lua
+local sugar = require("plugins._.sugar")
+
+local bashrc = sugar.home(".bashrc")
+
+local shell = {
+   name = id("shell"),
+   patches = {
+      sugar.patch(bashrc, function(document)
+         table.insert(document.config, sugar.alias("ll", "ls -l"))
+      end),
+   },
+}
+
+return {
+   documents = {
+      sugar.rc(bashrc),
+   },
+   configs = { shell },
+}
+```
+
+One stub file per builtin module:
 
 ```text
-{DIR}/profile.lua
-{DIR}/stubs
-{DIR}/stubs/confit.d.lua
-{DIR}/stubs/namespaces/config.d.lua
-{DIR}/stubs/namespaces/document.d.lua
-{DIR}/stubs/namespaces/hook.d.lua
-{DIR}/stubs/namespaces/patch.d.lua
-{DIR}/stubs/namespaces/paths.d.lua
-{DIR}/stubs/namespaces/plugin.d.lua
-{DIR}/stubs/namespaces/resources.d.lua
-{DIR}/stubs/namespaces/runtime.d.lua
-{DIR}/stubs/namespaces/utils.d.lua
-{DIR}/plugins/solrachq/mise/plugin.d.lua
-{DIR}/plugins/solrachq/nerd_fonts/plugin.d.lua
-{DIR}/plugins/solrachq/merge/plugin.d.lua
-{DIR}/plugins/solrachq/template/plugin.d.lua
+confit.d.lua
+confit.fact.d.lua
+confit.fetch.d.lua
+confit.input.d.lua
+confit.open.d.lua
+confit.render.d.lua
+confit.validate.d.lua
 ```
 
-The `stubs` folder check runs first, so a present folder
-reports the folder path. Remaining paths report in write
-order with the profile first. The check completes before the
-profile write. The abort
-exits 1 under the plan-error prefix, so stderr reads
-`confit: plan error: ` and the message.
+Eight plugin files:
 
-## Stdout
-
-Stdout answers with one line holding the profile path and the
-file count:
-
-```sh
-init: {profile} ({n} files)
+```text
+_/is/init.lua
+_/mise/init.lua
+_/mise/rc.lua
+_/mise/release.lua
+_/mise/spec.lua
+_/nerd_fonts/init.lua
+_/sugar/init.lua
+_/tab/init.lua
 ```
 
-The current scaffold writes 15 files: the profile and 14
-stubs. The run completes in one pass: parse, check, write,
-report. Stderr stays quiet.
+These plugin files are scaffold code. Edit them in the project. A refresh
+replaces them with the copy from the running binary.
+
+## Refresh flags
+
+| Flag | Target | Files |
+| --- | --- | --- |
+| `--stubs` | `{DIR}/{stubs.folder}` | 7 |
+| `--plugins` | `{DIR}/{plugins.folder}` | 8 |
+| `--lsp` | `{DIR}/.luarc.json` | 1 |
+
+A refresh writes every file of its target and overwrites a present file. It
+creates a missing folder. It does not write `main.lua` or `project.toml`.
+
+The flags combine. Each flagged target runs, and the lines appear in this order:
+stubs, plugins, lsp.
+
+`--stubs` generates the files from the live API of the running binary, so the
+stubs match the installed version. `--plugins` copies the core plugin tree.
+`--lsp` writes the editor config at the project root. The file carries the LuaLS
+settings schema in `$schema` with these values:
+
+```json
+{
+  "runtime": {
+    "version": "Lua 5.4",
+    "path": ["?.lua", "?/init.lua"]
+  },
+  "diagnostics": {
+    "globals": ["require"]
+  },
+  "workspace": {
+    "library": ["plugins", "stubs"]
+  }
+}
+```
+
+The library list is the plugin folder and the stubs folder from `project.toml`.
+The
+writer escapes a backslash and a double quote in a folder name.
+
+## Clash
+
+The plain scaffold refuses a present destination with this message:
+
+```text
+Cannot overwrite existing '{path}'
+```
+
+The stubs folder is checked first. An existing stubs folder refuses the run even
+when it is empty. The run then checks the profile, the project file, every
+stub file, every plugin file, and the editor config.
+
+The checks run before the first write. A clash writes nothing. The exit code is
+1, and stderr shows the log line and the error line.
+
+A plugin folder may exist when every plugin file is absent. The writer creates
+missing parent folders.
+
+A refresh flag skips the clash check. It overwrites the files of its target and
+leaves other files in the folder untouched.
+
+## Output
+
+A plain run prints the profile path and the file count:
+
+```text
+init: site/main.lua (18 files)
+```
+
+A refresh prints one line per target:
+
+```text
+stubs: site/stubs (7 files)
+plugins: site/plugins (8 files)
+lsp: site/.luarc.json (1 files)
+```
+
+The counts are fixed per target: 18 for the scaffold, 7 for the stubs, 8 for the
+plugins, and 1 for the editor config. The path is the target path under `DIR`.
+
+The result lines go to stdout. A successful run prints no log line. A failed run
+exits 1 and prints `log: {path}` and `error:` to stderr. A usage error exits 2
+before the logs folder is resolved.

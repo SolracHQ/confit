@@ -1,0 +1,207 @@
+# Patches
+
+A patch reads a live document or hook, mutates the table, and returns nothing.
+The engine merges the result over the assembled base. A patch declares one
+destination and one callback.
+
+```lua
+{
+   target = route("config", "mise/config.toml"),
+   format = "toml",
+   apply = function(document)
+      document.data.tools.bat = "0.24.0"
+   end,
+}
+```
+
+The callback edits fields directly. A returned value fails the plan. The live
+table is the whole write surface. A dotted-path setter and an append helper are
+absent.
+
+A patch table takes one of three shapes.
+
+| Shape | Marker | Callback argument |
+| --- | --- | --- |
+| Structured | `format` | `{ path, format, data }` |
+| Rc | route, no `format` | `{ path, profile, config, final }` |
+| Hook | a string `target` | the live hook table |
+
+## Destination
+
+A patch declares exactly one of `target` and `filter`. A table with both
+fields fails. A table with neither fails.
+
+`target` is one destination. A route points at a document. A string points at
+a hook id. The string target makes a hook patch.
+
+| Target | With `format` | Without `format` |
+| --- | --- | --- |
+| route | structured patch | rc patch |
+| string | fails | hook patch |
+
+`filter` takes a function over a route and returns a boolean.
+
+```lua
+{
+   filter = function(route)
+      return route.base == "home" and route.relative:match("%.sh$") ~= nil
+   end,
+   apply = function(document)
+      table.insert(document.config, {
+         alias = { name = "cat", expansion = "bat" },
+      })
+   end,
+}
+```
+
+A structured filter sees only structured documents. An rc filter sees only rc
+documents. A false result skips the document. A filter that matches
+nothing does nothing. A non-boolean result fails the plan.
+
+A target must be a document of the patch kind or a hook id. A missing target
+fails the plan with a nearby-name suggestion. A target of another kind fails
+the plan.
+
+A structured patch must take the same format as its base. A different format
+fails the plan.
+
+## Priority
+
+Structured and rc patches accept a `priority` field. Higher levels run first.
+
+| Level | Rank |
+| --- | --- |
+| `minor` | 0 |
+| `low` | 1 |
+| `normal` | 2 |
+| `high` | 3 |
+| `major` | 4 |
+
+The level reads in any letter case. The default is `normal`. An unknown name
+fails the plan.
+
+Declaration order breaks a tie. Declaration order is profile config order,
+then patch order inside one config.
+
+Hook patches carry no priority. They run in declaration order.
+
+## Structured patches
+
+A structured patch receives the live document with its format and data.
+
+```lua
+{
+   target = route("config", "starship.toml"),
+   format = "toml",
+   apply = function(document)
+      document.data.add_newline = false
+      document.data.palette = "catppuccin"
+   end,
+}
+```
+
+The callback writes through `document.data`. It cannot move `document.path`
+and cannot change `document.format`. Either change fails the plan.
+
+The base owns every leaf. A patch inserts a new leaf and owns it. A later
+write of a leaf that another writer owns is dropped, and one collision line
+records the loss.
+
+```text
+collision on config('starship.toml') "add_newline": "theme" loses, "base" wins
+```
+
+These rules decide the merge:
+
+- The first writer owns a leaf. The base is the first writer.
+- Lists are leaves. A write of a different list loses whole.
+- A table over a scalar leaf loses. The scalar stays.
+- An equal value does nothing.
+- A key that the patch omits stays in the document.
+- A patch cannot delete a base leaf. A removal is logged and the leaf stays.
+
+A patch cannot delete a key by dropping it from the returned table. The engine
+folds new values over the live table and never removes a live leaf.
+
+## Rc patches
+
+An rc patch receives the live rc document with its three sections.
+
+```lua
+{
+   target = route("home", ".bashrc"),
+   apply = function(document)
+      table.insert(document.config, {
+         alias = { name = "cat", expansion = "bat" },
+      })
+      table.insert(document.final, {
+         eval = { argv = { "zoxide", "init", "bash" } },
+      })
+   end,
+}
+```
+
+The callback reads and mutates `document.profile`, `document.config`, and
+`document.final`. It cannot move `document.path`.
+
+A named entry collides on its name within one section. The names come from
+`env`, `path`, and `alias`. An entry named `PATH` in `config` collides with
+any other `config` entry named `PATH`, whatever its kind. Sections do not
+collide with each other.
+
+The first writer owns a named entry. A later entry with the same name and a
+different body is dropped, and one collision line records the loss.
+
+```text
+collision on home('.bashrc') config "ll": "theme" loses, "base" wins
+```
+
+`eval`, `cmd`, and `source` carry no name. They accumulate in the returned
+order. An entry equal to a live entry replaces that entry instead of adding a
+duplicate.
+
+Entries keep the order of the returned section. A patch that leaves a base
+entry untouched keeps it in place.
+
+## Hook patches
+
+A hook patch takes a hook id as a plain string. The callback receives the live
+hook table.
+
+```lua
+{
+   target = "plugin:_/mise:install",
+   apply = function(hook)
+      hook.timeout = "20m"
+      hook.check = {
+         all = {
+            hook.check,
+            { exists = { route = route("data", "mise/shims/bat") } },
+         },
+      }
+   end,
+}
+```
+
+The callback mutates fields such as `argv`, `path`, `requires`, `when`,
+`check`, and `timeout`. The result is decoded again. A bad shape fails the
+plan. A target with no matching hook id fails the plan with a suggestion.
+
+Hooks do not merge by identity. One shared hook is one hook that other configs
+patch. See [hooks](hooks.md#identity).
+
+## Order
+
+The engine splits patches by kind and groups them by destination.
+
+1. Every structured destination runs, in first-seen order.
+2. Every rc destination runs, in first-seen order.
+3. The assembled documents join the unpatched documents and sort by display
+   path.
+
+Within one destination, patches sort by priority with the highest first. Equal
+priorities keep declaration order. First-seen order follows the profile config
+order and the patch order inside each config.
+
+Hook patches run over the collected hooks in declaration order, after the
+profile builds the hook list.

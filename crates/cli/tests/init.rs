@@ -44,6 +44,16 @@ fn init_writes_the_scaffold_with_stubs_and_plugins() {
 }
 
 #[test]
+fn init_scaffold_writes_the_editor_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = scaffold(dir.path());
+    assert!(
+        root.join(".luarc.json").exists(),
+        "the scaffold holds the editor config"
+    );
+}
+
+#[test]
 fn init_rejects_a_present_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());

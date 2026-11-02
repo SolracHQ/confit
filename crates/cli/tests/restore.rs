@@ -121,10 +121,12 @@ fn restore_history_returns_the_original() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-rollback-note", "original");
     apply_project(dir.path());
+    seed_project(dir.path(), "confit-restore-rollback-note", "second");
+    apply_project(dir.path());
     assert_eq!(
         home_bytes("confit-restore-rollback-note"),
-        b"original",
-        "the apply writes the original text"
+        b"second",
+        "the second apply writes the second text"
     );
     write_home("confit-restore-rollback-note", b"changed");
     restore_source(dir.path(), PathBuf::from("%1"));
@@ -132,5 +134,59 @@ fn restore_history_returns_the_original() {
         home_bytes("confit-restore-rollback-note"),
         b"original",
         "the history restore writes the original bytes"
+    );
+}
+
+#[test]
+fn restore_previous_history_returns_the_earlier_run() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path(), "confit-restore-prev-note", "first");
+    apply_project(dir.path());
+    seed_project(dir.path(), "confit-restore-prev-note", "second");
+    apply_project(dir.path());
+    assert_eq!(
+        home_bytes("confit-restore-prev-note"),
+        b"second",
+        "the second apply writes the second text"
+    );
+    restore_source(dir.path(), PathBuf::from("%1"));
+    assert_eq!(
+        home_bytes("confit-restore-prev-note"),
+        b"first",
+        "the previous history entry writes the first bytes"
+    );
+}
+
+#[test]
+fn restore_history_rejects_an_out_of_range_pick() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path(), "confit-restore-range-note", "only");
+    apply_project(dir.path());
+    let stores = common::test_stores(dir.path(), "site");
+    let args = RestoreArgs {
+        source: PathBuf::from("%1"),
+        force: true,
+    };
+    let hooks = dir.path().join("hooks");
+    assert!(
+        restore::run(&args, stores, common::test_handles(), hooks).is_err(),
+        "one entry leaves %1 out of range"
+    );
+}
+
+#[test]
+fn restore_history_rejects_slot_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path(), "confit-restore-zero-note", "only");
+    apply_project(dir.path());
+    let stores = common::test_stores(dir.path(), "site");
+    let args = RestoreArgs {
+        source: PathBuf::from("%0"),
+        force: true,
+    };
+    let hooks = dir.path().join("hooks");
+    assert!(
+        restore::run(&args, stores, common::test_handles(), hooks).is_err(),
+        "slot zero is internal and never parses"
     );
 }

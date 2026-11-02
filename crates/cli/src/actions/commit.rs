@@ -8,8 +8,10 @@ use confit_core::error::{
 use confit_model::arg::Arg;
 use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
+use confit_runtime::snapshot;
 use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
+use confit_store::state::Picker;
 use confit_ui::{ToUi, UiHandles};
 
 use crate::presentation::difference;
@@ -21,6 +23,8 @@ pub struct WriteReport {
     pub written: usize,
     /// The number of documents and tree members the run removed.
     pub removed: usize,
+    /// The number of files the run saved into the rescue slot.
+    pub saved: usize,
 }
 
 pub struct CommitRunner {
@@ -85,6 +89,7 @@ impl CommitRunner {
             return Ok(WriteReport {
                 written: 0,
                 removed: 0,
+                saved: 0,
             });
         }
         let (fresh, fresh_warnings) = prepare::refresh(&self.stores, &self.prepared)?;
@@ -105,6 +110,7 @@ impl CommitRunner {
                 return Ok(WriteReport {
                     written: 0,
                     removed: 0,
+                    saved: 0,
                 });
             }
         }
@@ -128,6 +134,19 @@ impl CommitRunner {
         let built = &self.prepared.desired;
         let previous = &self.prepared.previous;
         let changed = &self.prepared.changed;
+        let capture = snapshot::capture(&self.stores, &self.prepared)?;
+        let mut saved = 0;
+        if capture.files > 0 {
+            stored::store_named(
+                &self.stores.states(),
+                &Picker::Named(snapshot::RESCUE_NAME.to_owned()),
+                &capture.manifest,
+            )?;
+            saved = capture.files;
+        }
+        for skipped in &capture.skipped {
+            self.print(format!("skipped: {skipped}"));
+        }
         let writer = Writer {
             stores: self.stores.clone(),
             to_ui: self.handles.to_ui.clone(),
@@ -142,10 +161,14 @@ impl CommitRunner {
             .pool()
             .prune(&keep)
             .terminal(ErrorKind::PruneBlobs)?;
-        Ok(WriteReport { written, removed })
+        Ok(WriteReport {
+            written,
+            removed,
+            saved,
+        })
     }
 
-    /// Runs the built hooks after the files, the state, and the history land.
+    /// Runs the built hooks after the files and the history land.
     ///
     /// # Errors
     ///

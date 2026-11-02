@@ -13,11 +13,8 @@ use confit_driver as driver;
 use crate::StoreRoots;
 use crate::handles::StateHandle;
 
-/// The number of stored states kept before rotation drops the oldest.
-const HISTORY_KEPT: usize = 5;
-
-/// The file name for the applied state.
-const STATE_FILE: &str = "state.json";
+/// The number of history files kept before rotation drops the oldest.
+const HISTORY_KEPT: usize = 6;
 
 /// The folder name for history entries.
 const HISTORY_DIR: &str = "history";
@@ -32,7 +29,7 @@ pub enum Picker {
     Applied,
     /// A state selected by its stored name.
     Named(String),
-    /// A history entry numbered newest first from one.
+    /// A history entry.
     History(usize),
 }
 
@@ -51,16 +48,18 @@ impl FromStr for Picker {
                     return Err(contextual(SlotReason::NotNumber));
                 }
             };
+            if pick == 0 {
+                return Err(contextual(SlotReason::OutOfRange));
+            }
             return Ok(Self::History(pick));
         }
         Err(contextual(SlotReason::BareSlot))
     }
 }
 
-/// A store of state files, their history, and their picker choices.
+/// A store of history entries and named state files with picker choices.
 #[derive(Debug, Clone)]
 pub struct StateStore {
-    state: PathBuf,
     history: PathBuf,
     states: PathBuf,
 }
@@ -69,19 +68,24 @@ impl StateStore {
     /// Builds a state store under the config base.
     pub fn new(roots: &StoreRoots) -> Self {
         Self {
-            state: roots.config_base.join(STATE_FILE),
             history: roots.config_base.join(HISTORY_DIR),
             states: roots.config_base.join(STATES_DIR),
         }
     }
 
-    /// Returns the handle for the applied state file.
+    /// Returns the handle for the applied state.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] when the state file is absent.
+    /// - [`SlotReason::MissingEntry`] when the history is empty.
     pub fn applied(&self) -> ContextualResult<StateHandle> {
-        checked(self.state.clone())
+        let mut files = history_files(&self.history)?;
+        files.reverse();
+        files
+            .into_iter()
+            .next()
+            .map(StateHandle::new)
+            .ok_or_else(|| contextual(SlotReason::MissingEntry).with_fs_path(&self.history))
     }
 
     /// Returns the handle for one stored name.
@@ -101,7 +105,7 @@ impl StateStore {
     /// # Errors
     ///
     /// - [`SlotReason::MissingEntry`] when the state file is absent.
-    /// - [`SlotReason::OutOfRange`] when the pick is zero or past the newest entry.
+    /// - [`SlotReason::OutOfRange`] when the pick is out of range.
     /// - [`FilesystemError`] when the history folder is unreadable.
     pub fn resolve(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
@@ -112,10 +116,10 @@ impl StateStore {
             }
             Picker::History(pick) => {
                 let files = history_files(&self.history)?;
-                if *pick < 1 || *pick > files.len() {
+                if *pick >= files.len() {
                     return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
                 }
-                let Some(path) = files.into_iter().rev().nth(pick - 1) else {
+                let Some(path) = files.into_iter().rev().nth(*pick) else {
                     return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
                 };
                 Ok(StateHandle::new(path))
@@ -139,18 +143,14 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::BareSlot`] when the picker picks a history entry.
+    /// - [`SlotReason::BareSlot`] when the picker picks the applied slot or a
+    ///   history entry.
     /// - [`SlotReason::EmptyName`] when the name is empty.
     /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
     /// - [`FilesystemError`] when the state file fails to write.
     pub fn create(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
-            Picker::Applied => {
-                if !self.state.exists() {
-                    store_bytes(&self.state, &mut std::io::empty())?;
-                }
-                checked(self.state.clone())
-            }
+            Picker::Applied | Picker::History(_) => Err(contextual(SlotReason::BareSlot)),
             Picker::Named(name) => {
                 let path = self.named_path(name)?;
                 if !path.exists() {
@@ -158,7 +158,6 @@ impl StateStore {
                 }
                 checked(path)
             }
-            Picker::History(_) => Err(contextual(SlotReason::BareSlot)),
         }
     }
 
@@ -183,7 +182,7 @@ impl StateStore {
             .with_fs_path(path)
     }
 
-    /// Returns history handles in newest-first order.
+    /// Returns the history handles.
     ///
     /// # Errors
     ///
@@ -232,9 +231,11 @@ impl StateStore {
         Ok(())
     }
 
-    /// Returns whether this is the first run.
+    /// Returns whether the history is empty.
     pub fn is_first_run(&self) -> bool {
-        !self.state.exists()
+        history_files(&self.history)
+            .map(|files| files.is_empty())
+            .unwrap_or(true)
     }
 
     /// Returns the file path for one validated state name.
@@ -261,7 +262,7 @@ fn checked(path: PathBuf) -> ContextualResult<StateHandle> {
     Ok(StateHandle::new(path))
 }
 
-/// Returns stored files in oldest-first order.
+/// Returns the stored files.
 ///
 /// # Errors
 ///

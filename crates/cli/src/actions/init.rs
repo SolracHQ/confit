@@ -76,7 +76,8 @@ impl InitRunner<'_> {
     }
 }
 
-/// Writes the profile, the live stubs, the core plugins, and the project file.
+/// Writes the profile, the live stubs, the core plugins, the project file, and
+/// the editor config.
 ///
 /// # Errors
 ///
@@ -90,6 +91,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let stubs_dir = root.join(&project.stubs.folder);
     let project_path = root.join(PROJECT_FILE);
     let plugins_dir = root.join(&project.plugins.folder);
+    let (lsp_path, lsp_text) = render_lsp(root, project)?;
     let documents = generate_stubs().map_err(map_stubs)?;
     let stub_destinations: Vec<PathBuf> = documents
         .iter()
@@ -98,6 +100,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let mut destinations = vec![profile.clone(), project_path.clone()];
     destinations.extend(stub_destinations.iter().cloned());
     destinations.extend(PLUGIN_FILES.iter().map(|entry| plugins_dir.join(entry.0)));
+    destinations.push(lsp_path.clone());
     if stubs_dir.exists() {
         return error(
             ErrorKind::OverwriteRefused,
@@ -126,6 +129,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     for (relative, text) in PLUGIN_FILES.iter().copied() {
         write_file(&plugins_dir.join(relative), text.as_bytes())?;
     }
+    write_file(&lsp_path, lsp_text.as_bytes())?;
     Ok(InitReport {
         path: profile,
         written: destinations.len(),
@@ -193,6 +197,17 @@ const LSP_TEXT: &str = include_str!("../../resources/luarc.json");
 ///
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a config write fails.
 fn write_lsp(root: &Path, project: &Project) -> TerminalResult<InitReport> {
+    let (path, text) = render_lsp(root, project)?;
+    write_file(&path, text.as_bytes())?;
+    Ok(InitReport { path, written: 1 })
+}
+
+/// Renders the editor config that maps the plugin and stubs folders.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when the template fails to render.
+fn render_lsp(root: &Path, project: &Project) -> TerminalResult<(PathBuf, String)> {
     let path = root.join(LSP_FILE);
     let context = minijinja::context!(
         plugins => escape(&project.plugins.folder.display().to_string()),
@@ -209,8 +224,7 @@ fn write_lsp(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    write_file(&path, text.as_bytes())?;
-    Ok(InitReport { path, written: 1 })
+    Ok((path, text))
 }
 
 /// Escapes the backslashes and the double quotes in one string.

@@ -2,7 +2,7 @@
 local mise = require("plugins._.mise")
 local sugar = require("plugins._.sugar")
 local open = require("confit.open")
-local render = require("confit.template")
+local render = require("confit.render")
 
 local TEMPLATE = "resources/starship.toml.j2"
 

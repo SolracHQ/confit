@@ -1,4 +1,4 @@
---- @meta confit.template
+--- @meta confit.render
 --- Renders one template string with plain vars.
 --- @param template string The template text under rendering.
 --- @param vars any Plain vars for the template.

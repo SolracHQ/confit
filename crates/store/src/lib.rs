@@ -25,7 +25,7 @@ use state::StateStore;
 /// The base folders of one run.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
-    /// The base folder for state and history.
+    /// The base folder for history and named states.
     pub config_base: PathBuf,
     /// The base folder for the fetch cache and transient files.
     pub temp_base: PathBuf,

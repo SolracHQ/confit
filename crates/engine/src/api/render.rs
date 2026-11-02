@@ -4,10 +4,10 @@ use mlua::{Lua, Value};
 
 use lua_binding::lua_module;
 
-pub struct Template;
+pub struct Render;
 
-#[lua_module("confit.template")]
-impl Template {
+#[lua_module("confit.render")]
+impl Render {
     /// Renders one template string with plain vars.
     ///
     /// # Arguments
