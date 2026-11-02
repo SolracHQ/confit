@@ -72,7 +72,7 @@ The stages of one run are:
 
 1. Read `project.toml` and evaluate the profile.
 2. Assemble documents from the profile and its configs, then sort by path.
-3. Apply patches in priority order to live document and hook tables.
+3. Apply patches in priority order to working document and hook tables.
 4. Validate conditions and build one manifest.
 5. Compare the manifest with the applied state and with the disk.
 6. Write documents, remove dropped ones, store state, prune the pool, and run
@@ -99,7 +99,7 @@ Every path sits under the OS config folder and `confit`. On Linux the folder is
 until the name is free. `{sha}` is the 64 lowercase hex characters of the
 SHA-256 digest of the uncompressed content.
 
-Fetched bodies and archive members live under the OS temp folder and
+Fetched bodies and archive members sit under the OS temp folder and
 `confit/cache`:
 
 | Path | Contents |

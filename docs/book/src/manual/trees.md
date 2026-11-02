@@ -12,7 +12,7 @@ The naive way is one opaque document per file in a loop:
 ```lua
 --- more code here
 for _, name in ipairs(names) do
-   table.insert(documents, { path = folder:join(name), handle = handles[name] })
+   table.insert(documents, { path = folder:join(name), handle = handles[name]:ref() })
 end
 --- more code here
 ```
@@ -28,7 +28,7 @@ fills it:
 --- more code here
 local members = {}
 for _, name in ipairs(names) do
-   members[name] = handles[name]
+   members[name] = handles[name]:ref()
 end
 --- more code here
 local tree = { path = folder, members = members }
@@ -51,12 +51,12 @@ line, one hook. The tree holds the 96 members inside:
 
 ```lua
 members = {
-   ["JetBrainsMonoNerdFont-Regular.ttf"] = handle,
+   ["JetBrainsMonoNerdFont-Regular.ttf"] = handle:ref(),
 }
 ```
 
-A bare handle takes mode 644. Members sort by relative path. Apply writes each
-member under the destination folder.
+A ref without a mode takes 644. Members sort by relative path.
+Apply writes each member under the destination folder.
 
 The check counts the tree as one document:
 

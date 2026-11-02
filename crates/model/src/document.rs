@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use crate::routes::Route;
 use confit_core::error::{ContextualResult, DocumentError, contextual};
-use confit_store::handles::ResourceHandle;
+use confit_core::resource_ref::ResourceRef;
 use lua_binding::Shape;
 use lua_binding::error::{DecodeError, DecodeTag};
 use lua_binding::value::Hooked;
@@ -155,7 +155,7 @@ impl TextDocument {
 #[shape(table)]
 pub struct OpaqueDocument {
     /// The opaque file handle.
-    pub handle: ResourceHandle,
+    pub handle: ResourceRef,
     /// The file permission mode.
     #[serde(default)]
     #[shape(default)]
@@ -197,11 +197,11 @@ impl StructuredDocument {
 #[shape(table, untagged, name = "TreeMember")]
 pub enum TreeMember {
     /// A member that carries a handle and the default mode.
-    Handle(ResourceHandle),
+    Handle(ResourceRef),
     /// A member that carries a handle and an explicit mode.
     Full {
         /// The file payload.
-        handle: ResourceHandle,
+        handle: ResourceRef,
         /// The file permission mode.
         mode: FileMode,
     },
@@ -209,7 +209,7 @@ pub enum TreeMember {
 
 impl TreeMember {
     /// Returns the handle that the member carries.
-    pub fn handle(&self) -> &ResourceHandle {
+    pub fn handle(&self) -> &ResourceRef {
         match self {
             Self::Handle(handle) | Self::Full { handle, .. } => handle,
         }

@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_engine::Engine;
 use confit_engine::api::config::Config;
@@ -21,7 +22,6 @@ use confit_model::document::{
 use confit_model::hook::{Hook, HookTimeout};
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
-use confit_store::handles::ResourceHandle;
 use confit_store::{StoreRoots, Stores};
 use lua_binding::callable::Callable;
 use lua_binding::value::Decode;
@@ -346,7 +346,7 @@ pub const PATCHED: &str = r#"
         }
     "#;
 
-/// Lua profile mixing structured and rc patches over live targets.
+/// Lua profile mixing structured and rc patches over working targets.
 pub const MIXED_SPLIT: &str = r#"
         return {
             configs = {
@@ -403,7 +403,7 @@ pub const RC_OVER_STRUCTURED: &str = r#"
         }
     "#;
 
-/// Lua profile with mixed structured formats over one live target.
+/// Lua profile with mixed structured formats over one working target.
 pub const MIXED_FORMATS: &str = r#"
         return {
             configs = {
@@ -552,7 +552,7 @@ pub fn placed_opaque(stores: &Stores, relative: &str) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
         Data::Opaque(OpaqueDocument {
-            handle: ResourceHandle::Cache(Sha::hash(b"hi")),
+            handle: ResourceRef::new(Sha::hash(b"hi")),
             mode: FileMode::new(0o644),
             unmanaged: true,
         }),

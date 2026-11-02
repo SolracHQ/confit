@@ -1,4 +1,4 @@
-//! Scaffolds a project from live shapes and embedded resources.
+//! Scaffolds a project from current shapes and embedded resources.
 
 use std::path::{Path, PathBuf};
 
@@ -76,8 +76,8 @@ impl InitRunner<'_> {
     }
 }
 
-/// Writes the profile, the live stubs, the core plugins, the project file, and
-/// the editor config.
+/// Writes the profile, the current stubs, the core plugins, the project
+/// file, and the editor config.
 ///
 /// # Errors
 ///

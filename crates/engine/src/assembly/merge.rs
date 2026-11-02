@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use mlua::{Lua, Table, Value};
 
-use crate::api::patch::{RcLiveDocument, StructuredLiveDocument, StructuredPatch};
+use crate::api::patch::{RcWorkingDocument, StructuredPatch, StructuredWorkingDocument};
 use confit_model::document::{
     Data, Document, RcData, RcEntry, StructuredDocument, StructuredFormat,
 };
@@ -130,14 +130,14 @@ impl Assembler<'_> {
             let Some(found) = patch.structured() else {
                 continue;
             };
-            let live = StructuredLiveDocument {
+            let working = StructuredWorkingDocument {
                 path: destination.clone(),
                 body: StructuredDocument {
                     format: *format,
                     data: data.clone(),
                 },
             };
-            let table = live_view(self.lua(), &live)?;
+            let table = working_view(self.lua(), &working)?;
             match found.apply.call::<()>(self.lua(), (table.clone(),)) {
                 Ok(()) => {}
                 Err(fault) => {
@@ -147,7 +147,7 @@ impl Assembler<'_> {
                     return error(ErrorKind::LuaFailed, fault);
                 }
             }
-            let back = match StructuredLiveDocument::decode(&Value::Table(table), self.lua()) {
+            let back = match StructuredWorkingDocument::decode(&Value::Table(table), self.lua()) {
                 Ok(found) => found,
                 Err(_) => {
                     return error(
@@ -156,7 +156,7 @@ impl Assembler<'_> {
                     );
                 }
             };
-            validate_live_path(destination, &back.path)?;
+            validate_working_path(destination, &back.path)?;
             if back.body.format != *format {
                 return error(
                     ErrorKind::RenderManifest,
@@ -189,11 +189,11 @@ impl Assembler<'_> {
             let Some(found) = patch.rc() else {
                 continue;
             };
-            let live = RcLiveDocument {
+            let working = RcWorkingDocument {
                 path: destination.clone(),
                 body: document.clone(),
             };
-            let table = live_view(self.lua(), &live)?;
+            let table = working_view(self.lua(), &working)?;
             match found.apply.call::<()>(self.lua(), (table.clone(),)) {
                 Ok(()) => {}
                 Err(fault) => {
@@ -203,7 +203,7 @@ impl Assembler<'_> {
                     return error(ErrorKind::LuaFailed, fault);
                 }
             }
-            let back = match RcLiveDocument::decode(&Value::Table(table), self.lua()) {
+            let back = match RcWorkingDocument::decode(&Value::Table(table), self.lua()) {
                 Ok(found) => found,
                 Err(_) => {
                     return error(
@@ -212,20 +212,20 @@ impl Assembler<'_> {
                     );
                 }
             };
-            validate_live_path(destination, &back.path)?;
+            validate_working_path(destination, &back.path)?;
             document = merge_rc(display, &document, back.body, &mut owned, &patch.owner);
         }
         Ok(document)
     }
 }
 
-/// Encodes one live document.
+/// Encodes one working document.
 ///
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the shape falls
 ///   outside the table shape.
-fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
+fn working_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     match document.encode(lua) {
         Ok(Value::Table(table)) => Ok(table),
         Ok(_) => error(ErrorKind::LuaFailed, contextual(EvalError::LuaFailed)),
@@ -233,13 +233,13 @@ fn live_view(lua: &Lua, document: &impl Encode) -> TerminalResult<Table> {
     }
 }
 
-/// Rejects a moved live path.
+/// Rejects a moved working path.
 ///
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the path moves
 ///   off the target.
-fn validate_live_path(destination: &Route, back: &Route) -> TerminalResult<()> {
+fn validate_working_path(destination: &Route, back: &Route) -> TerminalResult<()> {
     if back != destination {
         return error(ErrorKind::LuaFailed, contextual(EvalError::LuaFailed));
     }
@@ -275,16 +275,16 @@ fn seed_leaves(
     }
 }
 
-/// Merges patch data over live data.
+/// Merges patch data over base data.
 fn merge(
     display: &str,
-    live: BTreeMap<String, serde_json::Value>,
+    base: BTreeMap<String, serde_json::Value>,
     owners: &mut BTreeMap<String, String>,
     next: BTreeMap<String, serde_json::Value>,
     owner: &str,
 ) -> BTreeMap<String, serde_json::Value> {
     let loser = owner;
-    let mut merged = live;
+    let mut merged = base;
     let missing: Vec<String> = merged
         .keys()
         .filter(|key| !next.contains_key(*key))
@@ -310,38 +310,41 @@ fn fold_entry(
     next_value: serde_json::Value,
     loser: &str,
 ) {
-    let Some(live) = merged.get_mut(&key) else {
+    let Some(found) = merged.get_mut(&key) else {
         seed_leaves(&next_value, &key, loser, owners);
         merged.insert(key, next_value);
         return;
     };
-    if *live == next_value {
+    if *found == next_value {
         return;
     }
-    fold_value(display, &key, live, next_value, owners, loser);
+    fold_value(display, &key, found, next_value, owners, loser);
 }
 
-/// Folds one patch value over a live value.
+/// Folds one patch value over a current value.
 fn fold_value(
     display: &str,
     path: &str,
-    live: &mut serde_json::Value,
+    current: &mut serde_json::Value,
     next: serde_json::Value,
     owners: &mut BTreeMap<String, String>,
     loser: &str,
 ) {
-    if *live == next {
+    if *current == next {
         return;
     }
-    let live_empty = live.as_object().map(|map| map.is_empty()).unwrap_or(false);
-    match (live, next) {
-        (serde_json::Value::Object(live_map), serde_json::Value::Object(next_map)) => {
-            fold_maps(display, path, live_map, next_map, owners, loser);
+    let empty = current
+        .as_object()
+        .map(|map| map.is_empty())
+        .unwrap_or(false);
+    match (current, next) {
+        (serde_json::Value::Object(map), serde_json::Value::Object(next_map)) => {
+            fold_maps(display, path, map, next_map, owners, loser);
         }
-        (live, found) => {
-            if live_empty {
+        (current, found) => {
+            if empty {
                 seed_leaves(&found, path, loser, owners);
-                *live = found;
+                *current = found;
                 return;
             }
             if let Some(winner) = winner_for(path, owners) {
@@ -353,34 +356,34 @@ fn fold_value(
     }
 }
 
-/// Folds one patch table over a live table.
+/// Folds one patch table over the current table.
 fn fold_maps(
     display: &str,
     path: &str,
-    live_map: &mut serde_json::Map<String, serde_json::Value>,
+    map: &mut serde_json::Map<String, serde_json::Value>,
     next_map: serde_json::Map<String, serde_json::Value>,
     owners: &mut BTreeMap<String, String>,
     loser: &str,
 ) {
-    let removed: Vec<String> = live_map
+    let removed: Vec<String> = map
         .keys()
         .filter(|key| !next_map.contains_key(*key))
         .cloned()
         .collect();
     for (key, next_value) in next_map {
         let child = format!("{path}.{key}");
-        if let Some(live) = live_map.get_mut(&key) {
-            if *live == next_value {
+        if let Some(found) = map.get_mut(&key) {
+            if *found == next_value {
                 continue;
             }
-            fold_value(display, &child, live, next_value, owners, loser);
+            fold_value(display, &child, found, next_value, owners, loser);
         } else {
             seed_leaves(&next_value, &child, loser, owners);
-            live_map.insert(key, next_value);
+            map.insert(key, next_value);
         }
     }
     for key in removed {
-        if let Some(found) = live_map.get(&key).cloned() {
+        if let Some(found) = map.get(&key).cloned() {
             let child = format!("{path}.{key}");
             log_removed(display, &found, &child, owners, loser);
         }
@@ -390,12 +393,12 @@ fn fold_maps(
 /// Logs the removed leaves.
 fn log_removed(
     display: &str,
-    live: &serde_json::Value,
+    removed: &serde_json::Value,
     path: &str,
     owners: &BTreeMap<String, String>,
     loser: &str,
 ) {
-    match live {
+    match removed {
         serde_json::Value::Object(map) => {
             for (key, item) in map {
                 let child = format!("{path}.{key}");
@@ -454,10 +457,10 @@ fn seed_section(entries: &[RcEntry], owned: &mut BTreeMap<String, String>) {
     }
 }
 
-/// Merges patch sections over live sections.
+/// Merges patch sections over the current sections.
 fn merge_rc(
     display: &str,
-    live: &RcData,
+    document: &RcData,
     next: RcData,
     owned: &mut CollisionOwners,
     owner: &str,
@@ -467,7 +470,7 @@ fn merge_rc(
         profile: merge_section(
             display,
             "profile",
-            &live.profile,
+            &document.profile,
             next.profile,
             &mut owned.profile,
             loser,
@@ -475,7 +478,7 @@ fn merge_rc(
         config: merge_section(
             display,
             "config",
-            &live.config,
+            &document.config,
             next.config,
             &mut owned.config,
             loser,
@@ -483,7 +486,7 @@ fn merge_rc(
         r#final: merge_section(
             display,
             "final",
-            &live.r#final,
+            &document.r#final,
             next.r#final,
             &mut owned.final_entries,
             loser,
@@ -491,7 +494,7 @@ fn merge_rc(
     }
 }
 
-/// Merges one patch section over its live entries.
+/// Merges one patch section over its previous entries.
 fn merge_section(
     display: &str,
     section: &str,
@@ -534,14 +537,14 @@ mod tests {
 
     #[test]
     fn distinct_nested_keys_merge_side_by_side() {
-        let live: BTreeMap<String, serde_json::Value> =
+        let base: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("tools".to_owned(), json!({"bat": "latest"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([(
             "tools".to_owned(),
             json!({"bat": "latest", "ripgrep": "latest"}),
         )]);
-        let merged = merge("home('config.json')", live, &mut owners, next, "second");
+        let merged = merge("home('config.json')", base, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -559,11 +562,11 @@ mod tests {
 
     #[test]
     fn same_leaf_twice_keeps_first_write() {
-        let live: BTreeMap<String, serde_json::Value> =
+        let base: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("tools".to_owned(), json!({"bat": "first"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([("tools".to_owned(), json!({"bat": "second"}))]);
-        let merged = merge("home('config.json')", live, &mut owners, next, "second");
+        let merged = merge("home('config.json')", base, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -574,11 +577,11 @@ mod tests {
 
     #[test]
     fn table_against_scalar_keeps_first_write() {
-        let live: BTreeMap<String, serde_json::Value> =
+        let base: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("tools".to_owned(), json!({"bat": "kept"}))]);
         let mut owners = BTreeMap::from([("tools.bat".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([("tools".to_owned(), json!("flat"))]);
-        let merged = merge("home('config.json')", live, &mut owners, next, "second");
+        let merged = merge("home('config.json')", base, &mut owners, next, "second");
         let tools = merged.get("tools").unwrap();
         assert_eq!(
             tools.get("bat").and_then(|item| item.as_str()),
@@ -588,11 +591,11 @@ mod tests {
 
     #[test]
     fn lists_keep_the_first_write_whole() {
-        let live: BTreeMap<String, serde_json::Value> =
+        let base: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("items".to_owned(), json!([1, 2]))]);
         let mut owners = BTreeMap::from([("items".to_owned(), "first".to_owned())]);
         let next = BTreeMap::from([("items".to_owned(), json!([3]))]);
-        let merged = merge("home('config.json')", live, &mut owners, next, "second");
+        let merged = merge("home('config.json')", base, &mut owners, next, "second");
         assert_eq!(merged.get("items"), Some(&json!([1, 2])));
         assert_eq!(owners.get("items").map(String::as_str), Some("first"));
     }

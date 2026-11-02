@@ -65,8 +65,8 @@
   returns nil with reason.
 - Changed opaque documents to blob refs with hashes.
   Bytes stream on write. Plan labels show hashes.
-- Changed blob payloads to seal at build. Decoded handles
-  seal into refs. Decode and validate compress nothing.
+- Changed blob payloads to refs at build. Decoded handles
+  produce refs. Decode and validate compress nothing.
 - Changed tree documents to member tables. Members map
   relative paths to resource handles or handle tables with
   a required mode. Bare handles take 644. Empty, absolute
@@ -432,7 +432,7 @@ Design spec: `docs/design/v0.5.md`.
 ## [0.4] - 2026-09-14
 
 Design spec: `docs/design/v0.4.md`. v0.3 was planned and half
-built, then superseded without sealing.
+built, then superseded with no release.
 
 ### Added
 

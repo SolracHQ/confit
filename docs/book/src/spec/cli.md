@@ -11,7 +11,7 @@ confit [--logs-dir DIR] [--log-level LEVEL] COMMAND ...
 | --- | --- |
 | `bundle` | evaluate a profile into a bundle or named state |
 | `check` | preview the profile against the machine |
-| `apply` | write the live project onto the machine |
+| `apply` | write the project onto the machine |
 | `restore` | write one bundle or stored state onto the machine |
 | `export` | pack one state into a bundle or print its manifest |
 | `delete` | delete one named state and prune unreferenced content |

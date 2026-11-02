@@ -42,8 +42,8 @@ local STARSHIP_BIN = route("home", ".local/bin/starship")
 local STARSHIP_TOML = route("config", "starship.toml")
 
 --- Builds the starship config from the pinned release and the base TOML.
----@param user_config table User keys winning only where the base holds none.
----@return Config Starship config for the profile configs array.
+---@param user_config table
+---@return Config
 return function(user_config)
 	local platform = fact("os") .. "/" .. fact("arch")
 	local release =
@@ -63,7 +63,7 @@ return function(user_config)
 	local config = {
 		name = id("starship"),
 		documents = {
-			{ path = STARSHIP_BIN, handle = binary, mode = "755" },
+			{ path = STARSHIP_BIN, handle = binary:ref(), mode = "755" },
 			{ path = STARSHIP_TOML, format = "toml", data = base },
 		},
 		patches = {
@@ -71,7 +71,7 @@ return function(user_config)
 				filter = function(route)
 					return route.base == "home" and route.relative:match(SHELL_PATTERN) ~= nil
 				end,
-				---@param document Document_Rc Live shell document under patching.
+				---@param document Document_Rc
 				apply = function(document)
 					local shell = document.path.relative:match(SHELL_PATTERN)
 					if not shell then
@@ -83,7 +83,7 @@ return function(user_config)
 			{
 				target = STARSHIP_TOML,
 				format = "toml",
-				---@param document Document_Structured Live TOML document under patching.
+				---@param document Document_Structured
 				apply = function(document)
 					for key, value in pairs(user_config) do
 						if base[key] == nil then

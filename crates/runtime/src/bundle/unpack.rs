@@ -179,7 +179,7 @@ impl<'a> Unpack<'a> {
         };
         let mut shas: BTreeSet<Sha> = BTreeSet::new();
         for handle in manifest.handles() {
-            shas.insert(handle.sha().clone());
+            shas.insert(*handle.sha());
         }
         for sha in &shas {
             if !self.bundler.resources.cache_path(sha).exists() {
@@ -219,11 +219,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::prepare::build;
+    use confit_core::resource_ref::ResourceRef;
     use confit_core::version::VERSION;
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
-    use confit_store::handles::ResourceHandle;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -250,11 +250,15 @@ mod tests {
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}");
-            let path = project_file(dir, &name, body);
+            project_file(dir, &name, body);
+            let handle = match stores.resources().resource(&name) {
+                Ok(found) => found,
+                Err(error) => panic!("the project fails to open: {error}"),
+            };
             documents.push(Document {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
                 data: Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Project(path, Sha::hash(body)),
+                    handle,
                     mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
@@ -327,7 +331,7 @@ mod tests {
                     manifest
                         .handles()
                         .iter()
-                        .map(|handle| handle.sha().clone())
+                        .map(|handle| *handle.sha())
                         .collect::<Vec<_>>()
                 };
                 assert_eq!(
@@ -373,12 +377,18 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(roots.clone(), sender);
-        let path = project_file(dir.path(), "wanted.bin", b"wanted bytes");
+        let wanted = Sha::hash(b"wanted bytes");
+        project_file(dir.path(), "wanted.bin", b"wanted bytes");
+        let handle = match stores.resources().resource("wanted.bin") {
+            Ok(found) => found,
+            Err(error) => panic!("the project fails to open: {error}"),
+        };
+        assert_eq!(handle.sha(), &wanted);
         let manifest = match build(
             vec![Document {
                 path: Route::new(RouteBase::Home, "bin").unwrap(),
                 data: Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Project(path, Sha::hash(b"wanted bytes")),
+                    handle,
                     mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),
@@ -540,7 +550,7 @@ mod tests {
             documents: vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
                 Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Cache(sha.clone()),
+                    handle: ResourceRef::new(sha),
                     mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),

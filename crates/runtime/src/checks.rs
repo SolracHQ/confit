@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_follows_a_live_link_and_skips_a_dead_link() {
+    fn discovery_follows_a_working_link_and_skips_a_broken_link() {
         let dir = tempfile::tempdir().unwrap();
         place(&dir.path().join("tool"), 0o755);
         driver::fs::write_link(&dir.path().join("link_ok"), std::path::Path::new("tool")).unwrap();
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(
             find_executable("link_ok", &dirs),
             Some(dir.path().join("link_ok")),
-            "the search follows a live link"
+            "the search follows a working link"
         );
         assert_eq!(
             find_executable("link_dead", &dirs),

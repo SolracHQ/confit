@@ -15,8 +15,8 @@ local SHELL_PATTERN = "^%.(%a+)rc$"
 local BAT_CONFIG = sugar.config("bat/config")
 
 --- Builds the bat theme config from the template.
----@param name string Bat theme name.
----@return Config Theme config for the profile configs array.
+---@param name string
+---@return Config
 return function(name)
 	local template = assert(assert(open(TEMPLATE)):text())
 	local text = assert(render(template, { theme = name }))
@@ -30,7 +30,7 @@ return function(name)
 				filter = function(route)
 					return route.base == "home" and route.relative:match(SHELL_PATTERN) ~= nil
 				end,
-				---@param document Document_Rc Live shell document under patching.
+				---@param document Document_Rc
 				apply = function(document)
 					table.insert(document.config, sugar.env("BAT_THEME", name))
 				end,

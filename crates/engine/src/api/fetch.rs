@@ -6,8 +6,7 @@ use lua_binding::lua_module;
 
 use confit_core::sha::Sha;
 
-use confit_store::handles::ResourceHandle;
-
+use crate::api::resource::ResourceHandle;
 use crate::api::stores_from;
 
 pub struct Fetch;
@@ -35,7 +34,7 @@ impl Fetch {
             return Err(mlua::Error::runtime("fetch requires a non-empty url"));
         }
         match stores.fetch().fetch(&url, sha256) {
-            Ok(found) => Ok((Some(found), None)),
+            Ok(found) => Ok((Some(ResourceHandle::new(found)), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
     }

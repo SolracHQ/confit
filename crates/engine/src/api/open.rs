@@ -4,8 +4,7 @@ use mlua::Lua;
 
 use lua_binding::lua_module;
 
-use confit_store::handles::ResourceHandle;
-
+use crate::api::resource::ResourceHandle;
 use crate::api::stores_from;
 
 pub struct Open;
@@ -25,7 +24,7 @@ impl Open {
     pub fn open(lua: &Lua, path: String) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_from(lua)?;
         match stores.resources().resource(&path) {
-            Ok(handle) => Ok((Some(handle), None)),
+            Ok(found) => Ok((Some(ResourceHandle::new(found)), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
         }
     }

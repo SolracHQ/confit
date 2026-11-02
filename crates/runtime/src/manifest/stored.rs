@@ -9,8 +9,8 @@ use confit_core::error::{
     error,
 };
 use confit_core::sha::Sha;
-use confit_store::handles::StateHandle;
 use confit_store::state::Picker;
+use confit_store::state::StateHandle;
 use confit_store::state::StateStore;
 
 use super::Manifest;
@@ -151,6 +151,6 @@ fn collect_state_refs(handle: &StateHandle, states: &StateStore, keep: &mut BTre
         return;
     }
     for handle in found.handles() {
-        keep.insert(handle.sha().clone());
+        keep.insert(*handle.sha());
     }
 }

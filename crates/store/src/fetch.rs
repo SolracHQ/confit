@@ -3,15 +3,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use confit_core::error::{
-    ContentError, ContextualCause, ContextualResult, ErrorCause, WithContext, contextual,
-};
+use confit_core::error::{ContextualCause, ContextualResult, ErrorCause, WithContext, contextual};
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_events::ProgressEvent;
 use confit_events::ToUi;
 use crossbeam_channel::Sender;
 
-use crate::handles::ResourceHandle;
 use crate::resources::Resources;
 use confit_driver as driver;
 
@@ -45,14 +43,14 @@ impl FetchCache {
 }
 
 impl FetchCache {
-    /// Downloads one URL and returns a handle to its bytes.
+    /// Downloads one URL and returns its trusted hash.
     ///
     /// # Errors
     ///
     /// - [`confit_core::error::FetchError`] when a download fails.
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
-    pub fn fetch(&self, url: &str, expected_sha: Option<Sha>) -> ContextualResult<ResourceHandle> {
+    pub fn fetch(&self, url: &str, expected_sha: Option<Sha>) -> ContextualResult<ResourceRef> {
         Fetch::new(self, url, expected_sha.as_ref()).run()
     }
 }
@@ -102,14 +100,14 @@ impl<'a> Fetch<'a> {
         }
     }
 
-    /// Runs the walk and returns a handle to the fetched bytes.
+    /// Runs the walk and returns the fetched hash.
     ///
     /// # Errors
     ///
     /// - [`confit_core::error::FetchError`] when a download fails.
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
-    fn run(&mut self) -> ContextualResult<ResourceHandle> {
+    fn run(&mut self) -> ContextualResult<ResourceRef> {
         let _ = self
             .cache
             .to_ui
@@ -123,17 +121,14 @@ impl<'a> Fetch<'a> {
         self.download()
     }
 
-    /// Returns a cached handle when the index points at present bytes.
+    /// Returns the cached hash when the index points at present bytes.
     ///
     /// # Errors
     ///
     /// - [`ErrorCause::ContentHashMismatch`] when the hit fails the user hash.
-    fn hit(&self) -> Option<ContextualResult<ResourceHandle>> {
+    fn hit(&self) -> Option<ContextualResult<ResourceRef>> {
         let hit = self.lookup()?;
-        let ResourceHandle::Cache(sha) = &hit else {
-            return None;
-        };
-        let path = self.cache.resources.cache_path(sha);
+        let path = self.cache.resources.cache_path(hit.sha());
         let bytes = std::fs::metadata(&path)
             .map(|facts| usize::try_from(facts.len()).unwrap_or(0))
             .unwrap_or(0);
@@ -148,20 +143,20 @@ impl<'a> Fetch<'a> {
                     human_bytes(bytes_as_u64(bytes))
                 ),
             }));
-        match self.check(sha) {
+        match self.check(hit.sha()) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
         }
     }
 
-    /// Returns a handle when the URL index points at present bytes.
-    fn lookup(&self) -> Option<ResourceHandle> {
+    /// Returns the trusted hash when the URL index points at present bytes.
+    fn lookup(&self) -> Option<ResourceRef> {
         let stored = std::fs::read_to_string(self.cache.index_path(self.url)).ok()?;
         let wanted = Sha::new(stored.trim()).ok()?;
         if !self.cache.resources.cache_path(&wanted).exists() {
             return None;
         }
-        Some(ResourceHandle::Cache(wanted))
+        Some(ResourceRef::new(wanted))
     }
 
     /// Downloads one URL body and writes its progress events.
@@ -171,7 +166,7 @@ impl<'a> Fetch<'a> {
     /// - [`confit_core::error::FetchError`] when a download fails.
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
-    fn download(&mut self) -> ContextualResult<ResourceHandle> {
+    fn download(&mut self) -> ContextualResult<ResourceRef> {
         let (reader, total) = driver::http::download(self.url, BODY_LIMIT_BYTES)?;
         self.total = total;
         let resources = self.cache.resources.clone();
@@ -183,14 +178,8 @@ impl<'a> Fetch<'a> {
             },
         };
         let handle = resources.store(metered).with_url(self.url)?;
-        let sha = match handle {
-            ResourceHandle::Cache(sha) => sha,
-            ResourceHandle::Project(..) => {
-                return Err(contextual(ContentError::ProjectHandleInCache).with_url(self.url));
-            }
-        };
-        self.check(&sha)?;
-        self.write_index(&sha)?;
+        self.check(handle.sha())?;
+        self.write_index(handle.sha())?;
         let _ = self
             .cache
             .to_ui
@@ -202,7 +191,7 @@ impl<'a> Fetch<'a> {
                     human_bytes(bytes_as_u64(usize::try_from(self.bytes).unwrap_or(0)))
                 ),
             }));
-        Ok(ResourceHandle::Cache(sha))
+        Ok(handle)
     }
 
     /// Writes one progress event.
@@ -246,8 +235,8 @@ impl<'a> Fetch<'a> {
         };
         if actual != wanted {
             return Err(contextual(ErrorCause::ContentHashMismatch {
-                expected: (*wanted).clone(),
-                found: actual.clone(),
+                expected: *wanted,
+                found: *actual,
             })
             .with_url(self.url));
         }
@@ -329,14 +318,11 @@ mod tests {
         dir.join("temp").join("cache").join(sha_hex)
     }
 
-    fn cached_sha(handle: &ResourceHandle) -> Sha {
-        match handle {
-            ResourceHandle::Cache(sha) => sha.clone(),
-            ResourceHandle::Project(..) => panic!("expected a cache handle"),
-        }
+    fn cached_sha(handle: &ResourceRef) -> Sha {
+        *handle.sha()
     }
 
-    fn seed(cache: &FetchCache, url: &str, body: &[u8]) -> ResourceHandle {
+    fn seed(cache: &FetchCache, url: &str, body: &[u8]) -> ResourceRef {
         driver::http::serve(url, body);
         match cache.fetch(url, None) {
             Ok(handle) => handle,
@@ -643,7 +629,7 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"1.2.3");
         let wanted = Sha::hash(b"1.2.3");
-        match cache.fetch(URL, Some(wanted.clone())) {
+        match cache.fetch(URL, Some(wanted)) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 assert_eq!(sha, wanted);
@@ -664,10 +650,7 @@ mod tests {
         seed(&cache, URL, &raw);
         match cache.fetch(URL, None) {
             Ok(handle) => {
-                match &handle {
-                    ResourceHandle::Cache(sha) => assert_eq!(sha, &Sha::hash(&raw)),
-                    ResourceHandle::Project(..) => panic!("expected a cache handle"),
-                }
+                assert_eq!(handle.sha(), &Sha::hash(&raw));
                 let sha = cached_sha(&handle);
                 let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
                 assert_eq!(found, raw);

@@ -6,8 +6,8 @@ local open = require("confit.open")
 ---@type Route
 local STARSHIP_TOML = route("config", "starship.toml")
 
----@param user_config table User keys winning over the base data.
----@return Config Starship config for the profile configs array.
+---@param user_config table
+---@return Config
 return function(user_config)
 	local base = assert(assert(open("resources/starship.toml")):load())
 	local config = mise.package({
@@ -23,7 +23,7 @@ return function(user_config)
 	table.insert(config.patches, {
 		target = STARSHIP_TOML,
 		format = "toml",
-		---@param document Document_Structured Live TOML document under patching.
+		---@param document Document_Structured
 		apply = function(document)
 			for key, value in pairs(user_config) do
 				document.data[key] = value

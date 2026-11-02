@@ -104,7 +104,7 @@ fn fill_hashes(documents: &[Document]) -> TerminalResult<BTreeMap<String, Sha>> 
 /// - [`confit_core::error::DocumentError::ParseFailed`] when an rc route base is absent.
 fn document_hash(document: &Document) -> ContextualResult<Sha> {
     match &document.data {
-        Data::Opaque(found) => Ok(found.handle.sha().clone()),
+        Data::Opaque(found) => Ok(*found.handle.sha()),
         Data::Tree(found) => Ok(Sha::hash(&tree_manifest_bytes(&found.members))),
         Data::Rc(_) => Ok(Sha::hash(&render::render_document(document)?)),
         Data::Structured(found) => found.bytes().map(|bytes| Sha::hash(&bytes)),
@@ -290,10 +290,10 @@ fn log_processed(built: &Manifest, previous: &Manifest) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_core::resource_ref::ResourceRef;
     use confit_model::document::Document;
     use confit_model::document::{Data, FileMode, OpaqueDocument, TextDocument, TreeDocument};
     use confit_model::routes::{Route, RouteBase};
-    use confit_store::handles::ResourceHandle;
 
     use crate::fixtures::{project_handle, test_stores};
     use confit_driver::fs;
@@ -333,14 +333,14 @@ mod tests {
         members.insert(
             "b".to_owned(),
             TreeMember::Full {
-                handle: ResourceHandle::Cache(second),
+                handle: ResourceRef::new(second),
                 mode: FileMode::new(0o755),
             },
         );
         members.insert(
             "a".to_owned(),
             TreeMember::Full {
-                handle: ResourceHandle::Cache(first),
+                handle: ResourceRef::new(first),
                 mode: FileMode::new(0o644),
             },
         );
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn build_hashes_live_handles_with_their_content_hashes() {
+    fn build_hashes_project_handles_with_their_content_hashes() {
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
@@ -396,15 +396,15 @@ mod tests {
             "the build leaves the pool empty"
         );
         for document in &manifest.documents {
-            let payloads: Vec<&ResourceHandle> = match &document.data {
+            let payloads: Vec<&ResourceRef> = match &document.data {
                 Data::Opaque(found) => vec![&found.handle],
                 Data::Tree(found) => found.members.values().map(TreeMember::handle).collect(),
                 Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => Vec::new(),
             };
             for payload in payloads {
                 assert!(
-                    matches!(payload, ResourceHandle::Project(..)),
-                    "the build keeps live handles"
+                    *payload == note || *payload == other,
+                    "the build keeps the declared hashes"
                 );
             }
         }
@@ -474,28 +474,34 @@ mod tests {
             Data::Tree(found) => {
                 let members = &found.members;
                 assert_eq!(members.len(), 2, "the build keeps both members");
-                let bare = match members.get("top.txt") {
+                let bare_member = match members.get("top.txt") {
                     Some(found) => found,
                     None => panic!("expected the top.txt member"),
                 };
-                assert!(
-                    matches!(bare.handle(), ResourceHandle::Project(..)),
-                    "the bare member keeps its live bytes"
+                assert_eq!(
+                    bare_member.handle(),
+                    &bare,
+                    "the bare member keeps its bytes"
                 );
                 assert_eq!(
-                    bare.mode().bits(),
+                    bare_member.mode().bits(),
                     0o644,
                     "the bare member takes the default mode"
                 );
-                let full = match members.get("sub/nested.txt") {
+                let full_member = match members.get("sub/nested.txt") {
                     Some(found) => found,
                     None => panic!("expected the sub/nested.txt member"),
                 };
-                assert!(
-                    matches!(full.handle(), ResourceHandle::Project(..)),
-                    "the full member keeps its live bytes"
+                assert_eq!(
+                    full_member.handle(),
+                    &full,
+                    "the full member keeps its bytes"
                 );
-                assert_eq!(full.mode().bits(), 0o755, "the full member keeps its mode");
+                assert_eq!(
+                    full_member.mode().bits(),
+                    0o755,
+                    "the full member keeps its mode"
+                );
             }
             _ => panic!("expected a tree body"),
         }
@@ -508,7 +514,7 @@ mod tests {
         let note = project_handle(&stores, dir.path(), "note.txt", b"member bytes");
         for key in ["", "/top.txt", "sub//nested.txt", "sub/../nested.txt"] {
             let mut members = BTreeMap::new();
-            members.insert(key.to_owned(), TreeMember::Handle(note.clone()));
+            members.insert(key.to_owned(), TreeMember::Handle(note));
             let documents = vec![Document::new(
                 Route::new(RouteBase::Home, "tree").unwrap(),
                 Data::Tree(TreeDocument { members }),

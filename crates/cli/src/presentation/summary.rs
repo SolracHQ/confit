@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{self as document_mod, Data, Document, RcEntry};
@@ -11,7 +12,6 @@ use confit_model::routes::Route;
 use confit_runtime::manifest::Manifest;
 use confit_runtime::manifest::status::{self, DocumentStatus};
 use confit_runtime::{Difference, Prepared};
-use confit_store::handles::ResourceHandle;
 
 use crate::presentation::difference;
 use crate::presentation::hooks;
@@ -685,11 +685,8 @@ fn opaque_ref_label(sha: &Sha) -> String {
 }
 
 /// Renders the label for one handle's source.
-fn opaque_handle_label(handle: &ResourceHandle) -> String {
-    match handle {
-        ResourceHandle::Cache(sha) => opaque_ref_label(sha),
-        ResourceHandle::Project(path, _) => path.display().to_string(),
-    }
+fn opaque_handle_label(handle: &ResourceRef) -> String {
+    opaque_ref_label(handle.sha())
 }
 
 /// Collects the update lines between the recorded and the desired document.
@@ -890,14 +887,13 @@ mod tests {
     #[test]
     fn tree_first_run_groups_members_under_destination() {
         use confit_model::routes::RouteBase;
-        use confit_store::handles::ResourceHandle;
         let dest = Route::new(RouteBase::Data, "fonts/JetBrainsMono").unwrap();
         let blob = Sha::hash(b"x");
         let mut members = BTreeMap::new();
         members.insert(
             "a.ttf".to_owned(),
             TreeMember::Full {
-                handle: ResourceHandle::Cache(blob),
+                handle: ResourceRef::new(blob),
                 mode: FileMode::new(0o644),
             },
         );

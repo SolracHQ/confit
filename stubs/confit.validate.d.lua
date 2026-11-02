@@ -112,43 +112,13 @@ function Route:display() end
 --- A document with bytes from a handle.
 --- @class Document_Opaque
 --- @field path Route The destination route.
---- @field handle ResourceHandle The opaque file handle.
+--- @field handle ResourceRef The opaque file handle.
 --- @field mode string? The file permission mode.
 --- @field unmanaged boolean? Whether the document checks the route for existence alone.
 
---- A handle to a trusted resource.
---- @class ResourceHandle
-ResourceHandle = {}
-
---- Reads one trusted file as text.
---- @return string? The decoded file text.
---- @return string? The failure reason.
-function ResourceHandle:text() end
-
---- Loads one file into its Lua table.
---- @return table? The decoded table.
---- @return string? The failure reason.
-function ResourceHandle:load() end
-
---- Returns the archive handle for one trusted source.
---- @return ArchiveHandle? The archive handle.
---- @return string? The failure reason.
-function ResourceHandle:archive() end
-
---- A handle to a verified compressed archive.
---- @class ArchiveHandle
-ArchiveHandle = {}
-
---- Returns the archive member names in archive-relative form with forward slashes.
---- @return string[]? The member names.
---- @return string? The failure reason.
-function ArchiveHandle:members() end
-
---- Returns the handle for one archive member.
---- @param name string The member path with forward slashes.
---- @return ResourceHandle? The member handle.
---- @return string? The failure reason.
-function ArchiveHandle:member(name) end
+--- A reference to the data.
+--- @class ResourceRef
+ResourceRef = {}
 
 --- A document with a set of file members under one route.
 --- @class Document_Tree
@@ -156,11 +126,11 @@ function ArchiveHandle:member(name) end
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
 --- One tree member.
---- @alias TreeMember ResourceHandle | TreeMember_Full
+--- @alias TreeMember ResourceRef | TreeMember_Full
 
 --- A member that carries a handle and an explicit mode.
 --- @class TreeMember_Full
---- @field handle ResourceHandle The file payload.
+--- @field handle ResourceRef The file payload.
 --- @field mode string The file permission mode.
 
 --- One configuration artifact, compared as one unit.
@@ -192,7 +162,7 @@ Id = {}
 --- @field target Route? The patch target route.
 --- @field filter (fun(route: Route): boolean)? The patch filter callback.
 --- @field format StructuredFormat The structured format under patching.
---- @field apply fun(document: Document_Structured) The patch callback over the live document.
+--- @field apply fun(document: Document_Structured) The patch callback over the working document.
 --- @field priority Level? The patch merge level. Higher levels apply first.
 StructuredPatch = {}
 
@@ -201,8 +171,8 @@ StructuredPatch = {}
 --- @return boolean
 function StructuredPatch.filter(route) end
 
---- The patch callback over the live document.
---- @param document Document_Structured The live structured document.
+--- The patch callback over the working document.
+--- @param document Document_Structured The working structured document.
 function StructuredPatch.apply(document) end
 
 --- The patch merge level.
@@ -212,7 +182,7 @@ function StructuredPatch.apply(document) end
 --- @class RcPatch
 --- @field target Route? The patch target route.
 --- @field filter (fun(route: Route): boolean)? The patch filter callback.
---- @field apply fun(document: Document_Rc) The patch callback over the live document.
+--- @field apply fun(document: Document_Rc) The patch callback over the working document.
 --- @field priority Level? The patch merge level. Higher levels apply first.
 RcPatch = {}
 
@@ -221,18 +191,18 @@ RcPatch = {}
 --- @return boolean
 function RcPatch.filter(route) end
 
---- The patch callback over the live document.
---- @param document Document_Rc The live rc document.
+--- The patch callback over the working document.
+--- @param document Document_Rc The working rc document.
 function RcPatch.apply(document) end
 
 --- One hook patch table.
 --- @class HookPatch
 --- @field target string The hook id under patching.
---- @field apply fun(hook: Hook) The hook callback over the live hook.
+--- @field apply fun(hook: Hook) The hook callback over the working hook.
 HookPatch = {}
 
---- The hook callback over the live hook.
---- @param hook Hook The live hook.
+--- The hook callback over the working hook.
+--- @param hook Hook The working hook.
 function HookPatch.apply(hook) end
 
 --- A post-config step.

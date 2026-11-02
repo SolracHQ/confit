@@ -158,7 +158,7 @@ confit.render.d.lua
 confit.validate.d.lua
 ```
 
-The stubs come from the live API of the running binary. A refresh replaces them,
+The stubs come from the current API of the binary. A refresh replaces them,
 so they match the installed version.
 
 `init --lsp` writes `.luarc.json` at the project root. The file also carries the

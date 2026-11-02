@@ -1,10 +1,10 @@
 # Init
 
-`init` scaffolds a project folder from resources in the binary and from the live
-API shapes. A plain run writes the profile, the project file, the stubs, the
-core plugins, and the editor config. A refresh flag rewrites one generated
-target and overwrites it. Run `--lsp` again after changing a folder name in
-`project.toml`, so the editor config maps the new folders.
+`init` scaffolds a project folder from resources in the binary and from the
+current API shapes. A plain run writes the profile, the project file, the
+stubs, the core plugins, and the editor config. A refresh flag rewrites one
+generated target and overwrites it. Run `--lsp` again after changing a folder
+name in `project.toml`, so the editor config maps the new folders.
 
 ```sh
 confit init [DIR]
@@ -130,7 +130,7 @@ creates a missing folder. It does not write `main.lua` or `project.toml`.
 The flags combine. Each flagged target runs, and the lines appear in this order:
 stubs, plugins, lsp.
 
-`--stubs` generates the files from the live API of the running binary, so the
+`--stubs` generates the files from the current API of the binary, so the
 stubs match the installed version. `--plugins` copies the core plugin tree.
 `--lsp` writes the editor config at the project root. The file carries the LuaLS
 settings schema in `$schema` with these values:

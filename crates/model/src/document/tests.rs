@@ -1,14 +1,12 @@
 use super::{
     Data, Document, FileMode, OpaqueDocument, RcEntry, TextDocument, TreeDocument, TreeMember,
 };
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
-use confit_store::handles::ResourceHandle;
-use confit_store::{StoreRoots, Stores};
 use lua_binding::value::{Decode, Encode};
 use mlua::{Lua, Value};
 
 use crate::routes::{Route, RouteBase};
-use confit_driver::fs;
 
 /// Returns a fresh Lua state.
 fn fresh_lua() -> Lua {
@@ -58,42 +56,12 @@ fn publish_subject_path(lua: &Lua) {
     lua.globals().set("subject_path", encoded).unwrap();
 }
 
-/// Returns a temp project with two files and a Lua state holding its stores.
-fn opened_project_lua() -> (tempfile::TempDir, Lua, Stores) {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("project");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("note.txt"), b"hello").unwrap();
-    std::fs::write(root.join("other.txt"), b"world").unwrap();
-    let (sender, _) = crossbeam_channel::unbounded();
-    let stores = Stores::new(
-        StoreRoots {
-            config_base: directory.path().join("config"),
-            temp_base: directory.path().join("temp"),
-            project_root: directory.path().join("project"),
-        },
-        sender,
-    );
-    let lua = Lua::new();
-    let _ = lua.set_app_data(stores.clone());
-    (directory, lua, stores)
-}
-
-/// Sets one project file as a Lua global and returns its name.
-fn publish_handle(lua: &Lua, stores: &Stores, name: &str) -> String {
-    let global = format!("handle_{}", name.replace('.', "_"));
-    let handle = match stores.resources().resource(name) {
-        Ok(found) => found,
-        Err(error) => panic!("the project fails to open: {error}"),
-    };
-    lua.globals().set(global.clone(), handle).unwrap();
+/// Sets one content hash as a Lua global and returns its name.
+fn publish_ref(lua: &Lua, name: &str, bytes: &[u8]) -> String {
+    let global = format!("handle_{name}");
+    let reference = ResourceRef::new(Sha::hash(bytes));
+    lua.globals().set(global.clone(), reference).unwrap();
     global
-}
-
-/// Returns whether the pool is empty.
-fn pool_is_empty(directory: &tempfile::TempDir) -> bool {
-    let pool = directory.path().join("config").join("blobs");
-    !pool.exists() || fs::read_dir(&pool).unwrap_or_default().is_empty()
 }
 
 #[test]
@@ -140,8 +108,8 @@ fn document_decode_rejects_mixed_markers() {
 
 #[test]
 fn document_decode_rejects_malformed_fields() {
-    let (_directory, lua, stores) = opened_project_lua();
-    let note = publish_handle(&lua, &stores, "note.txt");
+    let lua = fresh_lua();
+    let note = publish_ref(&lua, "note", b"hello");
     reject_body(&lua, r#"{ text = "hi", bogus = 1 }"#);
     reject_body(&lua, r#"{ text = "hi", mode = 644 }"#);
     reject_body(&lua, r#"{ text = "hi", unmanaged = 1 }"#);
@@ -195,44 +163,41 @@ fn mode_strings_decode_and_encode() {
 
 #[test]
 fn handles_serialize_as_bare_sha() {
-    let (_directory, lua, stores) = opened_project_lua();
-    let handle = match stores.resources().resource("note.txt") {
-        Ok(found) => found,
-        Err(error) => panic!("the project fails to open: {error}"),
-    };
-    let carried = handle.sha().clone();
-    let live = Data::Opaque(OpaqueDocument {
+    let lua = fresh_lua();
+    let handle = ResourceRef::new(Sha::hash(b"hello"));
+    let carried = *handle.sha();
+    let data = Data::Opaque(OpaqueDocument {
         handle,
         mode: FileMode::new(0o644),
         unmanaged: false,
     });
-    match live.encode(&lua) {
+    match data.encode(&lua) {
         Ok(Value::Table(table)) => {
             let _: mlua::AnyUserData = table.get("handle").unwrap();
         }
         Ok(_) => panic!("expected a table"),
         Err(error) => panic!("the handle fails to encode: {error}"),
     }
-    let text = match serde_json::to_string(&live) {
+    let text = match serde_json::to_string(&data) {
         Ok(found) => found,
-        Err(error) => panic!("the live data fails to serialize: {error}"),
+        Err(error) => panic!("the data fails to serialize: {error}"),
     };
     assert!(
         text.contains(&carried.hex()),
-        "the live data writes the carried sha"
+        "the data writes the carried sha"
     );
     match serde_json::from_str::<Data>(&text) {
         Ok(Data::Opaque(back)) => assert_eq!(
             back.handle,
-            ResourceHandle::Cache(carried),
-            "the live data round-trips through the cache alone"
+            ResourceRef::new(carried),
+            "the data round-trips through its digest"
         ),
         Ok(_) => panic!("expected an opaque body"),
-        Err(error) => panic!("the live data fails to decode: {error}"),
+        Err(error) => panic!("the data fails to decode: {error}"),
     };
     let blob = Sha::hash(b"stored");
     let stored = Data::Opaque(OpaqueDocument {
-        handle: ResourceHandle::Cache(blob.clone()),
+        handle: ResourceRef::new(blob),
         mode: FileMode::new(0o644),
         unmanaged: false,
     });
@@ -252,9 +217,9 @@ fn handles_serialize_as_bare_sha() {
 
 #[test]
 fn tree_mixed_members_keep_their_modes() {
-    let (directory, lua, stores) = opened_project_lua();
-    let note = publish_handle(&lua, &stores, "note.txt");
-    let other = publish_handle(&lua, &stores, "other.txt");
+    let lua = fresh_lua();
+    let note = publish_ref(&lua, "note", b"hello");
+    let other = publish_ref(&lua, "other", b"world");
     let body = format!(
         r#"{{
         members = {{
@@ -289,16 +254,27 @@ fn tree_mixed_members_keep_their_modes() {
                 "the table entry decodes as a full member"
             );
             assert_eq!(full.mode().bits(), 0o755, "the full member keeps its mode");
-            assert!(
-                members
-                    .values()
-                    .all(|member| matches!(member.handle(), ResourceHandle::Project(..))),
-                "every member holds a project handle"
+            let top = match members.get("top.txt") {
+                Some(found) => found,
+                None => panic!("expected the top.txt member"),
+            };
+            assert_eq!(
+                top.handle().sha(),
+                &Sha::hash(b"hello"),
+                "the bare member keeps the note digest"
+            );
+            let nested = match members.get("sub/nested.txt") {
+                Some(found) => found,
+                None => panic!("expected the sub/nested.txt member"),
+            };
+            assert_eq!(
+                nested.handle().sha(),
+                &Sha::hash(b"world"),
+                "the full member keeps the other digest"
             );
         }
         _ => panic!("expected a tree body"),
     }
-    assert!(pool_is_empty(&directory), "the pool is empty after decode");
 }
 
 #[test]

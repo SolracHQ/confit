@@ -70,7 +70,7 @@ impl PoolStore {
         };
         if found != *sha {
             return Err(contextual(ErrorCause::ContentHashMismatch {
-                expected: sha.clone(),
+                expected: *sha,
                 found,
             })
             .with_cache_path(dest));
@@ -117,10 +117,7 @@ impl PoolStore {
         let file = std::fs::File::open(&path)
             .map_err(ContextualCause::from)
             .with_cache_path(&path)?;
-        Ok(VerifiedRead::new(
-            flate2::read::GzDecoder::new(file),
-            sha.clone(),
-        ))
+        Ok(VerifiedRead::new(flate2::read::GzDecoder::new(file), *sha))
     }
 
     /// Removes pool files that the keep set leaves out.
@@ -160,7 +157,7 @@ impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     ErrorCause::ContentHashMismatch {
-                        expected: self.expected.clone(),
+                        expected: self.expected,
                         found,
                     },
                 ));
@@ -449,7 +446,7 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("the pool fails to store: {error}"),
         }
-        let keep = BTreeSet::from([kept.clone()]);
+        let keep = BTreeSet::from([kept]);
         match store.prune(&keep) {
             Ok(removed) => assert_eq!(removed, 1, "the prune drops the unreferenced entry"),
             Err(error) => panic!("the pool fails to prune: {error}"),

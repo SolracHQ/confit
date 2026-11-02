@@ -10,7 +10,7 @@ table.insert(config.patches, {
 	filter = function(route)
 		return route.base == "home" and route.relative:match(SHELL_PATTERN) ~= nil
 	end,
-	---@param document Document_Rc Live shell document under patching.
+	---@param document Document_Rc
 	apply = function(document)
 		local shell = document.path.relative:match(SHELL_PATTERN)
 		if not shell then
@@ -21,5 +21,5 @@ table.insert(config.patches, {
 	end,
 })
 
----@return Config Zoxide config for the profile configs array.
+---@return Config
 return config

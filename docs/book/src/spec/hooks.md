@@ -47,8 +47,8 @@ config. See [profile](profile.md).
 A hook id is unique across the profile. A repeated id fails the plan and shows
 every config that declares it. The id is also the handle for hook patches.
 
-A hook patch takes the id text as a plain string and receives the live hook
-table. See [patches](patches.md#hook-patches).
+A hook patch takes the id text as a plain string and receives the
+working hook table. See [patches](patches.md#hook-patches).
 
 Hooks do not merge by identity. Two configs that need a shared command declare
 one hook and patch it. A second declaration with the same id fails.

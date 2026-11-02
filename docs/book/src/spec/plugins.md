@@ -232,7 +232,8 @@ The config:
 
 - One tree document at `data('fonts/{name}')`.
 - Every archive member whose name ends in `.ttf`, keyed by its archive path. A
-  bare handle takes mode 644. An archive without a `.ttf` member fails.
+  ref without a mode takes 644. An archive without a `.ttf` member
+  fails.
 - One hook with id `plugin:_/nerd_fonts:{name}`, argv
   `{ "fc-cache", "-f", dest }`, a `requires` check for `fc-cache` on PATH, and a
   `when` check on the tree document. The default timeout applies.
@@ -277,7 +278,7 @@ end
 - Config names and hook ids are unique across the profile. A repeated name fails
   the plan.
 
-The module annotation lives in the plugin file as
+The module annotation sits in the plugin file as
 `---@module "plugins.user.name"`. `.luarc.json` at the project root maps the
 plugin folder and the stubs folder on the library path. `confit init --lsp`
 writes the file. `confit init --stubs` writes the stub files that describe

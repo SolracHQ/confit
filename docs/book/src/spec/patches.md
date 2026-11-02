@@ -1,6 +1,7 @@
 # Patches
 
-A patch reads a live document or hook, mutates the table, and returns nothing.
+A patch reads a working document or hook, mutates the table, and returns
+nothing.
 The engine merges the result over the assembled base. A patch declares one
 destination and one callback.
 
@@ -14,9 +15,9 @@ destination and one callback.
 }
 ```
 
-The callback edits fields directly. A returned value fails the plan. The live
-table is the whole write surface. A dotted-path setter and an append helper are
-absent.
+The callback edits fields directly. A returned value fails the plan. The
+working table is the whole write surface. A dotted-path setter and an append
+helper are absent.
 
 A patch table takes one of three shapes.
 
@@ -24,7 +25,7 @@ A patch table takes one of three shapes.
 | --- | --- | --- |
 | Structured | `format` | `{ path, format, data }` |
 | Rc | route, no `format` | `{ path, profile, config, final }` |
-| Hook | a string `target` | the live hook table |
+| Hook | a string `target` | the working hook table |
 
 ## Destination
 
@@ -87,7 +88,7 @@ Hook patches carry no priority. They run in declaration order.
 
 ## Structured patches
 
-A structured patch receives the live document with its format and data.
+A structured patch receives the working document with its format and data.
 
 ```lua
 {
@@ -121,11 +122,11 @@ These rules decide the merge:
 - A patch cannot delete a base leaf. A removal is logged and the leaf stays.
 
 A patch cannot delete a key by dropping it from the returned table. The engine
-folds new values over the live table and never removes a live leaf.
+folds new values over the working table and never removes a working leaf.
 
 ## Rc patches
 
-An rc patch receives the live rc document with its three sections.
+An rc patch receives the working rc document with its three sections.
 
 ```lua
 {
@@ -157,16 +158,16 @@ collision on home('.bashrc') config "ll": "theme" loses, "base" wins
 ```
 
 `eval`, `cmd`, and `source` carry no name. They accumulate in the returned
-order. An entry equal to a live entry replaces that entry instead of adding a
-duplicate.
+order. An entry equal to a working entry replaces that entry instead of
+adding a duplicate.
 
 Entries keep the order of the returned section. A patch that leaves a base
 entry untouched keeps it in place.
 
 ## Hook patches
 
-A hook patch takes a hook id as a plain string. The callback receives the live
-hook table.
+A hook patch takes a hook id as a plain string. The callback receives the
+working hook table.
 
 ```lua
 {

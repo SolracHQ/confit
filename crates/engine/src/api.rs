@@ -1,5 +1,6 @@
 //! Installs the builtin modules.
 
+pub mod archive;
 pub mod config;
 pub mod fact;
 pub mod fetch;
@@ -9,6 +10,7 @@ pub mod open;
 pub mod patch;
 pub mod profile;
 pub mod render;
+pub mod resource;
 pub mod validate;
 
 use mlua::{Lua, Value};

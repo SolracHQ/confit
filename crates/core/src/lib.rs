@@ -4,6 +4,8 @@
 
 /// Shared failures with causes, context, and terminal kinds.
 pub mod error;
+/// Validated content hashes for trusted stores.
+pub mod resource_ref;
 /// Verified content hashes.
 pub mod sha;
 /// Near-match suggestions for unknown names.

@@ -27,7 +27,7 @@ pub enum Command {
     Bundle(BundleArgs),
     /// preview the profile evaluation with differences against previous state
     Check(CheckArgs),
-    /// write the live project onto the machine
+    /// write the project onto the machine
     Apply(ApplyArgs),
     /// write one package onto the machine
     Restore(RestoreArgs),

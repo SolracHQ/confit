@@ -51,7 +51,7 @@ end
 
 --- Collects the ttf members of one archive into a flat handle map.
 ---@param archive ArchiveHandle Opened font zip.
----@return {[string]: ResourceHandle} Member handles keyed by archive path.
+---@return {[string]: ResourceRef} Member refs keyed by archive path.
 local function ttf_members(archive)
 	local names =
 		is.must("nerd_fonts: cannot list the font archive: ", archive:members())
@@ -59,7 +59,7 @@ local function ttf_members(archive)
 	for _, name in ipairs(names) do
 		if name:match("%.ttf$") then
 			members[name] =
-				is.must("nerd_fonts: the font archive holds no '" .. name .. "': ", archive:member(name))
+				is.must("nerd_fonts: the font archive holds no '" .. name .. "': ", archive:member(name)):ref()
 		end
 	end
 	if not next(members) then

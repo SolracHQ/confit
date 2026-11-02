@@ -8,20 +8,15 @@ workspace = true
 
 [dependencies]
 confit-driver = { path = "../driver" }
-mlua = { workspace = true, features = ["lua54", "vendored"] }
 sha2.workspace = true
 thiserror.workspace = true
 serde.workspace = true
-lua-binding = { workspace = true }
-file-format = { version = "0.29.0", features = ["reader-txt"] }
 serde_json.workspace = true
-toml.workspace = true
-noyalib.workspace = true
-serini = "0.3.0"
 flate2.workspace = true
 confit-core = { path = "../core" }
 confit-events = { path = "../events" }
 crossbeam-channel.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

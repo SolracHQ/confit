@@ -69,7 +69,7 @@ local function rc_patches(bin, rc)
 	return {
 		{
 			filter = is_shell,
-			---@param document Document_Rc Live shell document under patching.
+			---@param document Document_Rc Working shell document under patching.
 			apply = function(document)
 				for _, item in ipairs(items) do
 					table.insert(document[item[1]], item[2])

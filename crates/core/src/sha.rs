@@ -44,7 +44,7 @@ const SHA_HEX_LEN: usize = 64;
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 
 /// A SHA-256 digest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Shape)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Shape)]
 #[shape(proxy = String)]
 pub struct Sha {
     inner: [u8; SHA_BYTE_LEN],

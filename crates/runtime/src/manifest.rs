@@ -7,13 +7,13 @@ use std::collections::BTreeMap;
 
 use confit_core::error::ContextualResult;
 use confit_core::error::ManifestError;
-use confit_core::error::{ContextualCause, DocumentError, WithContext, contextual};
+use confit_core::error::{DocumentError, contextual};
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_core::version;
 use confit_model::document::{Data, Document};
 use confit_model::hook::Hook;
 use confit_store::Stores;
-use confit_store::handles::ResourceHandle;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +33,8 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Returns the live handles in document order.
-    pub fn handles(&self) -> Vec<&ResourceHandle> {
+    /// Returns the hashes in document order.
+    pub fn handles(&self) -> Vec<&ResourceRef> {
         let mut handles = Vec::new();
         for document in &self.documents {
             match &document.data {
@@ -50,7 +50,7 @@ impl Manifest {
         handles
     }
 
-    /// Fills the pool with the bytes of every live handle.
+    /// Fills the pool with the bytes of every hash.
     ///
     /// # Errors
     ///
@@ -58,17 +58,7 @@ impl Manifest {
     /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when a stream fails the carried sha.
     pub fn persist(&self, stores: &Stores) -> ContextualResult<()> {
         for handle in self.handles() {
-            match handle {
-                ResourceHandle::Cache(sha) => {
-                    stores.resources().persist(sha)?;
-                }
-                ResourceHandle::Project(path, sha) => {
-                    let file = std::fs::File::open(path)
-                        .map_err(ContextualCause::from)
-                        .with_fs_path(path)?;
-                    stores.pool().store_checked(sha, file)?;
-                }
-            }
+            stores.resources().persist(handle)?;
         }
         Ok(())
     }
@@ -127,7 +117,7 @@ mod tests {
     use crate::fixtures::{project_handle, test_stores};
     use crate::prepare::build;
 
-    fn opaque_doc(name: &str, blob: ResourceHandle) -> Document {
+    fn opaque_doc(name: &str, blob: ResourceRef) -> Document {
         Document {
             path: Route::new(RouteBase::Home, name).unwrap(),
             data: Data::Opaque(OpaqueDocument {
@@ -198,14 +188,14 @@ mod tests {
         members.insert(
             "member.txt".to_owned(),
             TreeMember::Full {
-                handle: ResourceHandle::Cache(member_sha.clone()),
+                handle: ResourceRef::new(member_sha),
                 mode: FileMode::new(0o644),
             },
         );
         let manifest = Manifest {
             version: VERSION,
             documents: vec![
-                opaque_doc("blob.bin", ResourceHandle::Cache(opaque_sha.clone())),
+                opaque_doc("blob.bin", ResourceRef::new(opaque_sha)),
                 Document::new(
                     Route::new(RouteBase::Home, "fonts").unwrap(),
                     Data::Tree(TreeDocument { members }),
@@ -238,12 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn persist_lands_live_bytes_in_the_pool() {
+    fn persist_lands_project_bytes_in_the_pool() {
         use std::io::Read as _;
 
         let dir = tempfile::tempdir().unwrap();
         let stores = test_stores(dir.path());
-        let body = b"packaged live bytes";
+        let body = b"packaged project bytes";
         let handle = project_handle(&stores, dir.path(), "note.txt", body);
         let documents = vec![Document::new(
             Route::new(RouteBase::Home, "note").unwrap(),
@@ -258,19 +248,18 @@ mod tests {
             Err(error) => panic!("the manifest fails to hash: {error}"),
         };
         let sha = Sha::hash(body);
-        let live = match manifest.documents.first() {
+        let found = match manifest.documents.first() {
             Some(document) => match &document.data {
-                Data::Opaque(found) => found.handle.clone(),
+                Data::Opaque(opaque) => opaque.handle,
                 _ => panic!("expected an opaque body"),
             },
             None => panic!("expected a document"),
         };
-        match &live {
-            ResourceHandle::Project(_, found) => {
-                assert_eq!(*found, sha, "the build keeps the carried sha")
-            }
-            ResourceHandle::Cache(_) => panic!("expected a live handle"),
-        }
+        assert_eq!(
+            found,
+            ResourceRef::new(sha),
+            "the build keeps the carried sha"
+        );
         match manifest.persist(&stores) {
             Ok(()) => {}
             Err(error) => panic!("the manifest fails to persist: {error}"),
@@ -279,7 +268,7 @@ mod tests {
             Ok(mut reader) => {
                 let mut found = Vec::new();
                 reader.read_to_end(&mut found).unwrap();
-                assert_eq!(found, body, "the persisted bytes match the live file");
+                assert_eq!(found, body, "the persisted bytes match the project file");
             }
             Err(error) => panic!("the persisted bytes fail to open: {error}"),
         }

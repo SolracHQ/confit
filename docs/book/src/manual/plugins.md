@@ -70,7 +70,7 @@ return function(name)
                return route.base == "home"
                   and route.relative:match(SHELL_PATTERN) ~= nil
             end,
-            ---@param document Document_Rc Live shell document under patching.
+            ---@param document Document_Rc Working shell document under patching.
             apply = function(document)
                table.insert(document.config, sugar.env("BAT_THEME", name))
             end,
@@ -132,4 +132,4 @@ restore: confit restore %1
 ```
 
 The bat config reads `~/.config/bat/config`. The two shell documents export
-`BAT_THEME=catppuccin`. The theme name lives in one profile call.
+`BAT_THEME=catppuccin`. The theme name sits in one profile call.

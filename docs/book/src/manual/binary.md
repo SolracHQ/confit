@@ -69,7 +69,7 @@ The config carries two documents:
 local config = {
    name = id("starship"),
    documents = {
-      { path = STARSHIP_BIN, handle = binary, mode = "755" },
+      { path = STARSHIP_BIN, handle = binary:ref(), mode = "755" },
       { path = STARSHIP_TOML, format = "toml", data = base },
    },
 --- more code here
@@ -175,7 +175,7 @@ return function(user_config)
    local config = {
       name = id("starship"),
       documents = {
-         { path = STARSHIP_BIN, handle = binary, mode = "755" },
+         { path = STARSHIP_BIN, handle = binary:ref(), mode = "755" },
          { path = STARSHIP_TOML, format = "toml", data = base },
       },
       patches = {

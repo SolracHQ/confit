@@ -43,7 +43,7 @@ function sugar.rc(path)
 end
 
 ---@param target Route Document route under patching.
----@param apply fun(document: Document_Rc) Callback receiving the live shell document.
+---@param apply fun(document: Document_Rc) Callback receiving the working shell document.
 ---@return table Patch table holding target with apply.
 function sugar.patch(target, apply)
 	return { target = target, apply = apply }

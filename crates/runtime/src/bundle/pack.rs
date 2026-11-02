@@ -4,12 +4,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use confit_core::error::kind::ErrorKind;
-use confit_core::error::{
-    ContextualCause, ContextualResult, Terminal, TerminalResult, WithContext,
-};
+use confit_core::error::{ContextualResult, Terminal, TerminalResult, WithContext};
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_driver as driver;
-use confit_store::handles::ResourceHandle;
 
 use super::BUNDLE_MANIFEST;
 use super::Bundler;
@@ -43,16 +41,16 @@ struct Pack<'a> {
     dest: PathBuf,
     /// The rendered manifest text.
     text: String,
-    /// The content handles that the bundle writes, sorted by content hash.
-    contents: Vec<ResourceHandle>,
+    /// The content hashes that the bundle writes, sorted by content hash.
+    contents: Vec<ResourceRef>,
     /// The content files held open for the write.
     staged: Vec<Staged>,
 }
 
 /// One open content file.
 struct Staged {
-    /// The handle naming the entry with its carried sha.
-    handle: ResourceHandle,
+    /// The hash naming the entry with its carried sha.
+    handle: ResourceRef,
     /// The opened content file.
     file: std::fs::File,
 }
@@ -66,10 +64,9 @@ impl<'a> Pack<'a> {
     fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> ContextualResult<Self> {
         let dest = dest.to_path_buf();
         let text = manifest.json()?;
-        let mut seen: BTreeMap<Sha, ResourceHandle> = BTreeMap::new();
+        let mut seen: BTreeMap<Sha, ResourceRef> = BTreeMap::new();
         for handle in manifest.handles() {
-            seen.entry(handle.sha().clone())
-                .or_insert_with(|| handle.clone());
+            seen.entry(*handle.sha()).or_insert_with(|| *handle);
         }
         Ok(Self {
             bundler,
@@ -99,14 +96,9 @@ impl<'a> Pack<'a> {
     /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
     fn collect(&mut self) -> ContextualResult<()> {
         for handle in &self.contents {
-            let file = match handle {
-                ResourceHandle::Cache(_) => self.bundler.resources.open(handle)?,
-                ResourceHandle::Project(path, _) => std::fs::File::open(path)
-                    .map_err(ContextualCause::from)
-                    .with_fs_path(path)?,
-            };
+            let file = self.bundler.resources.open(handle)?;
             self.staged.push(Staged {
-                handle: handle.clone(),
+                handle: *handle,
                 file,
             });
         }
@@ -167,7 +159,6 @@ mod tests {
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
-    use confit_store::handles::ResourceHandle;
 
     use crate::prepare::build;
 
@@ -196,11 +187,16 @@ mod tests {
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}");
-            let path = project_file(dir, &name, body);
+            project_file(dir, &name, body);
+            let handle = match stores.resources().resource(&name) {
+                Ok(found) => found,
+                Err(error) => panic!("the project fails to open: {error}"),
+            };
+            assert_eq!(handle.sha(), &Sha::hash(body));
             documents.push(Document {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
                 data: Data::Opaque(OpaqueDocument {
-                    handle: ResourceHandle::Project(path, Sha::hash(body)),
+                    handle,
                     mode: FileMode::new(0o644),
                     unmanaged: false,
                 }),

@@ -11,7 +11,6 @@ use confit_core::error::{
 use confit_driver as driver;
 
 use crate::StoreRoots;
-use crate::handles::StateHandle;
 
 /// The number of history files kept before rotation drops the oldest.
 const HISTORY_KEPT: usize = 6;
@@ -21,6 +20,24 @@ const HISTORY_DIR: &str = "history";
 
 /// The folder name for named states.
 const STATES_DIR: &str = "states";
+
+/// The path of one stored state file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StateHandle {
+    path: PathBuf,
+}
+
+impl StateHandle {
+    /// Returns the path of the state file.
+    pub fn canonical(&self) -> &Path {
+        &self.path
+    }
+
+    /// Builds a handle for one state file path.
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
 
 /// A picker for one stored state.
 #[derive(Debug, Clone, PartialEq, Eq)]

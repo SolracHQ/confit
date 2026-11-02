@@ -61,12 +61,12 @@ function mise.init(version)
 			name = id(INSTALLER_NAME),
 			documents = {
 				{ path = MISE_TOML, format = "toml", data = { tools = {} } },
-				{ path = MISE_BIN, handle = release.binary(resolved), mode = "755" },
+				{ path = MISE_BIN, handle = release.binary(resolved):ref(), mode = "755" },
 			},
 			patches = {
 				{
 					filter = rc_lib.is_shell,
-					---@param document Document_Rc Live shell document under patching.
+					---@param document Document_Rc Working shell document under patching.
 					apply = function(document)
 						table.insert(document.profile, { path = { name = "PATH", dir = MISE_BINDIR } })
 						table.insert(document.profile, { eval = { argv = { "mise", "activate", rc_lib.shell_of(document.path) } } })
@@ -89,7 +89,7 @@ local function fold_patch(name, version, options)
 	return {
 		target = MISE_TOML,
 		format = "toml",
-		---@param document Document_Structured Live TOML document under patching.
+		---@param document Document_Structured Working TOML document under patching.
 		apply = function(document)
 			if not options then
 				document.data.tools[name] = version
@@ -124,7 +124,7 @@ end
 local function shim_patch(bin)
 	return {
 		target = HOOK_ID,
-		---@param hook Hook Live install hook under patching.
+		---@param hook Hook Working install hook under patching.
 		apply = function(hook)
 			hook.check =
 				join_check(hook.check, { exists = { route = route("data", "mise/shims/" .. bin) } })

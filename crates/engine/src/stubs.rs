@@ -1,4 +1,4 @@
-//! Generates stubs from live shapes.
+//! Generates stubs for current API.
 
 use confit_core::error::{ContextualCause, ContextualResult};
 use lua_binding::stub::Stub;
@@ -11,7 +11,7 @@ use crate::api::open::Open;
 use crate::api::render::Render;
 use crate::api::validate::Validate;
 
-/// Generates stubs from live shapes.
+/// Generates stubs for current API.
 ///
 /// # Errors
 ///

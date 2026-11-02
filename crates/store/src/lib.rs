@@ -11,7 +11,6 @@ use crossbeam_channel::Sender;
 
 pub mod archive;
 pub mod fetch;
-pub mod handles;
 pub mod pool;
 pub mod resources;
 pub mod state;

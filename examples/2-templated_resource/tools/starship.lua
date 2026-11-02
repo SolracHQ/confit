@@ -9,8 +9,8 @@ local TEMPLATE = "resources/starship.toml.j2"
 ---@type Route
 local STARSHIP_TOML = route("config", "starship.toml")
 
----@param opts table User vars for the template.
----@return Config Starship config for the profile configs array.
+---@param opts table
+---@return Config
 return function(opts)
 	local text = assert(assert(open(TEMPLATE)):text())
 	local rendered = assert(render(text, opts))

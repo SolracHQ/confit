@@ -5,11 +5,15 @@
 --- @return string? The failure reason, else nil.
 function open(path) end
 
---- A handle to a trusted resource.
+--- A handle to one resource.
 --- @class ResourceHandle
 ResourceHandle = {}
 
---- Reads one trusted file as text.
+--- Returns the data reference for this handle.
+--- @return ResourceRef The data reference.
+function ResourceHandle:ref() end
+
+--- Reads one file as text.
 --- @return string? The decoded file text.
 --- @return string? The failure reason.
 function ResourceHandle:text() end
@@ -19,24 +23,28 @@ function ResourceHandle:text() end
 --- @return string? The failure reason.
 function ResourceHandle:load() end
 
---- Returns the archive handle for one trusted source.
---- @return ArchiveHandle? The archive handle.
---- @return string? The failure reason.
+--- Returns the archive handle for one source.
+--- @return ArchiveHandle? The archive handle, else nil.
+--- @return string? The failure reason, else nil.
 function ResourceHandle:archive() end
 
---- A handle to a verified compressed archive.
+--- A reference to the data.
+--- @class ResourceRef
+ResourceRef = {}
+
+--- A handle to one compressed archive.
 --- @class ArchiveHandle
 ArchiveHandle = {}
 
---- Returns the archive member names in archive-relative form with forward slashes.
---- @return string[]? The member names.
---- @return string? The failure reason.
+--- Lists the member names in archive-relative form with forward slashes.
+--- @return string[]? The member names, else nil.
+--- @return string? The failure reason, else nil.
 function ArchiveHandle:members() end
 
 --- Returns the handle for one archive member.
 --- @param name string The member path with forward slashes.
---- @return ResourceHandle? The member handle.
---- @return string? The failure reason.
+--- @return ResourceHandle? The member handle, else nil.
+--- @return string? The failure reason, else nil.
 function ArchiveHandle:member(name) end
 
 return open

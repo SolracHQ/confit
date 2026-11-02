@@ -295,7 +295,7 @@ fn evaluate_rejects_an_rc_format_gap() {
 }
 
 #[test]
-fn mixed_sides_merge_live_targets() {
+fn mixed_sides_merge_working_targets() {
     let dir = tempfile::tempdir().unwrap();
     let engine = test_engine(dir.path());
     let (_, profile) = profile_with(dir.path(), MIXED_SPLIT);

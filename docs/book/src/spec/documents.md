@@ -79,8 +79,8 @@ so a recorded document expands again on the next apply.
 - Documents sort by display path. Tree members sort by relative path.
 - A mode is a string. Octal forms are `755` and `0755`. A symbolic form is
   `rwxr-xr-x`. Any other text fails.
-- Apply writes `644` for a text or opaque document without a mode. A tree
-  member with a bare handle takes `644`.
+- Apply writes `644` for a text or opaque document without a mode. A ref
+  without a mode takes `644`.
 - Structured, link, and rc documents carry no mode. A `mode` field on one of
   them fails.
 - `unmanaged` marks an existence-only document. Text and opaque documents
@@ -244,12 +244,13 @@ An opaque document writes bytes from a handle.
 ```lua
 {
    path = route("home", ".local/bin/starship"),
-   handle = handle,
+   handle = handle:ref(),
    mode = "755",
 }
 ```
 
-A handle comes from `confit.open`, `confit.fetch`, or `archive:member`. See the
+A handle comes from `confit.open`, `confit.fetch`, or `archive:member`. Call
+`ref` first: documents take the ref form. See the
 [Lua surface](lua.md#handles).
 
 Apply streams the handle bytes to the path, then sets the mode. A missing mode
@@ -267,14 +268,14 @@ A tree document writes a set of files under one folder.
 {
    path = route("data", "fonts/JetBrainsMono"),
    members = {
-      ["JetBrainsMono-Regular.ttf"] = regular,
-      ["JetBrainsMono-Bold.ttf"] = { handle = bold, mode = "755" },
+      ["JetBrainsMono-Regular.ttf"] = regular:ref(),
+      ["JetBrainsMono-Bold.ttf"] = { handle = bold:ref(), mode = "755" },
    },
 }
 ```
 
-A member value is a handle or a table with `handle` and `mode`. A bare handle
-takes `644`.
+A member value is a ref or a table with `handle` and `mode`. A ref
+without a mode takes `644`.
 
 A member key is a relative path with forward slashes. These keys fail:
 

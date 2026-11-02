@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_engine::api::config::Config;
 use confit_engine::api::patch::{Level, Patch};
@@ -14,7 +15,6 @@ use confit_model::document::{
 };
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
-use confit_store::handles::ResourceHandle;
 use mlua::Lua;
 use std::collections::{BTreeMap, HashMap};
 
@@ -140,14 +140,14 @@ fn placed_documents_convert_every_kind() {
     members.insert(
         "sub/nested.txt".to_owned(),
         TreeMember::Full {
-            handle: ResourceHandle::Cache(blob.clone()),
+            handle: ResourceRef::new(blob),
             mode: FileMode::new(0o644),
         },
     );
     members.insert(
         "top.txt".to_owned(),
         TreeMember::Full {
-            handle: ResourceHandle::Cache(blob.clone()),
+            handle: ResourceRef::new(blob),
             mode: FileMode::new(0o644),
         },
     );
@@ -745,7 +745,7 @@ fn collect_hooks_rejects_repeated_ids() {
 }
 
 #[test]
-fn hook_patches_mutate_live_hooks_in_order() {
+fn hook_patches_mutate_working_hooks_in_order() {
     let lua = Lua::new();
     let patch = hook_patch_of(
         &lua,

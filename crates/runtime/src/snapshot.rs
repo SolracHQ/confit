@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, kind::ErrorKind};
+use confit_core::resource_ref::ResourceRef;
 use confit_model::document::{Data, Document, FileMode, OpaqueDocument, TreeDocument, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
-use confit_store::handles::ResourceHandle;
 
 use super::prepare::{self, Prepared};
 use crate::manifest::Manifest;
@@ -70,7 +70,7 @@ pub fn capture(stores: &Stores, prepared: &Prepared) -> TerminalResult<Capture> 
     for handle in manifest.handles() {
         stores
             .resources()
-            .persist(handle.sha())
+            .persist(handle)
             .terminal(ErrorKind::StoreState)?;
     }
     Ok(Capture {
@@ -153,8 +153,8 @@ fn capture_file(stores: &Stores, route: &Route) -> TerminalResult<Captured> {
 
 /// The outcome of one file read.
 enum Read {
-    /// The handle and mode that hold the disk bytes.
-    Saved((ResourceHandle, FileMode)),
+    /// The hash and mode that hold the disk bytes.
+    Saved((ResourceRef, FileMode)),
     /// The path is absent from disk or hides a folder.
     Absent,
     /// The file stays out of the capture.

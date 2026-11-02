@@ -32,7 +32,7 @@ fn profile_tree(folder: &str, member: &str) -> String {
     format!(
         r#"
 local open = require("confit.open")
-local seed = assert(open("seed.txt"))
+local seed = assert(open("seed.txt"):ref())
 return {{
     configs = {{
         {{

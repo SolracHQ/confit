@@ -423,10 +423,7 @@ mod tests {
         let found = Sha::hash(b"got");
         let failure = std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            ErrorCause::ContentHashMismatch {
-                expected: expected.clone(),
-                found: found.clone(),
-            },
+            ErrorCause::ContentHashMismatch { expected, found },
         );
         match ErrorCause::from(failure) {
             ErrorCause::ContentHashMismatch {

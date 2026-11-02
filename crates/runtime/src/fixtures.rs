@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use confit_store::handles::ResourceHandle;
+use confit_core::resource_ref::ResourceRef;
 use confit_store::{StoreRoots, Stores};
 
 /// Builds stores under one temporary folder.
@@ -18,13 +18,8 @@ pub(crate) fn test_stores(dir: &Path) -> Stores {
     )
 }
 
-/// Writes one project file and returns its live handle.
-pub(crate) fn project_handle(
-    stores: &Stores,
-    dir: &Path,
-    name: &str,
-    body: &[u8],
-) -> ResourceHandle {
+/// Writes one project file and returns its trusted hash.
+pub(crate) fn project_handle(stores: &Stores, dir: &Path, name: &str, body: &[u8]) -> ResourceRef {
     let project = dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join(name), body).unwrap();

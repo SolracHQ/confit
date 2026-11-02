@@ -131,9 +131,13 @@ A handle comes from `open`, `fetch`, or `archive:member`.
 | `handle:text()` | The body as UTF-8 text, else nil and a reason |
 | `handle:load()` | The body as one table, else nil and a reason |
 | `handle:archive()` | An archive handle, else nil and a reason |
+| `handle:ref()` | The content reference for document handles |
 
-`text` fails on bytes that are not UTF-8. A project handle reads the live file,
-so a changed or deleted file shows on the next call.
+Documents take the ref form. Call `ref` where a document wants
+a handle.
+
+`text` fails on bytes that are not UTF-8. A project handle reads the project
+file, so a changed or deleted file shows on the next call.
 
 `load` sniffs the body format and parses JSON, TOML, YAML, or INI into one
 table. The file extension has no role. The parsers run in that order. The root

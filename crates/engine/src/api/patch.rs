@@ -14,7 +14,7 @@ use confit_model::routes::Route;
 
 #[derive(Debug, Clone, PartialEq, Eq, Shape)]
 #[shape(table, name = "Document_Structured")]
-pub struct StructuredLiveDocument {
+pub struct StructuredWorkingDocument {
     /// The destination route.
     pub path: Route,
     /// The structured body under patching.
@@ -24,7 +24,7 @@ pub struct StructuredLiveDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq, Shape)]
 #[shape(table, name = "Document_Rc")]
-pub struct RcLiveDocument {
+pub struct RcWorkingDocument {
     /// The destination route.
     pub path: Route,
     /// The rc body under patching.
@@ -36,25 +36,25 @@ pub struct RcLiveDocument {
 #[derive(Shape)]
 #[shape(function)]
 pub struct StructuredApplyArgs {
-    /// The live structured document.
+    /// The working structured document.
     #[shape(borrowed)]
-    document: StructuredLiveDocument,
+    document: StructuredWorkingDocument,
 }
 
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function)]
 pub struct RcApplyArgs {
-    /// The live rc document.
+    /// The working rc document.
     #[shape(borrowed)]
-    document: RcLiveDocument,
+    document: RcWorkingDocument,
 }
 
 #[allow(dead_code)]
 #[derive(Shape)]
 #[shape(function)]
 pub struct HookArgs {
-    /// The live hook.
+    /// The working hook.
     #[shape(borrowed)]
     hook: Hook,
 }
@@ -141,7 +141,7 @@ pub struct StructuredPatch {
     pub filter: Option<Callable<FilterArgs>>,
     /// The structured format under patching.
     pub format: StructuredFormat,
-    /// The patch callback over the live document.
+    /// The patch callback over the working document.
     pub apply: Callable<StructuredApplyArgs>,
     /// The patch merge level. Higher levels apply first.
     #[shape(default)]
@@ -156,7 +156,7 @@ pub struct RcPatch {
     pub target: Option<Route>,
     /// The patch filter callback.
     pub filter: Option<Callable<FilterArgs>>,
-    /// The patch callback over the live document.
+    /// The patch callback over the working document.
     pub apply: Callable<RcApplyArgs>,
     /// The patch merge level. Higher levels apply first.
     #[shape(default)]
@@ -169,7 +169,7 @@ pub struct RcPatch {
 pub struct HookPatch {
     /// The hook id under patching.
     pub target: String,
-    /// The hook callback over the live hook.
+    /// The hook callback over the working hook.
     pub apply: Callable<HookArgs>,
 }
 

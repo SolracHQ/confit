@@ -10,7 +10,6 @@ workspace = true
 lua-binding = { workspace = true }
 confit-core = { path = "../core" }
 confit-driver = { path = "../driver" }
-confit-store = { path = "../store" }
 mlua = { workspace = true, features = ["lua54", "vendored"] }
 noyalib.workspace = true
 serde.workspace = true
@@ -20,5 +19,3 @@ toml.workspace = true
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }
-crossbeam-channel.workspace = true
-tempfile.workspace = true

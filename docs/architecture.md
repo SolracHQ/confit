@@ -1,8 +1,9 @@
 # ConfIt architecture
 
-If you open the workspace you find nine crates. That looks like a lot. In
-practice you only track four ideas. What I control. What I do not. The shapes
-both sides share. The toolkit that moves those shapes through Lua.
+If you open the workspace you find ten crates. That looks like a lot. In
+practice you only track five ideas. What I control. What I do not. The shapes
+both sides share. The toolkit that moves those shapes through Lua. The channel
+that carries progress and prompts.
 
 I keep the dependency graph acyclic. That habit comes from old Nim pain. It has
 no deep meaning here beyond faster builds and tidy folders. The domain drives
@@ -15,9 +16,10 @@ project. The pool of blobs keyed by hash. The fetch cache for downloads. The
 unpacked archives keyed the same way. Slots and history under the config folder.
 
 When Lua needs a file it never touches disk directly. It gets a handle from
-stores. A Project handle points at a trusted path with its hash. A Cache handle
-points at bytes I already verified. Lua calls text, load or archive on the
-handle and stores do the read.
+the engine api. A handle points at one resource. Lua calls text, load or
+archive on the handle. Documents take the data reference from the handle.
+Stores resolve references to bytes. The remembered project file first. The
+cache second.
 
 ## Runtime meets the wild world
 
@@ -33,9 +35,9 @@ files land, guarded by changed routes and requires checks.
 ## Model has the shared shapes
 
 Model is the vocabulary both sides speak. Document, Route, Hook and Condition. A
-profile builds them with live handles. A manifest stores them with hashes. It is
-the same type through the whole run. Stores fill the live side. Runtime fills
-the preserved side. The life cycle is a collaboration between the two.
+profile builds them with handles. A manifest stores them as references. Stores
+resolve the resource side. Runtime fills the preserved side. The life cycle is
+a collaboration between the two.
 
 Routes keep bundles portable. A bundle applies on any system with the same
 facts. Version, os and arch. A route is composed of a base like home, config,
@@ -80,17 +82,20 @@ move to Zig. So I wrote that zua in Rust here. Treat it like a vendored lib and
 keep it agnostic. A future extraction should need no confit changes.
 
 Binding macros only feed the derive at build time. They generate the glue
-between Rust structs and Lua tables so model and stores never hand write push
+between Rust structs and Lua tables so model never hand writes push
 and pop loops.
 
-Core is confit DNA. Errors, hashes and progress events live here because every
+Core is confit DNA. Errors, hashes and references live here because every
 crate needs them. If you change how failures print, you change core.
+
+Events carries progress and prompts. The protocol between commands and the ui
+lives here, plus the handles both sides hold. It depends on nothing in confit.
 
 ## Life cycle in four moves
 
 You run a profile and four moves carry it to disk.
 
-1. Engine evaluates it into documents with live handles and hooks.
+1. Engine evaluates it into documents with handles and hooks.
 2. Runtime builds the desired manifest and fills hashes over rendered bytes.
 3. Runtime prepares the diff. On first run it diffs desired state against disk.
    Later it diffs recorded state against disk and desired state against recorded
@@ -103,17 +108,18 @@ You run a profile and four moves carry it to disk.
 
 ## Crate map
 
-Nine crates. One job each.
+Ten crates. One job each.
 
 | Crate | It owns |
 | --- | --- |
 | lua-binding | Lua shapes, values, generators and stubs |
 | lua-binding-macros | Derive glue for shapes at build time |
-| core | Errors, hashes and progress events |
+| core | Errors, hashes and references |
+| events | Progress, prompts and the ui channel |
 | driver | Filesystem, http, archive, process and path helpers |
 | store | Project files, pool, fetch cache, archives, slots and history |
 | model | Documents, routes, hooks, conditions and ids |
-| engine | Loader, project, api, assembly and stubs |
+| engine | Loader, project, api, handles, assembly and stubs |
 | runtime | Manifests, bundles, diffs, writes, hooks and checks |
 | cli | Flags, actions, presentation and sinks |
 
@@ -133,22 +139,24 @@ graph TD
     cli --> store["confit-store"]
     cli --> driver["confit-driver"]
     cli --> core["confit-core"]
+    cli --> events["confit-events"]
     engine --> model
     engine --> store
     engine --> driver
     engine --> core
+    engine --> events
     engine --> binding["lua-binding"]
     runtime --> model
     runtime --> store
     runtime --> driver
     runtime --> core
-    model --> store
+    runtime --> events
     model --> driver
     model --> core
     model --> binding
+    store --> events
     store --> driver
     store --> core
-    store --> binding
     driver --> core
 ```
 

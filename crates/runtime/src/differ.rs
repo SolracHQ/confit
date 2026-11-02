@@ -96,13 +96,13 @@ impl Differ {
 mod tests {
     use super::*;
 
+    use confit_core::resource_ref::ResourceRef;
     use confit_core::sha::Sha;
     use confit_model::document::{
         Data, Document, FileMode, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
     };
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
-    use confit_store::handles::ResourceHandle;
 
     use crate::manifest::Manifest;
     use crate::render;
@@ -143,7 +143,7 @@ mod tests {
         let mut members = BTreeMap::new();
         members.insert(
             relative.to_string(),
-            TreeMember::Handle(ResourceHandle::Cache(Sha::hash(b"member bytes"))),
+            TreeMember::Handle(ResourceRef::new(Sha::hash(b"member bytes"))),
         );
         Document::new(literal(dir), Data::Tree(TreeDocument { members }))
     }
