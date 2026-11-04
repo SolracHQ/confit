@@ -1,4 +1,4 @@
-//! Reads one portable bundle into its manifest.
+//! Reads one portable bundle archive.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -11,12 +11,12 @@ use confit_core::error::{
 use confit_core::sha::Sha;
 use confit_model::document::Data;
 
-use super::{BUNDLE_MANIFEST, Bundler};
-use crate::manifest::Manifest;
+use crate::{BUNDLE_MANIFEST, Bundler};
 use confit_driver as driver;
+use confit_model::manifest::Manifest;
 
 impl Bundler {
-    /// Reads one bundle archive into its manifest.
+    /// Reads one bundle archive.
     ///
     /// # Errors
     ///
@@ -216,9 +216,6 @@ mod tests {
     use super::*;
     use confit_core::error::{ErrorCause, ManifestError};
 
-    use std::collections::BTreeMap;
-
-    use crate::prepare::build;
     use confit_core::resource_ref::ResourceRef;
     use confit_core::version::VERSION;
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
@@ -264,10 +261,12 @@ mod tests {
                 }),
             });
         }
-        match build(documents, Vec::new()) {
-            Ok(manifest) => (Bundler::new(&stores), manifest),
-            Err(error) => panic!("the manifest fails to build: {error}"),
-        }
+        let manifest = Manifest {
+            version: VERSION,
+            documents,
+            hooks: Vec::new(),
+        };
+        (Bundler::new(&stores), manifest)
     }
 
     fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
@@ -326,7 +325,10 @@ mod tests {
         }
         match store.read(&dest) {
             Ok(found) => {
-                assert_eq!(found.hashes, manifest.hashes, "the hashes round-trip");
+                assert_eq!(
+                    found.documents, manifest.documents,
+                    "the documents round-trip"
+                );
                 let carried = |manifest: &Manifest| {
                     manifest
                         .handles()
@@ -348,7 +350,7 @@ mod tests {
     fn read_rejects_stale_version() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = opaque_manifest(dir.path(), &[]);
-        let stale = serde_json::json!({"version": [0, 8, 0], "documents": [], "hashes": {}});
+        let stale = serde_json::json!({"version": [0, 8, 0], "documents": []});
         let raw = serde_json::to_vec(&stale).unwrap();
         let stale_path = dir.path().join("stale.cb");
         build_bundle(&stale_path, &[(BUNDLE_MANIFEST, raw)]);
@@ -384,8 +386,9 @@ mod tests {
             Err(error) => panic!("the project fails to open: {error}"),
         };
         assert_eq!(handle.sha(), &wanted);
-        let manifest = match build(
-            vec![Document {
+        let manifest = Manifest {
+            version: VERSION,
+            documents: vec![Document {
                 path: Route::new(RouteBase::Home, "bin").unwrap(),
                 data: Data::Opaque(OpaqueDocument {
                     handle,
@@ -393,10 +396,7 @@ mod tests {
                     unmanaged: false,
                 }),
             }],
-            Vec::new(),
-        ) {
-            Ok(manifest) => manifest,
-            Err(error) => panic!("the manifest fails to build: {error}"),
+            hooks: Vec::new(),
         };
         let raw = serde_json::to_vec(&manifest).unwrap();
         let manifest_only = dir.path().join("manifest_only.cb");
@@ -424,7 +424,6 @@ mod tests {
         let manifest = serde_json::to_vec(&Manifest {
             version: VERSION,
             documents: Vec::new(),
-            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         })
         .unwrap();
@@ -512,7 +511,6 @@ mod tests {
         let empty = serde_json::to_vec(&Manifest {
             version: VERSION,
             documents: Vec::new(),
-            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         })
         .unwrap();
@@ -555,7 +553,6 @@ mod tests {
                     unmanaged: false,
                 }),
             )],
-            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         })
         .unwrap();

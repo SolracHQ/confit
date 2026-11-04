@@ -1,4 +1,4 @@
-//! Rescue slot capture over unmanaged destinations.
+//! Rescue state capture over unmanaged destinations.
 
 #![allow(clippy::unwrap_used)]
 
@@ -145,7 +145,7 @@ fn rescue_second_apply_keeps_the_first_capture() {
 }
 
 #[test]
-fn rescue_empty_capture_writes_no_slot() {
+fn rescue_empty_capture_writes_no_state() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-rescue-absent-note", "managed");
     let report = apply_project(dir.path());
@@ -154,12 +154,12 @@ fn rescue_empty_capture_writes_no_slot() {
     let picker = Picker::Named("!".to_owned());
     assert!(
         stores.states().resolve(&picker).is_err(),
-        "no capture leaves the rescue slot absent"
+        "no capture leaves the rescue state absent"
     );
 }
 
 #[test]
-fn rescue_later_capture_replaces_the_slot() {
+fn rescue_later_capture_replaces_the_state() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-rescue-first-note", "managed");
     write_home("confit-rescue-first-note", b"first");
@@ -171,7 +171,7 @@ fn rescue_later_capture_replaces_the_slot() {
     assert_eq!(
         home_bytes("confit-rescue-second-note"),
         b"second",
-        "the rescue slot holds the latest capture"
+        "the rescue state holds the latest capture"
     );
 }
 
@@ -194,7 +194,7 @@ fn rescue_capture_includes_tree_members() {
 }
 
 #[test]
-fn rescue_missing_slot_fails() {
+fn rescue_missing_state_fails() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-rescue-missing-note", "managed");
     let stores = common::test_stores(dir.path(), "site");
@@ -205,6 +205,6 @@ fn rescue_missing_slot_fails() {
     let hooks = dir.path().join("hooks");
     assert!(
         restore::run(&args, stores, common::test_handles(), hooks).is_err(),
-        "an absent rescue slot fails the restore"
+        "an absent rescue state fails the restore"
     );
 }

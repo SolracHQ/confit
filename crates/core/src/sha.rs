@@ -77,13 +77,6 @@ impl Sha {
         }
     }
 
-    /// Converts a running hasher into its digest.
-    pub fn finish(hasher: sha2::Sha256) -> Self {
-        Self {
-            inner: hasher.finalize().into(),
-        }
-    }
-
     /// Reads a byte stream and returns its digest and byte count.
     ///
     /// # Errors
@@ -101,7 +94,7 @@ impl Sha {
             len += read as u64;
             hasher.update(&chunk[..read]);
         }
-        Ok((Self::finish(hasher), len))
+        Ok((Self::from(hasher), len))
     }
 
     /// Reads a byte stream and returns its digest.
@@ -142,6 +135,14 @@ impl Sha {
     /// Formats the short hash prefix for a terminal line.
     pub fn short(&self) -> String {
         self.hex()[..12].to_owned()
+    }
+}
+
+impl From<sha2::Sha256> for Sha {
+    fn from(hasher: sha2::Sha256) -> Self {
+        Self {
+            inner: hasher.finalize().into(),
+        }
     }
 }
 
@@ -203,12 +204,12 @@ impl<W: std::io::Write> ShaWriter<W> {
 
     /// Closes the running hash after the last byte.
     pub fn digest(self) -> Sha {
-        Sha::finish(self.hasher)
+        Sha::from(self.hasher)
     }
 
     /// Closes the running hash and hands back the writer with its digest.
     pub fn finish(self) -> (W, Sha) {
-        let digest = Sha::finish(self.hasher);
+        let digest = Sha::from(self.hasher);
         (self.inner, digest)
     }
 }

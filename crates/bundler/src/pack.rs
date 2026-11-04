@@ -9,13 +9,15 @@ use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_driver as driver;
 
-use super::BUNDLE_MANIFEST;
-use super::Bundler;
-use super::with_bundle_extension;
-use crate::manifest::Manifest;
+use crate::BUNDLE_MANIFEST;
+use crate::Bundler;
+use confit_model::manifest::Manifest;
 
 /// The file mode that every bundle member carries.
 const BUNDLE_ENTRY_MODE: u32 = 0o644;
+
+/// The bundle extension that an explicit output carries.
+const BUNDLE_EXTENSION: &str = "cb";
 
 impl Bundler {
     /// Writes one bundle archive and returns its path.
@@ -25,11 +27,25 @@ impl Bundler {
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when a render or write fails, or the content
     ///   is unreadable, with the bundle path.
     pub fn write(&self, manifest: &Manifest, dest: &Path) -> TerminalResult<PathBuf> {
-        let dest = with_bundle_extension(dest);
+        let dest = Self::with_extension(dest);
         Pack::new(self, manifest, &dest)
             .and_then(|pack| pack.run())
             .with_bundle_path(dest)
             .terminal(ErrorKind::WriteBundle)
+    }
+
+    /// Returns the destination with a `.cb` extension.
+    fn with_extension(dest: &Path) -> PathBuf {
+        if dest
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(BUNDLE_EXTENSION))
+        {
+            dest.to_path_buf()
+        } else {
+            let mut name = dest.as_os_str().to_owned();
+            name.push(".cb");
+            PathBuf::from(name)
+        }
     }
 }
 
@@ -66,7 +82,7 @@ impl<'a> Pack<'a> {
         let text = manifest.json()?;
         let mut seen: BTreeMap<Sha, ResourceRef> = BTreeMap::new();
         for handle in manifest.handles() {
-            seen.entry(*handle.sha()).or_insert_with(|| *handle);
+            seen.entry(*handle.sha()).or_insert(handle);
         }
         Ok(Self {
             bundler,
@@ -155,18 +171,29 @@ mod tests {
     use std::io::Read as _;
 
     use confit_core::error::ErrorCause;
+    use confit_core::version::VERSION;
     use confit_driver as driver;
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
-
-    use crate::prepare::build;
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
+        }
+    }
+
+    #[test]
+    fn bundle_extension_adds_a_suffix_to_a_bare_path() {
+        for (input, want) in [
+            ("plan", "plan.cb"),
+            ("plan.cb", "plan.cb"),
+            ("plan.CB", "plan.CB"),
+        ] {
+            let out = Bundler::with_extension(Path::new(input));
+            assert_eq!(out.to_str(), Some(want));
         }
     }
 
@@ -202,10 +229,12 @@ mod tests {
                 }),
             });
         }
-        match build(documents, Vec::new()) {
-            Ok(manifest) => (Bundler::new(&stores), manifest),
-            Err(error) => panic!("the manifest fails to build: {error}"),
-        }
+        let manifest = Manifest {
+            version: VERSION,
+            documents,
+            hooks: Vec::new(),
+        };
+        (Bundler::new(&stores), manifest)
     }
 
     fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {

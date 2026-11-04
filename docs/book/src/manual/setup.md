@@ -110,8 +110,8 @@ land. `check` writes nothing, so run it as often as you like.
 
 > [!NOTE]
 > The first apply overwrites `~/.bashrc`. When the file already exists,
-> the run saves it into the rescue slot first, and the report prints
-> `saved: 1 files, confit restore @!`. That command brings it back. The slot
+> the run saves it into the rescue state first, and the report prints
+> `saved: 1 files, confit restore @!`. That command brings it back. The state
 > holds one rescue, so a second capture replaces the first.
 
 ```sh

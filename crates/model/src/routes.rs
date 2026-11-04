@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 #[shape(table, str_alias)]
 pub enum RouteBase {
-    /// The user home folder.
-    Home,
+    /// The platform cache folder.
+    Cache,
     /// The platform config folder.
     Config,
     /// The platform data folder.
     Data,
-    /// The platform cache folder.
-    Cache,
+    /// The user home folder.
+    Home,
     /// A host path taken verbatim.
     Literal,
 }

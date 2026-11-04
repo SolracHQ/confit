@@ -16,7 +16,7 @@ mod terminal;
 pub use cause::{
     ArchiveError, BundleError, ContentError, DocumentError, ErrorCause, EvalError, FetchError,
     FilesystemError, HookRunError, ManifestError, ProjectError, Require, RequireNameRule,
-    SlotReason, UsageError,
+    StateReason, UsageError,
 };
 pub use context::{ErrorContext, Source, SourceKind};
 pub use contextual::{ContextualCause, ContextualResult, WithContext, contextual};

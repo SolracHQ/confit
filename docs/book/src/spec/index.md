@@ -85,7 +85,7 @@ page defines what a run records.
 
 ## State layout
 
-Every path sits under the OS config folder and `confit`. On Linux the folder is
+Every path is under the OS config folder and `confit`. On Linux the folder is
 `${XDG_CONFIG_HOME:-~/.config}/confit`.
 
 | Path | Contents |

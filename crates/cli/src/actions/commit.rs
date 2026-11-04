@@ -7,12 +7,10 @@ use confit_core::error::{
 };
 use confit_events::{EventHandles, ToUi};
 use confit_model::arg::Arg;
-use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_runtime::snapshot;
 use confit_runtime::{HookDecision, HookRunner, Prepared, Writer};
 use confit_store::Stores;
-use confit_store::state::Picker;
 
 use crate::presentation::difference;
 use crate::presentation::summary;
@@ -23,7 +21,7 @@ pub struct WriteReport {
     pub written: usize,
     /// The number of documents and tree members the run removed.
     pub removed: usize,
-    /// The number of files the run saved into the rescue slot.
+    /// The number of files the run saved into the rescue state.
     pub saved: usize,
 }
 
@@ -127,7 +125,6 @@ impl CommitRunner {
     /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when the destination removal fails.
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the removal evaluation fails.
     /// - [`confit_core::error::kind::ErrorKind::StoreState`] when the state write fails.
-    /// - [`confit_core::error::kind::ErrorKind::ApplyState`] when the keep set fails.
     /// - [`confit_core::error::kind::ErrorKind::RotateHistory`] when the history rotation fails.
     /// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] when the blob prune fails.
     fn commit(&self) -> TerminalResult<WriteReport> {
@@ -137,11 +134,9 @@ impl CommitRunner {
         let capture = snapshot::capture(&self.stores, &self.prepared)?;
         let mut saved = 0;
         if capture.files > 0 {
-            stored::store_named(
-                &self.stores.states(),
-                &Picker::Named(snapshot::RESCUE_NAME.to_owned()),
-                &capture.manifest,
-            )?;
+            self.stores
+                .states()
+                .save_named(snapshot::RESCUE_NAME, &capture.manifest)?;
             saved = capture.files;
         }
         for skipped in &capture.skipped {
@@ -155,11 +150,9 @@ impl CommitRunner {
         let removed = writer.remove_deleted(&previous.documents, &built.documents)?;
         let removed =
             removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
-        stored::store(&self.stores.states(), built)?;
-        let keep = stored::keep_set(&self.stores.states()).terminal(ErrorKind::ApplyState)?;
+        self.stores.states().save_applied(built)?;
         self.stores
-            .pool()
-            .prune(&keep)
+            .prune_unreferenced()
             .terminal(ErrorKind::PruneBlobs)?;
         Ok(WriteReport {
             written,

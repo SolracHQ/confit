@@ -1,14 +1,18 @@
-//! Stored state files with picker resolution.
+//! Stored state manifests with picker resolution.
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use confit_core::error::{
-    ContextualCause, ContextualResult, ErrorCause, FilesystemError, SlotReason, WithContext,
-    contextual,
+    ContextualCause, ContextualResult, ErrorCause, FilesystemError, ManifestError, StateReason,
+    Terminal, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
 };
+use confit_core::sha::Sha;
+use confit_core::version::VERSION;
 use confit_driver as driver;
+use confit_model::manifest::Manifest;
 
 use crate::StoreRoots;
 
@@ -42,8 +46,6 @@ impl StateHandle {
 /// A picker for one stored state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picker {
-    /// The applied state.
-    Applied,
     /// A state selected by its stored name.
     Named(String),
     /// A history entry.
@@ -62,15 +64,15 @@ impl FromStr for Picker {
             let pick: usize = match rest.parse() {
                 Ok(pick) => pick,
                 Err(_) => {
-                    return Err(contextual(SlotReason::NotNumber));
+                    return Err(contextual(StateReason::NotNumber));
                 }
             };
             if pick == 0 {
-                return Err(contextual(SlotReason::OutOfRange));
+                return Err(contextual(StateReason::OutOfRange));
             }
             return Ok(Self::History(pick));
         }
-        Err(contextual(SlotReason::BareSlot))
+        Err(contextual(StateReason::BareState))
     }
 }
 
@@ -90,43 +92,106 @@ impl StateStore {
         }
     }
 
-    /// Returns the handle for the applied state.
+    /// Loads the applied manifest, or an empty manifest when history is absent.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] when the history is empty.
-    pub fn applied(&self) -> ContextualResult<StateHandle> {
-        let mut files = history_files(&self.history)?;
-        files.reverse();
-        files
-            .into_iter()
-            .next()
-            .map(StateHandle::new)
-            .ok_or_else(|| contextual(SlotReason::MissingEntry).with_fs_path(&self.history))
+    /// - [`ErrorKind::CorruptManifest`] when a state is unreadable or the payload is bad.
+    /// - [`ErrorKind::ManifestVersion`] when the version is unsupported.
+    /// - [`ErrorKind::ManifestNoVersion`] when the version is absent.
+    pub fn load_applied(&self) -> TerminalResult<Manifest> {
+        match self.applied() {
+            Ok(handle) => self.load_manifest(&handle),
+            Err(error) => match error.cause() {
+                ErrorCause::StateReason(_)
+                | ErrorCause::FilesystemError(FilesystemError::FileMissing) => Ok(empty()),
+                _ => Err(error.terminal(ErrorKind::CorruptManifest)),
+            },
+        }
     }
 
-    /// Returns the handle for one stored name.
+    /// Saves one manifest into a new history file.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::EmptyName`] when the name is empty.
-    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
-    /// - [`SlotReason::MissingEntry`] when the state file is absent.
-    pub fn named(&self, name: &str) -> ContextualResult<StateHandle> {
-        let path = self.named_path(name)?;
-        checked(path)
+    /// - [`ErrorKind::StoreState`] when the manifest render fails.
+    /// - [`ErrorKind::RotateHistory`] when the history rotation fails.
+    pub fn save_applied(&self, manifest: &Manifest) -> TerminalResult<()> {
+        let text = manifest.json().terminal(ErrorKind::StoreState)?;
+        let mut bytes = text.as_bytes();
+        let mut stamp = system_nanos().terminal(ErrorKind::RotateHistory)?;
+        let mut destination = self.history.join(format!("{stamp}.json"));
+        while destination.exists() {
+            stamp += 1;
+            destination = self.history.join(format!("{stamp}.json"));
+        }
+        store_bytes(&destination, &mut bytes).terminal(ErrorKind::RotateHistory)?;
+        checked(destination).terminal(ErrorKind::RotateHistory)?;
+        let files = history_files(&self.history).terminal(ErrorKind::RotateHistory)?;
+        if files.len() > HISTORY_KEPT {
+            for stale in files.iter().take(files.len() - HISTORY_KEPT) {
+                std::fs::remove_file(stale)
+                    .map_err(ContextualCause::from)
+                    .with_fs_path(stale)
+                    .terminal(ErrorKind::RotateHistory)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Loads the manifest that one picker holds.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::CorruptManifest`] when a state is absent or unreadable, or the payload is
+    ///   bad.
+    /// - [`ErrorKind::ManifestVersion`] when the version is unsupported.
+    /// - [`ErrorKind::ManifestNoVersion`] when the version is absent.
+    pub fn load_state(&self, picker: &Picker) -> TerminalResult<Manifest> {
+        let handle = self.resolve(picker).terminal(ErrorKind::CorruptManifest)?;
+        self.load_manifest(&handle)
+    }
+
+    /// Saves one manifest under one state name.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::StoreState`] when the name is bad, the render fails, or the write fails.
+    pub fn save_named(&self, name: &str, manifest: &Manifest) -> TerminalResult<()> {
+        let path = self.named_path(name).terminal(ErrorKind::StoreState)?;
+        let text = manifest.json().terminal(ErrorKind::StoreState)?;
+        let mut bytes = text.as_bytes();
+        store_bytes(&path, &mut bytes).terminal(ErrorKind::StoreState)?;
+        checked(path).terminal(ErrorKind::StoreState)?;
+        Ok(())
+    }
+
+    /// Removes the state file that one named picker holds.
+    ///
+    /// # Errors
+    ///
+    /// - [`StateReason::BareState`] when the picker is not a named state.
+    /// - [`FilesystemError`] when the state file fails to remove.
+    pub fn remove_state(&self, picker: &Picker) -> ContextualResult<()> {
+        let Picker::Named(_) = picker else {
+            return Err(contextual(StateReason::BareState));
+        };
+        let handle = self.resolve(picker)?;
+        let path = handle.canonical();
+        std::fs::remove_file(path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)
     }
 
     /// Resolves one picker into its state handle.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::MissingEntry`] when the state file is absent.
-    /// - [`SlotReason::OutOfRange`] when the pick is out of range.
+    /// - [`StateReason::MissingEntry`] when the state file is absent.
+    /// - [`StateReason::OutOfRange`] when the pick is out of range.
     /// - [`FilesystemError`] when the history folder is unreadable.
     pub fn resolve(&self, picker: &Picker) -> ContextualResult<StateHandle> {
         match picker {
-            Picker::Applied => self.applied(),
             Picker::Named(name) => {
                 let path = self.named_path(name)?;
                 checked(path)
@@ -134,69 +199,14 @@ impl StateStore {
             Picker::History(pick) => {
                 let files = history_files(&self.history)?;
                 if *pick >= files.len() {
-                    return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
+                    return Err(contextual(StateReason::OutOfRange).with_fs_path(&self.history));
                 }
                 let Some(path) = files.into_iter().rev().nth(*pick) else {
-                    return Err(contextual(SlotReason::OutOfRange).with_fs_path(&self.history));
+                    return Err(contextual(StateReason::OutOfRange).with_fs_path(&self.history));
                 };
                 Ok(StateHandle::new(path))
             }
         }
-    }
-
-    /// Reads one state file.
-    ///
-    /// # Errors
-    ///
-    /// - [`FilesystemError`] when the state file is unreadable.
-    pub fn read(&self, handle: &StateHandle) -> ContextualResult<Vec<u8>> {
-        let path = handle.canonical();
-        std::fs::read(path)
-            .map_err(ContextualCause::from)
-            .with_fs_path(path)
-    }
-
-    /// Creates one empty state file and returns its handle.
-    ///
-    /// # Errors
-    ///
-    /// - [`SlotReason::BareSlot`] when the picker picks the applied slot or a
-    ///   history entry.
-    /// - [`SlotReason::EmptyName`] when the name is empty.
-    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
-    /// - [`FilesystemError`] when the state file fails to write.
-    pub fn create(&self, picker: &Picker) -> ContextualResult<StateHandle> {
-        match picker {
-            Picker::Applied | Picker::History(_) => Err(contextual(SlotReason::BareSlot)),
-            Picker::Named(name) => {
-                let path = self.named_path(name)?;
-                if !path.exists() {
-                    store_bytes(&path, &mut std::io::empty())?;
-                }
-                checked(path)
-            }
-        }
-    }
-
-    /// Writes one source into a state file.
-    ///
-    /// # Errors
-    ///
-    /// - [`FilesystemError`] when the state file fails to write.
-    pub fn write(&self, handle: &StateHandle, mut source: impl Read) -> ContextualResult<()> {
-        store_bytes(handle.canonical(), &mut source)
-    }
-
-    /// Removes one state file.
-    ///
-    /// # Errors
-    ///
-    /// - [`FilesystemError`] when the state file fails to remove.
-    pub fn remove(&self, handle: &StateHandle) -> ContextualResult<()> {
-        let path = handle.canonical();
-        std::fs::remove_file(path)
-            .map_err(ContextualCause::from)
-            .with_fs_path(path)
     }
 
     /// Returns the history handles.
@@ -204,48 +214,10 @@ impl StateStore {
     /// # Errors
     ///
     /// - [`FilesystemError`] when the history folder is unreadable.
-    pub fn list(&self) -> ContextualResult<Vec<StateHandle>> {
+    pub fn history_list(&self) -> ContextualResult<Vec<StateHandle>> {
         let mut files = history_files(&self.history)?;
         files.reverse();
         Ok(files.into_iter().map(StateHandle::new).collect())
-    }
-
-    /// Lists named state handles.
-    ///
-    /// # Errors
-    ///
-    /// - [`FilesystemError`] when the state folder is unreadable.
-    pub fn list_named(&self) -> ContextualResult<Vec<StateHandle>> {
-        Ok(history_files(&self.states)?
-            .into_iter()
-            .map(StateHandle::new)
-            .collect())
-    }
-
-    /// Writes one streamed source into a new history file.
-    ///
-    /// # Errors
-    ///
-    /// - [`SlotReason::MissingEntry`] when the state file vanishes.
-    /// - [`FilesystemError`] when a clock reading or a state write fails.
-    pub fn rotate(&self, mut source: impl Read) -> ContextualResult<()> {
-        let mut stamp = system_nanos()?;
-        let mut destination = self.history.join(format!("{stamp}.json"));
-        while destination.exists() {
-            stamp += 1;
-            destination = self.history.join(format!("{stamp}.json"));
-        }
-        store_bytes(&destination, &mut source)?;
-        checked(destination)?;
-        let files = history_files(&self.history)?;
-        if files.len() > HISTORY_KEPT {
-            for stale in files.iter().take(files.len() - HISTORY_KEPT) {
-                std::fs::remove_file(stale)
-                    .map_err(ContextualCause::from)
-                    .with_fs_path(stale)?;
-            }
-        }
-        Ok(())
     }
 
     /// Returns whether the history is empty.
@@ -255,15 +227,129 @@ impl StateStore {
             .unwrap_or(true)
     }
 
+    /// Collects the content hashes that the states hold for a sweep.
+    ///
+    /// # Errors
+    ///
+    /// - [`FilesystemError`] when a folder is unreadable.
+    pub(crate) fn keep_set(&self) -> ContextualResult<BTreeSet<Sha>> {
+        let mut keep = BTreeSet::new();
+        if let Ok(handle) = self.applied() {
+            self.collect_state_refs(&handle, &mut keep);
+        }
+        for handle in self.history_list()? {
+            self.collect_state_refs(&handle, &mut keep);
+        }
+        for handle in self.list_named()? {
+            self.collect_state_refs(&handle, &mut keep);
+        }
+        Ok(keep)
+    }
+
+    /// Loads one state file with version errors mapped to terminal kinds.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::CorruptManifest`] when a state is unreadable or the payload is bad.
+    /// - [`ErrorKind::ManifestVersion`] when the version is unsupported.
+    /// - [`ErrorKind::ManifestNoVersion`] when the version is absent.
+    fn load_manifest(&self, handle: &StateHandle) -> TerminalResult<Manifest> {
+        match self.load_handle(handle) {
+            Ok(found) => Ok(found),
+            Err(contextual) => {
+                let kind = match contextual.cause() {
+                    ErrorCause::ManifestError(ManifestError::VersionUnsupported { .. }) => {
+                        ErrorKind::ManifestVersion
+                    }
+                    ErrorCause::ManifestError(ManifestError::MissingVersion) => {
+                        ErrorKind::ManifestNoVersion
+                    }
+                    _ => ErrorKind::CorruptManifest,
+                };
+                error(kind, contextual)
+            }
+        }
+    }
+
+    /// Reads one state file and decodes its manifest.
+    ///
+    /// # Errors
+    ///
+    /// - [`FilesystemError`] when the state file is unreadable.
+    /// - [`ManifestError`] when the payload is bad.
+    fn load_handle(&self, handle: &StateHandle) -> ContextualResult<Manifest> {
+        let bytes = self.read(handle)?;
+        Manifest::decode(&bytes).with_fs_path(handle.canonical())
+    }
+
+    /// Collects the content hashes from one state manifest that decodes.
+    fn collect_state_refs(&self, handle: &StateHandle, keep: &mut BTreeSet<Sha>) {
+        let found: Manifest = match self.load_handle(handle) {
+            Ok(found) => found,
+            Err(_) => return,
+        };
+        for handle in found.handles() {
+            keep.insert(*handle.sha());
+        }
+    }
+
+    /// Returns the handle for the applied state.
+    ///
+    /// # Errors
+    ///
+    /// - [`StateReason::MissingEntry`] when the history is empty.
+    fn applied(&self) -> ContextualResult<StateHandle> {
+        let mut files = history_files(&self.history)?;
+        files.reverse();
+        files
+            .into_iter()
+            .next()
+            .map(StateHandle::new)
+            .ok_or_else(|| contextual(StateReason::MissingEntry).with_fs_path(&self.history))
+    }
+
+    /// Reads one state file.
+    ///
+    /// # Errors
+    ///
+    /// - [`FilesystemError`] when the state file is unreadable.
+    fn read(&self, handle: &StateHandle) -> ContextualResult<Vec<u8>> {
+        let path = handle.canonical();
+        std::fs::read(path)
+            .map_err(ContextualCause::from)
+            .with_fs_path(path)
+    }
+
+    /// Lists named state handles.
+    ///
+    /// # Errors
+    ///
+    /// - [`FilesystemError`] when the state folder is unreadable.
+    fn list_named(&self) -> ContextualResult<Vec<StateHandle>> {
+        Ok(history_files(&self.states)?
+            .into_iter()
+            .map(StateHandle::new)
+            .collect())
+    }
+
     /// Returns the file path for one validated state name.
     ///
     /// # Errors
     ///
-    /// - [`SlotReason::EmptyName`] when the name is empty.
-    /// - [`SlotReason::NameChars`] when the name holds a forbidden character.
+    /// - [`StateReason::EmptyName`] when the name is empty.
+    /// - [`StateReason::ForbiddenNameChars`] when the name holds a forbidden character.
     fn named_path(&self, name: &str) -> ContextualResult<PathBuf> {
         validate_state_name(name)?;
         Ok(self.states.join(format!("{name}.json")))
+    }
+}
+
+/// Builds one manifest with no documents at the current version.
+fn empty() -> Manifest {
+    Manifest {
+        version: VERSION,
+        documents: Vec::new(),
+        hooks: Vec::new(),
     }
 }
 
@@ -271,10 +357,10 @@ impl StateStore {
 ///
 /// # Errors
 ///
-/// - [`SlotReason::MissingEntry`] when the state file is absent.
+/// - [`StateReason::MissingEntry`] when the state file is absent.
 fn checked(path: PathBuf) -> ContextualResult<StateHandle> {
     if !path.exists() {
-        return Err(contextual(SlotReason::MissingEntry).with_fs_path(path));
+        return Err(contextual(StateReason::MissingEntry).with_fs_path(path));
     }
     Ok(StateHandle::new(path))
 }
@@ -315,23 +401,23 @@ fn system_nanos() -> ContextualResult<u128> {
 ///
 /// # Errors
 ///
-/// - [`SlotReason::EmptyName`] when the name is empty.
-/// - [`SlotReason::NameChars`] when the name holds a forbidden character.
+/// - [`StateReason::EmptyName`] when the name is empty.
+/// - [`StateReason::ForbiddenNameChars`] when the name holds a forbidden character.
 fn validate_state_name(name: &str) -> ContextualResult<()> {
     if name.is_empty() {
-        return Err(contextual(SlotReason::EmptyName));
+        return Err(contextual(StateReason::EmptyName));
     }
     if name.contains('/') || name.contains('\\') {
-        return Err(contextual(SlotReason::NameChars));
+        return Err(contextual(StateReason::ForbiddenNameChars));
     }
     if name == "." || name == ".." || name.contains('\0') {
-        return Err(contextual(SlotReason::NameChars));
+        return Err(contextual(StateReason::ForbiddenNameChars));
     }
     if Path::new(name)
         .components()
         .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
-        return Err(contextual(SlotReason::NameChars));
+        return Err(contextual(StateReason::ForbiddenNameChars));
     }
     Ok(())
 }

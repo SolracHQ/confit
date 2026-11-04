@@ -461,14 +461,15 @@ impl<T: Decode> Decode for Box<T> {
     }
 }
 
-/// Decodes a map with string keys.
+/// Decodes a map with decoded keys.
 ///
 /// # Errors
 ///
 /// - [`DecodeError`] for tables outside the map shape.
-fn decode_map<V: Decode>(value: &Value, lua: &Lua) -> Result<Vec<(String, V)>, DecodeError> {
+/// - [`DecodeError`] for a key or value outside its shape.
+fn decode_map<K: Decode, V: Decode>(value: &Value, lua: &Lua) -> Result<Vec<(K, V)>, DecodeError> {
     let table = table_value(value)?;
-    let mut pairs: Vec<(String, Value)> = Vec::new();
+    let mut pairs: Vec<(Value, Value)> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         let (key, item) = pair.map_err(|error| DecodeError {
             segments: Vec::new(),
@@ -477,40 +478,39 @@ fn decode_map<V: Decode>(value: &Value, lua: &Lua) -> Result<Vec<(String, V)>, D
                 found: error.to_string(),
             },
         })?;
-        match key {
-            Value::String(text) => pairs.push((text.to_string_lossy(), item)),
-            _ => {
-                return Err(DecodeError {
-                    segments: Vec::new(),
-                    reason: DecodeTag::ShapeMismatch {
-                        require: "a string key".to_owned(),
-                        found: key.type_name().to_owned(),
-                    },
-                });
-            }
-        }
+        pairs.push((key, item));
     }
-    pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut decoded: Vec<(String, V)> = Vec::new();
+    let mut decoded: Vec<(K, V)> = Vec::new();
     for (key, item) in &pairs {
+        let found_key = K::decode(key, lua)?;
         let found = V::decode(item, lua).map_err(|mut error| {
-            error.segments.insert(0, Segment::Field(key.clone()));
+            error.segments.insert(0, Segment::Field(key_label(key)));
             error
         })?;
-        decoded.push((key.clone(), found));
+        decoded.push((found_key, found));
     }
     Ok(decoded)
 }
 
-impl<V: Decode> Decode for std::collections::HashMap<String, V> {
-    fn decode(value: &Value, lua: &Lua) -> Result<Self, DecodeError> {
-        decode_map::<V>(value, lua).map(|pairs| pairs.into_iter().collect())
+/// Returns the label that a map key carries in a decode error.
+fn key_label(key: &Value) -> String {
+    match key {
+        Value::String(text) => text.to_string_lossy(),
+        _ => key.type_name().to_owned(),
     }
 }
 
-impl<V: Decode> Decode for std::collections::BTreeMap<String, V> {
+impl<K: Decode + Eq + std::hash::Hash, V: Decode> Decode for std::collections::HashMap<K, V> {
     fn decode(value: &Value, lua: &Lua) -> Result<Self, DecodeError> {
-        decode_map::<V>(value, lua).map(|pairs| pairs.into_iter().collect())
+        decode_map::<K, V>(value, lua).map(|pairs| pairs.into_iter().collect())
+    }
+}
+
+impl<K: Decode + Ord, V: Decode> Decode for std::collections::BTreeMap<K, V> {
+    fn decode(value: &Value, lua: &Lua) -> Result<Self, DecodeError> {
+        let mut pairs = decode_map::<K, V>(value, lua)?;
+        pairs.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(pairs.into_iter().collect())
     }
 }
 

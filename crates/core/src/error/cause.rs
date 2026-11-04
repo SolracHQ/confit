@@ -147,38 +147,38 @@ pub enum BundleError {
     ContentMissing,
 }
 
-/// A store slot reason.
+/// A stored state reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SlotReason {
-    /// A slot name that holds no characters.
+pub enum StateReason {
+    /// A state name that holds no characters.
     EmptyName,
-    /// A slot name with forbidden characters.
-    NameChars,
-    /// A history slot with a non-number.
+    /// A state name with forbidden characters.
+    ForbiddenNameChars,
+    /// A history state with a non-number.
     NotNumber,
-    /// A history slot that points past the stored listing.
+    /// A history state that points past the stored listing.
     OutOfRange,
-    /// A history slot with no entry file.
+    /// A history state with no entry file.
     MissingEntry,
-    /// A slot with neither a name nor a history.
-    BareSlot,
+    /// A state with neither a name nor a history.
+    BareState,
 }
 
-impl std::fmt::Display for SlotReason {
-    /// Writes the slot reason as text.
+impl std::fmt::Display for StateReason {
+    /// Writes the state reason as text.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyName => write!(formatter, "name is empty"),
-            Self::NameChars => write!(formatter, "name holds forbidden characters"),
-            Self::NotNumber => write!(formatter, "history slot expects a number"),
-            Self::OutOfRange => write!(formatter, "history slot is out of range"),
+            Self::ForbiddenNameChars => write!(formatter, "name holds forbidden characters"),
+            Self::NotNumber => write!(formatter, "history state expects a number"),
+            Self::OutOfRange => write!(formatter, "history state is out of range"),
             Self::MissingEntry => write!(formatter, "history holds fewer entries"),
-            Self::BareSlot => write!(formatter, "slot expects @name or %n"),
+            Self::BareState => write!(formatter, "state expects @name or %n"),
         }
     }
 }
 
-impl std::error::Error for SlotReason {}
+impl std::error::Error for StateReason {}
 
 /// A manifest failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -402,9 +402,9 @@ pub enum ErrorCause {
     /// A command line that breaks a usage rule.
     #[error(transparent)]
     UsageError(#[from] UsageError),
-    /// A store slot that breaks a rule.
-    #[error("invalid store slot: {0}")]
-    SlotReason(#[from] SlotReason),
+    /// A stored state that breaks a rule.
+    #[error("invalid stored state: {0}")]
+    StateReason(#[from] StateReason),
 }
 
 #[cfg(test)]

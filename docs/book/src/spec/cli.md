@@ -166,8 +166,8 @@ When the run saves unmanaged files, it prints a saved line before the hint:
 saved: 3 files, confit restore @!
 ```
 
-The line is the rescue slot. It prints only when the capture holds at
-least one file. [State](state.md) covers the slot.
+The line is the rescue state. It prints only when the capture holds at
+least one file. [State](state.md) covers the state.
 
 A failure during evaluation, writing, state storage, or a hook stops the run
 with exit 1. The [apply](apply.md) page states the write sequence.
@@ -184,7 +184,7 @@ confit restore SOURCE [--force]
 | --- | --- |
 | path ending in `.cb` | bundle file, case-insensitive extension |
 | `@name` | named state |
-| `@!` | rescue slot, the pre-run capture |
+| `@!` | rescue state, the pre-run capture |
 | `%N` | history entry, previous runs, newest first from 1 |
 
 A source without `.cb` and without an `@` or `%` prefix fails as an invalid
@@ -221,7 +221,7 @@ confit export [PICKER] [-o PATH] [-m|--manifest]
 exit 2.
 
 A file export reads the state and writes a bundle. The automatic output name
-sits in the current folder:
+is in the current folder:
 
 | Picker | Name |
 | --- | --- |
@@ -312,7 +312,7 @@ A name is one path component. It is non-empty, with no `/` or `\`, and is
 not `.` or `..`. A NUL byte fails. The store adds `.json` to the name.
 
 `%N` accepts a decimal number from 1 through the count of previous entries.
-The store keeps five previous entries. `%0` fails as an out-of-range slot. A
+The store keeps five previous entries. `%0` fails as an out-of-range state. A
 number past the oldest entry fails.
 
 `bundle -o` accepts only `@name` among the pickers. `delete` accepts only

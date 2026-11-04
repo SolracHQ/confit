@@ -1,9 +1,10 @@
 # ConfIt architecture
 
-If you open the workspace you find ten crates. That looks like a lot. In
-practice you only track five ideas. What I control. What I do not. The shapes
+If you open the workspace you find eleven crates. That looks like a lot. In
+practice you only track six ideas. What I control. What I do not. The shapes
 both sides share. The toolkit that moves those shapes through Lua. The channel
-that carries progress and prompts.
+that carries progress and prompts. The portable archive that carries a run
+elsewhere.
 
 I keep the dependency graph acyclic. That habit comes from old Nim pain. It has
 no deep meaning here beyond faster builds and tidy folders. The domain drives
@@ -13,7 +14,7 @@ the layout. The graph just follows.
 
 Stores are the parts I know up front. Project files under the folder you pass as
 project. The pool of blobs keyed by hash. The fetch cache for downloads. The
-unpacked archives keyed the same way. Slots and history under the config folder.
+unpacked archives keyed the same way. States and history under the config folder.
 
 When Lua needs a file it never touches disk directly. It gets a handle from
 the engine api. A handle points at one resource. Lua calls text, load or
@@ -48,7 +49,8 @@ runtime writes. That keeps fixtures portable and tests honest.
 
 Engine owns evaluation. Loader sets up the VM. Project reads the project file
 and finds plugins. Api installs the builtin modules like fetch, open and
-template. Assembly walks the returned profile value into documents and hooks.
+template. Assembly walks the returned profile value into documents, hooks,
+and the manifest.
 
 You never call engine alone. Cli builds Stores once and hands them to engine
 through Lua app data. Every Lua callback reads them back the same way.
@@ -56,8 +58,8 @@ through Lua app data. Every Lua callback reads them back the same way.
 ## Cli is the thin surface
 
 Cli parses flags and runs one action. Plan, apply, export, delete and init.
-Actions call engine, then runtime build and prepare, then presentation renders
-the diff. Progress flows through one channel into sinks.
+Actions call engine for the manifest, then runtime prepare, then presentation
+renders the diff. Progress flows through one channel into sinks.
 
 Main builds stores and wires the rest. Nothing effectful lives in main or flag
 parsing. Effects hide behind driver and stores.
@@ -91,24 +93,24 @@ crate needs them. If you change how failures print, you change core.
 Events carries progress and prompts. The protocol between commands and the ui
 lives here, plus the handles both sides hold. It depends on nothing in confit.
 
-## Life cycle in four moves
+## Life cycle in three moves
 
-You run a profile and four moves carry it to disk.
+You run a profile and three moves carry it to disk.
 
-1. Engine evaluates it into documents with handles and hooks.
-2. Runtime builds the desired manifest and fills hashes over rendered bytes.
-3. Runtime prepares the diff. On first run it diffs desired state against disk.
+1. Engine evaluates the profile into a manifest of documents and hooks.
+   Every document hashes its own content.
+2. Runtime prepares the diff. On first run it diffs desired state against disk.
    Later it diffs recorded state against disk and desired state against recorded
    state. Behind that diff stores skip repeated work. Fetch cache skips
    downloads it already cached. Archive store skips unpacks it already unpacked.
    Pool skips blobs already present.
-4. Runtime writes. Text and structured payloads stay inline in the manifest.
+3. Runtime writes. Text and structured payloads stay inline in the manifest.
    Opaque bytes and trees stay in the pool by hash. State records the applied
-   slot and rotates history.
+   state and rotates history.
 
 ## Crate map
 
-Ten crates. One job each.
+Eleven crates. One job each.
 
 | Crate | It owns |
 | --- | --- |
@@ -117,10 +119,11 @@ Ten crates. One job each.
 | core | Errors, hashes and references |
 | events | Progress, prompts and the ui channel |
 | driver | Filesystem, http, archive, process and path helpers |
-| store | Project files, pool, fetch cache, archives, slots and history |
-| model | Documents, routes, hooks, conditions and ids |
+| bundler | Manifest builds and portable bundle archives |
+| store | Project files, pool, fetch cache, archives, states and history |
+| model | Documents, manifests, routes, hooks, conditions and ids |
 | engine | Loader, project, api, handles, assembly and stubs |
-| runtime | Manifests, bundles, diffs, writes, hooks and checks |
+| runtime | Diffs, writes, hooks, checks and status |
 | cli | Flags, actions, presentation and sinks |
 
 ## Dependencies stay acyclic
@@ -140,6 +143,7 @@ graph TD
     cli --> driver["confit-driver"]
     cli --> core["confit-core"]
     cli --> events["confit-events"]
+    cli --> bundler["confit-bundler"]
     engine --> model
     engine --> store
     engine --> driver
@@ -151,6 +155,11 @@ graph TD
     runtime --> driver
     runtime --> core
     runtime --> events
+    runtime --> bundler["confit-bundler"]
+    bundler --> model
+    bundler --> store
+    bundler --> driver
+    bundler --> core
     model --> driver
     model --> core
     model --> binding

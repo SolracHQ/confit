@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use confit_cli::actions::bundle::BundleRunner;
 use confit_cli::cli::BundleArgs;
-use confit_runtime::manifest::stored;
 use confit_store::state::Picker;
 
 /// A profile that requires the shared sugar plugin and needs no fetch.
@@ -79,7 +78,7 @@ fn named_bundle_state_holds_documents() {
         report.text
     );
     let picker: Picker = "@probe".parse().unwrap();
-    let manifest = stored::resolve(&stores.states(), &picker).unwrap();
+    let manifest = stores.states().load_state(&picker).unwrap();
     assert!(
         !manifest.documents.is_empty(),
         "the named state holds documents"

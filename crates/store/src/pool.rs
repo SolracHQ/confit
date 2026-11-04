@@ -152,7 +152,7 @@ impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
         if read == 0 {
-            let found = Sha::finish(self.hasher.clone());
+            let found = Sha::from(self.hasher.clone());
             if found != self.expected {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,

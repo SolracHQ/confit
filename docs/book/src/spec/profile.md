@@ -91,7 +91,7 @@ Documents collect in this order:
 1. Profile-level documents in declaration order.
 2. Config documents in config order, and within a config in declaration order.
 
-The assembled manifest then sorts documents by destination path. Tree members
+The assembled manifest then sorts documents by route. Tree members
 sort by relative path.
 
 Config names are unique. A repeated name fails with a duplicate-document error.

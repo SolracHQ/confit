@@ -37,7 +37,7 @@ impl Default for Project {
 pub struct PluginConf {
     /// The plugin tree folder, project relative unless absolute.
     pub folder: PathBuf,
-    /// Whether the folder sits outside the project root.
+    /// Whether the folder is outside the project root.
     pub allow_external_folders: bool,
 }
 
@@ -142,7 +142,7 @@ impl Project {
     /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the root
     ///   or the folder is unreadable.
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the folder
-    ///   sits outside the project root.
+    ///   is outside the project root.
     pub fn plugin_root(&self, root: &Path) -> TerminalResult<PluginRoot> {
         let joined = root.join(&self.plugins.folder);
         let root_real = match std::fs::canonicalize(root) {
@@ -227,7 +227,7 @@ mod tests {
                     Some(found) => assert_eq!(
                         found,
                         &Path::new("some/project.toml"),
-                        "the fs slot shows the file: {error}"
+                        "the fs path shows the file: {error}"
                     ),
                     None => panic!("expected a recorded file path: {error}"),
                 }

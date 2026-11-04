@@ -43,14 +43,6 @@ pub enum ErrorKind {
     LoadProject,
     /// A profile open that failed.
     OpenProfile,
-    /// A slot delete that failed.
-    DeleteSlot,
-    /// A slot parse for restore that failed.
-    RestoreSlot,
-    /// A slot export that failed.
-    ExportSlot,
-    /// A slot bundle that failed.
-    BundleSlot,
     /// A state delete that failed.
     DeleteState,
     /// A state apply that failed.

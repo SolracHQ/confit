@@ -129,9 +129,9 @@ impl ContextualCause {
         self
     }
 
-    /// Records the name of the store slot.
-    pub fn with_slot(mut self, slot: impl Into<String>) -> Self {
-        self.context = std::mem::take(&mut self.context).with_slot(slot);
+    /// Records the name of the stored state.
+    pub fn with_state(mut self, state: impl Into<String>) -> Self {
+        self.context = std::mem::take(&mut self.context).with_state(state);
         self
     }
 
@@ -203,8 +203,8 @@ pub trait WithContext<T> {
     fn with_cycle(self, chain: Vec<String>) -> ContextualResult<T>;
     /// Records the argv of the hook.
     fn with_argv(self, argv: impl Into<String>) -> ContextualResult<T>;
-    /// Records the name of the store slot.
-    fn with_slot(self, slot: impl Into<String>) -> ContextualResult<T>;
+    /// Records the name of the stored state.
+    fn with_state(self, state: impl Into<String>) -> ContextualResult<T>;
     /// Records the name of the command.
     fn with_command(self, command: impl Into<String>) -> ContextualResult<T>;
     /// Records the flags that conflict.
@@ -278,9 +278,9 @@ impl<T> WithContext<T> for ContextualResult<T> {
     fn with_argv(self, argv: impl Into<String>) -> ContextualResult<T> {
         self.map_err(|contextual| contextual.with_argv(argv))
     }
-    /// Records the name of the store slot.
-    fn with_slot(self, slot: impl Into<String>) -> ContextualResult<T> {
-        self.map_err(|contextual| contextual.with_slot(slot))
+    /// Records the name of the stored state.
+    fn with_state(self, state: impl Into<String>) -> ContextualResult<T> {
+        self.map_err(|contextual| contextual.with_state(state))
     }
     /// Records the name of the command.
     fn with_command(self, command: impl Into<String>) -> ContextualResult<T> {

@@ -67,7 +67,6 @@ pub struct Entry<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-/// Converts a zip failure into a core cause.
 fn zip_error(error: zip::result::ZipError) -> ContextualCause {
     use zip::result::ZipError as Zip;
     let message = error.to_string();

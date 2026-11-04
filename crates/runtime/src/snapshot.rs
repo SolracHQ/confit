@@ -1,18 +1,21 @@
-//! Pre-run capture of unmanaged destinations into the rescue slot.
+//! Pre-run capture of unmanaged destinations into the rescue state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, kind::ErrorKind};
 use confit_core::resource_ref::ResourceRef;
-use confit_model::document::{Data, Document, FileMode, OpaqueDocument, TreeDocument, TreeMember};
+use confit_model::document::{
+    Data, Document, FileMode, MemberKey, OpaqueDocument, TreeDocument, TreeMember,
+};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-use super::prepare::{self, Prepared};
-use crate::manifest::Manifest;
+use super::prepare::Prepared;
+use confit_core::version::VERSION;
+use confit_model::manifest::Manifest;
 
-/// The named slot that holds the pre-run capture.
+/// The named state that holds the pre-run capture.
 pub const RESCUE_NAME: &str = "!";
 
 /// The largest file the capture reads.
@@ -20,7 +23,7 @@ const MAX_CAPTURE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The captured documents with their counts.
 pub struct Capture {
-    /// The manifest that the rescue slot stores.
+    /// The manifest that the rescue state stores.
     pub manifest: Manifest,
     /// The files the capture read from disk.
     pub files: usize,
@@ -66,13 +69,15 @@ pub fn capture(stores: &Stores, prepared: &Prepared) -> TerminalResult<Capture> 
             }
         }
     }
-    let manifest = prepare::build(documents, Vec::new())?;
-    for handle in manifest.handles() {
-        stores
-            .resources()
-            .persist(handle)
-            .terminal(ErrorKind::StoreState)?;
-    }
+    let manifest = Manifest {
+        version: VERSION,
+        documents,
+        hooks: Vec::new(),
+    };
+    stores
+        .resources()
+        .persist(&manifest.handles())
+        .terminal(ErrorKind::StoreState)?;
     Ok(Capture {
         manifest,
         files,
@@ -98,15 +103,15 @@ enum Captured {
 fn capture_tree(
     stores: &Stores,
     document: &Document,
-    desired: &BTreeMap<String, TreeMember>,
-    known: Option<&BTreeSet<String>>,
+    desired: &BTreeMap<MemberKey, TreeMember>,
+    known: Option<&BTreeSet<MemberKey>>,
 ) -> TerminalResult<Option<Document>> {
     let mut members = BTreeMap::new();
     for relative in desired.keys() {
         if known.is_some_and(|known| known.contains(relative)) {
             continue;
         }
-        let member = document.path.join(relative);
+        let member = document.path.join(relative.as_str());
         let expanded = match member.expand() {
             Ok(expanded) => expanded,
             Err(_) => continue,
@@ -198,8 +203,8 @@ fn previous_routes(previous: &Manifest) -> BTreeSet<String> {
 }
 
 /// Collects the tree members that the previous manifest records by route.
-fn previous_tree_members(previous: &Manifest) -> BTreeMap<String, BTreeSet<String>> {
-    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+fn previous_tree_members(previous: &Manifest) -> BTreeMap<String, BTreeSet<MemberKey>> {
+    let mut out: BTreeMap<String, BTreeSet<MemberKey>> = BTreeMap::new();
     for document in &previous.documents {
         let Data::Tree(found) = &document.data else {
             continue;

@@ -2,14 +2,12 @@
 
 use std::path::Path;
 
+use confit_bundler::Bundler;
 use confit_core::error::{
-    ErrorCause, FilesystemError, SlotReason, TerminalResult, contextual, error, kind::ErrorKind,
+    ErrorCause, FilesystemError, StateReason, TerminalResult, contextual, error, kind::ErrorKind,
 };
 use confit_engine::Engine;
 use confit_events::EventHandles;
-use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::stored;
-use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
 
@@ -36,7 +34,7 @@ impl BundleRunner<'_> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::BundleSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::BundleState`] when the state picker text is malformed.
     /// - [`confit_core::error::kind::ErrorKind::BundleState`] when a state fails.
     /// - [`confit_core::error::kind::ErrorKind::MissingProject`] when the project folder is absent.
     /// - [`confit_core::error::kind::ErrorKind::OpenProfile`] when the profile is unreadable.
@@ -55,29 +53,28 @@ impl BundleRunner<'_> {
                 contextual(FilesystemError::FileMissing).with_project(&self.args.project),
             );
         }
-        let evaluated = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
-        let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
+        let desired = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
         let output = self.args.output.as_path();
         if is_named_output(output) {
             let raw = output.to_str().unwrap_or("");
             let picker: Picker = match raw.parse() {
                 Ok(picker) => picker,
                 Err(contextual) => match contextual.cause() {
-                    ErrorCause::SlotReason(_) => {
+                    ErrorCause::StateReason(_) => {
                         return Err(contextual
-                            .with_slot(raw.to_owned())
-                            .terminal(ErrorKind::BundleSlot));
+                            .with_state(raw.to_owned())
+                            .terminal(ErrorKind::BundleState));
                     }
                     _ => return error(ErrorKind::BundleState, contextual),
                 },
             };
-            let Picker::Named(_) = picker else {
+            let Picker::Named(name) = &picker else {
                 return error(
-                    ErrorKind::BundleSlot,
-                    contextual(SlotReason::BareSlot).with_slot(raw.to_owned()),
+                    ErrorKind::BundleState,
+                    contextual(StateReason::BareState).with_state(raw.to_owned()),
                 );
             };
-            stored::store_named(&self.stores.states(), &picker, &desired)?;
+            self.stores.states().save_named(name, &desired)?;
             Ok(BundleReport {
                 text: raw.to_owned(),
             })

@@ -10,7 +10,7 @@ members = [
   "crates/runtime",
   "crates/events",
   "lua-binding/crates/binding",
-  "lua-binding/crates/binding-macros",
+  "lua-binding/crates/binding-macros", "crates/bundler",
 ]
 
 [workspace.package]

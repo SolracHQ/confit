@@ -7,14 +7,11 @@ use std::path::PathBuf;
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, WithContext};
 use confit_driver as driver;
-use confit_events::ProgressEvent;
-use confit_events::ToUi;
-use confit_model::document::{Data, Document, TreeMember};
+use confit_events::{ProgressEvent, ToUi};
+use confit_model::document::{Data, Document, MemberKey, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
 use crossbeam_channel::Sender;
-
-use crate::render::render_document;
 
 /// The writer for document destinations.
 pub struct Writer {
@@ -92,7 +89,8 @@ impl Writer {
                 }
                 Data::Text(_) | Data::Structured(_) | Data::Rc(_) => {
                     driver::fs::remove_link(&expanded).terminal(ErrorKind::WriteDestination)?;
-                    let bytes = render_document(document)
+                    let bytes = document
+                        .render()
                         .map_err(ContextualCause::from)
                         .with_fs_path(&expanded)
                         .with_document(document.path.display())
@@ -140,12 +138,12 @@ impl Writer {
         &self,
         dest: &Path,
         route: &str,
-        members: &BTreeMap<String, TreeMember>,
+        members: &BTreeMap<MemberKey, TreeMember>,
     ) -> TerminalResult<usize> {
         use std::io::Write as _;
 
         for (relative, member) in members {
-            let path = dest.join(relative);
+            let path = dest.join(relative.as_str());
             let handle = member.handle();
             let mut reader = self
                 .stores
@@ -267,21 +265,21 @@ impl Writer {
                     | Data::Rc(_)
                     | Data::Opaque(_) => None,
                 })
-                .flat_map(|members| members.keys().map(String::as_str))
+                .flat_map(|members| members.keys().map(MemberKey::as_str))
                 .collect();
             let dest = expand_destination(old)?;
             for relative in old_members.keys() {
                 if new_rels.contains(relative.as_str()) {
                     continue;
                 }
-                let path = dest.join(relative);
+                let path = dest.join(relative.as_str());
                 if remove(&path)
                     .map_err(ContextualCause::from)
                     .with_fs_path(&path)
                     .terminal(ErrorKind::RemoveDestination)?
                 {
                     done += 1;
-                    self.emit_removed(&old.path.join(relative), done, total);
+                    self.emit_removed(&old.path.join(relative.as_str()), done, total);
                     removed += 1;
                 }
             }

@@ -197,8 +197,8 @@ The engine splits patches by kind and groups them by destination.
 
 1. Every structured destination runs, in first-seen order.
 2. Every rc destination runs, in first-seen order.
-3. The assembled documents join the unpatched documents and sort by display
-   path.
+3. The assembled documents join the unpatched documents and sort by
+   route.
 
 Within one destination, patches sort by priority with the highest first. Equal
 priorities keep declaration order. First-seen order follows the profile config

@@ -3,11 +3,11 @@
 use std::path::Path;
 
 use confit_core::error::{EvalError, TerminalResult, contextual, error, kind::ErrorKind};
+use confit_core::version::VERSION;
 use mlua::Lua;
 
 use confit_events::EventHandles;
-use confit_model::document::Document;
-use confit_model::hook::Hook;
+use confit_model::manifest::Manifest;
 use confit_store::Stores;
 use lua_binding::value::Decode;
 
@@ -15,14 +15,6 @@ use crate::api::profile::Profile;
 use crate::assembly::Assembler;
 use crate::loader::{install, load_chunk};
 use crate::project::Project;
-
-/// One evaluated profile.
-pub struct Evaluated {
-    /// The assembled documents.
-    pub documents: Vec<Document>,
-    /// The collected hooks.
-    pub hooks: Vec<Hook>,
-}
 
 /// The profile evaluator.
 pub struct Engine {
@@ -61,7 +53,7 @@ impl Engine {
     ///   document fails to render.
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a chunk
     ///   fails to load or a callback fails.
-    pub fn evaluate(&self, profile: &Path) -> TerminalResult<Evaluated> {
+    pub fn evaluate(&self, profile: &Path) -> TerminalResult<Manifest> {
         self.lua.set_app_data(self.stores.clone());
         self.lua.set_app_data(self.handles.clone());
         let root = self.stores.resources().roots.project_root.clone();
@@ -81,6 +73,10 @@ impl Engine {
         let assembler = Assembler::new(&self.lua);
         let documents = assembler.assemble(&decoded)?;
         let hooks = assembler.collect_hooks(&decoded, &documents)?;
-        Ok(Evaluated { documents, hooks })
+        Ok(Manifest {
+            version: VERSION,
+            documents,
+            hooks,
+        })
     }
 }

@@ -130,7 +130,7 @@ impl<'a> Fetch<'a> {
         let hit = self.lookup()?;
         let path = self.cache.resources.cache_path(hit.sha());
         let bytes = std::fs::metadata(&path)
-            .map(|facts| usize::try_from(facts.len()).unwrap_or(0))
+            .map(|facts| facts.len())
             .unwrap_or(0);
         let _ = self
             .cache
@@ -140,7 +140,7 @@ impl<'a> Fetch<'a> {
                 label: format!(
                     "collecting artifacts: {} ({} cached)",
                     self.url,
-                    human_bytes(bytes_as_u64(bytes))
+                    human_bytes(bytes)
                 ),
             }));
         match self.check(hit.sha()) {
@@ -188,7 +188,7 @@ impl<'a> Fetch<'a> {
                 label: format!(
                     "collecting artifacts: {} ({})",
                     self.url,
-                    human_bytes(bytes_as_u64(usize::try_from(self.bytes).unwrap_or(0)))
+                    human_bytes(self.bytes)
                 ),
             }));
         Ok(handle)
@@ -270,11 +270,6 @@ fn human_bytes(bytes: u64) -> String {
         unit += 1;
     }
     format!("{scaled:.1} {}", UNITS[unit])
-}
-
-/// Converts one byte count to a saturating u64.
-fn bytes_as_u64(bytes: usize) -> u64 {
-    u64::try_from(bytes).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

@@ -216,11 +216,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "confit-bundler"
+version = "0.9.0"
+dependencies = [
+ "confit-core",
+ "confit-driver",
+ "confit-model",
+ "confit-store",
+ "crossbeam-channel",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "confit-cli"
 version = "0.9.0"
 dependencies = [
  "anstream",
  "clap",
+ "confit-bundler",
  "confit-core",
  "confit-driver",
  "confit-engine",
@@ -322,6 +336,7 @@ dependencies = [
 name = "confit-runtime"
 version = "0.9.0"
 dependencies = [
+ "confit-bundler",
  "confit-core",
  "confit-driver",
  "confit-events",
@@ -346,6 +361,7 @@ dependencies = [
  "confit-core",
  "confit-driver",
  "confit-events",
+ "confit-model",
  "crossbeam-channel",
  "flate2",
  "log",

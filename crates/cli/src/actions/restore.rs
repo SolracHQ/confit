@@ -2,11 +2,10 @@
 
 use std::path::PathBuf;
 
+use confit_bundler::Bundler;
 use confit_core::error::{
-    ErrorCause, FilesystemError, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
+    FilesystemError, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
 };
-use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::stored;
 use confit_runtime::prepare;
 use confit_store::Stores;
 use confit_store::state::Picker;
@@ -19,7 +18,7 @@ use confit_events::EventHandles;
 ///
 /// # Errors
 ///
-/// - [`confit_core::error::kind::ErrorKind::RestoreSlot`] when a slot is malformed.
+/// - [`confit_core::error::kind::ErrorKind::RestoreState`] when the state picker text is malformed.
 /// - [`confit_core::error::kind::ErrorKind::RestoreState`] when a state fails or the source is not a package.
 /// - [`confit_core::error::kind::ErrorKind::ReadBundle`] when a bundle is unreadable.
 /// - [`confit_core::error::kind::ErrorKind::UnpackMember`] when a bundle member is unreadable.
@@ -36,17 +35,11 @@ pub fn run(
     let positional = args.source.as_path();
     let raw = positional.to_str().unwrap_or("").to_owned();
     let desired = if raw.starts_with('@') || raw.starts_with('%') {
-        let picker = match raw.parse::<Picker>().with_slot(&raw) {
+        let picker = match raw.parse::<Picker>().with_state(&raw) {
             Ok(picker) => picker,
-            Err(contextual) => {
-                let kind = match contextual.cause() {
-                    ErrorCause::SlotReason(_) => ErrorKind::RestoreSlot,
-                    _ => ErrorKind::RestoreState,
-                };
-                return error(kind, contextual);
-            }
+            Err(contextual) => return error(ErrorKind::RestoreState, contextual),
         };
-        stored::resolve(&stores.states(), &picker)?
+        stores.states().load_state(&picker)?
     } else if positional
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))

@@ -4,11 +4,13 @@ pub mod rc;
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use crate::routes::Route;
-use confit_core::error::{ContextualResult, DocumentError, contextual};
+use confit_core::error::{ContextualResult, DocumentError, Require, contextual};
 use confit_core::resource_ref::ResourceRef;
+use confit_core::sha::Sha;
 use lua_binding::Shape;
 use lua_binding::error::{DecodeError, DecodeTag};
 use lua_binding::value::Hooked;
@@ -93,22 +95,6 @@ impl StructuredFormat {
             Self::Yaml => "yaml",
         }
     }
-
-    /// Returns the format that the text selects, in any letter case.
-    pub fn parse(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "json" => Some(Self::Json),
-            "toml" => Some(Self::Toml),
-            "yaml" => Some(Self::Yaml),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for StructuredFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.name())
-    }
 }
 
 /// A symbolic link.
@@ -184,10 +170,76 @@ impl StructuredDocument {
     /// - [`DocumentError::RenderFailed`] when the serializer fails.
     pub fn bytes(&self) -> ContextualResult<Vec<u8>> {
         match self.format {
-            StructuredFormat::Toml => Ok(render_toml(&self.data)?.into_bytes()),
-            StructuredFormat::Json => Ok(render_json(&self.data)?.into_bytes()),
-            StructuredFormat::Yaml => Ok(render_yaml(&self.data)?.into_bytes()),
+            StructuredFormat::Toml => Ok(crate::render::render_toml(&self.data)
+                .map_err(contextual)?
+                .into_bytes()),
+            StructuredFormat::Json => Ok(crate::render::render_json(&self.data)
+                .map_err(contextual)?
+                .into_bytes()),
+            StructuredFormat::Yaml => Ok(crate::render::render_yaml(&self.data)
+                .map_err(contextual)?
+                .into_bytes()),
         }
+    }
+}
+
+/// A tree member key with forward slashes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Shape)]
+#[serde(transparent)]
+#[shape(proxy = String)]
+pub struct MemberKey {
+    /// The relative path.
+    inner: String,
+}
+
+impl MemberKey {
+    /// Builds a member key from a relative path.
+    ///
+    /// # Errors
+    ///
+    /// - [`DocumentError::ParseFailed`] when the key is bad.
+    pub fn new(text: String) -> ContextualResult<Self> {
+        if text.is_empty() || text.starts_with('/') {
+            return Err(contextual(DocumentError::ParseFailed {
+                require: Require::MemberPath,
+            }));
+        }
+        for segment in text.split('/') {
+            if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+                return Err(contextual(DocumentError::ParseFailed {
+                    require: Require::MemberPath,
+                }));
+            }
+        }
+        Ok(Self { inner: text })
+    }
+
+    /// Returns the key text.
+    pub fn as_str(&self) -> &str {
+        &self.inner
+    }
+}
+
+impl Borrow<str> for MemberKey {
+    /// Borrows the key text.
+    fn borrow(&self) -> &str {
+        &self.inner
+    }
+}
+
+impl Hooked<String> for MemberKey {
+    fn decode(_lua: &Lua, text: String) -> Result<Self, DecodeError> {
+        Self::new(text.clone()).map_err(|_| DecodeError {
+            segments: Vec::new(),
+            reason: DecodeTag::ShapeMismatch {
+                require: "a relative member path".to_owned(),
+                found: format!("'{text}'"),
+            },
+        })
+    }
+
+    fn encode(&self, _lua: &Lua) -> mlua::Result<String> {
+        Ok(self.inner.clone())
     }
 }
 
@@ -229,7 +281,7 @@ impl TreeMember {
 #[shape(table)]
 pub struct TreeDocument {
     /// Tree members keyed by relative path.
-    pub members: BTreeMap<String, TreeMember>,
+    pub members: BTreeMap<MemberKey, TreeMember>,
 }
 
 /// One document payload.
@@ -268,12 +320,59 @@ impl Document {
     pub fn new(path: Route, data: Data) -> Self {
         Self { path, data }
     }
+
+    /// Computes the content hash of one document.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
+    pub fn hash(&self) -> std::result::Result<Sha, DocumentError> {
+        match &self.data {
+            Data::Opaque(found) => Ok(*found.handle.sha()),
+            Data::Tree(found) => {
+                let mut out = Vec::new();
+                for (relative, member) in &found.members {
+                    let line = format!(
+                        "{:o} {} {}\n",
+                        member.mode().bits(),
+                        relative.as_str(),
+                        member.handle().sha()
+                    );
+                    out.extend_from_slice(line.as_bytes());
+                }
+                Ok(Sha::hash(&out))
+            }
+            Data::Structured(_) | Data::Text(_) | Data::Link(_) | Data::Rc(_) => {
+                Ok(Sha::hash(&self.render()?))
+            }
+        }
+    }
+
+    /// Encodes the payload as the exact bytes for disk.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::DocumentError::OpaqueNotRenderable`] when the payload is opaque.
+    /// - [`confit_core::error::DocumentError::TreeNotRenderable`] when the payload is a tree.
+    /// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
+    /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
+    pub fn render(&self) -> std::result::Result<Vec<u8>, DocumentError> {
+        match &self.data {
+            Data::Structured(found) => found.bytes().map_err(|_| DocumentError::RenderFailed),
+            Data::Text(found) => Ok(found.bytes()),
+            Data::Link(found) => Ok(found.bytes()),
+            Data::Rc(data) => crate::render::render_rc(data).map(|text| text.into_bytes()),
+            Data::Opaque(_) => Err(DocumentError::OpaqueNotRenderable),
+            Data::Tree(_) => Err(DocumentError::TreeNotRenderable),
+        }
+    }
 }
 
 /// Counts the tree members that differ between two member maps.
 pub fn tree_changed(
-    old: &BTreeMap<String, TreeMember>,
-    new: &BTreeMap<String, TreeMember>,
+    old: &BTreeMap<MemberKey, TreeMember>,
+    new: &BTreeMap<MemberKey, TreeMember>,
 ) -> usize {
     let mut changed = 0;
     for (relative, member) in new {
@@ -327,31 +426,4 @@ fn parse_mode_bits(text: &str) -> Option<u32> {
         }
         _ => None,
     }
-}
-
-/// Returns the TOML text of one map.
-///
-/// # Errors
-///
-/// - [`DocumentError::RenderFailed`] when the serializer fails.
-fn render_toml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
-    toml::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
-}
-
-/// Returns the JSON text of one map, with indentation.
-///
-/// # Errors
-///
-/// - [`DocumentError::RenderFailed`] when the serializer fails.
-fn render_json(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
-    serde_json::to_string_pretty(value).map_err(|_| contextual(DocumentError::RenderFailed))
-}
-
-/// Returns the YAML text of one map.
-///
-/// # Errors
-///
-/// - [`DocumentError::RenderFailed`] when the serializer fails.
-fn render_yaml(value: &BTreeMap<String, serde_json::Value>) -> ContextualResult<String> {
-    noyalib::to_string(value).map_err(|_| contextual(DocumentError::RenderFailed))
 }

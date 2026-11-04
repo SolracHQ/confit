@@ -4,19 +4,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use confit_core::sha::Sha;
-use confit_model::document::{Data, Document, StructuredFormat, TreeMember};
+use confit_model::document::{Data, Document, MemberKey, StructuredFormat, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-use super::Difference;
-use super::DifferenceOrder;
 use super::disk::{DiskReader, FileBytes, FileDigest};
 use super::ordered::Ordered;
-use crate::manifest::Manifest;
-use crate::manifest::status;
-use crate::render;
+use super::{Difference, DifferenceOrder};
+use crate::status;
 use confit_core::error::ContextualResult;
 use confit_core::error::{ContextualCause, DiffWarning, WithContext, contextual};
+use confit_model::manifest::Manifest;
 
 /// A comparator of recorded documents against the disk.
 pub(crate) struct Comparator<'a> {
@@ -69,7 +67,7 @@ impl<'a> Comparator<'a> {
             return self.compare_digest_handle(document);
         }
         DiskReader::digest(document, |FileDigest { digest, mode }| {
-            let recorded = match render::render_document(document) {
+            let recorded = match document.render() {
                 Ok(found) => found,
                 Err(leaf) => {
                     let contextual = contextual(leaf).with_document(document.path.display());
@@ -103,12 +101,12 @@ impl<'a> Comparator<'a> {
     fn compare_tree(
         &mut self,
         destination: &Route,
-        members: &BTreeMap<String, TreeMember>,
+        members: &BTreeMap<MemberKey, TreeMember>,
     ) -> ContextualResult<Vec<Difference>> {
         let base = destination.expand().with_document(destination.display())?;
         let mut out = Vec::new();
         for (relative, member) in members {
-            out.extend(self.compare_member(destination, &base, relative, member)?);
+            out.extend(self.compare_member(destination, &base, relative.as_str(), member)?);
         }
         Ok(out)
     }

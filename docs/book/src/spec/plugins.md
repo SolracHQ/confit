@@ -278,7 +278,7 @@ end
 - Config names and hook ids are unique across the profile. A repeated name fails
   the plan.
 
-The module annotation sits in the plugin file as
+The module annotation is in the plugin file as
 `---@module "plugins.user.name"`. `.luarc.json` at the project root maps the
 plugin folder and the stubs folder on the library path. `confit init --lsp`
 writes the file. `confit init --stubs` writes the stub files that describe

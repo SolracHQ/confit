@@ -8,9 +8,9 @@ use confit_core::sha::Sha;
 use confit_model::arg::Arg;
 use confit_model::document::{self as document_mod, Data, Document, RcEntry};
 use confit_model::hook::{self, HookLifecycle};
+use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
-use confit_runtime::manifest::Manifest;
-use confit_runtime::manifest::status::{self, DocumentStatus};
+use confit_runtime::status::{self, DocumentStatus};
 use confit_runtime::{Difference, Prepared};
 
 use crate::presentation::difference;
@@ -180,12 +180,7 @@ impl Summary<'_> {
     fn resource_lines(&self, painter: &Painter) -> Vec<String> {
         let mut out = Vec::new();
         for document in &self.built.documents {
-            let status = status::status(
-                document,
-                &self.previous.documents,
-                &self.built.hashes,
-                &self.previous.hashes,
-            );
+            let status = status::status(document, &self.previous.documents);
             if matches!(status, DocumentStatus::Unchanged) {
                 continue;
             }
@@ -214,12 +209,7 @@ impl Summary<'_> {
                 "Documents: {adds} to add, {changes} to change, 0 to destroy."
             ));
         } else {
-            let counts = status::summary(
-                &self.built.documents,
-                &self.built.hashes,
-                &self.previous.documents,
-                &self.previous.hashes,
-            );
+            let counts = status::summary(&self.built.documents, &self.previous.documents);
             out.push(format!(
                 "Documents: {} to add, {} to change, {} to destroy.",
                 counts.create, counts.update, counts.delete
@@ -292,12 +282,7 @@ impl Summary<'_> {
 
     /// Renders the entry lines that one document's status calls for.
     fn document_lines(&self, painter: &Painter, document: &Document) -> Vec<String> {
-        match status::status(
-            document,
-            &self.previous.documents,
-            &self.built.hashes,
-            &self.previous.hashes,
-        ) {
+        match status::status(document, &self.previous.documents) {
             DocumentStatus::Create => entry_bodies(document)
                 .into_iter()
                 .map(|body| painter.paint(Sigil::Add, &format!("  {} {body}", Sigil::Add.mark())))
@@ -341,19 +326,16 @@ impl Summary<'_> {
         }
     }
 
-    /// Renders the delete headers for previous keys that the manifest drops.
+    /// Renders the delete headers for previous paths that the manifest drops.
     fn delete_headers(&self) -> Vec<String> {
         let seen: BTreeSet<String> = self.built.documents.iter().map(status::key).collect();
         self.previous
             .documents
             .iter()
-            .filter(|recorded| {
-                !seen.contains(&status::key(recorded))
-                    && !status::superseded_by(recorded, &self.built.documents)
-            })
+            .filter(|recorded| !seen.contains(&status::key(recorded)))
             .map(|recorded| {
-                let key = status::key(recorded);
-                let (kind, path) = split_key(&key);
+                let path = recorded.path.display();
+                let kind = kind_name(&recorded.data);
                 match &recorded.data {
                     Data::Tree(found) => format!(
                         "{} {path}: {kind} ({} files)",
@@ -366,17 +348,12 @@ impl Summary<'_> {
             .collect()
     }
 
-    /// Finds the matching recorded document, else the opaque one.
+    /// Finds the recorded document at the same path.
     fn find_recorded<'a>(&'a self, document: &Document) -> Option<&'a Document> {
-        if let Some(found) = self
-            .previous
+        self.previous
             .documents
             .iter()
-            .find(|item| status::key(item) == status::key(document))
-        {
-            return Some(found);
-        }
-        status::find_opaque_sibling(&self.previous.documents, document)
+            .find(|item| item.path == document.path)
     }
 }
 
@@ -480,7 +457,7 @@ fn first_run_entries<'a>(
         .collect()
 }
 
-/// Returns whether a route sits under its destination path.
+/// Returns whether a route is under its destination path.
 fn member_of(destination: &Route, path: &Route) -> bool {
     path.base() == destination.base()
         && path.relative_path() != destination.relative_path()
@@ -776,11 +753,11 @@ fn recorded_diff(old: &str, new: &str) -> String {
 
 /// Renders one rc update as a text diff from recorded to desired.
 fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) -> Vec<String> {
-    let old_bytes = match confit_runtime::render_document(recorded) {
+    let old_bytes = match recorded.render() {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
-    let new_bytes = match confit_runtime::render_document(document) {
+    let new_bytes = match document.render() {
         Ok(bytes) => bytes,
         Err(_) => return update_fallback(painter, document),
     };
@@ -791,14 +768,6 @@ fn rc_update_lines(painter: &Painter, document: &Document, recorded: &Document) 
     let new = String::from_utf8_lossy(&new_bytes);
     let diff = recorded_diff(&old, &new);
     painted_diff_lines(painter, &diff)
-}
-
-/// Splits a manifest key into the kind and the path.
-fn split_key(key: &str) -> (&str, &str) {
-    match key.find(':') {
-        Some(index) => (&key[..index], &key[index + 1..]),
-        None => ("", key),
-    }
 }
 
 /// Collects the changed leaves between the old and the new map.
@@ -864,11 +833,13 @@ mod tests {
     use confit_core::version::VERSION;
     use confit_model::arg::Arg;
     use confit_model::condition::Condition;
-    use confit_model::document::{FileMode, TreeDocument, TreeMember};
+    use confit_model::document::FileMode;
+    use confit_model::document::MemberKey;
+    use confit_model::document::TreeDocument;
+    use confit_model::document::TreeMember;
     use confit_model::hook::{Hook, HookTimeout};
     use confit_model::id::Id;
-    use confit_runtime::manifest::Manifest;
-    use confit_runtime::prepare;
+    use confit_model::manifest::Manifest;
 
     fn probe_hook() -> Hook {
         Hook {
@@ -891,7 +862,7 @@ mod tests {
         let blob = Sha::hash(b"x");
         let mut members = BTreeMap::new();
         members.insert(
-            "a.ttf".to_owned(),
+            MemberKey::new("a.ttf".to_owned()).unwrap(),
             TreeMember::Full {
                 handle: ResourceRef::new(blob),
                 mode: FileMode::new(0o644),
@@ -918,13 +889,16 @@ mod tests {
 
     #[test]
     fn preview_renders_an_absent_binary_hook() {
-        let desired = prepare::build(Vec::new(), vec![probe_hook()]).unwrap();
+        let desired = Manifest {
+            version: VERSION,
+            documents: Vec::new(),
+            hooks: vec![probe_hook()],
+        };
         let prepared = Prepared {
             desired,
             previous: Manifest {
                 version: VERSION,
                 documents: Vec::new(),
-                hashes: BTreeMap::new(),
                 hooks: Vec::new(),
             },
             differences: Vec::new(),

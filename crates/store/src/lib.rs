@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use confit_core::error::ContextualResult;
 use confit_driver::paths::BaseDirs;
 use confit_events::ToUi;
 use crossbeam_channel::Sender;
@@ -117,5 +118,15 @@ impl Stores {
     /// Returns the store of state files and history.
     pub fn states(&self) -> Arc<StateStore> {
         self.states.clone()
+    }
+
+    /// Removes pool entries that no stored state references.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::FilesystemError`] when a folder is unreadable.
+    pub fn prune_unreferenced(&self) -> ContextualResult<usize> {
+        let keep = self.states.keep_set()?;
+        self.pool.prune(&keep)
     }
 }

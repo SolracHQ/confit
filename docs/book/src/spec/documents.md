@@ -76,7 +76,7 @@ so a recorded document expands again on the next apply.
 ## Common rules
 
 - One document per path. A repeated path fails the plan.
-- Documents sort by display path. Tree members sort by relative path.
+- Documents sort by route. Tree members sort by relative path.
 - A mode is a string. Octal forms are `755` and `0755`. A symbolic form is
   `rwxr-xr-x`. Any other text fails.
 - Apply writes `644` for a text or opaque document without a mode. A ref
@@ -277,7 +277,8 @@ A tree document writes a set of files under one folder.
 A member value is a ref or a table with `handle` and `mode`. A ref
 without a mode takes `644`.
 
-A member key is a relative path with forward slashes. These keys fail:
+A member key is a relative path with forward slashes. Profile decode
+rejects these keys:
 
 - an empty key
 - an absolute key
@@ -295,15 +296,15 @@ member change reads as a document update.
 
 ## Kind changes
 
-The recorded manifest identifies one entry by kind and display path. A kind
-change at one path reads as a create of the new kind and a delete of the old
+The recorded manifest identifies one entry by display path. The kind selects
+the comparison method. A kind change at one path reads as one update.
+
+The same hash means unchanged, and no comparison runs. Differing hashes
+compare once with the coarser method. Structured against text, rc, and link
+target text compares as rendered bytes. Anything against opaque compares as
+hashes. Those hashes already differ, so the document updates with no further
+lines. Equal bytes on disk mean unchanged, even across kinds. A mode mismatch
+forces an update.
+
+Apply writes the new payload at the path. The recorded entry takes the new
 kind.
-
-| Change | Preview |
-| --- | --- |
-| text to structured | one create and one delete |
-| rc to text | one create and one delete |
-| any kind to opaque | one update |
-| opaque to any kind | one update |
-
-Apply writes the new payload at the path. The recorded entry takes the new kind.

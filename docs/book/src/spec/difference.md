@@ -66,14 +66,19 @@ See [Apply](apply.md) for the run sequence.
 
 | Status | Condition |
 | --- | --- |
-| Create | No recorded document with the same kind and path |
-| Update | The same kind and path with a different hash or mode |
-| Unchanged | The same kind, path, hash, and mode |
+| Create | No recorded document with the same path |
+| Update | The same path with a different hash or mode |
+| Unchanged | The same path, hash, and mode |
 
-- A change between two kinds reads as a create and a delete. A change to or from
-  opaque reads as an update.
-- A recorded document absent from the desired manifest is a delete, unless an
-  opaque sibling at the same path replaces it.
+- A kind change at one path reads as one update. The kind selects the
+  comparison method.
+- The same hash means unchanged, and no comparison runs. Differing hashes
+  compare once with the coarser method. Structured against text, rc, and link
+  target text compares as rendered bytes. Anything against opaque compares as
+  hashes. Those hashes already differ, so the document updates with no further
+  lines. Equal bytes on disk mean unchanged, even across kinds. A mode mismatch
+  forces an update.
+- A recorded document absent from the desired manifest is a delete.
 - A create shows as `+ {path}: {kind}` with one `+` line per entry body.
 - An update shows as `~ {path}: {kind}` with its changed lines.
 - A delete shows as `- {path}: {kind}`, with a member count for a tree.

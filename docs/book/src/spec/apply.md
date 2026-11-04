@@ -186,7 +186,7 @@ The hint is the previous history entry, so the command undoes the run. It
 prints only when a previous entry exists. A run that changed
 nothing prints only the count line.
 
-Before the writes, the run saves unmanaged destinations into the rescue slot.
+Before the writes, the run saves unmanaged destinations into the rescue state.
 When the capture holds at least one file, the report gains a saved line:
 
 ```text
@@ -194,7 +194,7 @@ saved: 3 files, confit restore @!
 ```
 
 `confit restore @!` writes the saved bytes back. The [state](state.md) page
-covers the slot.
+covers the state.
 
 Every run prints the log path to stderr:
 

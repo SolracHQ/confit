@@ -2,44 +2,21 @@
 
 use std::collections::BTreeMap;
 
+use crate::arg::{Arg, quote};
+use crate::condition::Condition;
+use crate::document::{RcData, RcEntry};
+use crate::routes::Route;
 use confit_core::error::{DocumentError, ErrorCause};
-use confit_model::arg::{Arg, quote};
-use confit_model::condition::Condition;
-use confit_model::document::{Data, Document, RcData, RcEntry, StructuredFormat};
-use confit_model::routes::Route;
 
 /// The guard that every shell file shares for an interactive shell.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
-
-/// Encodes one document as the exact bytes for disk.
-///
-/// # Errors
-///
-/// - [`confit_core::error::DocumentError::OpaqueNotRenderable`] when the payload is opaque.
-/// - [`confit_core::error::DocumentError::TreeNotRenderable`] when the payload is a tree.
-/// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
-/// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
-pub fn render_document(document: &Document) -> std::result::Result<Vec<u8>, DocumentError> {
-    match &document.data {
-        Data::Structured(found) => match found.format {
-            StructuredFormat::Toml => render_toml(&found.data).map(|text| text.into_bytes()),
-            StructuredFormat::Json => render_json(&found.data).map(|text| text.into_bytes()),
-            StructuredFormat::Yaml => render_yaml(&found.data).map(|text| text.into_bytes()),
-        },
-        Data::Text(found) => Ok(found.content.as_bytes().to_vec()),
-        Data::Link(found) => Ok(found.target.display().as_bytes().to_vec()),
-        Data::Rc(data) => render_rc(data).map(|text| text.into_bytes()),
-        Data::Opaque(_) => Err(DocumentError::OpaqueNotRenderable),
-        Data::Tree(_) => Err(DocumentError::TreeNotRenderable),
-    }
-}
 
 /// Encodes one map as TOML text.
 ///
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
-fn render_toml(
+pub(crate) fn render_toml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     toml::to_string(value).map_err(|_| DocumentError::RenderFailed)
@@ -50,7 +27,7 @@ fn render_toml(
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
-fn render_json(
+pub(crate) fn render_json(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     serde_json::to_string_pretty(value).map_err(|_| DocumentError::RenderFailed)
@@ -61,7 +38,7 @@ fn render_json(
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::RenderFailed`] when the serializer fails.
-fn render_yaml(
+pub(crate) fn render_yaml(
     value: &BTreeMap<String, serde_json::Value>,
 ) -> std::result::Result<String, DocumentError> {
     noyalib::to_string(value).map_err(|_| DocumentError::RenderFailed)
@@ -72,7 +49,7 @@ fn render_yaml(
 /// # Errors
 ///
 /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
-fn render_rc(data: &RcData) -> std::result::Result<String, DocumentError> {
+pub(crate) fn render_rc(data: &RcData) -> std::result::Result<String, DocumentError> {
     let profile = section_lines(&data.profile)?;
     let config = section_lines(&data.config)?;
     let finals = section_lines(&data.r#final)?;

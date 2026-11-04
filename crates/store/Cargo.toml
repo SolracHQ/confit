@@ -17,6 +17,7 @@ confit-core = { path = "../core" }
 confit-events = { path = "../events" }
 crossbeam-channel.workspace = true
 log.workspace = true
+confit-model = { version = "0.9.0", path = "../model" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

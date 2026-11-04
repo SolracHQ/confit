@@ -556,7 +556,7 @@ mod tests {
                 );
                 match &error.context().profile {
                     Some(found) => {
-                        assert_eq!(found, &missing, "the profile slot shows the file: {error}")
+                        assert_eq!(found, &missing, "the profile path shows the file: {error}")
                     }
                     None => panic!("expected a recorded profile path: {error}"),
                 }
@@ -592,7 +592,7 @@ mod tests {
                 );
                 match &error.context().profile {
                     Some(found) => {
-                        assert_eq!(found, &profile, "the profile slot shows the file: {error}")
+                        assert_eq!(found, &profile, "the profile path shows the file: {error}")
                     }
                     None => panic!("expected a recorded profile path: {error}"),
                 }
@@ -629,14 +629,14 @@ mod tests {
                     match &terminal.context().module {
                         Some(module) => assert_eq!(
                             module, "broken",
-                            "the module slot shows the name: {terminal}"
+                            "the module name shows the name: {terminal}"
                         ),
                         None => panic!("expected a recorded module name: {terminal}"),
                     }
                     match &terminal.context().fs_path {
                         Some(path) => assert!(
                             path.ends_with("broken.lua"),
-                            "the fs slot shows the file: {terminal}"
+                            "the fs path shows the file: {terminal}"
                         ),
                         None => panic!("expected a recorded file path: {terminal}"),
                     }
@@ -674,7 +674,7 @@ mod tests {
                         match &terminal.context().module {
                             Some(found) => assert_eq!(
                                 found, name,
-                                "the module slot shows the name: {terminal}"
+                                "the module name shows the name: {terminal}"
                             ),
                             None => panic!("expected a recorded module name: {terminal}"),
                         }
@@ -1028,7 +1028,7 @@ mod tests {
                 );
                 match &error.context().scope {
                     Some(found) => {
-                        assert_eq!(found, &scope, "the scope slot shows the scope: {error}")
+                        assert_eq!(found, &scope, "the scope shows the scope: {error}")
                     }
                     None => panic!("expected a recorded scope: {error}"),
                 }

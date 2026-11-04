@@ -170,9 +170,9 @@ impl Error {
                 Some(path) => format!("Cannot load '{}' manifest, missing version", path.display()),
                 None => "Cannot load 'unknown' manifest, missing version".to_owned(),
             },
-            ErrorKind::DeleteNonNamed => match &context.slot {
-                Some(slot) => format!("Cannot delete the bare slot '{slot}'"),
-                None => "Cannot delete the bare slot 'unknown'".to_owned(),
+            ErrorKind::DeleteNonNamed => match &context.state {
+                Some(state) => format!("Cannot delete the bare state '{state}'"),
+                None => "Cannot delete the bare state 'unknown'".to_owned(),
             },
             ErrorKind::FlagsConflict => match &context.command {
                 Some(command) => format!(
@@ -212,26 +212,27 @@ impl Error {
                 Some(profile) => format!("Cannot open profile at '{}'", profile.display()),
                 None => "Cannot open profile at 'unknown'".to_owned(),
             },
-            ErrorKind::DeleteSlot
-            | ErrorKind::RestoreSlot
-            | ErrorKind::ExportSlot
-            | ErrorKind::BundleSlot => {
+            ErrorKind::DeleteState
+            | ErrorKind::RestoreState
+            | ErrorKind::ExportState
+            | ErrorKind::BundleState => {
                 let verb = match &self.kind {
-                    ErrorKind::DeleteSlot => "delete",
-                    ErrorKind::RestoreSlot => "restore",
-                    ErrorKind::ExportSlot => "export",
+                    ErrorKind::DeleteState => "delete",
+                    ErrorKind::RestoreState => "restore",
+                    ErrorKind::ExportState => "export",
                     _ => "bundle",
                 };
-                match &context.slot {
-                    Some(slot) => format!("Cannot {verb} the slot '{slot}', {}", self.cause),
-                    None => format!("Cannot {verb} the slot 'unknown', {}", self.cause),
+                match &context.state {
+                    Some(state) => format!("Cannot {verb} the state '{state}', {}", self.cause),
+                    None => match &self.kind {
+                        ErrorKind::DeleteState => "Cannot delete the state".to_owned(),
+                        ErrorKind::RestoreState => "Cannot restore the state".to_owned(),
+                        ErrorKind::ExportState => "Cannot export the state".to_owned(),
+                        _ => "Cannot bundle the state".to_owned(),
+                    },
                 }
             }
-            ErrorKind::DeleteState => "Cannot delete the state".to_owned(),
             ErrorKind::ApplyState => "Cannot apply the state".to_owned(),
-            ErrorKind::BundleState => "Cannot bundle the state".to_owned(),
-            ErrorKind::ExportState => "Cannot export the state".to_owned(),
-            ErrorKind::RestoreState => "Cannot restore the state".to_owned(),
             ErrorKind::RotateHistory => "Cannot rotate history".to_owned(),
             ErrorKind::PruneBlobs => "Cannot clean the old blobs, stale files remain".to_owned(),
             ErrorKind::StoreState => "Cannot store the state".to_owned(),

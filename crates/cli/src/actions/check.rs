@@ -48,8 +48,7 @@ impl CheckRunner<'_> {
                 contextual(FilesystemError::FileMissing).with_project(&self.args.project),
             );
         }
-        let evaluated = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
-        let desired = prepare::build(evaluated.documents, evaluated.hooks)?;
+        let desired = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
         let prepared = prepare::prepare(&self.stores, desired)?;
         for warning in &prepared.warnings {
             let _ = self.handles.to_ui.send(ToUi::Print(warning.summary()));

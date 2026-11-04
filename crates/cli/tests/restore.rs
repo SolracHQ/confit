@@ -1,4 +1,4 @@
-//! Restore runs over bundles, slots, and history.
+//! Restore runs over bundles, states, and history.
 
 #![allow(clippy::unwrap_used)]
 
@@ -175,7 +175,7 @@ fn restore_history_rejects_an_out_of_range_pick() {
 }
 
 #[test]
-fn restore_history_rejects_slot_zero() {
+fn restore_history_rejects_state_zero() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-zero-note", "only");
     apply_project(dir.path());
@@ -187,6 +187,6 @@ fn restore_history_rejects_slot_zero() {
     let hooks = dir.path().join("hooks");
     assert!(
         restore::run(&args, stores, common::test_handles(), hooks).is_err(),
-        "slot zero is internal and never parses"
+        "state zero is internal and never parses"
     );
 }

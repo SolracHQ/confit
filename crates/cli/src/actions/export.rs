@@ -2,11 +2,10 @@
 
 use std::path::PathBuf;
 
+use confit_bundler::Bundler;
 use confit_core::error::{
     ErrorCause, Terminal, TerminalResult, WithContext, error, kind::ErrorKind,
 };
-use confit_runtime::bundle::Bundler;
-use confit_runtime::manifest::stored;
 use confit_store::Stores;
 use confit_store::state::Picker;
 
@@ -37,7 +36,7 @@ impl<'a> ExportRunner<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when the state picker text is malformed.
     /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
     /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
@@ -51,7 +50,7 @@ impl<'a> ExportRunner<'a> {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ExportSlot`] when a slot is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when the state picker text is malformed.
     /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
     /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
@@ -61,25 +60,26 @@ impl<'a> ExportRunner<'a> {
         let args = self.args;
         let stores = self.stores;
         let bundles = Bundler::new(&stores);
-        let picker = match args.picker.as_deref() {
-            None => Picker::Applied,
+        let states = stores.states();
+        let (manifest, prefix) = match args.picker.as_deref() {
+            None => (states.load_applied()?, APPLIED_PREFIX.to_owned()),
             Some(raw) => match raw.parse::<Picker>() {
-                Ok(picker) => picker,
+                Ok(picker) => {
+                    let prefix = match &picker {
+                        Picker::Named(name) => name.clone(),
+                        Picker::History(pick) => format!("{HISTORY_PREFIX}{pick}"),
+                    };
+                    (states.load_state(&picker)?, prefix)
+                }
                 Err(contextual) => match contextual.cause() {
-                    ErrorCause::SlotReason(_) => {
+                    ErrorCause::StateReason(_) => {
                         return Err(contextual
-                            .with_slot(raw.to_owned())
-                            .terminal(ErrorKind::ExportSlot));
+                            .with_state(raw.to_owned())
+                            .terminal(ErrorKind::ExportState));
                     }
                     _ => return error(ErrorKind::ExportState, contextual),
                 },
             },
-        };
-        let manifest = stored::resolve(&stores.states(), &picker)?;
-        let prefix = match &picker {
-            Picker::Applied => APPLIED_PREFIX.to_owned(),
-            Picker::Named(name) => name.clone(),
-            Picker::History(pick) => format!("{HISTORY_PREFIX}{pick}"),
         };
         let auto = PathBuf::from(prefix);
         if args.manifest {

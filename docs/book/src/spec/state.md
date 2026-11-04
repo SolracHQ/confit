@@ -44,9 +44,6 @@ A manifest is one JSON object:
       "final": []
     }
   ],
-  "hashes": {
-    "home('.bashrc')": "<64 hex characters>"
-  },
   "hooks": []
 }
 ```
@@ -55,12 +52,12 @@ A manifest is one JSON object:
 | --- | --- |
 | `version` | The binary triplet |
 | `documents` | Every document, in path order |
-| `hashes` | The rendered hash of each document, keyed by display path |
 | `hooks` | Every hook, in profile order |
 
-A handle serializes as its content hash. An opaque document stores the hash of
-the bytes, and a tree member stores the hash of its member body. A tree document
-itself hashes its member list: mode, relative path, and member hash per line.
+A reference serializes as its hex hash. An opaque document carries the
+hash of the bytes, and a tree member carries the hash of its member body.
+A tree document hashes its member list: mode, relative path, and member
+hash per line.
 
 `apply` fills the pool with every opaque and tree member body before the
 preview. A stored manifest therefore resolves its handles only from the pool.
@@ -75,7 +72,7 @@ preview. A stored manifest therefore resolves its handles only from the pool.
   `%5` name the previous ones, newest first. The oldest file drops when a
   seventh lands.
 - `%N` picks a previous entry, newest first. `%1` is the previous run. `%0`
-  fails as an out-of-range slot. A number past the oldest entry fails.
+  fails as an out-of-range state. A number past the oldest entry fails.
 - A named state never enters the history.
 
 The hint `confit restore %1` undoes the run. It prints only when a previous
@@ -95,16 +92,19 @@ writes no bundle file and stores no content bytes.
 - A handle resolves from the cache, then from the pool. A hash with no stored
   bytes fails the restore.
 
-The named manifest is only hashes. The bytes come from the pool or the
-cache. Remove those bytes and the named state no longer restores.
+The pool holds the opaque and tree member blobs. The cache holds the
+fetched and extracted blobs. The named manifest holds the hashes that point
+at them. A blob with no bytes on disk fails the restore. Each apply and
+delete prunes the blobs that no stored manifest references, so manual
+deletion only breaks restores.
 
-## Rescue slot
+## Rescue state
 
 Before the writes, the run saves every destination that exists on disk and
 that no manifest records into `states/!.json`. The capture mirrors the
 desired shapes: single files land as opaque documents, tree members land
 inside a tree at the same route. A later capture replaces the file, so the
-slot holds one rescue. `restore @!` writes it back, `export @!` packs it,
+state holds one rescue. `restore @!` writes it back, `export @!` packs it,
 and `delete @!` drops it. Files over 16 MiB stay out with one warning
 line.
 

@@ -57,7 +57,6 @@ pub(super) fn spawn(
     }
 }
 
-/// Converts a spawn or wait fault into a cause.
 fn io_cause(error: std::io::Error) -> ContextualCause {
     match error.kind() {
         std::io::ErrorKind::NotFound => ContextualCause::from(HookRunError::BinaryUnresolved),

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use compare::Comparator;
 
-use crate::manifest::Manifest;
 use confit_core::error::{ContextualResult, DiffWarning};
+use confit_model::manifest::Manifest;
 use confit_model::routes::Route;
 use confit_store::Stores;
 
@@ -98,15 +98,20 @@ mod tests {
 
     use confit_core::resource_ref::ResourceRef;
     use confit_core::sha::Sha;
-    use confit_model::document::{
-        Data, Document, FileMode, RcData, RcEntry, TextDocument, TreeDocument, TreeMember,
-    };
+    use confit_model::document::Data;
+    use confit_model::document::Document;
+    use confit_model::document::FileMode;
+    use confit_model::document::MemberKey;
+    use confit_model::document::RcData;
+    use confit_model::document::RcEntry;
+    use confit_model::document::TextDocument;
+    use confit_model::document::TreeDocument;
+    use confit_model::document::TreeMember;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
 
-    use crate::manifest::Manifest;
-    use crate::render;
     use confit_core::version::VERSION;
+    use confit_model::manifest::Manifest;
 
     fn literal(path: &std::path::Path) -> Route {
         Route::new(RouteBase::Literal, path).unwrap()
@@ -123,7 +128,6 @@ mod tests {
         Manifest {
             version: VERSION,
             documents,
-            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         }
     }
@@ -141,8 +145,9 @@ mod tests {
 
     fn tree_doc(dir: &std::path::Path, relative: &str) -> Document {
         let mut members = BTreeMap::new();
+        let key = MemberKey::new(relative.to_owned()).unwrap();
         members.insert(
-            relative.to_string(),
+            key,
             TreeMember::Handle(ResourceRef::new(Sha::hash(b"member bytes"))),
         );
         Document::new(literal(dir), Data::Tree(TreeDocument { members }))
@@ -229,7 +234,7 @@ mod tests {
                 Vec::new(),
             )),
         );
-        let recorded = render::render_document(&document).unwrap();
+        let recorded = document.render().unwrap();
         let text = String::from_utf8_lossy(&recorded).into_owned();
         assert!(
             text.contains(sourced.to_str().unwrap()),
@@ -243,7 +248,6 @@ mod tests {
         let manifest = Manifest {
             version: VERSION,
             documents: vec![document.clone()],
-            hashes: BTreeMap::new(),
             hooks: Vec::new(),
         };
         let (sender, _) = crossbeam_channel::unbounded();

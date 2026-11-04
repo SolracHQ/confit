@@ -40,9 +40,11 @@ pub fn run(
             contextual(FilesystemError::FileMissing).with_project(&args.project),
         );
     }
-    let evaluated = Engine::new(stores.clone(), handles.clone()).evaluate(&path)?;
-    let built = prepare::build(evaluated.documents, evaluated.hooks)?;
-    built.persist(&stores).terminal(ErrorKind::StoreState)?;
+    let built = Engine::new(stores.clone(), handles.clone()).evaluate(&path)?;
+    stores
+        .resources()
+        .persist(&built.handles())
+        .terminal(ErrorKind::StoreState)?;
     let prepared = prepare::prepare(&stores, built)?;
     CommitRunner {
         prepared,

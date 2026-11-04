@@ -1,8 +1,7 @@
 //! Lifecycle status against previous manifests.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use confit_core::sha::Sha;
 use confit_model::document::Data;
 use confit_model::document::Document;
 
@@ -29,47 +28,44 @@ pub struct Summary {
 }
 
 /// Returns the lifecycle status of one document against the previous documents.
-pub fn status(
-    document: &Document,
-    previous: &[Document],
-    hashes: &BTreeMap<String, Sha>,
-    previous_hashes: &BTreeMap<String, Sha>,
-) -> DocumentStatus {
+pub fn status(document: &Document, previous: &[Document]) -> DocumentStatus {
     let recorded = previous
         .iter()
-        .find(|recorded| key(recorded) == key(document));
+        .find(|recorded| recorded.path == document.path);
     match recorded {
-        None => match find_opaque_sibling(previous, document) {
-            Some(_) => DocumentStatus::Update,
-            None => DocumentStatus::Create,
-        },
-        Some(recorded)
-            if hashes.get(&document.path.display())
-                == previous_hashes.get(&recorded.path.display())
-                && mode(recorded) == mode(document) =>
-        {
-            DocumentStatus::Unchanged
+        None => DocumentStatus::Create,
+        Some(recorded) => {
+            let same_mode = mode(recorded) == mode(document);
+            if same_mode && hash_matches(document, recorded) {
+                return DocumentStatus::Unchanged;
+            }
+            if mode(recorded) != mode(document) {
+                return DocumentStatus::Update;
+            }
+            if is_opaque(document) || is_opaque(recorded) {
+                return DocumentStatus::Update;
+            }
+            match (recorded.render(), document.render()) {
+                (Ok(old_bytes), Ok(new_bytes)) if old_bytes == new_bytes => {
+                    DocumentStatus::Unchanged
+                }
+                _ => DocumentStatus::Update,
+            }
         }
-        Some(_) => DocumentStatus::Update,
     }
 }
 
-/// Returns whether a recorded document yields to the desired documents.
-pub fn superseded_by(document: &Document, desired: &[Document]) -> bool {
-    find_opaque_sibling(desired, document).is_some()
+/// Returns whether both documents hash to the same content hash.
+fn hash_matches(document: &Document, recorded: &Document) -> bool {
+    match (document.hash(), recorded.hash()) {
+        (Ok(next), Ok(old)) => next == old,
+        _ => false,
+    }
 }
 
-/// Returns the kind key with the display path.
+/// Returns the display path that keys one document.
 pub fn key(document: &Document) -> String {
-    let kind = match &document.data {
-        Data::Structured(_) => "structured",
-        Data::Text(_) => "text",
-        Data::Link(_) => "link",
-        Data::Rc(_) => "rc",
-        Data::Opaque(_) => "opaque",
-        Data::Tree(_) => "tree",
-    };
-    format!("{kind}:{}", document.path.display())
+    document.path.display()
 }
 
 /// Returns whether the document carries opaque bytes.
@@ -86,25 +82,8 @@ pub fn mode(document: &Document) -> Option<u32> {
     }
 }
 
-/// Finds one opaque sibling at the same destination with a different kind.
-pub fn find_opaque_sibling<'a>(
-    documents: &'a [Document],
-    document: &Document,
-) -> Option<&'a Document> {
-    documents.iter().find(|recorded| {
-        recorded.path == document.path
-            && key(recorded) != key(document)
-            && (is_opaque(recorded) || is_opaque(document))
-    })
-}
-
 /// Counts the documents in each lifecycle state against the previous documents.
-pub fn summary(
-    built: &[Document],
-    built_hashes: &BTreeMap<String, Sha>,
-    previous: &[Document],
-    previous_hashes: &BTreeMap<String, Sha>,
-) -> Summary {
+pub fn summary(built: &[Document], previous: &[Document]) -> Summary {
     let mut counts = Summary {
         create: 0,
         update: 0,
@@ -113,14 +92,14 @@ pub fn summary(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for document in built {
         seen.insert(key(document));
-        match status(document, previous, built_hashes, previous_hashes) {
+        match status(document, previous) {
             DocumentStatus::Create => counts.create += 1,
             DocumentStatus::Update => counts.update += 1,
             DocumentStatus::Unchanged => {}
         }
     }
     for recorded in previous {
-        if !seen.contains(&key(recorded)) && !superseded_by(recorded, built) {
+        if !seen.contains(&key(recorded)) {
             counts.delete += 1;
         }
     }
@@ -145,7 +124,7 @@ mod tests {
         };
         let built = vec![doc("fresh")];
         let previous = vec![doc("stale")];
-        let counts = summary(&built, &BTreeMap::new(), &previous, &BTreeMap::new());
+        let counts = summary(&built, &previous);
         assert_eq!(
             (counts.create, counts.update, counts.delete),
             (1, 0, 1),

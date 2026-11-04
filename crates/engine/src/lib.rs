@@ -8,4 +8,4 @@ pub mod project;
 pub mod stubs;
 
 pub use assembly::assemble;
-pub use engine::{Engine, Evaluated};
+pub use engine::Engine;

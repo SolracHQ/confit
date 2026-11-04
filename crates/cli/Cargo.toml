@@ -28,6 +28,7 @@ minijinja = "3.0.0"
 confit-core = { path = "../core" }
 time = { workspace = true, features = ["local-offset"] }
 confit-events = { path = "../events" }
+confit-bundler = { path = "../bundler" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }

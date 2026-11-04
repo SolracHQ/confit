@@ -168,7 +168,7 @@ fn run_check(args: &CheckArgs, handles: EventHandles, log_path: &Path) -> Termin
 fn has_previous(stores: &Stores) -> bool {
     stores
         .states()
-        .list()
+        .history_list()
         .map(|entries| entries.len() > 1)
         .unwrap_or(false)
 }

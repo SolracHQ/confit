@@ -132,4 +132,4 @@ restore: confit restore %1
 ```
 
 The bat config reads `~/.config/bat/config`. The two shell documents export
-`BAT_THEME=catppuccin`. The theme name sits in one profile call.
+`BAT_THEME=catppuccin`. The theme name is in one profile call.

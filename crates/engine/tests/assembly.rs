@@ -10,7 +10,7 @@ use confit_engine::{assemble, assembly::Assembler};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, FileMode, LinkDocument, OpaqueDocument, RcEntry, StructuredDocument,
+    Data, Document, FileMode, LinkDocument, MemberKey, OpaqueDocument, RcEntry, StructuredDocument,
     StructuredFormat, TextDocument, TreeDocument, TreeMember,
 };
 use confit_model::id::Id;
@@ -138,14 +138,14 @@ fn placed_documents_convert_every_kind() {
     let blob = Sha::hash(b"ttf");
     let mut members = BTreeMap::new();
     members.insert(
-        "sub/nested.txt".to_owned(),
+        MemberKey::new("sub/nested.txt".to_owned()).unwrap(),
         TreeMember::Full {
             handle: ResourceRef::new(blob),
             mode: FileMode::new(0o644),
         },
     );
     members.insert(
-        "top.txt".to_owned(),
+        MemberKey::new("top.txt".to_owned()).unwrap(),
         TreeMember::Full {
             handle: ResourceRef::new(blob),
             mode: FileMode::new(0o644),
@@ -219,7 +219,7 @@ fn placed_documents_convert_every_kind() {
             match by_display("home('fonts')") {
                 Data::Tree(TreeDocument { members: found }) => {
                     assert_eq!(
-                        found.keys().map(String::as_str).collect::<Vec<_>>(),
+                        found.keys().map(MemberKey::as_str).collect::<Vec<_>>(),
                         vec!["sub/nested.txt", "top.txt"],
                         "the tree members hold flat paths in key order"
                     );

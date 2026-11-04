@@ -262,19 +262,21 @@ impl Resources {
         Ok(())
     }
 
-    /// Copies one trusted file into the pool.
+    /// Fills the pool with the bytes of every handle.
     ///
     /// # Errors
     ///
-    /// - [`ErrorCause::ContentHashMismatch`] when the stream fails the expected hash.
-    /// - [`FilesystemError`] when a pool or cache read fails.
-    pub fn persist(&self, sha: &ResourceRef) -> ContextualResult<Sha> {
-        if self.pools.path(sha.sha()).exists() {
-            return Ok(*sha.sha());
+    /// - [`confit_core::error::FilesystemError`] when an entry is unreadable, with the attempted path.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when a stream fails the carried sha.
+    pub fn persist(&self, handles: &[ResourceRef]) -> ContextualResult<()> {
+        for handle in handles {
+            if self.pools.path(handle.sha()).exists() {
+                continue;
+            }
+            let mut reader = self.open(handle)?;
+            self.pools.store_checked(handle.sha(), &mut reader)?;
         }
-        let mut reader = self.open(sha)?;
-        self.pools.store_checked(sha.sha(), &mut reader)?;
-        Ok(*sha.sha())
+        Ok(())
     }
 
     /// Reads one trusted file into memory.
@@ -775,8 +777,8 @@ mod tests {
             Err(error) => panic!("the cache fails to store: {error}"),
         }
         assert!(pools.open(&sha).is_err(), "the pool holds no entry");
-        match store.persist(&ResourceRef::new(sha)) {
-            Ok(found) => assert_eq!(found, sha),
+        match store.persist(&[ResourceRef::new(sha)]) {
+            Ok(()) => {}
             Err(error) => panic!("the cache fails to persist: {error}"),
         }
         match pools.open(&sha) {
@@ -798,8 +800,8 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("the pool fails to store: {error}"),
         }
-        match store.persist(&ResourceRef::new(sha)) {
-            Ok(found) => assert_eq!(found, sha, "the present pool returns the digest"),
+        match store.persist(&[ResourceRef::new(sha)]) {
+            Ok(()) => {}
             Err(error) => panic!("the present pool fails to persist: {error}"),
         }
     }
@@ -809,7 +811,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (store, pools) = test_pair(dir.path());
         let sha = Sha::hash(b"absent");
-        match store.persist(&ResourceRef::new(sha)) {
+        match store.persist(&[ResourceRef::new(sha)]) {
             Ok(_) => panic!("expected an absent cache"),
             Err(error) => {
                 assert!(
@@ -842,7 +844,7 @@ mod tests {
         }
         std::fs::create_dir_all(dir.path().join("config")).unwrap();
         std::fs::write(dir.path().join("config").join("blobs"), b"not a dir").unwrap();
-        match store.persist(&ResourceRef::new(sha)) {
+        match store.persist(&[ResourceRef::new(sha)]) {
             Ok(_) => panic!("expected a blocked pool"),
             Err(error) => match &error.context.cache_path {
                 Some(found) => assert_eq!(

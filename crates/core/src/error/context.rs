@@ -35,16 +35,6 @@ pub enum SourceKind {
     Config,
 }
 
-impl std::fmt::Display for SourceKind {
-    /// Writes the source kind as text.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Profile => write!(formatter, "profile"),
-            Self::Config => write!(formatter, "config"),
-        }
-    }
-}
-
 /// The typed context of one failure.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ErrorContext {
@@ -96,9 +86,9 @@ pub struct ErrorContext {
     /// The argv of the hook.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub argv: Option<String>,
-    /// The name of the store slot.
+    /// The name of the stored state.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub slot: Option<String>,
+    pub state: Option<String>,
     /// The name of the command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -209,9 +199,9 @@ impl ErrorContext {
         self
     }
 
-    /// Records the name of the store slot.
-    pub fn with_slot(mut self, slot: impl Into<String>) -> Self {
-        self.slot = Some(slot.into());
+    /// Records the name of the stored state.
+    pub fn with_state(mut self, state: impl Into<String>) -> Self {
+        self.state = Some(state.into());
         self
     }
 
@@ -245,7 +235,7 @@ impl ErrorContext {
         self
     }
 
-    /// Returns whether every slot is unset.
+    /// Returns whether every state is unset.
     pub fn is_empty(&self) -> bool {
         self.fs_path.is_none()
             && self.canonical_path.is_none()
@@ -262,7 +252,7 @@ impl ErrorContext {
             && self.url.is_none()
             && self.cycle.is_empty()
             && self.argv.is_none()
-            && self.slot.is_none()
+            && self.state.is_none()
             && self.command.is_none()
             && self.flags.is_empty()
             && self.detail.is_none()
@@ -270,7 +260,7 @@ impl ErrorContext {
             && self.sources.is_empty()
     }
 
-    /// Builds the log object from the slots that are set.
+    /// Builds the log object from the states that are set.
     pub fn log_value(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }

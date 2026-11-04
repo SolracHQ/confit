@@ -1,6 +1,6 @@
 # Safety
 
-Now that the project works, we will explain previews, the rescue slot, and undo.
+Now that the project works, we will explain previews, the rescue state, and undo.
 
 Every write previews first. You read the preview. You answer one question.
 `check` prints the same preview and stops.
@@ -88,7 +88,7 @@ A first apply has no history to undo with. That is the one dangerous moment. The
 run overwrites files it never managed before, and `%1` does not exist yet.
 
 confit saves those files first. Before the writes, the run copies every
-destination that exists on disk and that no manifest records into a rescue slot.
+destination that exists on disk and that no manifest records into a rescue state.
 The report tells you when it happens:
 
 ```text
@@ -98,7 +98,7 @@ saved: 3 files, confit restore @!
 `confit restore '@!'` writes those bytes back. Quote it in an interactive shell,
 where a bare `!` triggers history expansion.
 
-The slot holds one rescue. Each capture replaces the last, so `@!` is always the
+The state holds one rescue. Each capture replaces the last, so `@!` is always the
 latest one. Files over 16 MiB stay out with one warning line. Hooks stay outside
 the rescue. It restores files, not installed tools.
 

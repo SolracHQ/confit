@@ -21,6 +21,7 @@ diffy.workspace = true
 sha2.workspace = true
 confit-core = { path = "../core" }
 confit-events = { path = "../events" }
+confit-bundler = { path = "../bundler" }
 
 [dev-dependencies]
 confit-driver = { path = "../driver", features = ["test-support"] }
