@@ -36,11 +36,25 @@ pub fn replying_handles(replies: Vec<String>) -> EventHandles {
     std::thread::spawn(move || {
         let mut replies = replies.into_iter();
         for message in incoming {
-            if matches!(message, ToUi::Prompt(_)) {
-                let line = replies.next().unwrap_or_default();
-                if outgoing.send(FromUi::Answer(line)).is_err() {
-                    break;
+            match message {
+                ToUi::Prompt(_) => {
+                    let line = replies.next().unwrap_or_default();
+                    if outgoing.send(FromUi::Answer(line)).is_err() {
+                        break;
+                    }
                 }
+                ToUi::Confirm => {
+                    let line = replies.next().unwrap_or_default();
+                    let reply = if line.trim() == "yes" {
+                        FromUi::Approved
+                    } else {
+                        FromUi::Close
+                    };
+                    if outgoing.send(reply).is_err() {
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
     });

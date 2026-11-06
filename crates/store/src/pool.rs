@@ -2,14 +2,11 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use confit_core::error::{
     ContextualCause, ContextualResult, ErrorCause, FilesystemError, WithContext, contextual,
 };
 use confit_core::sha::{Sha, ShaWriter};
-use confit_events::ProgressEvent;
 use confit_events::ToUi;
 use crossbeam_channel::Sender;
 use sha2::Digest as _;
@@ -28,7 +25,6 @@ const POOL_GZIP_LEVEL: u32 = 6;
 pub struct PoolStore {
     pool: PathBuf,
     to_ui: Sender<ToUi>,
-    finished: Arc<AtomicUsize>,
 }
 
 impl PoolStore {
@@ -37,7 +33,6 @@ impl PoolStore {
         Self {
             pool: roots.config_base.join(BLOBS_DIR),
             to_ui,
-            finished: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -94,13 +89,6 @@ impl PoolStore {
                 .with_cache_path(&dest)?;
         }
         staged.persist(&dest).with_cache_path(&dest)?;
-        let done = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
-            id: "pool".to_owned(),
-            label: format!("compressing pool entries ({done})"),
-            done: u64::try_from(done).unwrap_or(u64::MAX),
-            total: None,
-        }));
         Ok(())
     }
 
@@ -126,7 +114,42 @@ impl PoolStore {
     ///
     /// - [`FilesystemError`] when listing or removal fails.
     pub fn prune(&self, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
-        prune_dir(&self.pool, keep)
+        let entries = match driver::fs::read_dir(&self.pool) {
+            Ok(entries) => entries,
+            Err(error)
+                if matches!(
+                    error.cause(),
+                    ErrorCause::FilesystemError(FilesystemError::FileMissing)
+                ) =>
+            {
+                return Ok(0);
+            }
+            Err(error) => {
+                return Err(error);
+            }
+        };
+        let condemned: Vec<PathBuf> = entries
+            .into_iter()
+            .filter(|path| !held(path, keep))
+            .collect();
+        if condemned.is_empty() {
+            return Ok(0);
+        }
+        let total = condemned.len();
+        let _ = self.to_ui.send(ToUi::PoolPruneStarted { total });
+        let mut removed = 0;
+        for path in condemned {
+            std::fs::remove_file(&path)
+                .map_err(ContextualCause::from)
+                .with_cache_path(&path)?;
+            removed += 1;
+            let _ = self.to_ui.send(ToUi::PoolPruneProgress {
+                done: removed,
+                total,
+            });
+        }
+        let _ = self.to_ui.send(ToUi::PoolPruneFinished);
+        Ok(removed)
     }
 }
 
@@ -167,35 +190,6 @@ impl<R: std::io::Read> std::io::Read for VerifiedRead<R> {
         self.hasher.update(&buf[..read]);
         Ok(read)
     }
-}
-
-/// Removes the files in one pool folder that the keep set leaves out.
-fn prune_dir(dir: &Path, keep: &BTreeSet<Sha>) -> ContextualResult<usize> {
-    let entries = match driver::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error)
-            if matches!(
-                error.cause(),
-                ErrorCause::FilesystemError(FilesystemError::FileMissing)
-            ) =>
-        {
-            return Ok(0);
-        }
-        Err(error) => {
-            return Err(error);
-        }
-    };
-    let mut removed = 0;
-    for path in entries {
-        if held(&path, keep) {
-            continue;
-        }
-        std::fs::remove_file(&path)
-            .map_err(ContextualCause::from)
-            .with_cache_path(&path)?;
-        removed += 1;
-    }
-    Ok(removed)
 }
 
 /// Returns true if the pool file is in the keep set.
@@ -309,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn pool_store_announces_a_finished_entry() {
+    fn pool_store_stays_silent_after_store() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
         let store = PoolStore::new(&test_roots(dir.path()), sender);
@@ -319,15 +313,9 @@ mod tests {
             Err(error) => panic!("the pool fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![ToUi::Progress(ProgressEvent::Progress {
-                id: "pool".to_owned(),
-                label: "compressing pool entries (1)".to_owned(),
-                done: 1,
-                total: None,
-            })],
-            "the pool store writes one finished event"
+        assert!(
+            events.is_empty(),
+            "the pool store writes no event: {events:?}"
         );
     }
 
@@ -347,15 +335,9 @@ mod tests {
             Err(error) => panic!("the repeated store fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![ToUi::Progress(ProgressEvent::Progress {
-                id: "pool".to_owned(),
-                label: "compressing pool entries (1)".to_owned(),
-                done: 1,
-                total: None,
-            })],
-            "the repeated store writes no event"
+        assert!(
+            events.is_empty(),
+            "the repeated store writes no event: {events:?}"
         );
     }
 
@@ -375,15 +357,9 @@ mod tests {
             Err(error) => panic!("the present store fails to store: {error}"),
         }
         let events: Vec<ToUi> = receiver.try_iter().collect();
-        assert_eq!(
-            events,
-            vec![ToUi::Progress(ProgressEvent::Progress {
-                id: "pool".to_owned(),
-                label: "compressing pool entries (1)".to_owned(),
-                done: 1,
-                total: None,
-            })],
-            "the present store writes no event"
+        assert!(
+            events.is_empty(),
+            "the present store writes no event: {events:?}"
         );
     }
 
@@ -430,6 +406,37 @@ mod tests {
             }
         }
         assert!(!store.path(&sha).exists(), "the mismatch leaves no file");
+    }
+
+    #[test]
+    fn pool_prune_reports_started_metered_and_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let store = PoolStore::new(&test_roots(dir.path()), sender);
+        let kept = Sha::hash(b"kept bytes");
+        let dropped = Sha::hash(b"dropped bytes");
+        match store.store_checked(&kept, &b"kept bytes"[..]) {
+            Ok(()) => {}
+            Err(error) => panic!("the pool fails to store: {error}"),
+        }
+        match store.store_checked(&dropped, &b"dropped bytes"[..]) {
+            Ok(()) => {}
+            Err(error) => panic!("the pool fails to store: {error}"),
+        }
+        let keep = BTreeSet::from([kept]);
+        match store.prune(&keep) {
+            Ok(removed) => assert_eq!(removed, 1, "the prune drops one entry"),
+            Err(error) => panic!("the pool fails to prune: {error}"),
+        }
+        let events: Vec<ToUi> = receiver.try_iter().collect();
+        assert_eq!(
+            events,
+            vec![
+                ToUi::PoolPruneStarted { total: 1 },
+                ToUi::PoolPruneProgress { done: 1, total: 1 },
+                ToUi::PoolPruneFinished,
+            ]
+        );
     }
 
     #[test]

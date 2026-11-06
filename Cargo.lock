@@ -312,6 +312,7 @@ dependencies = [
 name = "confit-events"
 version = "0.9.0"
 dependencies = [
+ "confit-model",
  "crossbeam-channel",
  "indicatif",
  "log",

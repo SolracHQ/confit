@@ -6,7 +6,6 @@ use std::sync::Arc;
 use confit_core::error::{ContextualCause, ContextualResult, ErrorCause, WithContext, contextual};
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
-use confit_events::ProgressEvent;
 use confit_events::ToUi;
 use crossbeam_channel::Sender;
 
@@ -17,7 +16,7 @@ use confit_driver as driver;
 const BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// The byte interval between progress events during a download.
-const PROGRESS_STEP_BYTES: u64 = 64 * 1024;
+const PROGRESS_STEP_BYTES: usize = 64 * 1024;
 
 /// The file extension for URL index entries in the cache folder.
 const INDEX_EXT: &str = "url";
@@ -63,10 +62,10 @@ struct Meter<R, F> {
     on_read: F,
 }
 
-impl<R: std::io::Read, F: FnMut(u64)> std::io::Read for Meter<R, F> {
+impl<R: std::io::Read, F: FnMut(usize)> std::io::Read for Meter<R, F> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
-        (self.on_read)(read as u64);
+        (self.on_read)(read);
         Ok(read)
     }
 }
@@ -80,11 +79,11 @@ struct Fetch<'a> {
     /// The expected hash from the caller.
     expected: Option<&'a Sha>,
     /// The total download size.
-    total: Option<u64>,
+    total: Option<usize>,
     /// The bytes read so far.
-    bytes: u64,
+    bytes: usize,
     /// The bytes reported so far.
-    reported: u64,
+    reported: usize,
 }
 
 impl<'a> Fetch<'a> {
@@ -108,13 +107,9 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
     fn run(&mut self) -> ContextualResult<ResourceRef> {
-        let _ = self
-            .cache
-            .to_ui
-            .send(ToUi::Progress(ProgressEvent::Started {
-                id: self.url.to_owned(),
-                label: format!("collecting artifacts: {}", self.url),
-            }));
+        let _ = self.cache.to_ui.send(ToUi::FetchStarted {
+            url: self.url.to_owned(),
+        });
         if let Some(hit) = self.hit() {
             return hit;
         }
@@ -128,21 +123,10 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hit fails the user hash.
     fn hit(&self) -> Option<ContextualResult<ResourceRef>> {
         let hit = self.lookup()?;
-        let path = self.cache.resources.cache_path(hit.sha());
-        let bytes = std::fs::metadata(&path)
-            .map(|facts| facts.len())
-            .unwrap_or(0);
-        let _ = self
-            .cache
-            .to_ui
-            .send(ToUi::Progress(ProgressEvent::Finished {
-                id: self.url.to_owned(),
-                label: format!(
-                    "collecting artifacts: {} ({} cached)",
-                    self.url,
-                    human_bytes(bytes)
-                ),
-            }));
+        let _ = self.cache.to_ui.send(ToUi::FetchFinished {
+            url: self.url.to_owned(),
+            cached: true,
+        });
         match self.check(hit.sha()) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
@@ -168,11 +152,11 @@ impl<'a> Fetch<'a> {
     /// - [`FilesystemError`] when a cache write fails.
     fn download(&mut self) -> ContextualResult<ResourceRef> {
         let (reader, total) = driver::http::download(self.url, BODY_LIMIT_BYTES)?;
-        self.total = total;
+        self.total = total.map(|known| usize::try_from(known).unwrap_or(usize::MAX));
         let resources = self.cache.resources.clone();
         let metered = Meter {
             inner: reader,
-            on_read: |bytes: u64| {
+            on_read: |bytes: usize| {
                 self.bytes += bytes;
                 self.report();
             },
@@ -180,17 +164,10 @@ impl<'a> Fetch<'a> {
         let handle = resources.store(metered).with_url(self.url)?;
         self.check(handle.sha())?;
         self.write_index(handle.sha())?;
-        let _ = self
-            .cache
-            .to_ui
-            .send(ToUi::Progress(ProgressEvent::Finished {
-                id: self.url.to_owned(),
-                label: format!(
-                    "collecting artifacts: {} ({})",
-                    self.url,
-                    human_bytes(self.bytes)
-                ),
-            }));
+        let _ = self.cache.to_ui.send(ToUi::FetchFinished {
+            url: self.url.to_owned(),
+            cached: false,
+        });
         Ok(handle)
     }
 
@@ -198,15 +175,11 @@ impl<'a> Fetch<'a> {
     fn report(&mut self) {
         if self.bytes - self.reported >= PROGRESS_STEP_BYTES {
             self.reported = self.bytes;
-            let _ = self
-                .cache
-                .to_ui
-                .send(ToUi::Progress(ProgressEvent::Progress {
-                    id: self.url.to_owned(),
-                    label: progress_label(self.url, self.bytes, self.total),
-                    done: self.bytes,
-                    total: self.total,
-                }));
+            let _ = self.cache.to_ui.send(ToUi::FetchProgress {
+                url: self.url.to_owned(),
+                done: self.bytes,
+                total: self.total,
+            });
         }
     }
 
@@ -244,34 +217,6 @@ impl<'a> Fetch<'a> {
     }
 }
 
-/// Formats the spinner message for one download in flight.
-fn progress_label(url: &str, done: u64, total: Option<u64>) -> String {
-    match total {
-        Some(known) => format!(
-            "collecting artifacts: {url} ({} of {})",
-            human_bytes(done),
-            human_bytes(known)
-        ),
-        None => format!("collecting artifacts: {url} ({})", human_bytes(done)),
-    }
-}
-
-/// Formats one byte count with a binary unit.
-fn human_bytes(bytes: u64) -> String {
-    const STEP: f64 = 1024.0;
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    let mut scaled = bytes as f64;
-    let mut unit = 0;
-    while scaled >= STEP && unit + 1 < UNITS.len() {
-        scaled /= STEP;
-        unit += 1;
-    }
-    format!("{scaled:.1} {}", UNITS[unit])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,7 +242,7 @@ mod tests {
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         FetchCache::new(resources, sender)
     }
 
@@ -480,7 +425,7 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None) {
             Ok(_) => {
@@ -488,14 +433,13 @@ mod tests {
                 assert_eq!(
                     events,
                     vec![
-                        ToUi::Progress(ProgressEvent::Started {
-                            id: URL.to_string(),
-                            label: format!("collecting artifacts: {URL}"),
-                        }),
-                        ToUi::Progress(ProgressEvent::Finished {
-                            id: URL.to_string(),
-                            label: format!("collecting artifacts: {URL} (5 B cached)"),
-                        }),
+                        ToUi::FetchStarted {
+                            url: URL.to_string(),
+                        },
+                        ToUi::FetchFinished {
+                            url: URL.to_string(),
+                            cached: true,
+                        },
                     ]
                 );
                 assert_eq!(driver::http::calls(URL), 1, "the hit makes no download");
@@ -513,7 +457,7 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None) {
             Ok(_) => {}
@@ -531,30 +475,27 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(ProgressEvent::Started {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL}"),
-                }),
-                ToUi::Progress(ProgressEvent::Finished {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL} (5 B)"),
-                }),
-                ToUi::Progress(ProgressEvent::Started {
-                    id: FILE_URL.to_string(),
-                    label: format!("collecting artifacts: {FILE_URL}"),
-                }),
-                ToUi::Progress(ProgressEvent::Finished {
-                    id: FILE_URL.to_string(),
-                    label: format!("collecting artifacts: {FILE_URL} (6 B)"),
-                }),
-                ToUi::Progress(ProgressEvent::Started {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL}"),
-                }),
-                ToUi::Progress(ProgressEvent::Finished {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL} (5 B cached)"),
-                }),
+                ToUi::FetchStarted {
+                    url: URL.to_string(),
+                },
+                ToUi::FetchFinished {
+                    url: URL.to_string(),
+                    cached: false,
+                },
+                ToUi::FetchStarted {
+                    url: FILE_URL.to_string(),
+                },
+                ToUi::FetchFinished {
+                    url: FILE_URL.to_string(),
+                    cached: false,
+                },
+                ToUi::FetchStarted {
+                    url: URL.to_string(),
+                },
+                ToUi::FetchFinished {
+                    url: URL.to_string(),
+                    cached: true,
+                },
             ]
         );
     }
@@ -699,7 +640,7 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None) {
             Ok(handle) => {
@@ -715,21 +656,20 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(ProgressEvent::Started {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL}"),
-                }),
-                ToUi::Progress(ProgressEvent::Finished {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL} (5 B)"),
-                }),
+                ToUi::FetchStarted {
+                    url: URL.to_string(),
+                },
+                ToUi::FetchFinished {
+                    url: URL.to_string(),
+                    cached: false,
+                },
             ]
         );
         assert_eq!(driver::http::calls(URL), 1, "the miss makes one download");
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None) {
             Ok(handle) => {
@@ -745,14 +685,13 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(ProgressEvent::Started {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL}"),
-                }),
-                ToUi::Progress(ProgressEvent::Finished {
-                    id: URL.to_string(),
-                    label: format!("collecting artifacts: {URL} (5 B cached)"),
-                }),
+                ToUi::FetchStarted {
+                    url: URL.to_string(),
+                },
+                ToUi::FetchFinished {
+                    url: URL.to_string(),
+                    cached: true,
+                },
             ]
         );
         assert_eq!(
@@ -790,20 +729,16 @@ mod tests {
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
         let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools));
+        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
         let cache = FetchCache::new(resources, sender);
         match cache.fetch(URL, None) {
             Ok(_) => {}
             Err(error) => panic!("the large miss fails to download: {error}"),
         }
-        let mut seen: Vec<u64> = Vec::new();
+        let mut seen: Vec<usize> = Vec::new();
         for event in receiver.try_iter() {
-            if let ToUi::Progress(ProgressEvent::Progress { done, total, .. }) = event {
-                assert_eq!(
-                    total,
-                    Some(raw.len() as u64),
-                    "the progress keeps the total"
-                );
+            if let ToUi::FetchProgress { done, total, .. } = event {
+                assert_eq!(total, Some(raw.len()), "the progress keeps the total");
                 seen.push(done);
             }
         }

@@ -237,7 +237,6 @@ impl Error {
             ErrorKind::PruneBlobs => "Cannot clean the old blobs, stale files remain".to_owned(),
             ErrorKind::StoreState => "Cannot store the state".to_owned(),
             ErrorKind::InitProject => "Cannot initialize the project".to_owned(),
-            ErrorKind::ReadReply => "Cannot read your reply".to_owned(),
             ErrorKind::WriteHookLog => match &context.fs_path {
                 Some(path) => format!("Cannot write the hook log at '{}'", path.display()),
                 None => "Cannot write the hook log at 'unknown'".to_owned(),

@@ -61,8 +61,6 @@ pub enum ErrorKind {
     StoreState,
     /// A project init that failed.
     InitProject,
-    /// A prompt reply that fails its read.
-    ReadReply,
     /// A hook log write that failed.
     WriteHookLog,
     /// A destination write that failed.

@@ -65,7 +65,7 @@ impl ArchiveHandle {
 mod tests {
     use super::*;
     use confit_driver::archive::{Algorithm, Builder, Level};
-    use confit_events::{ProgressEvent, ToUi};
+    use confit_events::ToUi;
     use confit_store::{StoreRoots, Stores};
     use crossbeam_channel::Receiver;
     use mlua::Value;
@@ -272,10 +272,9 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(events.len(), 2, "the repeated unpack writes two events");
         match events.last() {
-            Some(ToUi::Progress(ProgressEvent::Finished { label, .. })) => assert!(
-                label.contains("(2 members)"),
-                "the repeated unpack counts every member: {label}"
-            ),
+            Some(ToUi::ArchiveFinished { members, .. }) => {
+                assert_eq!(*members, 2, "the repeated unpack counts every member")
+            }
             other => panic!("expected a finished event: {other:?}"),
         }
     }

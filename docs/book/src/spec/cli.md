@@ -134,8 +134,9 @@ Apply these changes? Type 'yes' to continue:
 ```
 
 The answer comes from stdin. A trimmed answer equal to `yes` proceeds. Any other
-answer prints `no confirmation, the run stops` to stderr, writes nothing, and
-exits 0 with these counts:
+answer, a dismissed prompt, or an empty reply at end of input prints
+`no confirmation, the run stops` to stderr, writes nothing, and exits 0 with
+these counts:
 
 ```text
 applied: 0 files, 0 removed

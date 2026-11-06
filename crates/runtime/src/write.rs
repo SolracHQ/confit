@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{ContextualCause, Terminal, TerminalResult, WithContext};
 use confit_driver as driver;
-use confit_events::{ProgressEvent, ToUi};
+use confit_events::{ApplyOutcome, ToUi};
 use confit_model::document::{Data, Document, MemberKey, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
@@ -22,6 +22,25 @@ pub struct Writer {
 }
 
 impl Writer {
+    /// Returns the file count for the whole apply.
+    ///
+    /// - The count covers every desired document, every recorded
+    ///   destination, and every recorded tree member.
+    pub fn apply_total(desired: &[Document], recorded: &[Document]) -> usize {
+        let members: usize = recorded
+            .iter()
+            .filter_map(|old| match &old.data {
+                Data::Tree(found) => Some(found.members.len()),
+                Data::Text(_)
+                | Data::Structured(_)
+                | Data::Link(_)
+                | Data::Rc(_)
+                | Data::Opaque(_) => None,
+            })
+            .sum();
+        desired.len() + recorded.len() + members
+    }
+
     /// Writes the documents to their resolved destinations.
     ///
     /// - A present unmanaged document changes only when its destination is in
@@ -37,8 +56,6 @@ impl Writer {
         documents: &[Document],
         changed: &BTreeSet<Route>,
     ) -> TerminalResult<usize> {
-        let total = documents.len();
-        let mut done = 0;
         let mut written = 0;
         for document in documents {
             let expanded = expand_destination(document)?;
@@ -53,8 +70,7 @@ impl Writer {
             if let Data::Tree(found) = &document.data {
                 let count =
                     self.write_tree_members(&expanded, &document.path.display(), &found.members)?;
-                done += 1;
-                self.emit_written(&document.path, done, total);
+                self.emit_apply(&document.path, ApplyOutcome::Added);
                 written += count;
                 continue;
             }
@@ -76,8 +92,7 @@ impl Writer {
                 .terminal(ErrorKind::WriteDestination)?;
                 driver::fs::set_mode(&expanded, Some(found.mode.bits()))
                     .terminal(ErrorKind::WriteDestination)?;
-                done += 1;
-                self.emit_written(&document.path, done, total);
+                self.emit_apply(&document.path, ApplyOutcome::Added);
                 written += 1;
                 continue;
             }
@@ -112,21 +127,18 @@ impl Writer {
                 Data::Structured(_) | Data::Link(_) | Data::Rc(_) | Data::Tree(_) => None,
             };
             driver::fs::set_mode(&expanded, mode).terminal(ErrorKind::WriteDestination)?;
-            done += 1;
-            self.emit_written(&document.path, done, total);
+            self.emit_apply(&document.path, ApplyOutcome::Added);
             written += 1;
         }
         Ok(written)
     }
 
-    /// Sends one progress event for a written document.
-    fn emit_written(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
-            id: "write".to_owned(),
-            label: format!("writing {done}/{total}: {}", destination.display()),
-            done: u64::try_from(done).unwrap_or(u64::MAX),
-            total: Some(u64::try_from(total).unwrap_or(u64::MAX)),
-        }));
+    /// Sends one progress event for an applied destination.
+    fn emit_apply(&self, destination: &Route, outcome: ApplyOutcome) {
+        let _ = self.to_ui.send(ToUi::ApplyProgress {
+            route: destination.clone(),
+            outcome,
+        });
     }
 
     /// Writes the members of one tree destination one by one.
@@ -198,8 +210,6 @@ impl Writer {
         recorded: &[Document],
         desired: &[Document],
     ) -> TerminalResult<usize> {
-        let total = recorded.len();
-        let mut done = 0;
         let mut removed = 0;
         for old in recorded {
             if matches!(old.data, Data::Tree(_)) {
@@ -215,8 +225,7 @@ impl Writer {
                 .with_fs_path(&expanded)
                 .terminal(ErrorKind::RemoveDestination)?
             {
-                done += 1;
-                self.emit_removed(&old.path, done, total);
+                self.emit_apply(&old.path, ApplyOutcome::Removed);
                 removed += 1;
             }
         }
@@ -235,19 +244,6 @@ impl Writer {
         recorded: &[Document],
         desired: &[Document],
     ) -> TerminalResult<usize> {
-        let total: usize = recorded
-            .iter()
-            .filter_map(|old| match &old.data {
-                Data::Tree(found) => Some(&found.members),
-                Data::Structured(_)
-                | Data::Text(_)
-                | Data::Link(_)
-                | Data::Rc(_)
-                | Data::Opaque(_) => None,
-            })
-            .map(|members| members.len())
-            .sum();
-        let mut done = 0;
         let mut removed = 0;
         for old in recorded {
             let Data::Tree(found) = &old.data else {
@@ -278,30 +274,18 @@ impl Writer {
                     .with_fs_path(&path)
                     .terminal(ErrorKind::RemoveDestination)?
                 {
-                    done += 1;
-                    self.emit_removed(&old.path.join(relative.as_str()), done, total);
+                    self.emit_apply(&old.path.join(relative.as_str()), ApplyOutcome::Removed);
                     removed += 1;
                 }
             }
         }
         Ok(removed)
     }
-
-    /// Sends one progress event for a removed destination.
-    fn emit_removed(&self, destination: &Route, done: usize, total: usize) {
-        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Progress {
-            id: "remove".to_owned(),
-            label: format!("removing {done}/{total}: {}", destination.display()),
-            done: u64::try_from(done).unwrap_or(u64::MAX),
-            total: Some(u64::try_from(total).unwrap_or(u64::MAX)),
-        }));
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_events::ProgressEvent;
     use confit_model::document::{FileMode, TextDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -345,12 +329,10 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![ToUi::Progress(ProgressEvent::Progress {
-                id: "remove".to_owned(),
-                label: format!("removing 1/1: {}", path.display()),
-                done: 1,
-                total: Some(1),
-            })]
+            vec![ToUi::ApplyProgress {
+                route: literal(&path),
+                outcome: ApplyOutcome::Removed,
+            }]
         );
     }
 
@@ -380,19 +362,25 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::Progress(ProgressEvent::Progress {
-                    id: "write".to_owned(),
-                    label: format!("writing 1/2: {}", first.display()),
-                    done: 1,
-                    total: Some(2),
-                }),
-                ToUi::Progress(ProgressEvent::Progress {
-                    id: "write".to_owned(),
-                    label: format!("writing 2/2: {}", second.display()),
-                    done: 2,
-                    total: Some(2),
-                }),
+                ToUi::ApplyProgress {
+                    route: literal(&first),
+                    outcome: ApplyOutcome::Added,
+                },
+                ToUi::ApplyProgress {
+                    route: literal(&second),
+                    outcome: ApplyOutcome::Added,
+                },
             ]
         );
+    }
+
+    #[test]
+    fn apply_total_counts_documents_and_tree_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let recorded = dir.path().join("recorded.txt");
+        let desired = vec![text_doc(&first)];
+        let recorded = vec![text_doc(&recorded)];
+        assert_eq!(Writer::apply_total(&desired, &recorded), 2);
     }
 }

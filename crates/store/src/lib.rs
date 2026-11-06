@@ -83,7 +83,7 @@ impl Stores {
     /// Builds every store over file backends.
     pub fn new(roots: StoreRoots, to_ui: Sender<ToUi>) -> Self {
         let pool = Arc::new(PoolStore::new(&roots, to_ui.clone()));
-        let resources = Arc::new(Resources::new(&roots, pool.clone()));
+        let resources = Arc::new(Resources::new(&roots, pool.clone(), to_ui.clone()));
         let archives = Arc::new(ArchiveStore::new(resources.clone(), to_ui.clone()));
         Self {
             resources: resources.clone(),

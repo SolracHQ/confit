@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::{
-    FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
-};
+use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kind::ErrorKind};
 use confit_engine::Engine;
 use confit_events::EventHandles;
 use confit_runtime::prepare;
@@ -41,10 +39,6 @@ pub fn run(
         );
     }
     let built = Engine::new(stores.clone(), handles.clone()).evaluate(&path)?;
-    stores
-        .resources()
-        .persist(&built.handles())
-        .terminal(ErrorKind::StoreState)?;
     let prepared = prepare::prepare(&stores, built)?;
     CommitRunner {
         prepared,

@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::{
-    ContextualCause, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
-};
+use confit_core::error::{Terminal, TerminalResult, contextual, error, kind::ErrorKind};
 use confit_events::{EventHandles, ToUi};
 use confit_model::arg::Arg;
 use confit_runtime::prepare;
@@ -44,21 +42,10 @@ impl CommitRunner {
         let _ = self.handles.to_ui.send(ToUi::Print(line.into()));
     }
 
-    /// Asks the confirmation question and accepts a trimmed yes.
-    fn confirm(&self) -> TerminalResult<bool> {
-        let reply = self
-            .handles
-            .ask("Apply these changes? Type 'yes' to continue: ".to_owned())
-            .map_err(ContextualCause::from)
-            .terminal(ErrorKind::ReadReply)?;
-        Ok(reply.trim() == "yes")
-    }
-
     /// Writes the prepared manifests after the preview and the prompts.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::ReadReply`] when the prompt reply fails.
     /// - [`confit_core::error::kind::ErrorKind::ApplyState`] when the state refresh fails.
     /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the state refresh evaluation fails.
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the state refresh Lua run fails.
@@ -82,7 +69,7 @@ impl CommitRunner {
                 warning.context()
             );
         }
-        if !self.force && !self.confirm()? {
+        if !self.force && self.handles.confirm().is_err() {
             self.print("no confirmation, the run stops");
             return Ok(WriteReport {
                 written: 0,
@@ -102,14 +89,6 @@ impl CommitRunner {
         if fresh != self.prepared.differences {
             for line in difference::difference_lines(&fresh) {
                 self.print(line);
-            }
-            if !self.confirm()? {
-                self.print("no confirmation, the run stops");
-                return Ok(WriteReport {
-                    written: 0,
-                    removed: 0,
-                    saved: 0,
-                });
             }
         }
         let report = self.commit()?;
@@ -131,6 +110,10 @@ impl CommitRunner {
         let built = &self.prepared.desired;
         let previous = &self.prepared.previous;
         let changed = &self.prepared.changed;
+        self.stores
+            .resources()
+            .persist(&built.handles())
+            .terminal(ErrorKind::StoreState)?;
         let capture = snapshot::capture(&self.stores, &self.prepared)?;
         let mut saved = 0;
         if capture.files > 0 {
@@ -146,10 +129,13 @@ impl CommitRunner {
             stores: self.stores.clone(),
             to_ui: self.handles.to_ui.clone(),
         };
+        let total = Writer::apply_total(&built.documents, &previous.documents);
+        let _ = self.handles.to_ui.send(ToUi::ApplyStarted { total });
         let written = writer.write_documents(&built.documents, changed)?;
         let removed = writer.remove_deleted(&previous.documents, &built.documents)?;
         let removed =
             removed + writer.remove_tree_members(&previous.documents, &built.documents)?;
+        let _ = self.handles.to_ui.send(ToUi::ApplyFinished);
         self.stores.states().save_applied(built)?;
         self.stores
             .prune_unreferenced()

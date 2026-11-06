@@ -10,6 +10,8 @@ use confit_core::error::{
 };
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::{Sha, ShaWriter};
+use confit_events::ToUi;
+use crossbeam_channel::Sender;
 
 use crate::StoreRoots;
 use crate::pool::PoolStore;
@@ -28,16 +30,19 @@ pub struct Resources {
     pub roots: StoreRoots,
     /// The pool behind cache promotion.
     pools: Arc<PoolStore>,
+    /// The progress channel for batch events.
+    to_ui: Sender<ToUi>,
     /// The project path remembered for each validated hash.
     remembered: Arc<RwLock<HashMap<Sha, PathBuf>>>,
 }
 
 impl Resources {
     /// Builds a resource store under explicit roots.
-    pub fn new(roots: &StoreRoots, pools: Arc<PoolStore>) -> Self {
+    pub fn new(roots: &StoreRoots, pools: Arc<PoolStore>, to_ui: Sender<ToUi>) -> Self {
         Self {
             roots: roots.clone(),
             pools,
+            to_ui,
             remembered: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -269,13 +274,22 @@ impl Resources {
     /// - [`confit_core::error::FilesystemError`] when an entry is unreadable, with the attempted path.
     /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when a stream fails the carried sha.
     pub fn persist(&self, handles: &[ResourceRef]) -> ContextualResult<()> {
-        for handle in handles {
-            if self.pools.path(handle.sha()).exists() {
-                continue;
-            }
+        let missing: Vec<&ResourceRef> = handles
+            .iter()
+            .filter(|handle| !self.pools.path(handle.sha()).exists())
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let total = missing.len();
+        let _ = self.to_ui.send(ToUi::PoolFillStarted { total });
+        for (index, handle) in missing.into_iter().enumerate() {
             let mut reader = self.open(handle)?;
             self.pools.store_checked(handle.sha(), &mut reader)?;
+            let done = index + 1;
+            let _ = self.to_ui.send(ToUi::PoolFillProgress { done, total });
         }
+        let _ = self.to_ui.send(ToUi::PoolFillFinished);
         Ok(())
     }
 
@@ -363,8 +377,8 @@ mod tests {
     fn test_pair(dir: &Path) -> (Resources, Arc<PoolStore>) {
         let roots = test_roots(dir);
         let (sender, _) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender));
-        (Resources::new(&roots, pools.clone()), pools)
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        (Resources::new(&roots, pools.clone(), sender.clone()), pools)
     }
 
     fn test_store(dir: &Path) -> Resources {
@@ -804,6 +818,33 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("the present pool fails to persist: {error}"),
         }
+    }
+
+    #[test]
+    fn persist_reports_started_metered_and_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = test_roots(dir.path());
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
+        let store = Resources::new(&roots, pools, sender);
+        let sha = Sha::hash(b"cached bytes");
+        match store.store_checked(&sha, std::io::Cursor::new(b"cached bytes")) {
+            Ok(_) => {}
+            Err(error) => panic!("the cache fails to store: {error}"),
+        }
+        match store.persist(&[ResourceRef::new(sha)]) {
+            Ok(()) => {}
+            Err(error) => panic!("the cache fails to persist: {error}"),
+        }
+        let events: Vec<ToUi> = receiver.try_iter().collect();
+        assert_eq!(
+            events,
+            vec![
+                ToUi::PoolFillStarted { total: 1 },
+                ToUi::PoolFillProgress { done: 1, total: 1 },
+                ToUi::PoolFillFinished,
+            ]
+        );
     }
 
     #[test]

@@ -146,7 +146,7 @@ on success and on failure for `check`, `apply`, and `restore`. The other
 commands print it on failure.
 
 The spinner also uses stderr. On a terminal it updates in place and shows the
-current write, removal, or hook. Off a terminal the spinner hides, and only the
+current apply or hook. Off a terminal the spinner hides, and only the
 printed lines remain.
 
 ## Logs

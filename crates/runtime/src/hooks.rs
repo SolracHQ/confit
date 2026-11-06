@@ -10,7 +10,6 @@ use confit_core::error::{
 };
 use confit_core::sha::Sha;
 use confit_driver as driver;
-use confit_events::ProgressEvent;
 use confit_events::ToUi;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
@@ -144,10 +143,11 @@ impl HookRunner {
                 .terminal(ErrorKind::RunHook)?;
             path_dirs.push(materialized);
         }
-        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Started {
-            id: argv_text.clone(),
-            label: format!("hook {position} of {total}: {argv_text}"),
-        }));
+        let _ = self.to_ui.send(ToUi::HookStarted {
+            position,
+            total,
+            argv: argv_text.clone(),
+        });
         let log = hooks_dir.join(hook_file_name(hook.id.as_str()));
         let header = format!("hook {position} of {total}: {argv_text}");
         let file = open_hook_log(&log, &header)?;
@@ -160,10 +160,11 @@ impl HookRunner {
                 Error::new(kind, contextual.with_argv(&argv_text).with_fs_path(&log))
             })?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
-        let _ = self.to_ui.send(ToUi::Progress(ProgressEvent::Finished {
-            id: argv_text.clone(),
-            label: format!("hook {position} of {total} done: {argv_text}"),
-        }));
+        let _ = self.to_ui.send(ToUi::HookFinished {
+            position,
+            total,
+            argv: argv_text.clone(),
+        });
         Ok(Spawned {
             argv: argv_text,
             code: outcome.code,

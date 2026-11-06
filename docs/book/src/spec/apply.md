@@ -90,9 +90,8 @@ exits 0.
 `--force` skips this question. The preview still prints.
 
 The run compares the applied state against disk again before the first write. A
-fresh difference set prints its lines and asks the same question a second time.
-The second question appears with or without `--force`. A second `no` stops the
-run in the same way.
+fresh difference set prints its lines and the run continues with the confirmed
+plan. The rescue state holds the pre-write capture either way.
 
 ## Write order
 
@@ -130,6 +129,24 @@ matches the recorded manifest skips the write.
 A tree member in the previous manifest but missing from the desired manifest is
 removed from the destination. Files placed by hand under the tree destination
 stay.
+
+Each written destination reports one line on stderr:
+
+```text
+Added home('.bashrc')
+```
+
+Each removed destination reports one line:
+
+```text
+Removed home('.old')
+```
+
+The run ends with a count line:
+
+```text
+2 of 3 files applied
+```
 
 ## Hooks
 

@@ -1,35 +1,8 @@
 //! Event and plan types for the worker and render threads.
 
-/// The state of one run step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProgressEvent {
-    /// An operation that starts.
-    Started {
-        /// The id shared by every update for this operation.
-        id: String,
-        /// The text shown on the spinner row.
-        label: String,
-    },
-    /// An operation in progress.
-    Progress {
-        /// The id shared by every update for this operation.
-        id: String,
-        /// The text shown on the spinner row.
-        label: String,
-        /// The finished units through this update.
-        done: u64,
-        /// The unit count for the whole operation, absent
-        /// when the source omits it.
-        total: Option<u64>,
-    },
-    /// An operation that finishes.
-    Finished {
-        /// The id shared by every update for this operation.
-        id: String,
-        /// The text shown on the spinner row.
-        label: String,
-    },
-}
+use std::path::PathBuf;
+
+use confit_model::routes::Route;
 
 /// One action for a route in a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,17 +124,124 @@ pub struct Plan {
     pub first_run: bool,
 }
 
+/// One apply outcome for a route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// A route that landed on disk.
+    Added,
+    /// A route that left the disk.
+    Removed,
+}
+
 /// One message to the render thread.
+///
+/// - Each run step names one operation; the backend owns the words,
+///   the widgets, and the units.
+/// - Plans, prints, prompts, and confirmations share the channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToUi {
-    /// One run step event for the spinner.
-    Progress(ProgressEvent),
+    /// A fetch that starts.
+    FetchStarted {
+        /// The downloaded URL.
+        url: String,
+    },
+    /// A fetch in flight.
+    FetchProgress {
+        /// The downloaded URL.
+        url: String,
+        /// The finished bytes through this update.
+        done: usize,
+        /// The byte count for the whole body, absent
+        /// when the source omits it.
+        total: Option<usize>,
+    },
+    /// A fetch that lands.
+    FetchFinished {
+        /// The downloaded URL.
+        url: String,
+        /// Whether the bytes came from the cache.
+        cached: bool,
+    },
+    /// A pool fill that starts.
+    PoolFillStarted {
+        /// The file count for the whole fill.
+        total: usize,
+    },
+    /// A pool fill in flight.
+    PoolFillProgress {
+        /// The stored files through this update.
+        done: usize,
+        /// The file count for the whole fill.
+        total: usize,
+    },
+    /// A pool fill that lands.
+    PoolFillFinished,
+    /// A pool prune that starts.
+    PoolPruneStarted {
+        /// The file count for the whole prune.
+        total: usize,
+    },
+    /// A pool prune in flight.
+    PoolPruneProgress {
+        /// The removed files through this update.
+        done: usize,
+        /// The file count for the whole prune.
+        total: usize,
+    },
+    /// A pool prune that lands.
+    PoolPruneFinished,
+    /// An archive extract that starts.
+    ArchiveStarted {
+        /// The archive path.
+        path: PathBuf,
+    },
+    /// An archive extract that lands.
+    ArchiveFinished {
+        /// The archive path.
+        path: PathBuf,
+        /// The extracted member count.
+        members: usize,
+    },
+    /// An apply that starts.
+    ApplyStarted {
+        /// The file count for the whole apply.
+        total: usize,
+    },
+    /// An apply in flight.
+    ApplyProgress {
+        /// The applied route.
+        route: Route,
+        /// Whether the route landed or left.
+        outcome: ApplyOutcome,
+    },
+    /// An apply that lands.
+    ApplyFinished,
+    /// A hook run that starts.
+    HookStarted {
+        /// The hook position in the run.
+        position: usize,
+        /// The hook count for the run.
+        total: usize,
+        /// The hook command line.
+        argv: String,
+    },
+    /// A hook run that lands.
+    HookFinished {
+        /// The hook position in the run.
+        position: usize,
+        /// The hook count for the run.
+        total: usize,
+        /// The hook command line.
+        argv: String,
+    },
     /// One run plan as data for review.
     Plan(Plan),
     /// Text written to stderr above the spinner.
     Print(String),
     /// A question written to stderr, with the answer read from stdin.
     Prompt(String),
+    /// A confirmation request.
+    Confirm,
 }
 
 /// One message back from the render thread.
@@ -169,6 +249,8 @@ pub enum ToUi {
 pub enum FromUi {
     /// A line read from stdin with the trailing newline trimmed.
     Answer(String),
-    /// Whether the user confirmed the prompt.
-    Confirm(bool),
+    /// The user approved the confirmation. Anything else is a no.
+    Approved,
+    /// The user dismissed the prompt.
+    Close,
 }
