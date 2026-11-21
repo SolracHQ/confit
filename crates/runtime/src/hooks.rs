@@ -365,12 +365,12 @@ mod tests {
         let handles = EventHandles::silent();
         let reporter = handles.start_task(TaskKind::Write, Some(total));
         match writer.apply(&diff.effective, &reporter) {
-            Ok(_) => diff
+            (_, Ok(())) => diff
                 .effective
                 .iter()
                 .map(|change| change.path.clone())
                 .collect(),
-            Err(error) => panic!("the documents fail to write: {error}"),
+            (_, Err(error)) => panic!("the documents fail to write: {error}"),
         }
     }
 

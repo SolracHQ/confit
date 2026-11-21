@@ -50,7 +50,7 @@ impl Writer {
     ///   references a missing document.
     /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when a write fails.
     /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when a removal fails.
-    pub fn apply(&self, view: &View, reporter: &TaskReporter) -> TerminalResult<Applied> {
+    pub fn apply(&self, view: &View, reporter: &TaskReporter) -> (Applied, TerminalResult<()>) {
         let mut applied = Applied {
             added: 0,
             changed: 0,
@@ -68,12 +68,13 @@ impl Writer {
                 Ok(None) => {}
                 Err(error) => {
                     completed += 1;
+                    applied.push(&change.expanded, ApplyOutcome::Failed);
                     Self::emit_failure(reporter, change, completed, total);
-                    return Err(error);
+                    return (applied, Err(error));
                 }
             }
         }
-        Ok(applied)
+        (applied, Ok(()))
     }
 
     /// Applies one effective row and returns its write outcome.
@@ -456,8 +457,8 @@ mod tests {
         let reporter = handles.start_task(TaskKind::Write, Some(total));
         let _ = receiver.try_recv();
         match writer.apply(view, &reporter) {
-            Ok(applied) => applied,
-            Err(error) => panic!("the apply fails: {error}"),
+            (applied, Ok(())) => applied,
+            (_, Err(error)) => panic!("the apply fails: {error}"),
         }
     }
 
@@ -666,10 +667,10 @@ mod tests {
         let total = Writer::apply_total(&diff.effective);
         let reporter = handles.start_task(TaskKind::Write, Some(total));
         let _ = receiver.try_recv();
-        assert!(
-            writer.apply(&diff.effective, &reporter).is_err(),
-            "the blocked write fails at write time"
-        );
+        let (applied, result) = writer.apply(&diff.effective, &reporter);
+        assert!(result.is_err(), "the blocked write fails at write time");
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(applied.changes[0].outcome, ApplyOutcome::Failed);
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
@@ -695,10 +696,10 @@ mod tests {
         let total = Writer::apply_total(&diff.effective);
         let reporter = handles.start_task(TaskKind::Write, Some(total));
         let _ = receiver.try_recv();
-        assert!(
-            writer.apply(&diff.effective, &reporter).is_err(),
-            "the blocked row fails the execution"
-        );
+        let (applied, result) = writer.apply(&diff.effective, &reporter);
+        assert!(result.is_err(), "the blocked row fails the execution");
+        assert_eq!(applied.changes.len(), 2);
+        assert_eq!(applied.changes[1].outcome, ApplyOutcome::Failed);
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,

@@ -62,7 +62,6 @@ impl Applier {
         self.handles.phase_started(Phase::ApplyingChanges);
         let had_previous = !self.stores.states().is_first_execution();
         let applied = self.commit()?;
-        self.handles.write_results(applied.clone());
         self.run_hooks()?;
         self.handles
             .done(had_previous, saved > 0, !self.diff.drift.is_empty());
@@ -97,7 +96,9 @@ impl Applier {
         let writer = Writer::new(self.stores.clone());
         let total = Writer::apply_total(&self.diff.effective);
         let reporter = self.handles.start_task(TaskKind::Write, Some(total));
-        let applied = writer.apply(&self.diff.effective, &reporter)?;
+        let (applied, result) = writer.apply(&self.diff.effective, &reporter);
+        self.handles.write_results(applied.clone());
+        result?;
         reporter.finish(TaskNote::Closed);
         self.stores.states().save_applied(built)?;
         self.stores
