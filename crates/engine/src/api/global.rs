@@ -55,7 +55,7 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    use confit_events::{EventHandles, FromUi, ToUi};
+    use confit_events::EventHandles;
     use confit_model::id::Id;
     use confit_store::{StoreRoots, Stores};
     use lua_binding::value::Decode;
@@ -65,14 +65,13 @@ mod tests {
     use crate::loader::{install, load_chunk};
 
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            EventHandles::silent(),
         )
     }
 
@@ -91,9 +90,7 @@ mod tests {
 
     /// Builds silent renderer channels.
     fn silent_handles() -> EventHandles {
-        let (to_ui, _) = crossbeam_channel::unbounded::<ToUi>();
-        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
-        EventHandles { to_ui, from_ui }
+        EventHandles::silent()
     }
 
     #[test]
@@ -188,14 +185,13 @@ mod tests {
     #[test]
     fn duplicate_ids_keep_the_terminal_message() {
         let dir = tempfile::tempdir().unwrap();
-        let (sender, _) = crossbeam_channel::unbounded();
         let stores = Stores::new(
             StoreRoots {
                 config_base: dir.path().join("config"),
                 temp_base: dir.path().join("temp"),
                 project_root: dir.path().join("project"),
             },
-            sender,
+            EventHandles::silent(),
         );
         let root = stores.resources().roots.project_root.clone();
         std::fs::create_dir_all(&root).unwrap();

@@ -11,25 +11,26 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
-confit-runtime = { path = "../runtime" }
-confit-model = { path = "../model" }
-confit-engine = { path = "../engine" }
-confit-store = { path = "../store" }
+confit-runtime.workspace = true
+confit-model.workspace = true
+confit-engine.workspace = true
+confit-store.workspace = true
 crossbeam-channel.workspace = true
-diffy.workspace = true
 fern = "0.7.1"
 log.workspace = true
 serde_json.workspace = true
-confit-driver = { path = "../driver" }
+confit-driver.workspace = true
 thiserror.workspace = true
 minijinja = "3.0.0"
-confit-core = { path = "../core" }
+confit-core.workspace = true
 time = { workspace = true, features = ["local-offset"] }
-confit-events = { path = "../events" }
-confit-bundler = { path = "../bundler" }
+confit-events.workspace = true
+confit-bundler.workspace = true
+confit-ui.workspace = true
+confit-differ.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

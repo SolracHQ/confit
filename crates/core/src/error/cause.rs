@@ -313,7 +313,7 @@ impl std::fmt::Display for RequireNameRule {
     }
 }
 
-/// A hook run failure.
+/// A hook execution failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HookRunError {
     /// A hook past its timeout.
@@ -328,10 +328,10 @@ pub enum HookRunError {
         /// The process exit code.
         code: i32,
     },
-    /// A hook run with unmet checks.
+    /// A hook execution with unmet checks.
     #[error("hook checks unmet")]
     ChecksUnmet,
-    /// A hook run that a require blocks.
+    /// A hook execution that a require blocks.
     #[error("hook blocked")]
     Blocked,
 }
@@ -396,7 +396,7 @@ pub enum ErrorCause {
     /// An eval operation that failed.
     #[error(transparent)]
     EvalError(#[from] EvalError),
-    /// A hook run that failed.
+    /// A hook execution that failed.
     #[error(transparent)]
     HookRunError(#[from] HookRunError),
     /// A command line that breaks a usage rule.

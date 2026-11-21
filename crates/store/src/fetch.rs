@@ -6,8 +6,10 @@ use std::sync::Arc;
 use confit_core::error::{ContextualCause, ContextualResult, ErrorCause, WithContext, contextual};
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
-use confit_events::ToUi;
-use crossbeam_channel::Sender;
+use confit_events::EventHandles;
+use confit_events::TaskReporter;
+use confit_events::protocol::{TaskKind, TaskNote};
+use confit_model::url::Url;
 
 use crate::resources::Resources;
 use confit_driver as driver;
@@ -25,18 +27,18 @@ const INDEX_EXT: &str = "url";
 #[derive(Clone, Debug)]
 pub struct FetchCache {
     resources: Arc<Resources>,
-    to_ui: Sender<ToUi>,
+    handles: EventHandles,
 }
 
 impl FetchCache {
     /// Builds a cache over shared resources.
-    pub fn new(resources: Arc<Resources>, to_ui: Sender<ToUi>) -> Self {
-        Self { resources, to_ui }
+    pub fn new(resources: Arc<Resources>, handles: EventHandles) -> Self {
+        Self { resources, handles }
     }
 
     /// Returns the index path under the cache folder.
-    fn index_path(&self, url: &str) -> PathBuf {
-        let name = format!("{}.{INDEX_EXT}", Sha::hash(url.as_bytes()).hex());
+    fn index_path(&self, url: &Url) -> PathBuf {
+        let name = format!("{}.{INDEX_EXT}", Sha::hash(url.as_str().as_bytes()).hex());
         self.resources.cache_dir().join(name)
     }
 }
@@ -49,7 +51,7 @@ impl FetchCache {
     /// - [`confit_core::error::FetchError`] when a download fails.
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
-    pub fn fetch(&self, url: &str, expected_sha: Option<Sha>) -> ContextualResult<ResourceRef> {
+    pub fn fetch(&self, url: &Url, expected_sha: Option<Sha>) -> ContextualResult<ResourceRef> {
         Fetch::new(self, url, expected_sha.as_ref()).run()
     }
 }
@@ -75,7 +77,9 @@ struct Fetch<'a> {
     /// The fetch cache.
     cache: &'a FetchCache,
     /// The URL being fetched.
-    url: &'a str,
+    url: &'a Url,
+    /// The job reporter for progress events.
+    reporter: TaskReporter,
     /// The expected hash from the caller.
     expected: Option<&'a Sha>,
     /// The total download size.
@@ -88,10 +92,14 @@ struct Fetch<'a> {
 
 impl<'a> Fetch<'a> {
     /// Builds a walk that fetches one URL.
-    fn new(cache: &'a FetchCache, url: &'a str, expected: Option<&'a Sha>) -> Self {
+    fn new(cache: &'a FetchCache, url: &'a Url, expected: Option<&'a Sha>) -> Self {
+        let reporter = cache
+            .handles
+            .start_task(TaskKind::Fetch { url: url.clone() }, None);
         Self {
             cache,
             url,
+            reporter,
             expected,
             total: None,
             bytes: 0,
@@ -107,9 +115,6 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
     fn run(&mut self) -> ContextualResult<ResourceRef> {
-        let _ = self.cache.to_ui.send(ToUi::FetchStarted {
-            url: self.url.to_owned(),
-        });
         if let Some(hit) = self.hit() {
             return hit;
         }
@@ -123,10 +128,7 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hit fails the user hash.
     fn hit(&self) -> Option<ContextualResult<ResourceRef>> {
         let hit = self.lookup()?;
-        let _ = self.cache.to_ui.send(ToUi::FetchFinished {
-            url: self.url.to_owned(),
-            cached: true,
-        });
+        self.reporter.finish(TaskNote::Cached);
         match self.check(hit.sha()) {
             Ok(()) => Some(Ok(hit)),
             Err(error) => Some(Err(error)),
@@ -151,7 +153,7 @@ impl<'a> Fetch<'a> {
     /// - [`ErrorCause::ContentHashMismatch`] when the hash mismatches.
     /// - [`FilesystemError`] when a cache write fails.
     fn download(&mut self) -> ContextualResult<ResourceRef> {
-        let (reader, total) = driver::http::download(self.url, BODY_LIMIT_BYTES)?;
+        let (reader, total) = driver::http::download(self.url.as_str(), BODY_LIMIT_BYTES)?;
         self.total = total.map(|known| usize::try_from(known).unwrap_or(usize::MAX));
         let resources = self.cache.resources.clone();
         let metered = Meter {
@@ -161,13 +163,10 @@ impl<'a> Fetch<'a> {
                 self.report();
             },
         };
-        let handle = resources.store(metered).with_url(self.url)?;
+        let handle = resources.store(metered).with_url(self.url.as_str())?;
         self.check(handle.sha())?;
         self.write_index(handle.sha())?;
-        let _ = self.cache.to_ui.send(ToUi::FetchFinished {
-            url: self.url.to_owned(),
-            cached: false,
-        });
+        self.reporter.finish(TaskNote::Closed);
         Ok(handle)
     }
 
@@ -175,11 +174,7 @@ impl<'a> Fetch<'a> {
     fn report(&mut self) {
         if self.bytes - self.reported >= PROGRESS_STEP_BYTES {
             self.reported = self.bytes;
-            let _ = self.cache.to_ui.send(ToUi::FetchProgress {
-                url: self.url.to_owned(),
-                done: self.bytes,
-                total: self.total,
-            });
+            self.reporter.progress(self.bytes, self.total, None);
         }
     }
 
@@ -211,7 +206,7 @@ impl<'a> Fetch<'a> {
                 expected: *wanted,
                 found: *actual,
             })
-            .with_url(self.url));
+            .with_url(self.url.as_str()));
         }
         Ok(())
     }
@@ -226,6 +221,8 @@ mod tests {
     use crate::pool::PoolStore;
     use confit_core::error::ErrorCause;
     use confit_driver as driver;
+    use confit_events::protocol::FromUi;
+    use confit_events::protocol::{TaskState, ToUi};
 
     const URL: &str = "https://example.com/tool.bin";
     const FILE_URL: &str = "https://example.com/tool.tar.gz";
@@ -240,10 +237,10 @@ mod tests {
 
     fn file_cache(dir: &Path) -> FetchCache {
         let roots = test_roots(dir);
-        let (sender, _) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        FetchCache::new(resources, sender)
+        let handles = EventHandles::silent();
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        FetchCache::new(resources, handles)
     }
 
     fn index_file(dir: &Path, url: &str) -> PathBuf {
@@ -262,9 +259,14 @@ mod tests {
         *handle.sha()
     }
 
+    /// Builds one fetch url from valid text.
+    fn fetch_url(text: &str) -> Url {
+        Url::new(text.to_owned()).unwrap()
+    }
+
     fn seed(cache: &FetchCache, url: &str, body: &[u8]) -> ResourceRef {
         driver::http::serve(url, body);
-        match cache.fetch(url, None) {
+        match cache.fetch(&fetch_url(url), None) {
             Ok(handle) => handle,
             Err(error) => panic!("the seeded body fails to serve: {error}"),
         }
@@ -277,7 +279,7 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"1.2.3");
         assert_eq!(driver::http::calls(URL), 1, "the seed downloads once");
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 match std::fs::read(content_file(dir.path(), &sha.hex())) {
@@ -296,7 +298,7 @@ mod tests {
         driver::http::clear();
         let cache = file_cache(dir.path());
         seed(&cache, FILE_URL, b"binary");
-        match cache.fetch(FILE_URL, None) {
+        match cache.fetch(&fetch_url(FILE_URL), None) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 let path = content_file(dir.path(), &sha.hex());
@@ -322,7 +324,7 @@ mod tests {
         seed(&cache, URL, b"genuine");
         let wanted = Sha::hash(b"genuine");
         std::fs::remove_file(content_file(dir.path(), &wanted.hex())).unwrap();
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(refetched) => {
                 let sha = cached_sha(&refetched);
                 assert_eq!(sha, wanted, "the content loss keeps the digest");
@@ -351,7 +353,7 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
         std::fs::remove_file(index_file(dir.path(), URL)).unwrap();
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(refetched) => {
                 let sha = cached_sha(&refetched);
                 let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
@@ -377,7 +379,7 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"genuine");
         std::fs::write(index_file(dir.path(), URL), b"not-a-hex-digest").unwrap();
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(refetched) => {
                 let sha = cached_sha(&refetched);
                 let found = std::fs::read(content_file(dir.path(), &sha.hex())).unwrap();
@@ -416,6 +418,26 @@ mod tests {
         assert_no_sha_suffix_files(&dir.path().join("temp"));
     }
 
+    /// Builds one fetch started event.
+    fn fetch_started(url: &str) -> ToUi {
+        ToUi::Task {
+            kind: TaskKind::Fetch {
+                url: fetch_url(url),
+            },
+            state: TaskState::Started { total: None },
+        }
+    }
+
+    /// Builds one fetch finished event.
+    fn fetch_finished(url: &str, note: TaskNote) -> ToUi {
+        ToUi::Task {
+            kind: TaskKind::Fetch {
+                url: fetch_url(url),
+            },
+            state: TaskState::Finished { note },
+        }
+    }
+
     #[test]
     fn fetch_hit_reports_started_and_cached() {
         let dir = tempfile::tempdir().unwrap();
@@ -424,23 +446,17 @@ mod tests {
         seed(&cache, URL, b"1.2.3");
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let cache = FetchCache::new(resources, sender);
-        match cache.fetch(URL, None) {
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let cache = FetchCache::new(resources, handles);
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(_) => {
                 let events: Vec<ToUi> = receiver.try_iter().collect();
                 assert_eq!(
                     events,
-                    vec![
-                        ToUi::FetchStarted {
-                            url: URL.to_string(),
-                        },
-                        ToUi::FetchFinished {
-                            url: URL.to_string(),
-                            cached: true,
-                        },
-                    ]
+                    vec![fetch_started(URL), fetch_finished(URL, TaskNote::Cached),]
                 );
                 assert_eq!(driver::http::calls(URL), 1, "the hit makes no download");
             }
@@ -456,18 +472,20 @@ mod tests {
         driver::http::serve(FILE_URL, b"binary");
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let cache = FetchCache::new(resources, sender);
-        match cache.fetch(URL, None) {
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let cache = FetchCache::new(resources, handles);
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(_) => {}
             Err(error) => panic!("the first miss fails to download: {error}"),
         }
-        match cache.fetch(FILE_URL, None) {
+        match cache.fetch(&fetch_url(FILE_URL), None) {
             Ok(_) => {}
             Err(error) => panic!("the second miss fails to download: {error}"),
         }
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(_) => {}
             Err(error) => panic!("the repeat hit fails to serve: {error}"),
         }
@@ -475,27 +493,12 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::FetchStarted {
-                    url: URL.to_string(),
-                },
-                ToUi::FetchFinished {
-                    url: URL.to_string(),
-                    cached: false,
-                },
-                ToUi::FetchStarted {
-                    url: FILE_URL.to_string(),
-                },
-                ToUi::FetchFinished {
-                    url: FILE_URL.to_string(),
-                    cached: false,
-                },
-                ToUi::FetchStarted {
-                    url: URL.to_string(),
-                },
-                ToUi::FetchFinished {
-                    url: URL.to_string(),
-                    cached: true,
-                },
+                fetch_started(URL),
+                fetch_finished(URL, TaskNote::Closed),
+                fetch_started(FILE_URL),
+                fetch_finished(FILE_URL, TaskNote::Closed),
+                fetch_started(URL),
+                fetch_finished(URL, TaskNote::Cached),
             ]
         );
     }
@@ -525,7 +528,7 @@ mod tests {
         seed(&cache, URL, b"1.2.3");
         seed(&cache, FILE_URL, b"binary");
         let other_hash = "0".repeat(64);
-        match cache.fetch(URL, Some(Sha::new(other_hash.clone()).unwrap())) {
+        match cache.fetch(&fetch_url(URL), Some(Sha::new(other_hash.clone()).unwrap())) {
             Ok(_) => panic!("expected a user hash mismatch"),
             Err(error) => {
                 assert!(
@@ -538,7 +541,10 @@ mod tests {
                 );
             }
         }
-        match cache.fetch(FILE_URL, Some(Sha::new(other_hash.clone()).unwrap())) {
+        match cache.fetch(
+            &fetch_url(FILE_URL),
+            Some(Sha::new(other_hash.clone()).unwrap()),
+        ) {
             Ok(_) => panic!("expected a user hash mismatch"),
             Err(error) => {
                 assert!(
@@ -565,7 +571,7 @@ mod tests {
         let cache = file_cache(dir.path());
         seed(&cache, URL, b"1.2.3");
         let wanted = Sha::hash(b"1.2.3");
-        match cache.fetch(URL, Some(wanted)) {
+        match cache.fetch(&fetch_url(URL), Some(wanted)) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 assert_eq!(sha, wanted);
@@ -584,7 +590,7 @@ mod tests {
         let raw: Vec<u8> = (0..20 * 1024).map(|index| (index % 251) as u8).collect();
         assert!(raw.len() > 8192, "the entry spans several store chunks");
         seed(&cache, URL, &raw);
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(handle) => {
                 assert_eq!(handle.sha(), &Sha::hash(&raw));
                 let sha = cached_sha(&handle);
@@ -603,7 +609,7 @@ mod tests {
         driver::http::clear();
         let cache = file_cache(dir.path());
         driver::http::fail(URL, FetchError::DownloadFailed);
-        match cache.fetch(URL, None) {
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(_) => panic!("expected a scripted failure"),
             Err(error) => {
                 assert!(matches!(
@@ -622,7 +628,7 @@ mod tests {
             "the miss makes one download attempt"
         );
         assert!(
-            cache.fetch(URL, None).is_err(),
+            cache.fetch(&fetch_url(URL), None).is_err(),
             "the retry reports the scripted failure"
         );
         assert_eq!(
@@ -639,10 +645,12 @@ mod tests {
         driver::http::serve(URL, b"1.2.3");
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let cache = FetchCache::new(resources, sender);
-        match cache.fetch(URL, None) {
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let cache = FetchCache::new(resources, handles);
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 assert_eq!(
@@ -655,23 +663,17 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![
-                ToUi::FetchStarted {
-                    url: URL.to_string(),
-                },
-                ToUi::FetchFinished {
-                    url: URL.to_string(),
-                    cached: false,
-                },
-            ]
+            vec![fetch_started(URL), fetch_finished(URL, TaskNote::Closed),]
         );
         assert_eq!(driver::http::calls(URL), 1, "the miss makes one download");
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let cache = FetchCache::new(resources, sender);
-        match cache.fetch(URL, None) {
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let cache = FetchCache::new(resources, handles);
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(handle) => {
                 let sha = cached_sha(&handle);
                 assert_eq!(
@@ -684,15 +686,7 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(
             events,
-            vec![
-                ToUi::FetchStarted {
-                    url: URL.to_string(),
-                },
-                ToUi::FetchFinished {
-                    url: URL.to_string(),
-                    cached: true,
-                },
-            ]
+            vec![fetch_started(URL), fetch_finished(URL, TaskNote::Cached),]
         );
         assert_eq!(
             driver::http::calls(URL),
@@ -700,7 +694,7 @@ mod tests {
             "the offline hit makes no download"
         );
         let other_sha = Sha::new("0".repeat(64)).unwrap();
-        match cache.fetch(URL, Some(other_sha)) {
+        match cache.fetch(&fetch_url(URL), Some(other_sha)) {
             Ok(_) => panic!("expected a user hash mismatch"),
             Err(error) => {
                 assert!(
@@ -728,16 +722,22 @@ mod tests {
         driver::http::serve(URL, &raw);
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let cache = FetchCache::new(resources, sender);
-        match cache.fetch(URL, None) {
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let cache = FetchCache::new(resources, handles);
+        match cache.fetch(&fetch_url(URL), None) {
             Ok(_) => {}
             Err(error) => panic!("the large miss fails to download: {error}"),
         }
         let mut seen: Vec<usize> = Vec::new();
         for event in receiver.try_iter() {
-            if let ToUi::FetchProgress { done, total, .. } = event {
+            if let ToUi::Task {
+                kind: TaskKind::Fetch { .. },
+                state: TaskState::Progress { done, total, .. },
+            } = event
+            {
                 assert_eq!(total, Some(raw.len()), "the progress keeps the total");
                 seen.push(done);
             }

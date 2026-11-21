@@ -14,25 +14,31 @@ use crate::cli::{DEFAULT_PROFILE, InitArgs};
 
 const PROFILE_TEXT: &str = include_str!("../../resources/main.lua");
 
+/// The editor config file that the execution writes at the project root.
+const LSP_FILE: &str = ".luarc.json";
+
+/// The editor config template that maps the plugin and stubs folders.
+const LSP_TEXT: &str = include_str!("../../resources/luarc.json");
+
 // Core plugins.
 include!(concat!(env!("OUT_DIR"), "/plugin_files.rs"));
 
-pub enum InitOutcome {
-    /// A run that writes every artifact.
-    Scaffold(InitReport),
-    /// A refresh of the stubs alone.
-    Stubs(InitReport),
-    /// A refresh of the core plugins alone.
-    Plugins(InitReport),
-    /// A write of the editor config alone.
-    Lsp(InitReport),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
-    /// The file or folder that the run wrote.
+    /// The file or folder that the execution wrote.
     pub path: PathBuf,
-    /// The number of files the run wrote.
+    /// The number of files the execution wrote.
+    pub written: usize,
+}
+
+/// One init outcome.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InitItem {
+    /// The stage label.
+    pub stage: String,
+    /// The written path text.
+    pub path: String,
+    /// The written file count.
     pub written: usize,
 }
 
@@ -47,32 +53,45 @@ impl InitRunner<'_> {
     /// # Errors
     ///
     /// - [`confit_core::error::kind::ErrorKind::OverwriteRefused`] when a scaffold file is present.
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the evaluation fails.
-    /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua run fails.
     /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a scaffold write fails.
-    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when a scaffold write fails.
-    pub fn execute(self) -> TerminalResult<Vec<InitOutcome>> {
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project read fails.
+    pub fn execute(self) -> TerminalResult<Vec<InitItem>> {
         let root = self.args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
         let project = Project::read(&root)?;
         if !self.args.stubs && !self.args.plugins && !self.args.lsp {
-            return Ok(vec![InitOutcome::Scaffold(scaffold(&root, &project)?)]);
+            let report = scaffold(&root, &project)?;
+            return Ok(vec![InitItem {
+                stage: "init".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            }]);
         }
-        let mut outcomes = Vec::new();
+        let mut items = Vec::new();
         if self.args.stubs {
-            outcomes.push(InitOutcome::Stubs(write_stubs(
-                &root.join(&project.stubs.folder),
-            )?));
+            let report = write_stubs(&root.join(&project.stubs.folder))?;
+            items.push(InitItem {
+                stage: "stubs".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
         }
         if self.args.plugins {
-            outcomes.push(InitOutcome::Plugins(write_plugins(
-                &root,
-                &project.plugins.folder,
-            )?));
+            let report = write_plugins(&root, &project.plugins.folder)?;
+            items.push(InitItem {
+                stage: "plugins".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
         }
         if self.args.lsp {
-            outcomes.push(InitOutcome::Lsp(write_lsp(&root, &project)?));
+            let report = write_lsp(&root, &project)?;
+            items.push(InitItem {
+                stage: "lsp".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
         }
-        Ok(outcomes)
+        Ok(items)
     }
 }
 
@@ -82,10 +101,8 @@ impl InitRunner<'_> {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::OverwriteRefused`] when a scaffold file is present.
-/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the evaluation fails.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua run fails.
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a scaffold write fails.
-/// - [`confit_core::error::kind::ErrorKind::LoadProject`] when a scaffold write fails.
+/// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project read fails.
 fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let profile = root.join(DEFAULT_PROFILE);
     let stubs_dir = root.join(&project.stubs.folder);
@@ -141,7 +158,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
 /// # Errors
 ///
 /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the evaluation fails.
-/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when the Lua run fails.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when Lua fails.
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a stub write fails.
 fn write_stubs(dir: &Path) -> TerminalResult<InitReport> {
     let documents = generate_stubs().map_err(map_stubs)?;
@@ -184,12 +201,6 @@ fn write_plugins(root: &Path, folder: &Path) -> TerminalResult<InitReport> {
         written: PLUGIN_FILES.len(),
     })
 }
-
-/// The editor config file that the run writes at the project root.
-const LSP_FILE: &str = ".luarc.json";
-
-/// The editor config template that maps the plugin and stubs folders.
-const LSP_TEXT: &str = include_str!("../../resources/luarc.json");
 
 /// Writes the editor config that maps the plugin and stubs folders.
 ///

@@ -15,7 +15,7 @@ pub enum ErrorKind {
     DuplicateDocument,
     /// A module open that failed.
     OpenModule,
-    /// A hook run that failed.
+    /// A hook execution that failed.
     RunHook,
     /// A hook process spawn that failed.
     SpawnHook,

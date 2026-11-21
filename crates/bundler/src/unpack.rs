@@ -218,6 +218,7 @@ mod tests {
 
     use confit_core::resource_ref::ResourceRef;
     use confit_core::version::VERSION;
+    use confit_events::EventHandles;
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -242,8 +243,7 @@ mod tests {
         use confit_store::Stores;
 
         let roots = test_roots(dir);
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = Stores::new(roots, sender);
+        let stores = Stores::new(roots, EventHandles::silent());
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}");
@@ -266,7 +266,7 @@ mod tests {
             documents,
             hooks: Vec::new(),
         };
-        (Bundler::new(&stores), manifest)
+        (Bundler::new(&stores, EventHandles::silent()), manifest)
     }
 
     fn build_bundle(dest: &Path, entries: &[(&str, Vec<u8>)]) {
@@ -373,12 +373,12 @@ mod tests {
 
     #[test]
     fn read_rejects_a_bundle_with_absent_content() {
+        use confit_events::EventHandles;
         use confit_store::Stores;
 
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = Stores::new(roots.clone(), sender);
+        let stores = Stores::new(roots.clone(), EventHandles::silent());
         let wanted = Sha::hash(b"wanted bytes");
         project_file(dir.path(), "wanted.bin", b"wanted bytes");
         let handle = match stores.resources().resource("wanted.bin") {
@@ -401,7 +401,7 @@ mod tests {
         let raw = serde_json::to_vec(&manifest).unwrap();
         let manifest_only = dir.path().join("manifest_only.cb");
         build_bundle(&manifest_only, &[(BUNDLE_MANIFEST, raw)]);
-        let store = Bundler::new(&stores);
+        let store = Bundler::new(&stores, EventHandles::silent());
         match store.read(&manifest_only) {
             Ok(_) => panic!("expected a content rejection"),
             Err(error) => match error.cause() {

@@ -203,7 +203,7 @@ impl HookLifecycle<'_> {
     }
 }
 
-/// Pairs each desired and recorded hook with its change in render order.
+/// Collects hook lifecycles in render order.
 pub fn diff_lifecycle<'a>(current: &'a [Hook], previous: &'a [Hook]) -> Vec<HookLifecycle<'a>> {
     let mut out = Vec::new();
     for hook in current {

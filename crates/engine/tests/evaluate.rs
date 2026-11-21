@@ -1,9 +1,522 @@
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use common::*;
+use confit_engine::Engine;
+use confit_events::EventHandles;
 use confit_model::arg::Arg;
 use confit_model::document::{Data, StructuredDocument, StructuredFormat};
 use confit_model::routes::{Route, RouteBase};
+use confit_store::{StoreRoots, Stores};
+use std::path::{Path, PathBuf};
+
+/// Lua profile with two text configs in zebra then apple order.
+const PAIR: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("first"),
+                    documents = { { path = route("home", "zebra"), text = "z" } },
+                },
+                {
+                    name = id("second"),
+                    documents = { { path = route("home", "apple"), text = "a" } },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with repeated destination documents.
+const DUPLICATE: &str = r#"
+        return {
+            configs = {
+                { name = id("first"), documents = { { path = route("home", ".bashrc"), text = "one" } } },
+                { name = id("second"), documents = { { path = route("home", ".bashrc"), text = "two" } } },
+            },
+        }
+    "#;
+
+/// Lua profile with one structured toml document.
+const STRUCTURED: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/bat"),
+                    documents = {
+                        {
+                            path = route("home", "config.toml"),
+                            format = "toml",
+                            data = { profile = { shell = "bash" } },
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with repeated config names.
+const DUPLICATE_NAMES: &str = r#"
+        return {
+            configs = {
+                { name = id("same"), documents = { { path = route("home", "a"), text = "one" } } },
+                { name = id("same"), documents = { { path = route("home", "b"), text = "two" } } },
+            },
+        }
+    "#;
+
+/// Lua profile with two structured patches over one base.
+const MERGED_PATCHES: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) d.data.alpha = "one" end,
+                        },
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) d.data.beta = "two" end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one structured patch over a missing target.
+const MISSING_TARGET: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    patches = {
+                        {
+                            target = route("home", "fresh.json"),
+                            format = "json",
+                            apply = function(d) d.data.made = "yes" end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one structured patch over a text base.
+const TEXT_BASE: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = { { path = route("home", "note.txt"), text = "hi" } },
+                    patches = {
+                        {
+                            target = route("home", "note.txt"),
+                            format = "json",
+                            apply = function(d) d.data.x = 1 end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one failing structured callback.
+const FAILING_CALLBACK: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) error("patch boom") end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with two rc patches over one base.
+const RC_MERGED: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/shell"),
+                    documents = {
+                        {
+                            path = route("home", ".bashrc"),
+                            profile = { { env = { name = "SEED", value = "0" } } },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", ".bashrc"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
+                        },
+                        {
+                            target = route("home", ".bashrc"),
+                            apply = function(d) d.config[#d.config + 1] = { alias = { name = "ll", expansion = "ls -l" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one rc patch over a missing target.
+const RC_MISSING: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/shell"),
+                    patches = {
+                        {
+                            target = route("home", ".bashrc"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one rc patch over a text base.
+const RC_TEXT_BASE: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/shell"),
+                    documents = { { path = route("home", "note.txt"), text = "hi" } },
+                    patches = {
+                        {
+                            target = route("home", "note.txt"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one failing rc callback.
+const RC_FAILING: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/shell"),
+                    documents = {
+                        {
+                            path = route("home", ".bashrc"),
+                            profile = { { env = { name = "SEED", value = "0" } } },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", ".bashrc"),
+                            apply = function(d) error("rc boom") end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one structured patch over an rc base.
+const RC_FORMAT_GAP: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/shell"),
+                    documents = {
+                        {
+                            path = route("home", ".bashrc"),
+                            profile = { { env = { name = "SEED", value = "0" } } },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", ".bashrc"),
+                            format = "json",
+                            apply = function(d) d.data.x = 1 end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with a toml patch over a json base.
+const FORMAT_GAP: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "toml",
+                            apply = function(d) d.data.x = 1 end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile reading project text through the resource bridge.
+const PROJECT_TEXT: &str = r#"
+        local open = require("confit.open")
+        local handle = assert(open("note.txt"))
+        return {
+            configs = {
+                {
+                    name = id("tools/bat"),
+                    documents = { { path = route("home", ".bashrc"), text = assert(handle:text()) } },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one patch adding count and extra keys.
+const PATCHED: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { count = 1 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) d.data.count = 2 d.data.extra = "yes" end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile mixing structured and rc patches over working targets.
+const MIXED_SPLIT: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/both"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                        {
+                            path = route("home", ".bashrc"),
+                            profile = { { env = { name = "SEED", value = "0" } } },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) d.data.alpha = "one" end,
+                        },
+                        {
+                            target = route("home", ".bashrc"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "FIRST", value = "1" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one rc patch over a structured base.
+const RC_OVER_STRUCTURED: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with mixed structured formats over one working target.
+const MIXED_FORMATS: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "fresh.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "fresh.json"),
+                            format = "json",
+                            apply = function(d) d.data.a = 1 end,
+                        },
+                        {
+                            target = route("home", "fresh.json"),
+                            format = "toml",
+                            apply = function(d) d.data.b = 2 end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with structured and rc patches over one structured base.
+const MIXED_SAME_TARGET: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    documents = {
+                        {
+                            path = route("home", "config.json"),
+                            format = "json",
+                            data = { seed = 0 },
+                        },
+                    },
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) d.data.alpha = "one" end,
+                        },
+                        {
+                            target = route("home", "config.json"),
+                            apply = function(d) d.profile[#d.profile + 1] = { env = { name = "MADE", value = "yes" } } end,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with one patch with a foreign key.
+const FOREIGN_PATCH_KEY: &str = r#"
+        return {
+            configs = {
+                {
+                    name = id("tools/app"),
+                    patches = {
+                        {
+                            target = route("home", "config.json"),
+                            format = "json",
+                            apply = function(d) return d end,
+                            nope = 1,
+                        },
+                    },
+                },
+            },
+        }
+    "#;
+
+/// Lua profile with merged hooks over one text document.
+const HOOKS_THROUGH: &str = r#"
+            return {
+                configs = {
+                    {
+                        name = id("tools/app"),
+                        documents = { { path = route("home", "note.txt"), text = "hi" } },
+                        hooks = {
+                            { id = id("tools/mise-install"), argv = { "mise", "install" } },
+                            { id = id("tools/mise-install-quick"), argv = { "mise", "install" }, timeout = "90" },
+                            { id = id("tools/fc-cache"), argv = { "fc-cache" }, timeout = "10m" },
+                        },
+                    },
+                },
+            }
+        "#;
+
+/// Returns one engine over isolated stores.
+fn test_engine(dir: &Path) -> Engine {
+    let stores = Stores::new(
+        StoreRoots {
+            config_base: dir.join("config"),
+            temp_base: dir.join("temp"),
+            project_root: dir.join("project"),
+        },
+        EventHandles::silent(),
+    );
+    Engine::new(stores, EventHandles::silent())
+}
+
+/// Writes the profile file and returns both paths.
+fn profile_with(dir: &Path, source: &str) -> (PathBuf, PathBuf) {
+    let root = project_root(dir);
+    let profile = root.join("profile.lua");
+    std::fs::write(&profile, source.as_bytes()).unwrap();
+    (root, profile)
+}
+
+/// Creates the project root.
+fn project_root(dir: &Path) -> PathBuf {
+    let root = dir.join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+/// Returns the text content.
+fn text_of(data: &Data) -> &str {
+    match data {
+        Data::Text(found) => &found.content,
+        _ => panic!("expected a text document"),
+    }
+}
 
 #[test]
 fn evaluate_keeps_text_in_destination_order() {

@@ -1,4 +1,4 @@
-//! Serves scripted process runs.
+//! Serves scripted process executions.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -29,7 +29,7 @@ thread_local! {
     }) };
 }
 
-/// Queues a process outcome for the next run.
+/// Queues a process outcome for the next execution.
 pub fn serve(outcome: Result<ScriptedRun, ContextualCause>) {
     SCRIPTS.with(|cell| cell.borrow_mut().outcomes.push_back(outcome));
 }

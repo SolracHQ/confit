@@ -7,19 +7,20 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-confit-driver = { path = "../driver" }
+confit-driver.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 flate2.workspace = true
-confit-core = { path = "../core" }
-confit-events = { path = "../events" }
+confit-core.workspace = true
+confit-events.workspace = true
 crossbeam-channel.workspace = true
 log.workspace = true
-confit-model = { version = "0.9.0", path = "../model" }
+confit-model.workspace = true
+confit-differ.workspace = true
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { workspace = true, features = ["test-support"] }
 flate2.workspace = true
 tempfile.workspace = true

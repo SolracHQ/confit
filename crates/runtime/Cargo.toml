@@ -7,9 +7,9 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-confit-model = { path = "../model" }
-confit-driver = { path = "../driver" }
-confit-store = { path = "../store" }
+confit-model.workspace = true
+confit-driver.workspace = true
+confit-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
@@ -19,10 +19,11 @@ thiserror.workspace = true
 log.workspace = true
 diffy.workspace = true
 sha2.workspace = true
-confit-core = { path = "../core" }
-confit-events = { path = "../events" }
-confit-bundler = { path = "../bundler" }
+confit-core.workspace = true
+confit-events.workspace = true
+confit-bundler.workspace = true
+confit-differ.workspace = true
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

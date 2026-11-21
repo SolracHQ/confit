@@ -6,6 +6,7 @@ mod pack;
 mod unpack;
 use std::sync::Arc;
 
+use confit_events::EventHandles;
 use confit_store::Stores;
 use confit_store::resources::Resources;
 
@@ -17,13 +18,16 @@ pub(crate) const BUNDLE_MANIFEST: &str = "manifest.json";
 pub struct Bundler {
     /// The shared resource store.
     pub(crate) resources: Arc<Resources>,
+    /// The UI communication channel.
+    pub(crate) handles: EventHandles,
 }
 
 impl Bundler {
-    /// Builds one bundler that shares the resource store with the run.
-    pub fn new(stores: &Stores) -> Self {
+    /// Builds one bundler.
+    pub fn new(stores: &Stores, handles: EventHandles) -> Self {
         Self {
             resources: stores.resources(),
+            handles,
         }
     }
 }
@@ -37,6 +41,7 @@ mod tests {
     use confit_core::resource_ref::ResourceRef;
     use confit_core::sha::Sha;
     use confit_core::version::VERSION;
+    use confit_events::EventHandles;
     use confit_model::document::Data;
     use confit_model::document::Document;
     use confit_model::document::FileMode;
@@ -50,14 +55,13 @@ mod tests {
 
     /// Builds stores under one temporary folder.
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             confit_store::StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            EventHandles::silent(),
         )
     }
 

@@ -8,7 +8,7 @@ use confit_store::state::Picker;
 
 use crate::cli::DeleteArgs;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeleteReport {
     /// The deleted state name.
     pub name: String,

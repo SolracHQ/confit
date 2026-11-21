@@ -316,7 +316,7 @@ pub struct Document {
 }
 
 impl Document {
-    /// Pairs a destination route with its payload.
+    /// Builds one document.
     pub fn new(path: Route, data: Data) -> Self {
         Self { path, data }
     }

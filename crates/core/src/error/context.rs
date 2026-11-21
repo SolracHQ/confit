@@ -99,7 +99,7 @@ pub struct ErrorContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The lines of the stack trace.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<String>,
 }
 

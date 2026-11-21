@@ -8,6 +8,8 @@ use confit_core::error::{ContextualResult, Terminal, TerminalResult, WithContext
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_driver as driver;
+use confit_events::TaskReporter;
+use confit_events::protocol::{TaskKind, TaskNote};
 
 use crate::BUNDLE_MANIFEST;
 use crate::Bundler;
@@ -65,7 +67,7 @@ struct Pack<'a> {
 
 /// One open content file.
 struct Staged {
-    /// The hash naming the entry with its carried sha.
+    /// The hash naming the entry.
     handle: ResourceRef,
     /// The opened content file.
     file: std::fs::File,
@@ -100,8 +102,14 @@ impl<'a> Pack<'a> {
     /// - [`confit_core::error::FilesystemError`] when the content is unreadable or a write fails.
     /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
     fn run(mut self) -> ContextualResult<PathBuf> {
-        self.collect()?;
-        self.build()
+        let total = self.contents.len();
+        let dest = self.dest.clone();
+        let handles = self.bundler.handles.clone();
+        let reporter = handles.start_task(TaskKind::Pack { path: dest.clone() }, Some(total));
+        self.collect(&reporter)?;
+        let built = self.build(&reporter)?;
+        reporter.finish(TaskNote::Members(total));
+        Ok(built)
     }
 
     /// Opens every content file before the atomic write.
@@ -110,13 +118,15 @@ impl<'a> Pack<'a> {
     ///
     /// - [`confit_core::error::FilesystemError`] when the content is unreadable, with the attempted path.
     /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
-    fn collect(&mut self) -> ContextualResult<()> {
+    fn collect(&mut self, reporter: &TaskReporter) -> ContextualResult<()> {
+        let total = self.contents.len();
         for handle in &self.contents {
             let file = self.bundler.resources.open(handle)?;
             self.staged.push(Staged {
                 handle: *handle,
                 file,
             });
+            reporter.progress(self.staged.len(), Some(total), None);
         }
         Ok(())
     }
@@ -127,7 +137,7 @@ impl<'a> Pack<'a> {
     ///
     /// - [`confit_core::error::FilesystemError`] when a write fails.
     /// - [`confit_core::error::ArchiveError`] when a member fails.
-    fn build(self) -> ContextualResult<PathBuf> {
+    fn build(self, reporter: &TaskReporter) -> ContextualResult<PathBuf> {
         use confit_driver::archive::{Algorithm, Builder, Level};
 
         let Pack {
@@ -137,6 +147,7 @@ impl<'a> Pack<'a> {
             contents: _,
             mut staged,
         } = self;
+        let total = staged.len();
         let scratch = driver::StagedFile::stage(&dest)?;
         {
             let sink = std::fs::File::create(scratch.path())?;
@@ -148,7 +159,7 @@ impl<'a> Pack<'a> {
                 text.len() as u64,
                 &mut manifest_reader,
             )?;
-            for entry in &mut staged {
+            for (index, entry) in staged.iter_mut().enumerate() {
                 let len = entry.file.metadata()?.len();
                 builder.member(
                     &entry.handle.sha().hex(),
@@ -156,6 +167,7 @@ impl<'a> Pack<'a> {
                     len,
                     &mut entry.file,
                 )?;
+                reporter.progress(index + 1, Some(total), None);
             }
             let sink = builder.finish()?;
             drop(sink);
@@ -173,6 +185,7 @@ mod tests {
     use confit_core::error::ErrorCause;
     use confit_core::version::VERSION;
     use confit_driver as driver;
+    use confit_events::EventHandles;
     use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
     use confit_model::routes::{Route, RouteBase};
     use confit_store::StoreRoots;
@@ -209,8 +222,7 @@ mod tests {
         use confit_store::Stores;
 
         let roots = test_roots(dir);
-        let (sender, _) = crossbeam_channel::unbounded();
-        let stores = Stores::new(roots, sender);
+        let stores = Stores::new(roots, EventHandles::silent());
         let mut documents = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
             let name = format!("bin-{index}");
@@ -234,7 +246,7 @@ mod tests {
             documents,
             hooks: Vec::new(),
         };
-        (Bundler::new(&stores), manifest)
+        (Bundler::new(&stores, EventHandles::silent()), manifest)
     }
 
     fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {

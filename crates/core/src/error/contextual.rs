@@ -1,15 +1,10 @@
-//! Failure causes that carry where the operation ran.
+//! Failure causes with the operation location.
 
 use super::cause::{ErrorCause, EvalError};
 use super::context::{ErrorContext, Source};
 
 /// One contextual result.
 pub type ContextualResult<T> = std::result::Result<T, ContextualCause>;
-
-/// Wraps one cause with its location.
-pub fn contextual(cause: impl Into<ErrorCause>) -> ContextualCause {
-    ContextualCause::new(cause)
-}
 
 /// A failure cause and its location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,4 +339,9 @@ impl From<mlua::Error> for ContextualCause {
             .with_detail(detail)
             .with_trace(lines.map(str::to_owned).collect())
     }
+}
+
+/// Wraps one cause with its location.
+pub fn contextual(cause: impl Into<ErrorCause>) -> ContextualCause {
+    ContextualCause::new(cause)
 }

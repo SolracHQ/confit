@@ -12,7 +12,7 @@ const SAFE_CHARS: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-";
 
 /// One command line argument.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Shape)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Shape)]
 #[serde(untagged)]
 #[shape(table, untagged)]
 pub enum Arg {

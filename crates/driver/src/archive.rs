@@ -67,21 +67,6 @@ pub struct Entry<'a> {
     pub reader: Box<dyn io::Read + 'a>,
 }
 
-fn zip_error(error: zip::result::ZipError) -> ContextualCause {
-    use zip::result::ZipError as Zip;
-    let message = error.to_string();
-    match error {
-        Zip::Io(cause) => ContextualCause::from(cause),
-        Zip::InvalidPassword | Zip::UnsupportedArchive(Zip::PASSWORD_REQUIRED) => {
-            ContextualCause::from(ArchiveError::PasswordLocked)
-        }
-        Zip::UnsupportedArchive(_) | Zip::CompressionMethodNotSupported(_) => {
-            ContextualCause::from(ArchiveError::AlgorithmUnknown).with_detail(message)
-        }
-        _ => ContextualCause::from(ArchiveError::BackendCorrupt).with_detail(message),
-    }
-}
-
 /// A writer that streams an archive into a seekable sink.
 pub struct Builder<W: io::Write + io::Seek> {
     inner: Inner<W>,
@@ -199,6 +184,21 @@ impl<W: io::Write + io::Seek> Builder<W> {
                 Ok(encoder.finish()?)
             }
         }
+    }
+}
+
+fn zip_error(error: zip::result::ZipError) -> ContextualCause {
+    use zip::result::ZipError as Zip;
+    let message = error.to_string();
+    match error {
+        Zip::Io(cause) => ContextualCause::from(cause),
+        Zip::InvalidPassword | Zip::UnsupportedArchive(Zip::PASSWORD_REQUIRED) => {
+            ContextualCause::from(ArchiveError::PasswordLocked)
+        }
+        Zip::UnsupportedArchive(_) | Zip::CompressionMethodNotSupported(_) => {
+            ContextualCause::from(ArchiveError::AlgorithmUnknown).with_detail(message)
+        }
+        _ => ContextualCause::from(ArchiveError::BackendCorrupt).with_detail(message),
     }
 }
 

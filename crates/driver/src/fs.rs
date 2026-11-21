@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 use confit_core::error::{ContextualCause, ContextualResult, FilesystemError};
 
+/// The permission bits used when a path carries no mode.
+const DEFAULT_MODE: u32 = 0o644;
+
 /// Creates the parent folder of a file path.
 ///
 /// # Errors
@@ -76,9 +79,6 @@ pub fn read_link_bytes(path: &Path) -> ContextualResult<Vec<u8>> {
         .as_encoded_bytes()
         .to_vec())
 }
-
-/// The permission bits used when a path carries no mode.
-const DEFAULT_MODE: u32 = 0o644;
 
 /// Writes the unix permission bits onto a path.
 ///

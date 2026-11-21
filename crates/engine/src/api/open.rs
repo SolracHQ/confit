@@ -40,14 +40,13 @@ mod tests {
     use mlua::Value;
 
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            confit_events::EventHandles::silent(),
         )
     }
 

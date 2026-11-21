@@ -9,6 +9,25 @@ use std::path::{Path, PathBuf};
 use confit_cli::actions::{apply, bundle::BundleRunner, restore};
 use confit_cli::cli::{ApplyArgs, BundleArgs, RestoreArgs};
 use confit_driver::paths::BaseDirs;
+use confit_events::EventHandles;
+use confit_store::{StoreRoots, Stores};
+
+/// Builds stores under one temporary folder with a silent progress sink.
+fn test_stores(dir: &Path, project: &str) -> Stores {
+    Stores::new(
+        StoreRoots {
+            config_base: dir.join("config"),
+            temp_base: dir.join("temp"),
+            project_root: dir.join(project),
+        },
+        EventHandles::silent(),
+    )
+}
+
+/// Builds UI handles with no reader and no reply.
+fn test_handles() -> EventHandles {
+    EventHandles::silent()
+}
 
 /// Builds a profile that writes one text document with the given text.
 fn profile_text(relative: &str, text: &str) -> String {
@@ -38,7 +57,7 @@ fn seed_project(dir: &Path, relative: &str, text: &str) {
 /// Bundles the site project to the output path with the test stores.
 fn bundle_project(dir: &Path, output: PathBuf) {
     let site = dir.join("site");
-    let stores = common::test_stores(dir, "site");
+    let stores = test_stores(dir, "site");
     let args = BundleArgs {
         project: site,
         profile: None,
@@ -47,7 +66,7 @@ fn bundle_project(dir: &Path, output: PathBuf) {
     BundleRunner {
         args: &args,
         stores,
-        handles: common::test_handles(),
+        handles: test_handles(),
     }
     .execute()
     .unwrap();
@@ -55,26 +74,26 @@ fn bundle_project(dir: &Path, output: PathBuf) {
 
 /// Restores one package into the home folder with the prompt skipped.
 fn restore_source(dir: &Path, source: PathBuf) {
-    let stores = common::test_stores(dir, "site");
+    let stores = test_stores(dir, "site");
     let args = RestoreArgs {
         source,
         force: true,
     };
     let hooks = dir.join("hooks");
-    restore::run(&args, stores, common::test_handles(), hooks).unwrap();
+    restore::run(&args, stores, test_handles(), hooks).unwrap();
 }
 
 /// Applies the site project with the prompt skipped and drops the report.
 fn apply_project(dir: &Path) {
     let site = dir.join("site");
-    let stores = common::test_stores(dir, "site");
+    let stores = test_stores(dir, "site");
     let args = ApplyArgs {
         project: site,
         profile: None,
         force: true,
     };
     let hooks = dir.join("hooks");
-    apply::run(&args, stores, common::test_handles(), hooks).unwrap();
+    apply::run(&args, stores, test_handles(), hooks).unwrap();
 }
 
 /// Reads one home destination under the shared test root.
@@ -162,14 +181,14 @@ fn restore_history_rejects_an_out_of_range_pick() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-range-note", "only");
     apply_project(dir.path());
-    let stores = common::test_stores(dir.path(), "site");
+    let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("%1"),
         force: true,
     };
     let hooks = dir.path().join("hooks");
     assert!(
-        restore::run(&args, stores, common::test_handles(), hooks).is_err(),
+        restore::run(&args, stores, test_handles(), hooks).is_err(),
         "one entry leaves %1 out of range"
     );
 }
@@ -179,14 +198,14 @@ fn restore_history_rejects_state_zero() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-restore-zero-note", "only");
     apply_project(dir.path());
-    let stores = common::test_stores(dir.path(), "site");
+    let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("%0"),
         force: true,
     };
     let hooks = dir.path().join("hooks");
     assert!(
-        restore::run(&args, stores, common::test_handles(), hooks).is_err(),
+        restore::run(&args, stores, test_handles(), hooks).is_err(),
         "state zero is internal and never parses"
     );
 }

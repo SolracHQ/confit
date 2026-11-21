@@ -6,7 +6,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use confit_cli::actions::init::{InitOutcome, InitRunner};
+use confit_cli::actions::init::InitRunner;
 use confit_cli::cli::InitArgs;
 use confit_driver::fs;
 
@@ -19,15 +19,17 @@ fn scaffold(dir: &Path) -> PathBuf {
         plugins: false,
         lsp: false,
     };
-    let mut outcomes = InitRunner { args: &args }.execute().unwrap();
-    match outcomes.pop() {
-        Some(InitOutcome::Scaffold(report)) => {
-            assert!(report.written > 0, "the scaffold writes files");
-            root
-        }
-        Some(_) => panic!("expected a scaffold outcome"),
-        None => panic!("expected one outcome"),
-    }
+    let items = InitRunner { args: &args }.execute().unwrap();
+    assert_eq!(items.len(), 1, "the scaffold reports one item");
+    let item = &items[0];
+    assert_eq!(item.stage, "init", "the scaffold reports the init stage");
+    assert_eq!(
+        item.path,
+        root.join("main.lua").display().to_string(),
+        "the scaffold reports the profile path"
+    );
+    assert!(item.written > 0, "the scaffold writes files");
+    root
 }
 
 #[test]
@@ -83,8 +85,26 @@ fn init_flags_rewrite_stubs_plugins_and_lsp() {
         plugins: true,
         lsp: true,
     };
-    let outcomes = InitRunner { args: &args }.execute().unwrap();
-    assert_eq!(outcomes.len(), 3, "every flag reports one outcome");
+    let items = InitRunner { args: &args }.execute().unwrap();
+    assert_eq!(items.len(), 3, "every flag reports one item");
+    assert_eq!(items[0].stage, "stubs", "the first item reports stubs");
+    assert_eq!(items[1].stage, "plugins", "the second item reports plugins");
+    assert_eq!(items[2].stage, "lsp", "the third item reports lsp");
+    assert!(
+        items[0].path.contains("stubs"),
+        "the stubs item reports the stubs path"
+    );
+    assert!(
+        items[1].path.contains("plugins"),
+        "the plugins item reports the plugins path"
+    );
+    assert!(
+        items[2].path.ends_with(".luarc.json"),
+        "the lsp item reports the editor config"
+    );
+    for item in &items {
+        assert!(item.written > 0, "every flag writes files");
+    }
     let bytes = std::fs::read(&stubs[0]).unwrap();
     assert_ne!(bytes, b"garbage", "the stubs flag restores files");
     assert!(

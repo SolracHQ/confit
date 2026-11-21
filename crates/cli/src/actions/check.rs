@@ -1,27 +1,28 @@
 //! Renders the differences of a profile evaluation.
 
-use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kind::ErrorKind};
+use confit_core::error::{
+    FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
+};
+use confit_differ::diff::Diff;
 use confit_engine::Engine;
-use confit_events::{EventHandles, ToUi};
-use confit_runtime::prepare;
+use confit_events::EventHandles;
 use confit_store::Stores;
 
 use crate::cli;
 use crate::cli::CheckArgs;
-use crate::presentation::summary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
-    /// The summary lines the check renders.
-    pub text: String,
+    /// The diff that the preview renders.
+    pub diff: Diff,
 }
 
 pub struct CheckRunner<'a> {
     /// The flags that pick the project and the profile.
     pub args: &'a CheckArgs,
-    /// The stores that hold the project and the state.
+    /// The trusted roots and content caches.
     pub stores: Stores,
-    /// The channels that carry the prints and the prompts.
+    /// The UI communication channel.
     pub handles: EventHandles,
 }
 
@@ -49,16 +50,9 @@ impl CheckRunner<'_> {
             );
         }
         let desired = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
-        let prepared = prepare::prepare(&self.stores, desired)?;
-        for warning in &prepared.warnings {
-            let _ = self.handles.to_ui.send(ToUi::Print(warning.summary()));
-            log::warn!(
-                "diff warning: {} context: {}",
-                warning.summary(),
-                warning.context()
-            );
-        }
-        let text = summary::render_prepared(&prepared);
-        Ok(CheckReport { text })
+        let previous = self.stores.states().load_applied()?;
+        let diff = Diff::build(desired, previous).terminal(ErrorKind::Evaluate)?;
+        self.handles.desired_preview(diff.clone());
+        Ok(CheckReport { diff })
     }
 }

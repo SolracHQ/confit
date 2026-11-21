@@ -6,7 +6,7 @@ use crate::arg::{Arg, quote};
 use crate::condition::Condition;
 use crate::document::{RcData, RcEntry};
 use crate::routes::Route;
-use confit_core::error::{DocumentError, ErrorCause};
+use confit_core::error::{DocumentError, Require};
 
 /// The guard that every shell file shares for an interactive shell.
 const GUARD: &str = "case $- in\n*i*) ;;\n*) return ;;\nesac";
@@ -232,10 +232,9 @@ fn escape_arg(arg: &Arg) -> std::result::Result<String, DocumentError> {
 /// - [`confit_core::error::DocumentError::ParseFailed`] when a base folder is absent.
 fn expand_field(found: &Route) -> std::result::Result<String, DocumentError> {
     found
-        .expand()
+        .resolve()
         .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|contextual| match contextual.cause() {
-            ErrorCause::DocumentError(leaf) => leaf.clone(),
-            _ => unreachable!("expected a parse fault from route expansion"),
+        .ok_or(DocumentError::ParseFailed {
+            require: Require::BaseFolder,
         })
 }

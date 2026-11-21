@@ -4,17 +4,27 @@ use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
-use confit_core::error::{
-    ContextualCause, ContextualResult, ErrorCause, FilesystemError, ManifestError, StateReason,
-    Terminal, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
+use confit_core::{
+    error::{
+        ContextualCause, ContextualResult, ErrorCause, FilesystemError, ManifestError, StateReason,
+        Terminal, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
+    },
+    resource_ref::ResourceRef,
+    sha::Sha,
+    version::VERSION,
 };
-use confit_core::sha::Sha;
-use confit_core::version::VERSION;
+use confit_differ::view::View;
 use confit_driver as driver;
-use confit_model::manifest::Manifest;
+use confit_events::EventHandles;
+use confit_events::protocol::{TaskKind, TaskNote};
+use confit_model::{
+    document::{Data, Document, OpaqueDocument},
+    manifest::Manifest,
+};
 
-use crate::StoreRoots;
+use crate::{StoreRoots, resources::Resources};
 
 /// The number of history files kept before rotation drops the oldest.
 const HISTORY_KEPT: usize = 6;
@@ -24,6 +34,9 @@ const HISTORY_DIR: &str = "history";
 
 /// The folder name for named states.
 const STATES_DIR: &str = "states";
+
+/// The named state that holds the pre-execution rescue.
+const RESCUE_NAME: &str = "!";
 
 /// The path of one stored state file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -81,14 +94,18 @@ impl FromStr for Picker {
 pub struct StateStore {
     history: PathBuf,
     states: PathBuf,
+    resources: Arc<Resources>,
+    handles: EventHandles,
 }
 
 impl StateStore {
     /// Builds a state store under the config base.
-    pub fn new(roots: &StoreRoots) -> Self {
+    pub fn new(roots: &StoreRoots, resources: Arc<Resources>, handles: EventHandles) -> Self {
         Self {
             history: roots.config_base.join(HISTORY_DIR),
             states: roots.config_base.join(STATES_DIR),
+            resources,
+            handles,
         }
     }
 
@@ -156,14 +173,63 @@ impl StateStore {
     ///
     /// # Errors
     ///
-    /// - [`ErrorKind::StoreState`] when the name is bad, the render fails, or the write fails.
+    /// - [`ErrorKind::StoreState`] when the name is bad, the render fails,
+    ///   or the write fails.
     pub fn save_named(&self, name: &str, manifest: &Manifest) -> TerminalResult<()> {
+        let pack_path = PathBuf::from(format!("@{name}"));
+        let total = manifest.documents.len() + manifest.hooks.len();
+        let reporter = self.handles.start_task(
+            TaskKind::Pack {
+                path: pack_path.clone(),
+            },
+            Some(total),
+        );
         let path = self.named_path(name).terminal(ErrorKind::StoreState)?;
         let text = manifest.json().terminal(ErrorKind::StoreState)?;
         let mut bytes = text.as_bytes();
         store_bytes(&path, &mut bytes).terminal(ErrorKind::StoreState)?;
         checked(path).terminal(ErrorKind::StoreState)?;
+        reporter.progress(total, Some(total), None);
+        reporter.finish(TaskNote::Members(total));
         Ok(())
+    }
+
+    /// Saves the before hashes of the effective rows under the rescue name.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::StoreState`] when the disk capture, pool persist,
+    ///   or rescue save fails.
+    pub fn save_rescue(&self, view: &View) -> TerminalResult<usize> {
+        if view.iter().all(|change| change.before.is_none()) {
+            return Ok(0);
+        }
+        let mut documents = Vec::new();
+        for change in view.iter() {
+            let Some(before) = change.before else {
+                continue;
+            };
+            self.resources
+                .unchecked(&before.sha, change.expanded.clone());
+            documents.push(Document::new(
+                change.path.clone(),
+                Data::Opaque(OpaqueDocument {
+                    handle: ResourceRef::new(before.sha),
+                    mode: before.mode,
+                    unmanaged: false,
+                }),
+            ));
+        }
+        let manifest = Manifest {
+            version: VERSION,
+            documents,
+            hooks: Vec::new(),
+        };
+        self.resources
+            .persist(&manifest.handles())
+            .terminal(ErrorKind::StoreState)?;
+        self.save_named(RESCUE_NAME, &manifest)?;
+        Ok(manifest.documents.len())
     }
 
     /// Removes the state file that one named picker holds.
@@ -221,7 +287,7 @@ impl StateStore {
     }
 
     /// Returns whether the history is empty.
-    pub fn is_first_run(&self) -> bool {
+    pub fn is_first_execution(&self) -> bool {
         history_files(&self.history)
             .map(|files| files.is_empty())
             .unwrap_or(true)
@@ -432,4 +498,186 @@ fn store_bytes(path: &Path, source: &mut impl Read) -> ContextualResult<()> {
         std::io::copy(&mut *source, file)?;
         file.sync_all()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Stores;
+    use confit_differ::{
+        change::{Change, ChangeKind, Comparability, IncomparableReason, Side},
+        diff::Diff,
+        view::{View, ViewKind},
+    };
+    use confit_events::EventHandles;
+    use confit_model::{
+        document::FileMode,
+        routes::{Route, RouteBase},
+    };
+
+    /// Builds silent stores under one temporary folder.
+    fn test_stores(dir: &Path) -> Stores {
+        Stores::new(StoreRoots::under(dir, dir), EventHandles::silent())
+    }
+
+    /// Builds one literal route under one temporary folder.
+    fn test_route(dir: &Path, name: &str) -> Route {
+        Route::new(RouteBase::Literal, dir.join(name)).unwrap()
+    }
+
+    /// Builds one effective row with the before hash.
+    fn test_change(path: Route, before: Option<Sha>) -> Change {
+        let expanded = path.resolve().unwrap();
+        Change {
+            path,
+            expanded,
+            kind: ChangeKind::Change,
+            comparability: Comparability::Comparable,
+            group: None,
+            before: before.map(|hash| Side::new(hash, FileMode::default())),
+            after: None,
+        }
+    }
+
+    /// Builds a diff that holds the effective rows.
+    fn test_diff(changes: Vec<Change>) -> Diff {
+        let wanted = Arc::new(Manifest {
+            version: VERSION,
+            documents: Vec::new(),
+            hooks: Vec::new(),
+        });
+        let recorded = Arc::new(Manifest {
+            version: VERSION,
+            documents: Vec::new(),
+            hooks: Vec::new(),
+        });
+        Diff {
+            wanted: Arc::clone(&wanted),
+            recorded: Arc::clone(&recorded),
+            desired: View::new(
+                ViewKind::Desired,
+                Vec::new(),
+                Arc::clone(&wanted),
+                Arc::clone(&recorded),
+            ),
+            drift: View::new(
+                ViewKind::Drift,
+                Vec::new(),
+                Arc::clone(&wanted),
+                Arc::clone(&recorded),
+            ),
+            effective: View::new(
+                ViewKind::Effective,
+                changes,
+                Arc::clone(&wanted),
+                Arc::clone(&recorded),
+            ),
+        }
+    }
+
+    /// Loads the rescue manifest that the save wrote.
+    fn rescue_manifest(stores: &Stores) -> Manifest {
+        let picker = Picker::Named(RESCUE_NAME.to_owned());
+        match stores.states().load_state(&picker) {
+            Ok(found) => found,
+            Err(error) => panic!("the rescue state fails to load: {error}"),
+        }
+    }
+
+    #[test]
+    fn rescue_skips_the_save_without_before_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let diff = test_diff(vec![test_change(test_route(dir.path(), "fresh"), None)]);
+        match stores.states().save_rescue(&diff.effective) {
+            Ok(saved) => assert_eq!(saved, 0, "the addition saves nothing"),
+            Err(error) => panic!("the rescue save fails: {error}"),
+        }
+        let picker = Picker::Named(RESCUE_NAME.to_owned());
+        assert!(
+            stores.states().resolve(&picker).is_err(),
+            "the skip leaves the rescue state absent"
+        );
+    }
+
+    #[test]
+    fn rescue_saves_the_before_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        std::fs::write(dir.path().join("note"), b"original").unwrap();
+        let before = Sha::hash(b"original");
+        let route = test_route(dir.path(), "note");
+        let diff = test_diff(vec![test_change(route.clone(), Some(before))]);
+        match stores.states().save_rescue(&diff.effective) {
+            Ok(saved) => assert_eq!(saved, 1, "the rescue saves one file"),
+            Err(error) => panic!("the rescue save fails: {error}"),
+        }
+        let found = rescue_manifest(&stores);
+        assert_eq!(found.documents.len(), 1, "the rescue holds one document");
+        assert_eq!(found.documents[0].path, route, "the rescue keeps the route");
+        assert!(
+            stores.pool().path(&before).exists(),
+            "the rescue pools the before bytes"
+        );
+    }
+
+    #[test]
+    fn rescue_skips_rows_without_before_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        std::fs::write(dir.path().join("kept"), b"kept").unwrap();
+        let before = Sha::hash(b"kept");
+        let rugged = Change {
+            kind: ChangeKind::Change,
+            comparability: Comparability::Incomparable(IncomparableReason::DirThere),
+            ..test_change(test_route(dir.path(), "rugged"), None)
+        };
+        let diff = test_diff(vec![
+            rugged,
+            test_change(test_route(dir.path(), "kept"), Some(before)),
+        ]);
+        match stores.states().save_rescue(&diff.effective) {
+            Ok(saved) => assert_eq!(saved, 1, "the rescue saves the lone hash"),
+            Err(error) => panic!("the rescue save fails: {error}"),
+        }
+        assert_eq!(
+            rescue_manifest(&stores).documents.len(),
+            1,
+            "the rescue drops the hash-free row"
+        );
+    }
+
+    #[test]
+    fn rescue_reuses_pooled_bytes_without_disk_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let before = Sha::hash(b"pooled");
+        match stores.pool().store_checked(&before, &b"pooled"[..]) {
+            Ok(()) => {}
+            Err(error) => panic!("the pool fails to store: {error}"),
+        }
+        let diff = test_diff(vec![test_change(
+            test_route(dir.path(), "absent"),
+            Some(before),
+        )]);
+        match stores.states().save_rescue(&diff.effective) {
+            Ok(saved) => assert_eq!(saved, 1, "the pooled hash saves one file"),
+            Err(error) => panic!("the rescue save fails: {error}"),
+        }
+    }
+
+    #[test]
+    fn rescue_rejects_mismatched_disk_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        std::fs::write(dir.path().join("note"), b"disk").unwrap();
+        let diff = test_diff(vec![test_change(
+            test_route(dir.path(), "note"),
+            Some(Sha::hash(b"other")),
+        )]);
+        assert!(
+            stores.states().save_rescue(&diff.effective).is_err(),
+            "the mismatch fails the rescue save"
+        );
+    }
 }

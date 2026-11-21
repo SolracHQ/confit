@@ -109,20 +109,16 @@ impl Route {
     }
 
     /// Resolves the route under its base folder into a host path.
-    ///
-    /// # Errors
-    ///
-    /// - [`DocumentError::ParseFailed`] when a base folder is missing.
-    pub fn expand(&self) -> ContextualResult<PathBuf> {
+    pub fn resolve(&self) -> Option<PathBuf> {
         let bases = BaseDirs::new();
         let base = match self.base {
-            RouteBase::Literal => return Ok(self.relative.clone()),
-            RouteBase::Home => require_base_folder(RouteBase::Home, bases.home)?,
-            RouteBase::Config => require_base_folder(RouteBase::Config, bases.config)?,
-            RouteBase::Data => require_base_folder(RouteBase::Data, bases.data)?,
-            RouteBase::Cache => require_base_folder(RouteBase::Cache, bases.cache)?,
+            RouteBase::Literal => return Some(self.relative.clone()),
+            RouteBase::Home => bases.home?,
+            RouteBase::Config => bases.config?,
+            RouteBase::Data => bases.data?,
+            RouteBase::Cache => bases.cache?,
         };
-        Ok(base.join(&self.relative))
+        Some(base.join(&self.relative))
     }
 
     /// Returns a route with one path segment appended.
@@ -166,19 +162,6 @@ impl Route {
             _ => format!("{}('{}')", self.base.name(), self.relative.display()),
         }
     }
-}
-
-/// Returns the base folder, or a parse failure when it is absent.
-///
-/// # Errors
-///
-/// - [`DocumentError::ParseFailed`] when the base folder is missing.
-fn require_base_folder(_base: RouteBase, found: Option<PathBuf>) -> ContextualResult<PathBuf> {
-    found.ok_or_else(|| {
-        contextual(DocumentError::ParseFailed {
-            require: Require::BaseFolder,
-        })
-    })
 }
 
 #[cfg(test)]
@@ -329,8 +312,8 @@ mod tests {
         for (base, found) in cases {
             let route = Route::new(base, relative).unwrap();
             match found {
-                Some(root) => assert_eq!(route.expand().unwrap(), root.join(relative)),
-                None => assert!(route.expand().is_err()),
+                Some(root) => assert_eq!(route.resolve().unwrap(), root.join(relative)),
+                None => assert!(route.resolve().is_none()),
             }
         }
     }
@@ -339,7 +322,7 @@ mod tests {
     fn expand_returns_the_literal_path() {
         for path in ["/opt/confit/tool", "relative/tool"] {
             let route = Route::new(RouteBase::Literal, path).unwrap();
-            assert_eq!(route.expand().unwrap(), Path::new(path));
+            assert_eq!(route.resolve().unwrap(), Path::new(path));
         }
     }
 

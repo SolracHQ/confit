@@ -1,63 +1,68 @@
-//! Hook runs with conditions and post-checks.
+//! Hook executions with conditions and post-checks.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use confit_core::error::kind::ErrorKind;
 use confit_core::error::{
-    ContextualCause, ContextualResult, Error, ErrorCause, HookRunError, Terminal, TerminalResult,
-    WithContext, contextual, error,
+    ContextualCause, ContextualResult, DocumentError, Error, ErrorCause, HookRunError, Require,
+    Terminal, TerminalResult, WithContext, contextual, error,
 };
 use confit_core::sha::Sha;
 use confit_driver as driver;
-use confit_events::ToUi;
+use confit_events::EventHandles;
+use confit_events::protocol::{TaskKind, TaskNote};
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::hook::Hook;
 use confit_model::routes::Route;
-use crossbeam_channel::Sender;
 
 use crate::checks::{Checks, Unmet, find_executable};
 
 /// The decision for one hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookDecision {
-    /// A hook closed by its bare run failure.
+    /// A hook closed by an unmet requires condition.
     RequiresClosed(HookRunError),
     /// An unmet `when` condition and its fault.
     WhenClosed(Condition, Unmet),
-    /// A hook whose check passes and needs no run.
+    /// A hook that skips its execution after a passing check.
     ChecksPass,
-    /// A hook that runs, with its resolved binary.
+    /// A hook that runs.
     Run(PathBuf),
 }
 
 /// One finished hook process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spawned {
-    /// The joined argv of the run.
+    /// The joined argv of the execution.
     pub argv: String,
     /// The process exit code.
     pub code: i32,
-    /// The hook log holding the streamed output.
+    /// The hook log path.
     pub log: PathBuf,
 }
 
 /// The runner for hook spawns and post-checks.
 pub struct HookRunner {
-    /// The progress channel for hook events.
-    pub to_ui: Sender<ToUi>,
+    /// The UI communication channel.
+    handles: EventHandles,
 }
 
 /// The decision for every hook.
 pub struct DecidedHooks {
     /// The decisions in plan order.
     pub decisions: Vec<HookDecision>,
-    /// The host facts that hook conditions and post-checks test.
+    /// The host facts for conditions and post-checks.
     pub checks: Checks,
 }
 
 impl HookRunner {
+    /// Builds a runner.
+    pub fn new(handles: EventHandles) -> Self {
+        Self { handles }
+    }
+
     /// Decides every hook and returns the decisions with the facts in use.
     ///
     /// # Errors
@@ -118,7 +123,7 @@ impl HookRunner {
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when an arg fails to materialize or a hook run fails.
+    /// - [`confit_core::error::kind::ErrorKind::RunHook`] when an arg fails to materialize or a hook execution fails.
     /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] when the process fails to spawn.
     pub fn spawn(
         &self,
@@ -143,11 +148,14 @@ impl HookRunner {
                 .terminal(ErrorKind::RunHook)?;
             path_dirs.push(materialized);
         }
-        let _ = self.to_ui.send(ToUi::HookStarted {
-            position,
-            total,
-            argv: argv_text.clone(),
-        });
+        let reporter = self.handles.start_task(
+            TaskKind::Hook {
+                position,
+                total,
+                argv: hook.argv.clone(),
+            },
+            None,
+        );
         let log = hooks_dir.join(hook_file_name(hook.id.as_str()));
         let header = format!("hook {position} of {total}: {argv_text}");
         let file = open_hook_log(&log, &header)?;
@@ -160,11 +168,7 @@ impl HookRunner {
                 Error::new(kind, contextual.with_argv(&argv_text).with_fs_path(&log))
             })?;
         log::debug!("hook {position} of {total} ran code={}", outcome.code);
-        let _ = self.to_ui.send(ToUi::HookFinished {
-            position,
-            total,
-            argv: argv_text.clone(),
-        });
+        reporter.finish(TaskNote::Spawned(spawn.clone()));
         Ok(Spawned {
             argv: argv_text,
             code: outcome.code,
@@ -188,7 +192,7 @@ impl HookRunner {
         Ok(())
     }
 
-    /// Checks the hook conditions after one run.
+    /// Checks the hook conditions after one execution.
     ///
     /// # Errors
     ///
@@ -239,7 +243,7 @@ fn open_hook_log(path: &Path, header: &str) -> TerminalResult<std::fs::File> {
     Ok(file)
 }
 
-/// Builds one log file name from the hook id and a short hash of it.
+/// Builds one log file name.
 fn hook_file_name(id: &str) -> String {
     let mut slug = id
         .split(|cell: char| !cell.is_ascii_alphanumeric())
@@ -287,7 +291,11 @@ fn resolve_binary(hook: &Hook, scoped: &Checks) -> ContextualResult<Option<PathB
 fn materialize_arg(arg: &Arg) -> ContextualResult<PathBuf> {
     match arg {
         Arg::Text(text) => Ok(PathBuf::from(text)),
-        Arg::Route(route) => route.expand(),
+        Arg::Route(route) => route.resolve().ok_or_else(|| {
+            contextual(DocumentError::ParseFailed {
+                require: Require::BaseFolder,
+            })
+        }),
     }
 }
 
@@ -296,11 +304,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    use confit_differ::diff::Diff;
     use confit_model::document::Data;
     use confit_model::document::Document;
     use confit_model::document::{FileMode, TextDocument};
     use confit_model::hook::HookTimeout;
     use confit_model::id::Id;
+    use confit_model::manifest::Manifest;
     use confit_model::routes::{Route, RouteBase};
     use confit_store::{StoreRoots, Stores};
 
@@ -322,27 +332,44 @@ mod tests {
     }
 
     fn runner() -> HookRunner {
-        let (sender, _) = crossbeam_channel::unbounded();
-        HookRunner { to_ui: sender }
+        HookRunner::new(EventHandles::silent())
     }
 
     fn writer_in(dir: &Path) -> Writer {
-        let (sender, _) = crossbeam_channel::unbounded();
+        let handles = EventHandles::silent();
         let roots = StoreRoots {
             config_base: dir.join("config"),
             temp_base: dir.join("temp"),
             project_root: dir.join("project"),
         };
-        Writer {
-            stores: Stores::new(roots, sender.clone()),
-            to_ui: sender,
-        }
+        let stores = Stores::new(roots, handles.clone());
+        Writer::new(stores)
     }
 
     fn write_doc(writer: &Writer, document: &Document) -> BTreeSet<Route> {
-        let changed = BTreeSet::from([document.path.clone()]);
-        match writer.write_documents(std::slice::from_ref(document), &changed) {
-            Ok(_) => changed,
+        let desired = Manifest {
+            version: [0, 9, 0],
+            documents: vec![document.clone()],
+            hooks: Vec::new(),
+        };
+        let previous = Manifest {
+            version: [0, 9, 0],
+            documents: Vec::new(),
+            hooks: Vec::new(),
+        };
+        let diff = match Diff::build(desired.clone(), previous.clone()) {
+            Ok(diff) => diff,
+            Err(error) => panic!("the diff fails to build: {error}"),
+        };
+        let total = Writer::apply_total(&diff.effective);
+        let handles = EventHandles::silent();
+        let reporter = handles.start_task(TaskKind::Write, Some(total));
+        match writer.apply(&diff.effective, &reporter) {
+            Ok(_) => diff
+                .effective
+                .iter()
+                .map(|change| change.path.clone())
+                .collect(),
             Err(error) => panic!("the documents fail to write: {error}"),
         }
     }

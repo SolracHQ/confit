@@ -13,11 +13,6 @@ pub const GUIDE_CLOSING: &str = "please check help or manual for detailed guide"
 /// One closed terminal result.
 pub type TerminalResult<T> = std::result::Result<T, Error>;
 
-/// Joins one cause with its kind into a terminal error.
-pub fn error<T>(kind: ErrorKind, contextual: impl Into<ContextualCause>) -> TerminalResult<T> {
-    Err(contextual.into().terminal(kind))
-}
-
 /// A contextual result that closes into a terminal error.
 pub trait Terminal<T> {
     /// Turns one contextual result into its terminal error.
@@ -31,7 +26,7 @@ impl<T> Terminal<T> for ContextualResult<T> {
     }
 }
 
-/// A failure that ends the run.
+/// A failure that ends the execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     kind: ErrorKind,
@@ -252,6 +247,13 @@ impl Error {
         }
     }
 
+    /// Builds the log payload from the summary and the context.
+    ///
+    pub fn log_payload(&self) -> serde_json::Value {
+        let first = self.summary().lines().next().unwrap_or_default().to_owned();
+        serde_json::json!({"error": first, "reason": self.context.log_value()})
+    }
+
     /// Returns the closing line for the terminal output.
     pub fn closing(&self) -> &'static str {
         match &self.kind {
@@ -274,4 +276,9 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.cause)
     }
+}
+
+/// Joins one cause with its kind into a terminal error.
+pub fn error<T>(kind: ErrorKind, contextual: impl Into<ContextualCause>) -> TerminalResult<T> {
+    Err(contextual.into().terminal(kind))
 }

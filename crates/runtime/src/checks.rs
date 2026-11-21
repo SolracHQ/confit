@@ -61,8 +61,8 @@ impl Checks {
             Condition::EnvEq { key, value } => self.vars.get(key).is_some_and(|held| held == value),
             Condition::EnvSet { key } => self.vars.get(key).is_some_and(|held| !held.is_empty()),
             Condition::InPath { name } => find_executable(name, &self.path_dirs).is_some(),
-            Condition::Exists { route } => route.expand().is_ok_and(|path| path.exists()),
-            Condition::Changed { route } => changed.contains(route),
+            Condition::Exists { route } => route.resolve().is_some_and(|path| path.exists()),
+            Condition::Changed { route } => route_changed(changed, route),
             Condition::All(items) => items.iter().all(|item| self.check(item, changed)),
             Condition::Any(items) => items.iter().any(|item| self.check(item, changed)),
             Condition::Not(inner) => !self.check(inner, changed),
@@ -170,6 +170,14 @@ pub fn unmet_names(fault: &Unmet) -> Vec<String> {
         out.extend(unmet_names(nested));
     }
     out
+}
+
+/// Returns whether one route lands in the changed set or under it.
+fn route_changed(changed: &BTreeSet<Route>, route: &Route) -> bool {
+    changed.contains(route)
+        || changed.iter().any(|path| {
+            path.base() == route.base() && path.relative_path().starts_with(route.relative_path())
+        })
 }
 
 /// Finds one executable in the directories through the driver.
@@ -281,12 +289,12 @@ mod tests {
         assert_eq!(
             find_executable("tool", &[first.clone(), second.clone()]),
             Some(first.join("tool")),
-            "the first directory wins"
+            "the search returns the first hit"
         );
         assert_eq!(
             find_executable("tool", &[second.clone(), first.clone()]),
             Some(second.join("tool")),
-            "the reordered directories move the win"
+            "the reordered directories move the hit"
         );
     }
 
@@ -366,7 +374,7 @@ mod tests {
         std::fs::write(&path, b"needle").unwrap();
         let route = literal(&path);
         assert_eq!(
-            route.expand().unwrap(),
+            route.resolve().unwrap(),
             path,
             "the literal route keeps its path"
         );
@@ -405,6 +413,18 @@ mod tests {
             !checks_with(Vec::new()).check(&Condition::Changed { route: other }, &changed,),
             "the changed condition rejects an absent route"
         );
+        let group = Route::new(RouteBase::Data, "fonts/g").unwrap();
+        let member = Route::new(RouteBase::Data, "fonts/g/a.ttf").unwrap();
+        let sibling = Route::new(RouteBase::Data, "fonts/h").unwrap();
+        let members = BTreeSet::from([member]);
+        assert!(
+            checks_with(Vec::new()).check(&Condition::Changed { route: group }, &members,),
+            "the changed condition holds a group route over a member row"
+        );
+        assert!(
+            !checks_with(Vec::new()).check(&Condition::Changed { route: sibling }, &members,),
+            "the changed condition rejects a sibling group"
+        );
     }
 
     fn leaf(name: &str) -> Condition {
@@ -414,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_conjunction_names_the_first_unmet_member() {
+    fn unmet_conjunction_reports_the_first_unmet_member() {
         let checks = checks_with(Vec::new());
         let cond = Condition::All(vec![leaf("a"), leaf("b")]);
         let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();
@@ -437,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn unmet_disjunction_names_every_member() {
+    fn unmet_disjunction_collects_every_member_into_the_cause() {
         let checks = checks_with(Vec::new());
         let cond = Condition::Any(vec![leaf("a"), leaf("b")]);
         let fault = checks.unmet(&cond, &BTreeSet::new()).unwrap();

@@ -1,21 +1,28 @@
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use common::*;
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
 use confit_engine::api::config::Config;
-use confit_engine::api::patch::{Level, Patch};
+use confit_engine::api::patch::{HookPatch, Level, Patch, RcPatch, StructuredPatch};
 use confit_engine::api::profile::Profile;
 use confit_engine::{assemble, assembly::Assembler};
+use confit_events::EventHandles;
 use confit_model::arg::Arg;
 use confit_model::condition::Condition;
 use confit_model::document::{
-    Data, Document, FileMode, LinkDocument, MemberKey, OpaqueDocument, RcEntry, StructuredDocument,
-    StructuredFormat, TextDocument, TreeDocument, TreeMember,
+    Data, Document, FileMode, LinkDocument, MemberKey, OpaqueDocument, RcData, RcEntry,
+    StructuredDocument, StructuredFormat, TextDocument, TreeDocument, TreeMember,
 };
+use confit_model::hook::{Hook, HookTimeout};
 use confit_model::id::Id;
 use confit_model::routes::{Route, RouteBase};
-use mlua::Lua;
+use confit_store::{StoreRoots, Stores};
+use lua_binding::callable::Callable;
+use lua_binding::value::Decode;
+use mlua::{Function, Lua, Value};
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
@@ -1245,4 +1252,200 @@ fn assemble_rejects_a_filter_error() {
         assemble(&lua, &profile).is_err(),
         "the assembler rejects a failing filter"
     );
+}
+
+/// Wraps text in a document.
+fn placed_text(relative: &str, text: &str) -> Document {
+    Document::new(
+        Route::new(RouteBase::Home, relative).unwrap(),
+        Data::Text(TextDocument {
+            content: text.to_owned(),
+            mode: FileMode::new(0o644),
+            unmanaged: false,
+        }),
+    )
+}
+
+/// Wraps profile entries in a document.
+fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
+    Document::new(
+        Route::new(RouteBase::Home, relative).unwrap(),
+        Data::Rc(RcData::new(entries, Vec::new(), Vec::new())),
+    )
+}
+
+/// Wraps seeded json in a document.
+fn placed_structured(relative: &str) -> Document {
+    Document::new(
+        Route::new(RouteBase::Home, relative).unwrap(),
+        Data::Structured(StructuredDocument {
+            format: StructuredFormat::Json,
+            data: BTreeMap::from([("seed".to_owned(), serde_json::json!(0))]),
+        }),
+    )
+}
+
+/// Returns isolated stores in a fresh tempdir.
+fn test_stores() -> (tempfile::TempDir, Stores) {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = Stores::new(
+        StoreRoots {
+            config_base: dir.path().join("config"),
+            temp_base: dir.path().join("temp"),
+            project_root: dir.path().join("project"),
+        },
+        EventHandles::silent(),
+    );
+    (dir, stores)
+}
+
+/// Wraps a project blob in a document.
+fn placed_opaque(stores: &Stores, relative: &str) -> Document {
+    let root = stores.resources().roots.project_root.clone();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("blob.bin"), b"hi").unwrap();
+    Document::new(
+        Route::new(RouteBase::Home, relative).unwrap(),
+        Data::Opaque(OpaqueDocument {
+            handle: ResourceRef::new(Sha::hash(b"hi")),
+            mode: FileMode::new(0o644),
+            unmanaged: true,
+        }),
+    )
+}
+
+/// Builds one profile from the documents and patches.
+fn profile_of(documents: Vec<Document>, patches: Vec<Patch>) -> Profile {
+    Profile::new(
+        vec![Config::new(
+            Id::of("tools/test"),
+            documents,
+            patches,
+            Vec::new(),
+            HashMap::new(),
+        )],
+        Vec::new(),
+    )
+}
+
+/// Builds one env entry.
+fn rc_entry(name: &str, value: &str) -> RcEntry {
+    RcEntry::Env {
+        name: name.to_owned(),
+        value: value.to_owned(),
+        when: None,
+    }
+}
+
+/// Builds one structured patch with its callback.
+fn structured_patch_of(
+    lua: &Lua,
+    relative: &str,
+    format: StructuredFormat,
+    priority: Level,
+    source: &str,
+) -> StructuredPatch {
+    let apply: Function = lua.load(source).call(()).unwrap();
+    StructuredPatch {
+        target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+        filter: None,
+        format,
+        apply: Callable::new(apply),
+        priority,
+    }
+}
+
+/// Builds one rc patch with its callback.
+fn rc_patch_of(lua: &Lua, relative: &str, priority: Level, source: &str) -> RcPatch {
+    let apply: Function = lua.load(source).call(()).unwrap();
+    RcPatch {
+        target: Some(Route::new(RouteBase::Home, relative).unwrap()),
+        filter: None,
+        apply: Callable::new(apply),
+        priority,
+    }
+}
+
+/// Builds one structured filter patch.
+fn structured_filter_of(
+    lua: &Lua,
+    filter_source: &str,
+    format: StructuredFormat,
+    priority: Level,
+    source: &str,
+) -> StructuredPatch {
+    let filter: Function = lua.load(filter_source).call(()).unwrap();
+    let apply: Function = lua.load(source).call(()).unwrap();
+    StructuredPatch {
+        target: None,
+        filter: Some(Callable::new(filter)),
+        format,
+        apply: Callable::new(apply),
+        priority,
+    }
+}
+
+/// Builds one rc filter patch.
+fn rc_filter_of(lua: &Lua, filter_source: &str, priority: Level, source: &str) -> RcPatch {
+    let filter: Function = lua.load(filter_source).call(()).unwrap();
+    let apply: Function = lua.load(source).call(()).unwrap();
+    RcPatch {
+        target: None,
+        filter: Some(Callable::new(filter)),
+        apply: Callable::new(apply),
+        priority,
+    }
+}
+
+/// Returns one profile env value.
+fn rc_value(data: &Data, name: &str) -> Option<String> {
+    match data {
+        Data::Rc(found) => found.profile.iter().find_map(|entry| match entry {
+            RcEntry::Env {
+                name: key, value, ..
+            } if key == name => Some(value.clone()),
+            _ => None,
+        }),
+        _ => panic!("expected an rc document"),
+    }
+}
+
+/// Builds one hook from argv words and a timeout.
+fn hook_of(argv: &[&str], timeout_secs: u64) -> Hook {
+    Hook {
+        argv: argv
+            .iter()
+            .map(|item| Arg::Text((*item).to_owned()))
+            .collect(),
+        path: Vec::new(),
+        id: Id::of(format!("{}:{timeout_secs}", argv.join(" "))),
+        requires: Condition::default(),
+        when: Condition::default(),
+        check: Condition::default(),
+        timeout_secs: HookTimeout::new(timeout_secs),
+    }
+}
+
+/// Builds one hook with an id.
+fn identified_hook_of(id: &str, argv: &[&str], timeout_secs: u64) -> Hook {
+    let mut hook = hook_of(argv, timeout_secs);
+    hook.id = Id::of(id);
+    hook
+}
+
+/// Builds one hook patch.
+fn hook_patch_of(lua: &Lua, target: &str, source: &str) -> HookPatch {
+    let apply: Function = lua.load(source).call(()).unwrap();
+    let table = lua.create_table().unwrap();
+    table.set("target", target).unwrap();
+    table.set("apply", apply).unwrap();
+    match HookPatch::decode(&Value::Table(table), lua) {
+        Ok(patch) => patch,
+        Err(error) => panic!("the hook patch fails to decode: {error}"),
+    }
+}
+
+/// Builds one profile with hooks.
+fn profile_with_hooks(configs: Vec<Config>) -> Profile {
+    Profile::new(configs, Vec::new())
 }

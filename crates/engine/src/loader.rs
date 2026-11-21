@@ -499,17 +499,17 @@ fn stored_root(lua: &Lua) -> TerminalResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confit_events::EventHandles;
     use confit_store::{StoreRoots, Stores};
 
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            EventHandles::silent(),
         )
     }
 

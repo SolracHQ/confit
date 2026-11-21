@@ -1,256 +1,203 @@
-//! Event and plan types for the worker and render threads.
+//! Worker progress, prompt, and diff events for the render thread.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use confit_model::routes::Route;
-
-/// One action for a route in a plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanAction {
-    /// A route in the desired state and absent from
-    /// the recorded state.
-    Add,
-    /// A route in both states with new content.
-    Change,
-    /// A route absent from the desired state and present
-    /// in the recorded state.
-    Remove,
-    /// A route with identical content in both states.
-    Same,
-}
-
-/// One comparison that produces a change.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChangeSource {
-    /// A change found in the desired state.
-    Desired,
-    /// A change found in the recorded state.
-    Recorded,
-    /// A change found on disk.
-    Disk,
-}
-
-/// One difference for a route in a plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Change {
-    /// A leaf value with old and new text.
-    LeafValue {
-        /// The leaf key in the document.
-        key: String,
-        /// The recorded text.
-        old: String,
-        /// The desired text.
-        new: String,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// A text line added or removed.
-    TextLine {
-        /// The added or removed line.
-        line: String,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// A link with old and new targets.
-    LinkTarget {
-        /// The recorded target.
-        old: String,
-        /// The desired target.
-        new: String,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// An opaque blob with old and new hashes.
-    OpaqueHash {
-        /// The recorded hash.
-        old: String,
-        /// The desired hash.
-        new: String,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// A file mode with old and new bits.
-    Mode {
-        /// The recorded mode bits.
-        old: u32,
-        /// The desired mode bits.
-        new: u32,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// A tree member with an action.
-    TreeMember {
-        /// The member path relative to the tree root.
-        relative: String,
-        /// The action for the member.
-        action: PlanAction,
-        /// The comparison that produced the change.
-        source: ChangeSource,
-    },
-    /// A document with a new kind.
-    KindChange {
-        /// The recorded kind.
-        old: String,
-        /// The desired kind.
-        new: String,
-    },
-}
-
-/// One route in a plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanEntry {
-    /// The route path as text.
-    pub route: String,
-    /// The document kind as text.
-    pub kind: String,
-    /// The action for the route.
-    pub action: PlanAction,
-    /// The differences for the route.
-    pub changes: Vec<Change>,
-    /// Whether disk differs from the recorded state.
-    pub drift: bool,
-    /// Whether the path needs rescue capture.
-    pub rescue: bool,
-}
-
-/// The full preview of one apply run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Plan {
-    /// One entry per route.
-    pub entries: Vec<PlanEntry>,
-    /// Human-readable warnings for the run.
-    pub warnings: Vec<String>,
-    /// Whether no applied state exists yet.
-    pub first_run: bool,
-}
+use confit_core::error::Error;
+use confit_differ::diff::Diff;
+use confit_model::{arg::Arg, url::Url};
 
 /// One apply outcome for a route.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ApplyOutcome {
     /// A route that landed on disk.
     Added,
+    /// A route that changed on disk.
+    Changed,
     /// A route that left the disk.
     Removed,
+    /// A route that failed to apply.
+    Failed,
+}
+
+impl ApplyOutcome {
+    /// Counts outcomes by variant.
+    pub fn count<I>(iter: I) -> (usize, usize, usize, usize)
+    where
+        I: IntoIterator<Item = ApplyOutcome>,
+    {
+        let mut added = 0;
+        let mut changed = 0;
+        let mut removed = 0;
+        let mut failed = 0;
+        for outcome in iter {
+            match outcome {
+                ApplyOutcome::Added => added += 1,
+                ApplyOutcome::Changed => changed += 1,
+                ApplyOutcome::Removed => removed += 1,
+                ApplyOutcome::Failed => failed += 1,
+            }
+        }
+        (added, changed, removed, failed)
+    }
+}
+
+/// The counts for one effective apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Applied {
+    /// The addition rows the execution wrote.
+    pub added: usize,
+    /// The change rows the execution wrote.
+    pub changed: usize,
+    /// The removal rows the execution removed.
+    pub removed: usize,
+    /// The written rows in view order.
+    pub changes: Vec<AppliedChange>,
+}
+
+/// One recorded write.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AppliedChange {
+    /// The expanded host path the execution wrote.
+    pub path: String,
+    /// The outcome the execution recorded for the path.
+    pub outcome: ApplyOutcome,
+}
+
+impl Applied {
+    /// Records one written row.
+    pub fn push(&mut self, path: &Path, outcome: ApplyOutcome) {
+        self.changes.push(AppliedChange {
+            path: path.display().to_string(),
+            outcome,
+        });
+    }
+}
+
+/// One background job behind the progress bars.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TaskKind {
+    /// One download.
+    Fetch { url: Url },
+    /// One fill of missing pool entries.
+    PoolFill,
+    /// One prune of unreferenced pool entries.
+    PoolPrune,
+    /// One archive extract.
+    Archive { path: PathBuf },
+    /// One bundle pack.
+    Pack { path: PathBuf },
+    /// The write execution over the effective rows.
+    Write,
+    /// One hook execution.
+    Hook {
+        /// The hook position in the execution.
+        position: usize,
+        /// The hook count for the execution.
+        total: usize,
+        /// The hook arguments.
+        argv: Vec<Arg>,
+    },
+}
+
+/// One write row in a progress update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowUpdate {
+    /// Expanded host path bytes.
+    pub path: String,
+    /// The recorded outcome.
+    pub outcome: ApplyOutcome,
+}
+
+/// One closing fact for a finished job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskNote {
+    /// The fetch served the body from the cache.
+    Cached,
+    /// The archive landed with the member count.
+    Members(usize),
+    /// The spawned command for one hook execution.
+    Spawned(Vec<String>),
+    /// The job landed with no extra fact.
+    Closed,
+}
+
+/// One progress update for a background job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskState {
+    /// The job opened with the known total when present.
+    Started { total: Option<usize> },
+    /// The job advanced with the finished count and the total.
+    Progress {
+        /// The finished count for this update.
+        done: usize,
+        /// The total count when known.
+        total: Option<usize>,
+        /// The applied row in a write update.
+        row: Option<RowUpdate>,
+    },
+    /// The job closed with its closing fact.
+    Finished { note: TaskNote },
+}
+
+/// One user-visible work phase for a title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// The profile evaluation execution.
+    Evaluation,
+    /// The bundle packaging execution.
+    Packaging,
+    /// The blob and state persistence execution.
+    Persisting,
+    /// The write execution over the effective rows.
+    ApplyingChanges,
 }
 
 /// One message to the render thread.
-///
-/// - Each run step names one operation; the backend owns the words,
-///   the widgets, and the units.
-/// - Plans, prints, prompts, and confirmations share the channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToUi {
-    /// A fetch that starts.
-    FetchStarted {
-        /// The downloaded URL.
-        url: String,
+    /// One phase start with its title.
+    PhaseStarted(Phase),
+    /// One progress update for a background job.
+    Task {
+        /// The job behind the update.
+        kind: TaskKind,
+        /// The update for the job.
+        state: TaskState,
     },
-    /// A fetch in flight.
-    FetchProgress {
-        /// The downloaded URL.
-        url: String,
-        /// The finished bytes through this update.
-        done: usize,
-        /// The byte count for the whole body, absent
-        /// when the source omits it.
-        total: Option<usize>,
+    /// One check preview request.
+    DesiredPreview(Diff),
+    /// One commit preview request with the approval reply.
+    ShowAndConfirm {
+        /// The diff behind the preview.
+        diff: Diff,
+        /// The skip-confirmation flag.
+        force: bool,
     },
-    /// A fetch that lands.
-    FetchFinished {
-        /// The downloaded URL.
-        url: String,
-        /// Whether the bytes came from the cache.
-        cached: bool,
-    },
-    /// A pool fill that starts.
-    PoolFillStarted {
-        /// The file count for the whole fill.
-        total: usize,
-    },
-    /// A pool fill in flight.
-    PoolFillProgress {
-        /// The stored files through this update.
-        done: usize,
-        /// The file count for the whole fill.
-        total: usize,
-    },
-    /// A pool fill that lands.
-    PoolFillFinished,
-    /// A pool prune that starts.
-    PoolPruneStarted {
-        /// The file count for the whole prune.
-        total: usize,
-    },
-    /// A pool prune in flight.
-    PoolPruneProgress {
-        /// The removed files through this update.
-        done: usize,
-        /// The file count for the whole prune.
-        total: usize,
-    },
-    /// A pool prune that lands.
-    PoolPruneFinished,
-    /// An archive extract that starts.
-    ArchiveStarted {
-        /// The archive path.
-        path: PathBuf,
-    },
-    /// An archive extract that lands.
-    ArchiveFinished {
-        /// The archive path.
-        path: PathBuf,
-        /// The extracted member count.
-        members: usize,
-    },
-    /// An apply that starts.
-    ApplyStarted {
-        /// The file count for the whole apply.
-        total: usize,
-    },
-    /// An apply in flight.
-    ApplyProgress {
-        /// The applied route.
-        route: Route,
-        /// Whether the route landed or left.
-        outcome: ApplyOutcome,
-    },
-    /// An apply that lands.
-    ApplyFinished,
-    /// A hook run that starts.
-    HookStarted {
-        /// The hook position in the run.
-        position: usize,
-        /// The hook count for the run.
-        total: usize,
-        /// The hook command line.
-        argv: String,
-    },
-    /// A hook run that lands.
-    HookFinished {
-        /// The hook position in the run.
-        position: usize,
-        /// The hook count for the run.
-        total: usize,
-        /// The hook command line.
-        argv: String,
-    },
-    /// One run plan as data for review.
-    Plan(Plan),
-    /// Text written to stderr above the spinner.
-    Print(String),
-    /// A question written to stderr, with the answer read from stdin.
+    /// The write results with per-row outcomes.
+    WriteResults(Applied),
+    /// One question request.
     Prompt(String),
-    /// A confirmation request.
-    Confirm,
+    /// One failure notice with no reply.
+    Error(Box<Error>),
+    /// One close request.
+    Done {
+        /// The previous entry flag.
+        undo: bool,
+        /// The rescue save flag.
+        rescued: bool,
+        /// The drift view flag.
+        drifted: bool,
+    },
 }
 
 /// One message back from the render thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FromUi {
-    /// A line read from stdin with the trailing newline trimmed.
+    /// One stdin line without the trailing newline.
     Answer(String),
     /// The user approved the confirmation. Anything else is a no.
     Approved,
-    /// The user dismissed the prompt.
+    /// The cancelled prompt reply.
     Close,
 }

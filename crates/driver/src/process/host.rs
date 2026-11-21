@@ -16,7 +16,7 @@ use super::ProcessOutput;
 /// - [`HookRunError::BinaryUnresolved`] when the argv is empty or the binary is missing.
 /// - [`FilesystemError::FilePermissionDenied`] when execution is denied.
 /// - [`FilesystemError::FileUnknown`] when the spawn or the wait fails.
-/// - [`HookRunError::TimedOut`] when the run times out.
+/// - [`HookRunError::TimedOut`] when the execution times out.
 pub(super) fn spawn(
     argv: &[String],
     path_dirs: &[PathBuf],

@@ -12,8 +12,8 @@ use confit_core::error::{
 };
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::Sha;
-use confit_events::ToUi;
-use crossbeam_channel::Sender;
+use confit_events::EventHandles;
+use confit_events::protocol::{TaskKind, TaskNote};
 
 use crate::resources::Resources;
 use confit_driver as driver;
@@ -28,16 +28,16 @@ type Map = BTreeMap<String, (ResourceRef, u32)>;
 #[derive(Debug, Clone)]
 pub struct ArchiveStore {
     resources: Arc<Resources>,
-    to_ui: Sender<ToUi>,
+    handles: EventHandles,
     maps: Arc<RwLock<HashMap<Sha, Map>>>,
 }
 
 impl ArchiveStore {
     /// Builds a store over the shared resource cache.
-    pub fn new(resources: Arc<Resources>, to_ui: Sender<ToUi>) -> Self {
+    pub fn new(resources: Arc<Resources>, handles: EventHandles) -> Self {
         Self {
             resources,
-            to_ui,
+            handles,
             maps: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -158,7 +158,7 @@ impl ArchiveStore {
 
     /// Stores one archive index in memory and on disk.
     ///
-    /// - A failed disk write only warns; the next run rebuilds the map.
+    /// - A failed disk write only warns; the next execution rebuilds the map.
     fn write_map(&self, sha: &Sha, archive_path: &Path, map: &Map) {
         if let Ok(mut guard) = self.maps.write() {
             guard.insert(*sha, map.clone());
@@ -191,19 +191,19 @@ impl ArchiveStore {
     /// - [`FilesystemError`] when the archive is unreadable or a cache write fails.
     fn unpack_all(&self, sha: &ResourceRef) -> ContextualResult<Map> {
         let archive_path = self.resources.resolve(sha.sha())?;
-        let _ = self.to_ui.send(ToUi::ArchiveStarted {
-            path: archive_path.clone(),
-        });
+        let reporter = self.handles.start_task(
+            TaskKind::Archive {
+                path: archive_path.clone(),
+            },
+            None,
+        );
         let file = std::fs::File::open(&archive_path)
             .map_err(ContextualCause::from)
             .with_fs_path(&archive_path)?;
         let map = Unpack::new(&self.resources, &archive_path).run(file)?;
         self.write_map(sha.sha(), &archive_path, &map);
         let total = map.len();
-        let _ = self.to_ui.send(ToUi::ArchiveFinished {
-            path: archive_path,
-            members: total,
-        });
+        reporter.finish(TaskNote::Members(total));
         Ok(map)
     }
 }
@@ -214,7 +214,7 @@ struct Unpack<'a> {
     resources: &'a Resources,
     /// The archive path for errors.
     archive_path: PathBuf,
-    /// The extracted members keyed by name with their mode.
+    /// The extracted members keyed by name.
     entries: Map,
 }
 
@@ -272,7 +272,7 @@ impl<'a> Unpack<'a> {
     }
 }
 
-/// Creates the error for an absent member with its archive path.
+/// Creates the error for an absent member.
 fn member_missing(archive_path: &Path, name: &str) -> ContextualCause {
     contextual(FilesystemError::FileMissing)
         .with_fs_path(archive_path)
@@ -286,6 +286,7 @@ mod tests {
     use crate::pool::PoolStore;
     use confit_core::error::ErrorCause;
     use confit_driver::archive::{Algorithm, Builder, Level};
+    use confit_events::protocol::{TaskState, ToUi};
     use std::io::Read as _;
 
     fn test_roots(dir: &Path) -> StoreRoots {
@@ -298,15 +299,14 @@ mod tests {
 
     fn test_pair(dir: &Path) -> (ArchiveStore, Arc<Resources>) {
         let roots = test_roots(dir);
-        let (sender, _) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        (ArchiveStore::new(resources.clone(), sender), resources)
+        let handles = EventHandles::silent();
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        (ArchiveStore::new(resources.clone(), handles), resources)
     }
 
     fn fresh_store(resources: &Arc<Resources>) -> ArchiveStore {
-        let (sender, _) = crossbeam_channel::unbounded();
-        ArchiveStore::new(resources.clone(), sender)
+        ArchiveStore::new(resources.clone(), EventHandles::silent())
     }
 
     fn tar_gz_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
@@ -950,12 +950,16 @@ mod tests {
 
     #[test]
     fn unpack_announces_the_member_count() {
+        use confit_events::protocol::FromUi;
+
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let resources = Arc::new(Resources::new(&roots, pools, sender.clone()));
-        let store = ArchiveStore::new(resources.clone(), sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pools, handles.clone()));
+        let store = ArchiveStore::new(resources.clone(), handles);
         let archive = fixture_archive(
             &store,
             &resources,
@@ -972,9 +976,12 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(events.len(), 2, "the unpack writes two events");
         match &events[1] {
-            ToUi::ArchiveFinished {
-                path: seen,
-                members,
+            ToUi::Task {
+                kind: TaskKind::Archive { path: seen },
+                state:
+                    TaskState::Finished {
+                        note: TaskNote::Members(members),
+                    },
             } => {
                 assert_eq!(*members, 2, "the unpack counts every member");
                 assert_eq!(

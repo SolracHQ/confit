@@ -9,7 +9,25 @@ use std::path::{Path, PathBuf};
 use confit_cli::actions::{apply, restore};
 use confit_cli::cli::{ApplyArgs, RestoreArgs};
 use confit_driver::paths::BaseDirs;
-use confit_store::state::Picker;
+use confit_events::EventHandles;
+use confit_store::{StoreRoots, Stores, state::Picker};
+
+/// Builds stores under one temporary folder with a silent progress sink.
+fn test_stores(dir: &Path, project: &str) -> Stores {
+    Stores::new(
+        StoreRoots {
+            config_base: dir.join("config"),
+            temp_base: dir.join("temp"),
+            project_root: dir.join(project),
+        },
+        EventHandles::silent(),
+    )
+}
+
+/// Builds UI handles with no reader and no reply.
+fn test_handles() -> EventHandles {
+    EventHandles::silent()
+}
 
 /// Builds a profile that writes one text document with the given text.
 fn profile_text(relative: &str, text: &str) -> String {
@@ -72,25 +90,25 @@ fn seed_tree_project(dir: &Path, folder: &str, member: &str, text: &str) {
 /// Applies the site project with the prompt skipped and keeps the report.
 fn apply_project(dir: &Path) -> confit_cli::actions::commit::WriteReport {
     let site = dir.join("site");
-    let stores = common::test_stores(dir, "site");
+    let stores = test_stores(dir, "site");
     let args = ApplyArgs {
         project: site,
         profile: None,
         force: true,
     };
     let hooks = dir.join("hooks");
-    apply::run(&args, stores, common::test_handles(), hooks).unwrap()
+    apply::run(&args, stores, test_handles(), hooks).unwrap()
 }
 
 /// Restores one source into the home folder with the prompt skipped.
 fn restore_source(dir: &Path, source: PathBuf) {
-    let stores = common::test_stores(dir, "site");
+    let stores = test_stores(dir, "site");
     let args = RestoreArgs {
         source,
         force: true,
     };
     let hooks = dir.join("hooks");
-    restore::run(&args, stores, common::test_handles(), hooks).unwrap();
+    restore::run(&args, stores, test_handles(), hooks).unwrap();
 }
 
 /// Reads one home destination under the shared test root.
@@ -150,7 +168,7 @@ fn rescue_empty_capture_writes_no_state() {
     seed_project(dir.path(), "confit-rescue-absent-note", "managed");
     let report = apply_project(dir.path());
     assert_eq!(report.saved, 0, "the absent file stores no capture");
-    let stores = common::test_stores(dir.path(), "site");
+    let stores = test_stores(dir.path(), "site");
     let picker = Picker::Named("!".to_owned());
     assert!(
         stores.states().resolve(&picker).is_err(),
@@ -197,14 +215,14 @@ fn rescue_capture_includes_tree_members() {
 fn rescue_missing_state_fails() {
     let dir = tempfile::tempdir().unwrap();
     seed_project(dir.path(), "confit-rescue-missing-note", "managed");
-    let stores = common::test_stores(dir.path(), "site");
+    let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("@!"),
         force: true,
     };
     let hooks = dir.path().join("hooks");
     assert!(
-        restore::run(&args, stores, common::test_handles(), hooks).is_err(),
+        restore::run(&args, stores, test_handles(), hooks).is_err(),
         "an absent rescue state fails the restore"
     );
 }

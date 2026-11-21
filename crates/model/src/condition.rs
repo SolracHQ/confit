@@ -210,6 +210,31 @@ impl Condition {
         }
         render(&self.simplified())
     }
+
+    /// Returns the removed and added leaves between two conditions.
+    pub fn leaf_diff(&self, other: &Self) -> (Vec<Self>, Vec<Self>) {
+        let before = Self::flatten(&self.simplified());
+        let after = Self::flatten(&other.simplified());
+        let removed = before
+            .iter()
+            .filter(|leaf| !after.contains(leaf))
+            .cloned()
+            .collect();
+        let added = after
+            .iter()
+            .filter(|leaf| !before.contains(leaf))
+            .cloned()
+            .collect();
+        (removed, added)
+    }
+
+    /// Flattens one simplified condition into its member leaves.
+    fn flatten(condition: &Self) -> Vec<Self> {
+        match condition {
+            Self::All(items) | Self::Any(items) => items.iter().flat_map(Self::flatten).collect(),
+            _ => vec![condition.clone()],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +291,32 @@ mod tests {
             swapped.simplified(),
             Condition::All(vec![leaf("a"), leaf("b")])
         );
+    }
+
+    #[test]
+    fn leaf_diff_returns_removed_and_added_leaves() {
+        let before = Condition::All(vec![leaf("bat"), leaf("starship")]);
+        let after = Condition::All(vec![leaf("bat"), leaf("eza")]);
+        assert_eq!(
+            before.leaf_diff(&after),
+            (vec![leaf("starship")], vec![leaf("eza")])
+        );
+    }
+
+    #[test]
+    fn leaf_diff_flattens_nested_lists_before_compare() {
+        let before = Condition::Any(vec![leaf("a")]);
+        let after = Condition::All(vec![leaf("a"), Condition::Any(vec![leaf("b"), leaf("c")])]);
+        assert_eq!(
+            before.leaf_diff(&after),
+            (Vec::new(), vec![leaf("b"), leaf("c")])
+        );
+    }
+
+    #[test]
+    fn leaf_diff_returns_empty_lists_for_matching_leaves() {
+        let before = Condition::All(vec![leaf("a"), leaf("b")]);
+        let after = Condition::Any(vec![leaf("b"), leaf("a")]);
+        assert_eq!(before.leaf_diff(&after), (Vec::new(), Vec::new()));
     }
 }

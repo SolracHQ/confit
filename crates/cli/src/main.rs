@@ -1,77 +1,178 @@
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+
 use clap::Parser;
-
-use std::path::Path;
-
 use confit_cli::actions::bundle::BundleRunner;
 use confit_cli::actions::check::CheckRunner;
 use confit_cli::actions::export::ExportRunner;
-use confit_cli::actions::init::{InitOutcome, InitRunner};
-use confit_cli::actions::{apply, delete, restore};
-use confit_cli::cli;
-use confit_cli::cli::{
-    APP_LOG_NAME, ApplyArgs, BundleArgs, CheckArgs, Cli, Command, DeleteArgs, ExportArgs,
-    HOOKS_DIR_NAME, InitArgs, RestoreArgs,
-};
-use confit_core::error::TerminalResult;
-use confit_events::{EventHandles, Ui};
+use confit_cli::actions::init::InitRunner;
+use confit_cli::actions::{ActionResult, apply, delete, restore};
+use confit_cli::cli::{self, APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME};
+use confit_core::error::{Error, TerminalResult, contextual, kind::ErrorKind};
+use confit_model::manifest::Manifest;
 use confit_store::{StoreRoots, Stores};
+use confit_ui::Ui;
 
 fn main() {
-    if let Err(error) = run() {
-        let context = error.context();
-        let reason = context.log_value();
-        let summary = error.summary();
-        let mut lines = summary.lines();
-        let first = lines.next().unwrap_or_default();
-        let rest: Vec<&str> = lines.collect();
-        let trace: Vec<&str> = if context.trace.is_empty() {
-            match context.detail.as_deref() {
-                Some(detail) if rest.len() == 1 && rest[0] == detail => Vec::new(),
-                _ => rest,
-            }
-        } else {
-            context.trace.iter().map(String::as_str).collect()
-        };
-        let mut payload = serde_json::json!({
-            "error": first,
-            "reason": reason,
-        });
-        if !trace.is_empty() {
-            payload["trace"] = serde_json::json!(trace);
-        }
-        log::error!(target: "confit:error", "{payload}");
-        log::logger().flush();
-        eprintln!("error: {}", error.summary());
-        let closing = error.closing();
-        if !closing.is_empty() {
-            eprintln!("{closing}");
-        }
-        std::process::exit(1);
-    }
-}
-
-/// Runs the picked subcommand to completion.
-fn run() -> TerminalResult<()> {
     let mut cli = Cli::parse();
     cli::expand_command(&mut cli.command);
     let logs_dir = cli::resolve_logs_dir(cli.logs_dir.as_deref());
     let log_path = logs_dir.join(APP_LOG_NAME);
+    let as_json = cli.json;
+    let backend = match cli.ui {
+        cli::UiMode::Auto => {
+            let stdin_tty = std::io::stdin().is_terminal();
+            let stderr_tty = std::io::stderr().is_terminal();
+            if !stdin_tty && as_json {
+                confit_ui::Backend::None
+            } else if !stdin_tty || !stderr_tty {
+                confit_ui::Backend::Plain
+            } else {
+                confit_ui::Backend::Inline
+            }
+        }
+        cli::UiMode::Plain => confit_ui::Backend::Plain,
+        cli::UiMode::Inline => confit_ui::Backend::Inline,
+        cli::UiMode::None => confit_ui::Backend::None,
+    };
+    let run_log_path = log_path.clone();
+    let outcome: TerminalResult<ActionResult> = Ui::init(&log_path, backend, move |handles| {
+        let hooks_dir = setup_logging(&logs_dir, &run_log_path, cli.log_level)?;
+        let mut roots = StoreRoots::standard();
+        match &cli.command {
+            Command::Bundle(args) => roots.project_root = args.project.clone(),
+            Command::Check(args) => roots.project_root = args.project.clone(),
+            Command::Apply(args) => roots.project_root = args.project.clone(),
+            Command::Restore(_) | Command::Init(_) | Command::Export(_) | Command::Delete(_) => {}
+        }
+        let stores = Stores::new(roots, handles.clone());
+        match &cli.command {
+            Command::Bundle(args) => BundleRunner {
+                args,
+                stores,
+                handles,
+            }
+            .execute()
+            .map(ActionResult::Artifact),
+            Command::Check(args) => CheckRunner {
+                args,
+                stores,
+                handles,
+            }
+            .execute()
+            .map(|report| ActionResult::Check(report.diff)),
+            Command::Apply(args) => {
+                apply::run(args, stores, handles, hooks_dir).map(ActionResult::Wrote)
+            }
+            Command::Restore(args) => {
+                restore::run(args, stores, handles, hooks_dir).map(ActionResult::Wrote)
+            }
+            Command::Init(args) => InitRunner { args }.execute().map(ActionResult::Init),
+            Command::Export(args) if args.manifest => {
+                ExportRunner::run(args, stores).map(ActionResult::Export)
+            }
+            Command::Export(args) => ExportRunner::run(args, stores).map(ActionResult::Artifact),
+            Command::Delete(args) => delete::run(args, stores).map(ActionResult::Delete),
+        }
+    });
+    match outcome {
+        Ok(output) => print_output(&output, as_json),
+        Err(error) => {
+            let payload = error.log_payload();
+            log::error!(target: "confit:error", "{payload}");
+            if as_json {
+                print_json(payload);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Prints the command result to stdout.
+fn print_output(output: &ActionResult, as_json: bool) {
+    if !as_json {
+        if let ActionResult::Export(report) = output {
+            print_manifest(&report.manifest);
+        }
+        return;
+    }
+    match output {
+        ActionResult::Artifact(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Check(diff) => {
+            print_json(serde_json::json!(diff));
+        }
+        ActionResult::Wrote(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Export(report) => {
+            print_manifest(&report.manifest);
+        }
+        ActionResult::Delete(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Init(items) => {
+            if items.len() == 1 {
+                if let Some(first) = items.first()
+                    && let Ok(value) = serde_json::to_value(first)
+                {
+                    print_json(value);
+                }
+            } else if let Ok(value) = serde_json::to_value(items) {
+                print_json(value);
+            }
+        }
+    }
+}
+
+/// Prints one manifest as pretty JSON text to stdout.
+fn print_manifest(manifest: &Manifest) {
+    match manifest.json() {
+        Ok(text) => println!("{text}"),
+        Err(_) => print_json(serde_json::json!(manifest)),
+    }
+}
+
+/// Prints one JSON value as pretty text to stdout.
+fn print_json(value: serde_json::Value) {
+    match serde_json::to_string_pretty(&value) {
+        Ok(text) => println!("{text}"),
+        Err(_) => println!("{value}"),
+    }
+}
+
+/// Creates the hooks folder, then starts the file log.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when the hooks folder
+///   is unreachable or the log file fails to open.
+fn setup_logging(
+    logs_dir: &Path,
+    log_path: &Path,
+    log_level: log::LevelFilter,
+) -> TerminalResult<PathBuf> {
     let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
     if let Err(error) = std::fs::create_dir_all(&hooks_dir) {
-        eprintln!(
-            "error: cannot create the hooks folder '{}': {error}",
-            hooks_dir.display()
-        );
-        std::process::exit(1);
+        return Err(Error::new(
+            ErrorKind::WriteHookLog,
+            contextual(error).with_fs_path(&hooks_dir),
+        ));
     }
-    let log_file = match fern::log_file(&log_path) {
+    let log_file = match fern::log_file(log_path) {
         Ok(found) => found,
         Err(error) => {
-            eprintln!(
-                "error: cannot open the log '{}': {error}",
-                log_path.display()
-            );
-            std::process::exit(1);
+            return Err(Error::new(
+                ErrorKind::WriteHookLog,
+                contextual(error).with_fs_path(log_path),
+            ));
         }
     };
     let dispatch = fern::Dispatch::new()
@@ -111,168 +212,9 @@ fn run() -> TerminalResult<()> {
                 out.finish(format_args!("{text}"));
             }
         })
-        .level(cli.log_level)
+        .level(log_level)
         .chain(log_file);
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
-    let ui = Ui::start();
-    let outcome = match &cli.command {
-        Command::Bundle(args) => run_bundle(args, ui.handles()),
-        Command::Check(args) => run_check(args, ui.handles(), &log_path),
-        Command::Apply(args) => run_apply(args, ui.handles(), &log_path, &hooks_dir),
-        Command::Restore(args) => run_restore(args, ui.handles(), &log_path, &hooks_dir),
-        Command::Init(args) => run_init(args),
-        Command::Export(args) => run_export(args, ui.handles()),
-        Command::Delete(args) => run_delete(args, ui.handles()),
-    };
-    ui.finish();
-    if outcome.is_err() {
-        anstream::eprintln!("log: {}", log_path.display());
-    }
-    log::logger().flush();
-    outcome
-}
-
-/// Writes the bundle and prints the artifact path.
-fn run_bundle(args: &BundleArgs, handles: EventHandles) -> TerminalResult<()> {
-    let mut roots = StoreRoots::standard();
-    roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, handles.to_ui.clone());
-    let report = BundleRunner {
-        args,
-        stores: stores.clone(),
-        handles,
-    }
-    .execute()?;
-    anstream::println!("bundle: {}", report.text);
-    Ok(())
-}
-
-/// Checks the project and prints the summary.
-fn run_check(args: &CheckArgs, handles: EventHandles, log_path: &Path) -> TerminalResult<()> {
-    let mut roots = StoreRoots::standard();
-    roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, handles.to_ui.clone());
-    let prepared = CheckRunner {
-        args,
-        stores: stores.clone(),
-        handles,
-    }
-    .execute()?;
-    anstream::println!("{}", prepared.text);
-    anstream::eprintln!("log: {}", log_path.display());
-    Ok(())
-}
-
-/// Returns whether a previous entry exists.
-fn has_previous(stores: &Stores) -> bool {
-    stores
-        .states()
-        .history_list()
-        .map(|entries| entries.len() > 1)
-        .unwrap_or(false)
-}
-
-/// Applies the plan after the preview and the prompts.
-fn run_apply(
-    args: &ApplyArgs,
-    handles: EventHandles,
-    log_path: &Path,
-    hooks_dir: &Path,
-) -> TerminalResult<()> {
-    let mut roots = StoreRoots::standard();
-    roots.project_root = args.project.clone();
-    let stores = Stores::new(roots, handles.to_ui.clone());
-    let report = apply::run(args, stores.clone(), handles, hooks_dir.to_path_buf())?;
-    anstream::println!(
-        "applied: {} files, {} removed",
-        report.written,
-        report.removed
-    );
-    if report.saved > 0 {
-        anstream::println!("saved: {} files, confit restore @!", report.saved);
-    }
-    if (report.written > 0 || report.removed > 0) && has_previous(&stores) {
-        anstream::println!("restore: confit restore %1");
-    }
-    anstream::eprintln!("log: {}", log_path.display());
-    Ok(())
-}
-
-/// Restores the package after the preview and the prompts.
-fn run_restore(
-    args: &RestoreArgs,
-    handles: EventHandles,
-    log_path: &Path,
-    hooks_dir: &Path,
-) -> TerminalResult<()> {
-    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
-    let report = restore::run(args, stores.clone(), handles, hooks_dir.to_path_buf())?;
-    anstream::println!(
-        "restored: {} files, {} removed",
-        report.written,
-        report.removed
-    );
-    if report.saved > 0 {
-        anstream::println!("saved: {} files, confit restore @!", report.saved);
-    }
-    if (report.written > 0 || report.removed > 0) && has_previous(&stores) {
-        anstream::println!("restore: confit restore %1");
-    }
-    anstream::eprintln!("log: {}", log_path.display());
-    Ok(())
-}
-
-/// Exports the state to a bundle file or prints its manifest.
-fn run_export(args: &ExportArgs, handles: EventHandles) -> TerminalResult<()> {
-    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
-    let report = ExportRunner::run(args, stores)?;
-    if let Some(dest) = report.dest {
-        anstream::println!("export: {}", dest.display());
-    } else if let Some(manifest) = report.manifest {
-        println!("{manifest}");
-    }
-    Ok(())
-}
-
-/// Deletes the named state and its unreferenced entries.
-fn run_delete(args: &DeleteArgs, handles: EventHandles) -> TerminalResult<()> {
-    let stores = Stores::new(StoreRoots::standard(), handles.to_ui.clone());
-    let report = delete::run(args, stores)?;
-    anstream::println!(
-        "delete: @{} ({} entries pruned)",
-        report.name,
-        report.pruned
-    );
-    Ok(())
-}
-
-/// Scaffolds the project or refreshes the flagged artifacts.
-fn run_init(args: &InitArgs) -> TerminalResult<()> {
-    let runner = InitRunner { args };
-    for outcome in runner.execute()? {
-        match outcome {
-            InitOutcome::Scaffold(report) => {
-                anstream::println!("init: {} ({} files)", report.path.display(), report.written);
-            }
-            InitOutcome::Stubs(report) => {
-                anstream::println!(
-                    "stubs: {} ({} files)",
-                    report.path.display(),
-                    report.written
-                );
-            }
-            InitOutcome::Plugins(report) => {
-                anstream::println!(
-                    "plugins: {} ({} files)",
-                    report.path.display(),
-                    report.written
-                );
-            }
-            InitOutcome::Lsp(report) => {
-                anstream::println!("lsp: {} ({} files)", report.path.display(), report.written);
-            }
-        }
-    }
-    Ok(())
+    Ok(hooks_dir)
 }

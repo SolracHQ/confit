@@ -219,6 +219,16 @@ impl Assembler<'_> {
     }
 }
 
+#[derive(Default)]
+struct CollisionOwners {
+    /// Collision owners in the profile section.
+    profile: BTreeMap<String, String>,
+    /// Collision owners in the config section.
+    config: BTreeMap<String, String>,
+    /// Collision owners in the final section.
+    final_entries: BTreeMap<String, String>,
+}
+
 /// Encodes one working document.
 ///
 /// # Errors
@@ -427,16 +437,6 @@ fn winner_for(path: &str, owners: &BTreeMap<String, String>) -> Option<String> {
         }
     }
     None
-}
-
-#[derive(Default)]
-struct CollisionOwners {
-    /// Collision owners in the profile section.
-    profile: BTreeMap<String, String>,
-    /// Collision owners in the config section.
-    config: BTreeMap<String, String>,
-    /// Collision owners in the final section.
-    final_entries: BTreeMap<String, String>,
 }
 
 /// Seeds the collision owners.

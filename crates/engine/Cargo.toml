@@ -5,11 +5,11 @@ edition.workspace = true
 
 [dependencies]
 lua-binding = { workspace = true }
-confit-core = { path = "../core" }
-confit-driver = { path = "../driver" }
-confit-model = { path = "../model" }
-confit-store = { path = "../store" }
-confit-events = { path = "../events" }
+confit-core.workspace = true
+confit-driver.workspace = true
+confit-model.workspace = true
+confit-store.workspace = true
+confit-events.workspace = true
 log.workspace = true
 minijinja = { version = "3.0.0", features = ["serde"] }
 mlua = { workspace = true, features = ["lua54", "vendored"] }
@@ -25,6 +25,6 @@ noyalib.workspace = true
 workspace = true
 
 [dev-dependencies]
-confit-driver = { path = "../driver", features = ["test-support"] }
+confit-driver = { workspace = true, features = ["test-support"] }
 crossbeam-channel = "0.5.17"
 tempfile.workspace = true

@@ -4,15 +4,14 @@ use std::path::PathBuf;
 
 use confit_bundler::Bundler;
 use confit_core::error::{
-    FilesystemError, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
+    FilesystemError, Terminal, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
 };
-use confit_runtime::prepare;
-use confit_store::Stores;
-use confit_store::state::Picker;
-
-use super::commit::{CommitRunner, WriteReport};
-use crate::cli::RestoreArgs;
+use confit_differ::diff::Diff;
 use confit_events::EventHandles;
+use confit_store::{Stores, state::Picker};
+
+use super::commit::{Applier, WriteReport};
+use crate::cli::RestoreArgs;
 
 /// Resolves the desired documents from one package, then commits them.
 ///
@@ -44,16 +43,17 @@ pub fn run(
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cb"))
     {
-        Bundler::new(&stores).read(positional)?
+        Bundler::new(&stores, handles.clone()).read(positional)?
     } else {
         return error(
             ErrorKind::RestoreState,
             contextual(FilesystemError::MalformedPath).with_fs_path(positional),
         );
     };
-    let prepared = prepare::prepare(&stores, desired)?;
-    CommitRunner {
-        prepared,
+    let previous = stores.states().load_applied()?;
+    let diff = Diff::build(desired, previous).terminal(ErrorKind::Evaluate)?;
+    Applier {
+        diff,
         force: args.force,
         stores,
         handles,

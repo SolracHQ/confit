@@ -5,9 +5,9 @@ use mlua::Lua;
 use lua_binding::lua_module;
 
 use confit_core::sha::Sha;
+use confit_model::url::Url;
 
-use crate::api::resource::ResourceHandle;
-use crate::api::stores_from;
+use crate::api::{resource::ResourceHandle, stores_from};
 
 pub struct Fetch;
 
@@ -17,7 +17,7 @@ impl Fetch {
     ///
     /// # Arguments
     ///
-    /// - [url] The url to fetch.
+    /// - [url] with http or https scheme and a present host.
     /// - [sha256] The pinned digest.
     ///
     /// # Returns
@@ -30,9 +30,7 @@ impl Fetch {
         sha256: Option<Sha>,
     ) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_from(lua)?;
-        if url.is_empty() {
-            return Err(mlua::Error::runtime("fetch requires a non-empty url"));
-        }
+        let url = Url::new(url).map_err(|error| mlua::Error::runtime(error.to_string()))?;
         match stores.fetch().fetch(&url, sha256) {
             Ok(found) => Ok((Some(ResourceHandle::new(found)), None)),
             Err(error) => Ok((None, Some(error.to_string()))),
@@ -49,20 +47,19 @@ mod tests {
     use crate::api::builtin;
     use confit_core::error::FetchError;
     use confit_core::sha::Sha;
-    use confit_driver::http::{clear, fail, serve};
+    use confit_driver::http::{calls, clear, fail, serve};
     use confit_store::{StoreRoots, Stores};
 
     const URL: &str = "https://example.com/tool.bin";
 
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            confit_events::EventHandles::silent(),
         )
     }
 
@@ -157,6 +154,47 @@ mod tests {
             Ok(_) => panic!("expected a string reason"),
             Err(error) => panic!("the fetch module keeps a mismatched pin soft: {error}"),
         }
+    }
+
+    #[test]
+    fn fetch_rejects_bad_urls_before_any_event() {
+        use confit_events::EventHandles;
+        use confit_events::protocol::FromUi;
+
+        let dir = tempfile::tempdir().unwrap();
+        clear();
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let stores = Stores::new(
+            StoreRoots {
+                config_base: dir.path().join("config"),
+                temp_base: dir.path().join("temp"),
+                project_root: dir.path().join("project"),
+            },
+            EventHandles::new(sender, from_ui),
+        );
+        let lua = fresh_lua(&stores);
+        for bad in [
+            "",
+            "not a url",
+            "gopher://x",
+            "ftp://example.com/tool.bin",
+            "file:///etc/passwd",
+        ] {
+            let source = format!(r#"return fetch("{bad}")"#);
+            match run(&lua, &source) {
+                Ok(_) => panic!("the fetch module rejects the url: {bad}"),
+                Err(error) => assert!(
+                    error.to_string().contains("invalid fetch url"),
+                    "the rejection names the url: {error}"
+                ),
+            }
+        }
+        assert!(
+            receiver.try_iter().next().is_none(),
+            "the rejected urls emit no event"
+        );
+        assert_eq!(calls("gopher://x"), 0, "the rejected url makes no download");
     }
 
     #[test]

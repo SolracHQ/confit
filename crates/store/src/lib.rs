@@ -1,4 +1,4 @@
-//! Write-backed capability roots for one run.
+//! Trusted roots and content caches.
 
 #![deny(missing_docs)]
 
@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use confit_core::error::ContextualResult;
 use confit_driver::paths::BaseDirs;
-use confit_events::ToUi;
-use crossbeam_channel::Sender;
+use confit_events::EventHandles;
 
 pub mod archive;
 pub mod fetch;
@@ -22,7 +21,7 @@ use pool::PoolStore;
 use resources::Resources;
 use state::StateStore;
 
-/// The base folders of one run.
+/// The base folders of one execution.
 #[derive(Debug, Clone, Default)]
 pub struct StoreRoots {
     /// The base folder for history and named states.
@@ -33,20 +32,20 @@ pub struct StoreRoots {
     pub project_root: PathBuf,
 }
 
-/// The write-backed stores for one run.
+/// The trusted roots and content caches.
 #[derive(Clone)]
 pub struct Stores {
-    /// The base folders for every store.
+    /// The owned base folders.
     pub roots: StoreRoots,
-    /// The trusted project files shared by every store.
+    /// The owned project files.
     resources: Arc<Resources>,
-    /// The pool that holds content-addressed bytes.
+    /// The compressed blobs.
     pool: Arc<PoolStore>,
-    /// The cache that holds remote bytes by content hash.
+    /// The remote bytes by content hash.
     fetch: Arc<FetchCache>,
-    /// The store that lists and extracts archive members.
+    /// The unpacked archive members.
     archives: Arc<ArchiveStore>,
-    /// The store that holds named state files and their history.
+    /// The named states and their history.
     states: Arc<StateStore>,
 }
 
@@ -74,23 +73,18 @@ impl StoreRoots {
     }
 }
 
-/// Returns the working folder, or `.` on failure.
-fn current_dir() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
 impl Stores {
     /// Builds every store over file backends.
-    pub fn new(roots: StoreRoots, to_ui: Sender<ToUi>) -> Self {
-        let pool = Arc::new(PoolStore::new(&roots, to_ui.clone()));
-        let resources = Arc::new(Resources::new(&roots, pool.clone(), to_ui.clone()));
-        let archives = Arc::new(ArchiveStore::new(resources.clone(), to_ui.clone()));
+    pub fn new(roots: StoreRoots, handles: EventHandles) -> Self {
+        let pool = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let resources = Arc::new(Resources::new(&roots, pool.clone(), handles.clone()));
+        let archives = Arc::new(ArchiveStore::new(resources.clone(), handles.clone()));
         Self {
             resources: resources.clone(),
             pool: pool.clone(),
-            fetch: Arc::new(FetchCache::new(resources.clone(), to_ui)),
+            fetch: Arc::new(FetchCache::new(resources.clone(), handles.clone())),
             archives,
-            states: Arc::new(StateStore::new(&roots)),
+            states: Arc::new(StateStore::new(&roots, resources.clone(), handles)),
             roots,
         }
     }
@@ -129,4 +123,9 @@ impl Stores {
         let keep = self.states.keep_set()?;
         self.pool.prune(&keep)
     }
+}
+
+/// Returns the working folder, or `.` on failure.
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

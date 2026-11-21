@@ -4,7 +4,7 @@
 mod cause;
 /// Typed location and values for log records.
 mod context;
-/// Failure causes that carry where the operation ran.
+/// Failure causes with the operation location.
 mod contextual;
 /// Non-blocking diff warnings.
 mod failure;

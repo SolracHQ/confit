@@ -3,12 +3,11 @@
 use std::path::PathBuf;
 
 use confit_bundler::Bundler;
-use confit_core::error::{
-    ErrorCause, Terminal, TerminalResult, WithContext, error, kind::ErrorKind,
-};
-use confit_store::Stores;
-use confit_store::state::Picker;
+use confit_core::error::{ErrorCause, TerminalResult, error, kind::ErrorKind};
+use confit_events::EventHandles;
+use confit_store::{Stores, state::Picker};
 
+use crate::actions::ArtifactReport;
 use crate::cli::ExportArgs;
 
 /// The auto-name prefix for exports of the applied state.
@@ -16,18 +15,10 @@ const APPLIED_PREFIX: &str = "applied";
 /// The auto-name prefix for exports of history entries.
 const HISTORY_PREFIX: &str = "prev-";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExportReport {
-    /// The bundle path for a file export, `None` for a manifest print.
-    pub dest: Option<PathBuf>,
-    /// The pretty manifest JSON for a manifest print, `None` for a file export.
-    pub manifest: Option<String>,
-}
-
 pub struct ExportRunner<'a> {
     /// The flags that pick the state and the output.
     pub args: &'a ExportArgs,
-    /// The stores that hold the state and the resources.
+    /// The trusted roots and content caches.
     pub stores: Stores,
 }
 
@@ -42,11 +33,11 @@ impl<'a> ExportRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
     /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
-    pub fn run(args: &'a ExportArgs, stores: Stores) -> TerminalResult<ExportReport> {
+    pub fn run(args: &'a ExportArgs, stores: Stores) -> TerminalResult<ArtifactReport> {
         Self { args, stores }.execute()
     }
 
-    /// Resolves the picker, then writes the file or renders the manifest.
+    /// Resolves the picker, then writes the file or returns the manifest.
     ///
     /// # Errors
     ///
@@ -56,10 +47,10 @@ impl<'a> ExportRunner<'a> {
     /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
     /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
     /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
-    pub fn execute(self) -> TerminalResult<ExportReport> {
+    pub fn execute(self) -> TerminalResult<ArtifactReport> {
         let args = self.args;
         let stores = self.stores;
-        let bundles = Bundler::new(&stores);
+        let bundles = Bundler::new(&stores, EventHandles::silent());
         let states = stores.states();
         let (manifest, prefix) = match args.picker.as_deref() {
             None => (states.load_applied()?, APPLIED_PREFIX.to_owned()),
@@ -81,25 +72,22 @@ impl<'a> ExportRunner<'a> {
                 },
             },
         };
-        let auto = PathBuf::from(prefix);
         if args.manifest {
-            let text = manifest
-                .json()
-                .with_bundle_path(&auto)
-                .terminal(ErrorKind::WriteBundle)?;
-            return Ok(ExportReport {
-                dest: None,
-                manifest: Some(text),
+            let source = args.picker.as_deref().unwrap_or(APPLIED_PREFIX).to_owned();
+            return Ok(ArtifactReport {
+                output: source,
+                manifest,
             });
         }
+        let auto = PathBuf::from(prefix);
         let dest = match args.output.as_deref() {
             Some(raw) => raw.to_path_buf(),
             None => auto,
         };
         let dest = bundles.write(&manifest, &dest)?;
-        Ok(ExportReport {
-            dest: Some(dest),
-            manifest: None,
+        Ok(ArtifactReport {
+            output: dest.display().to_string(),
+            manifest,
         })
     }
 }

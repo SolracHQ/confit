@@ -17,27 +17,23 @@ impl Input {
     ///
     /// # Returns
     ///
-    /// - The input line.
-    pub fn input(lua: &Lua, prompt: String) -> mlua::Result<String> {
-        let handles = handles_of(lua)?;
-        handles.ask(prompt).map_err(mlua::Error::external)
-    }
-}
-
-/// Returns the renderer handles.
-fn handles_of(lua: &Lua) -> mlua::Result<EventHandles> {
-    match lua.app_data_ref::<EventHandles>() {
-        Some(handles) => Ok(handles.clone()),
-        None => Err(mlua::Error::RuntimeError(
-            "the confit input is not installed".to_owned(),
-        )),
+    /// - The input line, else nil.
+    /// - The failure reason, else nil.
+    pub fn input(lua: &Lua, prompt: String) -> (Option<String>, Option<String>) {
+        let Some(handles) = lua.app_data_ref::<EventHandles>() else {
+            return (None, Some("the confit input is not installed".to_owned()));
+        };
+        match handles.ask(prompt) {
+            Some(line) => (Some(line), None),
+            None => (None, Some("the input prompt was cancelled".to_owned())),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_events::{FromUi, ToUi};
+    use confit_events::protocol::{FromUi, ToUi};
     use mlua::Value;
 
     fn fresh_lua(replies: Vec<String>) -> Lua {
@@ -55,7 +51,7 @@ mod tests {
             }
         });
         let lua = Lua::new();
-        let _ = lua.set_app_data(EventHandles { to_ui, from_ui });
+        let _ = lua.set_app_data(EventHandles::new(to_ui, from_ui));
         let input = Input::add(&lua).unwrap();
         lua.globals().set("input", input).unwrap();
         lua
@@ -68,10 +64,44 @@ mod tests {
     #[test]
     fn input_returns_the_asked_line() {
         let lua = fresh_lua(vec!["hello".to_owned()]);
-        match run(&lua, r#"return input("Name? ")"#) {
+        let source = r#"
+            local line, reason = input("Name? ")
+            assert(line == "hello", "the input line matches the answer")
+            assert(reason == nil, "the reason stays nil on an answer")
+            return line
+        "#;
+        match run(&lua, source) {
             Ok(Value::String(found)) => assert_eq!(found.to_string_lossy(), "hello"),
             Ok(_) => panic!("expected a string"),
             Err(error) => panic!("the input reader returns the line: {error}"),
+        }
+    }
+
+    #[test]
+    fn input_returns_nil_with_a_reason_on_cancellation() {
+        let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
+        let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        std::thread::spawn(move || {
+            for message in incoming {
+                if matches!(message, ToUi::Prompt(_)) && outgoing.send(FromUi::Close).is_err() {
+                    break;
+                }
+            }
+        });
+        let lua = Lua::new();
+        let _ = lua.set_app_data(EventHandles::new(to_ui, from_ui));
+        let input = Input::add(&lua).unwrap();
+        lua.globals().set("input", input).unwrap();
+        let source = r#"
+            local line, reason = input("Name? ")
+            assert(line == nil, "the cancelled line stays nil")
+            assert(reason ~= nil, "the cancellation carries a reason")
+            return reason
+        "#;
+        match run(&lua, source) {
+            Ok(Value::String(_)) => {}
+            Ok(_) => panic!("expected a string reason"),
+            Err(error) => panic!("the input reader keeps a cancellation soft: {error}"),
         }
     }
 }

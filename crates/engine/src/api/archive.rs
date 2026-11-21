@@ -65,7 +65,11 @@ impl ArchiveHandle {
 mod tests {
     use super::*;
     use confit_driver::archive::{Algorithm, Builder, Level};
-    use confit_events::ToUi;
+    use confit_events::EventHandles;
+    use confit_events::protocol::FromUi;
+    use confit_events::protocol::TaskNote;
+    use confit_events::protocol::TaskState;
+    use confit_events::protocol::ToUi;
     use confit_store::{StoreRoots, Stores};
     use crossbeam_channel::Receiver;
     use mlua::Value;
@@ -74,19 +78,19 @@ mod tests {
     use crate::api::builtin;
 
     fn test_stores(dir: &Path) -> Stores {
-        let (sender, _) = crossbeam_channel::unbounded();
         Stores::new(
             StoreRoots {
                 config_base: dir.join("config"),
                 temp_base: dir.join("temp"),
                 project_root: dir.join("project"),
             },
-            sender,
+            EventHandles::silent(),
         )
     }
 
     fn test_stores_with_events(dir: &Path) -> (Stores, Receiver<ToUi>) {
         let (sender, receiver) = crossbeam_channel::unbounded();
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
         (
             Stores::new(
                 StoreRoots {
@@ -94,7 +98,7 @@ mod tests {
                     temp_base: dir.join("temp"),
                     project_root: dir.join("project"),
                 },
-                sender,
+                EventHandles::new(sender, from_ui),
             ),
             receiver,
         )
@@ -272,7 +276,13 @@ mod tests {
         let events: Vec<ToUi> = receiver.try_iter().collect();
         assert_eq!(events.len(), 2, "the repeated unpack writes two events");
         match events.last() {
-            Some(ToUi::ArchiveFinished { members, .. }) => {
+            Some(ToUi::Task {
+                state:
+                    TaskState::Finished {
+                        note: TaskNote::Members(members),
+                    },
+                ..
+            }) => {
                 assert_eq!(*members, 2, "the repeated unpack counts every member")
             }
             other => panic!("expected a finished event: {other:?}"),

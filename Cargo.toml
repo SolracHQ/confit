@@ -11,6 +11,8 @@ members = [
   "crates/events",
   "lua-binding/crates/binding",
   "lua-binding/crates/binding-macros", "crates/bundler",
+  "crates/differ",
+  "crates/ui",
 ]
 
 [workspace.package]
@@ -18,8 +20,17 @@ version = "0.9.0"
 edition = "2024"
 
 [workspace.dependencies]
-anstream = "1.0.0"
 clap = { version = "4.6.6", features = ["derive"] }
+confit-bundler = { version = "0.9.0", path = "crates/bundler" }
+confit-core = { version = "0.9.0", path = "crates/core" }
+confit-differ = { version = "0.9.0", path = "crates/differ" }
+confit-driver = { version = "0.9.0", path = "crates/driver" }
+confit-engine = { version = "0.9.0", path = "crates/engine" }
+confit-events = { version = "0.9.0", path = "crates/events" }
+confit-model = { version = "0.9.0", path = "crates/model" }
+confit-runtime = { version = "0.9.0", path = "crates/runtime" }
+confit-store = { version = "0.9.0", path = "crates/store" }
+confit-ui = { version = "0.9.0", path = "crates/ui" }
 crossbeam-channel = "0.5.17"
 diffy = "0.5.2"
 dirs = "7.0.0"

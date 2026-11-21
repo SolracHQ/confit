@@ -24,9 +24,9 @@ pub struct ProcessOutput {
 pub struct ProcessCall {
     /// The binary and arguments after the binary resolves.
     pub argv: Vec<String>,
-    /// The PATH extension folders under the run.
+    /// The PATH extension folders under the execution.
     pub path_dirs: Vec<PathBuf>,
-    /// The run limit in seconds.
+    /// The execution limit in seconds.
     pub timeout_secs: u64,
 }
 
@@ -38,7 +38,7 @@ pub struct ProcessCall {
 ///   or the binary is missing.
 /// - [`confit_core::error::FilesystemError::FilePermissionDenied`] when execution is denied.
 /// - [`confit_core::error::FilesystemError::FileUnknown`] when the spawn or the wait fails.
-/// - [`confit_core::error::HookRunError::TimedOut`] when the run times out.
+/// - [`confit_core::error::HookRunError::TimedOut`] when the execution times out.
 pub fn run(
     argv: &[String],
     path_dirs: &[PathBuf],

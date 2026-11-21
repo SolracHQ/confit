@@ -7,8 +7,8 @@ use confit_core::error::{
     ContextualCause, ContextualResult, ErrorCause, FilesystemError, WithContext, contextual,
 };
 use confit_core::sha::{Sha, ShaWriter};
-use confit_events::ToUi;
-use crossbeam_channel::Sender;
+use confit_events::EventHandles;
+use confit_events::protocol::{TaskKind, TaskNote};
 use sha2::Digest as _;
 
 use crate::StoreRoots;
@@ -24,15 +24,15 @@ const POOL_GZIP_LEVEL: u32 = 6;
 #[derive(Debug, Clone)]
 pub struct PoolStore {
     pool: PathBuf,
-    to_ui: Sender<ToUi>,
+    handles: EventHandles,
 }
 
 impl PoolStore {
     /// Builds a pool over the config base.
-    pub fn new(roots: &StoreRoots, to_ui: Sender<ToUi>) -> Self {
+    pub fn new(roots: &StoreRoots, handles: EventHandles) -> Self {
         Self {
             pool: roots.config_base.join(BLOBS_DIR),
-            to_ui,
+            handles,
         }
     }
 
@@ -136,19 +136,16 @@ impl PoolStore {
             return Ok(0);
         }
         let total = condemned.len();
-        let _ = self.to_ui.send(ToUi::PoolPruneStarted { total });
+        let reporter = self.handles.start_task(TaskKind::PoolPrune, Some(total));
         let mut removed = 0;
         for path in condemned {
             std::fs::remove_file(&path)
                 .map_err(ContextualCause::from)
                 .with_cache_path(&path)?;
             removed += 1;
-            let _ = self.to_ui.send(ToUi::PoolPruneProgress {
-                done: removed,
-                total,
-            });
+            reporter.progress(removed, Some(total), None);
         }
-        let _ = self.to_ui.send(ToUi::PoolPruneFinished);
+        reporter.finish(TaskNote::Closed);
         Ok(removed)
     }
 }
@@ -206,6 +203,9 @@ mod tests {
 
     use std::io::Read as _;
 
+    use confit_events::protocol::FromUi;
+    use confit_events::protocol::{TaskState, ToUi};
+
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
             config_base: dir.join("config"),
@@ -215,8 +215,7 @@ mod tests {
     }
 
     fn test_store(dir: &Path) -> PoolStore {
-        let (sender, _) = crossbeam_channel::unbounded();
-        PoolStore::new(&test_roots(dir), sender)
+        PoolStore::new(&test_roots(dir), EventHandles::silent())
     }
 
     /// A test reader that fails every read.
@@ -306,7 +305,8 @@ mod tests {
     fn pool_store_stays_silent_after_store() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = PoolStore::new(&test_roots(dir.path()), sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let store = PoolStore::new(&test_roots(dir.path()), EventHandles::new(sender, from_ui));
         let raw = b"announced bytes";
         match store.store_checked(&Sha::hash(raw), &raw[..]) {
             Ok(()) => {}
@@ -323,7 +323,8 @@ mod tests {
     fn pool_store_stays_silent_on_repeat() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = PoolStore::new(&test_roots(dir.path()), sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let store = PoolStore::new(&test_roots(dir.path()), EventHandles::new(sender, from_ui));
         let raw = b"silent reuse bytes";
         let sha = Sha::hash(raw);
         match store.store_checked(&sha, &raw[..]) {
@@ -345,7 +346,8 @@ mod tests {
     fn pool_store_skips_the_stream_for_a_present_entry() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = PoolStore::new(&test_roots(dir.path()), sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let store = PoolStore::new(&test_roots(dir.path()), EventHandles::new(sender, from_ui));
         let raw = b"present bytes";
         let sha = Sha::hash(raw);
         match store.store_checked(&sha, &raw[..]) {
@@ -412,7 +414,8 @@ mod tests {
     fn pool_prune_reports_started_metered_and_finished() {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let store = PoolStore::new(&test_roots(dir.path()), sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let store = PoolStore::new(&test_roots(dir.path()), EventHandles::new(sender, from_ui));
         let kept = Sha::hash(b"kept bytes");
         let dropped = Sha::hash(b"dropped bytes");
         match store.store_checked(&kept, &b"kept bytes"[..]) {
@@ -432,9 +435,24 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::PoolPruneStarted { total: 1 },
-                ToUi::PoolPruneProgress { done: 1, total: 1 },
-                ToUi::PoolPruneFinished,
+                ToUi::Task {
+                    kind: TaskKind::PoolPrune,
+                    state: TaskState::Started { total: Some(1) },
+                },
+                ToUi::Task {
+                    kind: TaskKind::PoolPrune,
+                    state: TaskState::Progress {
+                        done: 1,
+                        total: Some(1),
+                        row: None,
+                    },
+                },
+                ToUi::Task {
+                    kind: TaskKind::PoolPrune,
+                    state: TaskState::Finished {
+                        note: TaskNote::Closed,
+                    },
+                },
             ]
         );
     }

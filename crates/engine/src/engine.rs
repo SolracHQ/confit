@@ -7,6 +7,7 @@ use confit_core::version::VERSION;
 use mlua::Lua;
 
 use confit_events::EventHandles;
+use confit_events::protocol::Phase;
 use confit_model::manifest::Manifest;
 use confit_store::Stores;
 use lua_binding::value::Decode;
@@ -20,7 +21,7 @@ use crate::project::Project;
 pub struct Engine {
     /// The Lua instance.
     lua: Lua,
-    /// The shared stores.
+    /// The trusted roots and content caches.
     stores: Stores,
     /// The renderer handles for Lua input.
     handles: EventHandles,
@@ -54,6 +55,7 @@ impl Engine {
     /// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when a chunk
     ///   fails to load or a callback fails.
     pub fn evaluate(&self, profile: &Path) -> TerminalResult<Manifest> {
+        self.handles.phase_started(Phase::Evaluation);
         self.lua.set_app_data(self.stores.clone());
         self.lua.set_app_data(self.handles.clone());
         let root = self.stores.resources().roots.project_root.clone();

@@ -1,0 +1,21 @@
+[package]
+name = "confit-differ"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-core.workspace = true
+confit-driver.workspace = true
+confit-model.workspace = true
+diffy.workspace = true
+extend = "1.2.0"
+noyalib.workspace = true
+serde = { workspace = true, features = ["rc"] }
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

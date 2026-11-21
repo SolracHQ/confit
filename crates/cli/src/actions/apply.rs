@@ -2,13 +2,15 @@
 
 use std::path::PathBuf;
 
-use confit_core::error::{FilesystemError, TerminalResult, contextual, error, kind::ErrorKind};
+use confit_core::error::{
+    FilesystemError, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
+};
+use confit_differ::diff::Diff;
 use confit_engine::Engine;
 use confit_events::EventHandles;
-use confit_runtime::prepare;
 use confit_store::Stores;
 
-use super::commit::{CommitRunner, WriteReport};
+use super::commit::{Applier, WriteReport};
 use crate::cli;
 use crate::cli::ApplyArgs;
 
@@ -39,9 +41,10 @@ pub fn run(
         );
     }
     let built = Engine::new(stores.clone(), handles.clone()).evaluate(&path)?;
-    let prepared = prepare::prepare(&stores, built)?;
-    CommitRunner {
-        prepared,
+    let previous = stores.states().load_applied()?;
+    let diff = Diff::build(built, previous).terminal(ErrorKind::Evaluate)?;
+    Applier {
+        diff,
         force: args.force,
         stores,
         handles,

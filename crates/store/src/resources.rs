@@ -10,8 +10,8 @@ use confit_core::error::{
 };
 use confit_core::resource_ref::ResourceRef;
 use confit_core::sha::{Sha, ShaWriter};
-use confit_events::ToUi;
-use crossbeam_channel::Sender;
+use confit_events::EventHandles;
+use confit_events::protocol::{TaskKind, TaskNote};
 
 use crate::StoreRoots;
 use crate::pool::PoolStore;
@@ -31,18 +31,18 @@ pub struct Resources {
     /// The pool behind cache promotion.
     pools: Arc<PoolStore>,
     /// The progress channel for batch events.
-    to_ui: Sender<ToUi>,
+    handles: EventHandles,
     /// The project path remembered for each validated hash.
     remembered: Arc<RwLock<HashMap<Sha, PathBuf>>>,
 }
 
 impl Resources {
     /// Builds a resource store under explicit roots.
-    pub fn new(roots: &StoreRoots, pools: Arc<PoolStore>, to_ui: Sender<ToUi>) -> Self {
+    pub fn new(roots: &StoreRoots, pools: Arc<PoolStore>, handles: EventHandles) -> Self {
         Self {
             roots: roots.clone(),
             pools,
-            to_ui,
+            handles,
             remembered: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -113,6 +113,14 @@ impl Resources {
             guard.insert(sha, canonical_full);
         }
         Ok(reference)
+    }
+
+    /// Registers one disk path for its expected hash.
+    pub(crate) fn unchecked(&self, sha: &Sha, path: PathBuf) -> ResourceRef {
+        if let Ok(mut guard) = self.remembered.write() {
+            guard.entry(*sha).or_insert(path);
+        }
+        ResourceRef::new(*sha)
     }
 
     /// Resolves one content hash to its file path.
@@ -282,14 +290,14 @@ impl Resources {
             return Ok(());
         }
         let total = missing.len();
-        let _ = self.to_ui.send(ToUi::PoolFillStarted { total });
+        let reporter = self.handles.start_task(TaskKind::PoolFill, Some(total));
         for (index, handle) in missing.into_iter().enumerate() {
             let mut reader = self.open(handle)?;
             self.pools.store_checked(handle.sha(), &mut reader)?;
             let done = index + 1;
-            let _ = self.to_ui.send(ToUi::PoolFillProgress { done, total });
+            reporter.progress(done, Some(total), None);
         }
-        let _ = self.to_ui.send(ToUi::PoolFillFinished);
+        reporter.finish(TaskNote::Closed);
         Ok(())
     }
 
@@ -365,6 +373,7 @@ fn normalize(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use confit_core::error::ErrorCause;
+    use confit_events::protocol::{TaskState, ToUi};
 
     fn test_roots(dir: &Path) -> StoreRoots {
         StoreRoots {
@@ -376,9 +385,9 @@ mod tests {
 
     fn test_pair(dir: &Path) -> (Resources, Arc<PoolStore>) {
         let roots = test_roots(dir);
-        let (sender, _) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        (Resources::new(&roots, pools.clone(), sender.clone()), pools)
+        let handles = EventHandles::silent();
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        (Resources::new(&roots, pools.clone(), handles), pools)
     }
 
     fn test_store(dir: &Path) -> Resources {
@@ -822,11 +831,15 @@ mod tests {
 
     #[test]
     fn persist_reports_started_metered_and_finished() {
+        use confit_events::protocol::FromUi;
+
         let dir = tempfile::tempdir().unwrap();
         let roots = test_roots(dir.path());
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let pools = Arc::new(PoolStore::new(&roots, sender.clone()));
-        let store = Resources::new(&roots, pools, sender);
+        let (_, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(sender, from_ui);
+        let pools = Arc::new(PoolStore::new(&roots, handles.clone()));
+        let store = Resources::new(&roots, pools, handles);
         let sha = Sha::hash(b"cached bytes");
         match store.store_checked(&sha, std::io::Cursor::new(b"cached bytes")) {
             Ok(_) => {}
@@ -840,9 +853,24 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ToUi::PoolFillStarted { total: 1 },
-                ToUi::PoolFillProgress { done: 1, total: 1 },
-                ToUi::PoolFillFinished,
+                ToUi::Task {
+                    kind: TaskKind::PoolFill,
+                    state: TaskState::Started { total: Some(1) },
+                },
+                ToUi::Task {
+                    kind: TaskKind::PoolFill,
+                    state: TaskState::Progress {
+                        done: 1,
+                        total: Some(1),
+                        row: None,
+                    },
+                },
+                ToUi::Task {
+                    kind: TaskKind::PoolFill,
+                    state: TaskState::Finished {
+                        note: TaskNote::Closed,
+                    },
+                },
             ]
         );
     }

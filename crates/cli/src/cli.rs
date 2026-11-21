@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Parser, Subcommand};
 use confit_driver::paths::BaseDirs;
 
-/// The parsed command line for one run.
+/// The parsed command line.
 #[derive(Debug, Parser)]
 #[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
 pub struct Cli {
@@ -18,6 +18,12 @@ pub struct Cli {
     /// log level (default: warn)
     #[arg(long, default_value_t = log::LevelFilter::Warn)]
     pub log_level: log::LevelFilter,
+    /// print the result as pretty JSON on stdout
+    #[arg(long)]
+    pub json: bool,
+    /// ui backend (default: auto)
+    #[arg(long, value_enum, default_value_t = UiMode::Auto)]
+    pub ui: UiMode,
 }
 
 /// The subcommand the user picks.
@@ -39,8 +45,31 @@ pub enum Command {
     Delete(DeleteArgs),
 }
 
+/// The ui backend choice from the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum UiMode {
+    /// choose the ui from the terminal type
+    #[default]
+    Auto,
+    /// simple non-interactive ui for pipes and unattended executions
+    Plain,
+    /// inline interactive ui
+    Inline,
+    /// silent ui with no output
+    None,
+}
+
 /// Default profile file under the project.
 pub const DEFAULT_PROFILE: &str = "main.lua";
+
+/// The environment variable that sets the logs folder.
+pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
+
+/// The log file that the app writes under the logs folder.
+pub const APP_LOG_NAME: &str = "confit.log";
+
+/// The folder under the logs folder that holds the hook logs.
+pub const HOOKS_DIR_NAME: &str = "hooks";
 
 #[derive(Debug, Args)]
 pub struct BundleArgs {
@@ -172,15 +201,6 @@ pub fn expand_command(command: &mut Command) {
         Command::Delete(_) => {}
     }
 }
-
-/// The environment variable that sets the logs folder.
-pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
-
-/// The log file that the app writes under the logs folder.
-pub const APP_LOG_NAME: &str = "confit.log";
-
-/// The folder under the logs folder that holds the hook logs.
-pub const HOOKS_DIR_NAME: &str = "hooks";
 
 /// Resolves the logs folder from the flag, the environment, or the default.
 pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {

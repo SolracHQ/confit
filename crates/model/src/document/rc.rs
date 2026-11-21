@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[shape(table, typed_alias)]
 pub enum RcEntry {
-    /// A variable that the shell exports with a value.
+    /// One exported shell variable.
     Env {
         /// The variable name, like `EDITOR`.
         name: String,
@@ -31,7 +31,7 @@ pub enum RcEntry {
         /// The shell session guard.
         when: Option<Condition>,
     },
-    /// A shell alias with its expansion.
+    /// One shell alias.
     Alias {
         /// The alias name, like `ll`.
         name: String,

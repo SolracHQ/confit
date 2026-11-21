@@ -14,14 +14,6 @@ use confit_model::routes::Route;
 
 pub struct Validate;
 
-/// Decodes one value with its reason.
-fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Option<String>)> {
-    match T::decode(value, lua) {
-        Ok(found) => Ok((Some(found), None)),
-        Err(error) => Ok((None, Some(error.to_string()))),
-    }
-}
-
 #[lua_module("confit.validate")]
 impl Validate {
     /// Checks one document table.
@@ -120,6 +112,14 @@ impl Validate {
     /// - The failure reason, else nil.
     pub fn route(lua: &Lua, value: Value) -> mlua::Result<(Option<Route>, Option<String>)> {
         checked(lua, &value)
+    }
+}
+
+/// Decodes one value with its reason.
+fn checked<T: Decode>(lua: &Lua, value: &Value) -> mlua::Result<(Option<T>, Option<String>)> {
+    match T::decode(value, lua) {
+        Ok(found) => Ok((Some(found), None)),
+        Err(error) => Ok((None, Some(error.to_string()))),
     }
 }
 

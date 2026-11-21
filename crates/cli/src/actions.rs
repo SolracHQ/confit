@@ -8,3 +8,31 @@ pub mod delete;
 pub mod export;
 pub mod init;
 pub mod restore;
+
+use confit_differ::diff::Diff;
+use confit_model::manifest::Manifest;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// One artifact execution record.
+pub struct ArtifactReport {
+    /// The bundle path, the state name, or the source label as display text.
+    pub output: String,
+    /// The evaluated or loaded manifest.
+    pub manifest: Manifest,
+}
+
+/// One printable result per command.
+pub enum ActionResult {
+    /// The artifact execution.
+    Artifact(ArtifactReport),
+    /// The evaluated diff.
+    Check(Diff),
+    /// The write counts.
+    Wrote(commit::WriteReport),
+    /// The stored manifest.
+    Export(ArtifactReport),
+    /// The deleted state.
+    Delete(delete::DeleteReport),
+    /// One init item per outcome.
+    Init(Vec<init::InitItem>),
+}
