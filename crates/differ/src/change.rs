@@ -36,6 +36,8 @@ pub struct Change {
     pub before: Option<Side>,
     /// Present state on the after side.
     pub after: Option<Side>,
+    /// The drift flag.
+    pub drifted: bool,
 }
 
 /// One document outcome.
@@ -130,6 +132,7 @@ impl Change {
                 group,
                 before: None,
                 after: Some(found),
+                drifted: false,
             })),
             (Some(held), None) => Ok(Some(Self {
                 path: path.clone(),
@@ -139,6 +142,7 @@ impl Change {
                 group,
                 before: Some(held),
                 after: None,
+                drifted: false,
             })),
             (Some(held), Some(wanted)) => {
                 if held == wanted || unmanaged {
@@ -152,6 +156,7 @@ impl Change {
                     group,
                     before: Some(held),
                     after: Some(wanted),
+                    drifted: false,
                 }))
             }
         }
@@ -187,6 +192,7 @@ impl Change {
             group,
             before,
             after,
+            drifted: false,
         })
     }
 }

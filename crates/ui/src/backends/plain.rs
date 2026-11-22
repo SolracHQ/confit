@@ -1,19 +1,20 @@
 //! Line-based renderer.
 
-use confit_differ::diff::Diff;
-use confit_events::UiHandles;
-use confit_events::protocol::{FromUi, ToUi};
+use confit_events::{
+    UiHandles,
+    protocol::{FromUi, PromptKind, ToUi},
+};
 
 use crate::shared::{
     components::{
-        strings::{CANCELLED, YES},
+        strings::{
+            CANCELLED, CONFIRM_SUFFIX, DETAILS_HEADER, DETAILS_TITLE, PromptKindExt as _, YES,
+        },
         style::strExt as _,
     },
+    detail::DetailOption,
     execution::{Execution, read_answer},
 };
-
-/// The typed approval question.
-const CONFIRM_TYPED: &str = "Apply these changes? Type 'yes' to continue: ";
 
 /// The line-based render state.
 struct Plain {
@@ -29,14 +30,39 @@ impl Plain {
         }
     }
 
-    /// Prints the approval prompt and sends the reply.
-    fn on_show(&mut self, handles: &UiHandles, diff: Diff, force: bool) {
-        self.emit(|execution| execution.preview(&diff.effective));
+    /// Prints the stored detail lines and sends the reply.
+    fn on_details(&mut self, handles: &UiHandles) {
+        let question = format!("{DETAILS_TITLE}{CONFIRM_SUFFIX}");
+        match read_answer(&question) {
+            Ok(answer) if answer.trim() == YES => {
+                if let Some(view) = self.execution.view() {
+                    let picks = DetailOption::collect(view);
+                    let lines = DetailOption::render(view, &picks);
+                    if !lines.is_empty() {
+                        eprintln!("{}", DETAILS_HEADER.header());
+                        for line in &lines {
+                            eprintln!("{}", line.paint());
+                        }
+                    }
+                }
+                handles.send(FromUi::Close);
+            }
+            Ok(_) => handles.send(FromUi::Close),
+            Err(error) => {
+                log::debug!("details read failed: {error}");
+                handles.send(FromUi::Close);
+            }
+        }
+    }
+
+    /// Asks the per-prompt question and sends the reply.
+    fn on_confirm(&mut self, handles: &UiHandles, prompt: PromptKind, force: bool) {
         if force {
             handles.send(FromUi::Approved);
             return;
         }
-        match read_answer(CONFIRM_TYPED) {
+        let question = format!("{}{CONFIRM_SUFFIX}", prompt.text());
+        match read_answer(&question) {
             Ok(answer) => {
                 let reply = confirm_reply(&answer);
                 if matches!(reply, FromUi::Close) {
@@ -71,9 +97,10 @@ pub(crate) fn start(handles: UiHandles) {
                 kind,
                 state: update,
             } => ui.emit(|execution| execution.task(&kind, &update)),
-            ToUi::DesiredPreview(diff) => ui.emit(|execution| execution.preview(&diff.desired)),
+            ToUi::Preview { diff, view } => ui.emit(|execution| execution.preview(&diff, view)),
+            ToUi::AskForDetails => ui.on_details(&handles),
+            ToUi::AskForConfirm { prompt, force } => ui.on_confirm(&handles, prompt, force),
             ToUi::WriteResults(applied) => ui.emit(|execution| execution.write_results(&applied)),
-            ToUi::ShowAndConfirm { diff, force } => ui.on_show(&handles, diff, force),
             ToUi::Prompt(question) => match read_answer(&question) {
                 Ok(answer) => handles.send(FromUi::Answer(answer)),
                 Err(error) => {

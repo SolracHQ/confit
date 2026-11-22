@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use confit_cli::actions::{apply, commit::WriteReport};
-use confit_cli::cli::ApplyArgs;
+use confit_cli::cli::{ApplyArgs, UiView};
 use confit_core::error::TerminalResult;
 use confit_driver::paths::BaseDirs;
 use confit_events::{
@@ -42,7 +42,12 @@ fn replying_handles(replies: Vec<String>) -> EventHandles {
                         break;
                     }
                 }
-                ToUi::ShowAndConfirm { force, .. } => {
+                ToUi::AskForDetails => {
+                    if outgoing.send(FromUi::Close).is_err() {
+                        break;
+                    }
+                }
+                ToUi::AskForConfirm { force, .. } => {
                     if force {
                         if outgoing.send(FromUi::Approved).is_err() {
                             break;
@@ -101,6 +106,7 @@ fn run_apply(
     let args = ApplyArgs {
         project: site,
         profile,
+        view: UiView::Effective,
         force,
     };
     let replies = replies.iter().map(ToString::to_string).collect();

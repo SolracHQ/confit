@@ -1,27 +1,27 @@
 //! Inline renderer.
 
 mod bars;
-mod detail;
 
 use confit_differ::view::View;
-use confit_events::UiHandles;
-use confit_events::protocol::{FromUi, TaskKind, TaskState, ToUi};
+use confit_events::{
+    UiHandles,
+    protocol::{FromUi, PromptKind, TaskKind, TaskState, ToUi},
+};
 use inquire::{MultiSelect, Select};
 
-use crate::backends::inline::{bars::Bars, detail::DetailOption};
+use crate::backends::inline::bars::Bars;
 use crate::shared::{
     components::{
-        strings::{CANCELLED, DETAILS, NO, YES},
+        strings::{
+            CANCELLED, DETAILS, DETAILS_HEADER, DETAILS_TITLE, EXPAND_TITLE, NO,
+            PromptKindExt as _, YES,
+        },
         style::strExt as _,
     },
+    detail::DetailOption,
     execution::{Execution, read_answer},
     state::{JobProgress, task_label},
 };
-
-/// Approval question.
-const CONFIRM_TITLE: &str = "Apply these changes?";
-/// Row expansion question.
-const EXPAND_TITLE: &str = "Do you want more details?";
 
 /// Stateful inline renderer.
 struct Inline {
@@ -51,12 +51,12 @@ impl Inline {
                 self.on_task(kind, state);
                 None
             }
-            ToUi::ShowAndConfirm { diff, force } => Some(self.on_show(&diff.effective, *force)),
-            ToUi::DesiredPreview(diff) => {
-                self.emit(|execution| execution.preview(&diff.desired));
-                show_details(&self.bars, &diff.desired);
+            ToUi::Preview { diff, view } => {
+                self.emit(|execution| execution.preview(diff, *view));
                 None
             }
+            ToUi::AskForDetails => Some(self.on_details()),
+            ToUi::AskForConfirm { prompt, force } => Some(self.on_confirm(*prompt, *force)),
             ToUi::Prompt(question) => Some(ask_text(&self.bars, question)),
             ToUi::WriteResults(applied) => {
                 self.emit(|execution| execution.write_results(applied));
@@ -100,13 +100,23 @@ impl Inline {
         self.emit(|execution| execution.task(kind, state));
     }
 
-    /// Prints one preview and collects the approval reply.
-    fn on_show(&mut self, view: &View, force: bool) -> FromUi {
-        self.emit(|execution| execution.preview(view));
+    /// Prints one preview and collects the details reply.
+    fn on_details(&mut self) -> FromUi {
+        let Some(view) = self.execution.view() else {
+            return FromUi::Close;
+        };
+        ask_details(&self.bars, view)
+    }
+
+    /// Prints no preview and collects the approval reply.
+    fn on_confirm(&mut self, prompt: PromptKind, force: bool) -> FromUi {
         if force {
             return FromUi::Approved;
         }
-        ask_confirm(&self.bars, view)
+        let Some(view) = self.execution.view() else {
+            return FromUi::Close;
+        };
+        ask_confirm(&self.bars, view, prompt)
     }
 
     /// Prints the lines from one execution update.
@@ -146,9 +156,9 @@ fn ask_text(bars: &Bars, question: &str) -> FromUi {
 }
 
 /// Asks for approval.
-fn ask_confirm(bars: &Bars, view: &View) -> FromUi {
+fn ask_confirm(bars: &Bars, view: &View, prompt: PromptKind) -> FromUi {
     loop {
-        match bars.suspend(select_answer) {
+        match bars.suspend(|| select_answer(prompt)) {
             Ok(pick) if pick == YES => return FromUi::Approved,
             Ok(pick) if pick == NO => {
                 bars.print(&CANCELLED.dim());
@@ -169,12 +179,39 @@ fn ask_confirm(bars: &Bars, view: &View) -> FromUi {
 /// # Errors
 ///
 /// - [`inquire::InquireError`] when the prompt fails.
-fn select_answer() -> Result<String, inquire::InquireError> {
+fn select_answer(prompt: PromptKind) -> Result<String, inquire::InquireError> {
     Select::new(
-        CONFIRM_TITLE,
+        prompt.text(),
         vec![YES.to_owned(), NO.to_owned(), DETAILS.to_owned()],
     )
+    .with_starting_cursor(1)
     .prompt()
+}
+
+/// Asks whether to expand the stored view.
+fn ask_details(bars: &Bars, view: &View) -> FromUi {
+    let pick = match bars.suspend(select_details) {
+        Ok(pick) => pick,
+        Err(error) => {
+            log::debug!("details select failed: {error}");
+            return FromUi::Close;
+        }
+    };
+    if pick == YES {
+        show_details(bars, view);
+    }
+    FromUi::Close
+}
+
+/// Prompts for the details choice.
+///
+/// # Errors
+///
+/// - [`inquire::InquireError`] when the prompt fails.
+fn select_details() -> Result<String, inquire::InquireError> {
+    Select::new(DETAILS_TITLE, vec![YES.to_owned(), NO.to_owned()])
+        .with_starting_cursor(1)
+        .prompt()
 }
 
 /// Prompts for detail options and prints the picked lines.
@@ -187,7 +224,12 @@ fn show_details(bars: &Bars, view: &View) {
         Ok(selected) => selected,
         Err(_) => return,
     };
-    for line in DetailOption::render(view, &selected) {
+    let lines = DetailOption::render(view, &selected);
+    if lines.is_empty() {
+        return;
+    }
+    bars.print(&DETAILS_HEADER.header());
+    for line in &lines {
         bars.print(&line.paint());
     }
 }

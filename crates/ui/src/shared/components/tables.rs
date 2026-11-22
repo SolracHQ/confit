@@ -21,13 +21,13 @@ use crate::shared::{
 /// One document count by write outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DocCounts {
-    /// The number of added rows.
+    /// The number of added changes.
     pub added: usize,
-    /// The number of changed rows.
+    /// The number of updated changes.
     pub changed: usize,
-    /// The number of removed rows.
+    /// The number of removed changes.
     pub removed: usize,
-    /// The number of failed rows.
+    /// The number of failed changes.
     pub failed: usize,
 }
 
@@ -67,7 +67,7 @@ impl ErrorHookCounts {
 
 #[ext(name = KindCounts)]
 pub impl<T: AsRef<ChangeKind>> [T] {
-    /// Counts rows by change kind.
+    /// Counts changes by change kind.
     fn kind_counts(&self) -> (usize, usize, usize) {
         let mut added = 0;
         let mut changed = 0;
@@ -85,14 +85,38 @@ pub impl<T: AsRef<ChangeKind>> [T] {
 
 /// Returns the preview summary table.
 pub fn preview_table(view: &View) -> String {
-    let (added, changed, removed) = view.rows.kind_counts();
-    let docs = DocCounts {
-        added,
-        changed,
-        removed,
-        failed: 0,
-    };
-    results_table(&docs, &hook_counts(view))
+    let (added, changed, removed) = view.changes.kind_counts();
+    let hooks = hook_counts(view);
+    let mut table = Table::new();
+    table.load_style(NOTHING);
+    table.set_content_arrangement(ContentArrangement::Disabled);
+    table.force_no_tty();
+    table.set_header(vec![
+        String::new(),
+        Symbol::Add.to_string(),
+        Symbol::Update.to_string(),
+        Symbol::Remove.to_string(),
+    ]);
+    table.add_row(vec![
+        DOCUMENTS_LABEL.to_owned(),
+        added.to_string(),
+        changed.to_string(),
+        removed.to_string(),
+    ]);
+    if !hooks.is_empty() {
+        table.add_row(vec![
+            HOOKS_LABEL.to_owned(),
+            hooks.added.to_string(),
+            hooks.changed.to_string(),
+            hooks.destroyed.to_string(),
+        ]);
+    }
+    for index in 1..=3 {
+        if let Some(column) = table.column_mut(index) {
+            column.set_cell_alignment(CellAlignment::Center);
+        }
+    }
+    table.to_string()
 }
 
 /// Empty clause text.
@@ -100,15 +124,15 @@ const EMPTY_CLAUSE: &str = "[]";
 
 /// One clause mark.
 enum Part {
-    /// Added rows.
+    /// Added changes.
     Add,
-    /// Changed rows.
+    /// Updated changes.
     Update,
-    /// Removed rows.
+    /// Removed changes.
     Remove,
-    /// Failed rows.
+    /// Failed changes.
     Failed,
-    /// Pending rows.
+    /// Pending changes.
     Pending,
 }
 

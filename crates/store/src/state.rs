@@ -194,7 +194,7 @@ impl StateStore {
         Ok(())
     }
 
-    /// Saves the before hashes of the effective rows under the rescue name.
+    /// Saves the before hashes under the rescue name.
     ///
     /// # Errors
     ///
@@ -525,7 +525,7 @@ mod tests {
         Route::new(RouteBase::Literal, dir.join(name)).unwrap()
     }
 
-    /// Builds one effective row with the before hash.
+    /// Builds one effective change with the before hash.
     fn test_change(path: Route, before: Option<Sha>) -> Change {
         let expanded = path.resolve().unwrap();
         Change {
@@ -536,10 +536,11 @@ mod tests {
             group: None,
             before: before.map(|hash| Side::new(hash, FileMode::default())),
             after: None,
+            drifted: false,
         }
     }
 
-    /// Builds a diff that holds the effective rows.
+    /// Builds a diff that holds the effective changes.
     fn test_diff(changes: Vec<Change>) -> Diff {
         let wanted = Arc::new(Manifest {
             version: VERSION,

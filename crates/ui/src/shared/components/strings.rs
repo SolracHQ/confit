@@ -1,6 +1,7 @@
 //! Component display strings.
 
 use confit_differ::change::IncomparableReason;
+use confit_events::protocol::PromptKind;
 use extend::ext;
 
 /// Cached fetch suffix.
@@ -11,6 +12,8 @@ pub(crate) const YES: &str = "yes";
 pub(crate) const NO: &str = "no";
 /// Row expansion answer.
 pub(crate) const DETAILS: &str = "details";
+/// Details header.
+pub(crate) const DETAILS_HEADER: &str = "Details";
 /// Exact rescue title.
 pub(crate) const RESTORE_EXACT_TITLE: &str = "To restore previous exact disk state:";
 /// Undo title.
@@ -33,6 +36,18 @@ pub(crate) const REASON_DIR_THERE: &str = "directory blocks the managed path";
 pub(crate) const REASON_BLOCKED_BY_DIR: &str = "ancestor blocks the path";
 /// Reason word for a special file at the path.
 pub(crate) const REASON_BLOCKED_BY_SPECIAL_FILE: &str = "special file blocks the path";
+/// Details question.
+pub(crate) const DETAILS_TITLE: &str = "Do you want to explore details?";
+/// Row expansion question.
+pub(crate) const EXPAND_TITLE: &str = "Please select the files you want more detail from:";
+/// The typed suffix for a confirm question.
+pub(crate) const CONFIRM_SUFFIX: &str = " Type 'yes' to continue: ";
+/// Apply confirm prompt.
+pub(crate) const PROMPT_APPLY: &str = "Do you want to apply these changes?";
+/// Restore confirm prompt.
+pub(crate) const PROMPT_RESTORE: &str = "Do you want to restore these changes?";
+/// Bundle confirm prompt.
+pub(crate) const PROMPT_BUNDLE: &str = "Do you want to pack these changes?";
 
 #[ext]
 pub impl IncomparableReason {
@@ -43,6 +58,18 @@ pub impl IncomparableReason {
             Self::DirThere => REASON_DIR_THERE,
             Self::BlockedByDir => REASON_BLOCKED_BY_DIR,
             Self::BlockedBySpecialFile => REASON_BLOCKED_BY_SPECIAL_FILE,
+        }
+    }
+}
+
+#[ext]
+pub impl PromptKind {
+    /// Returns the confirm prompt text.
+    fn text(&self) -> &'static str {
+        match self {
+            Self::Apply => PROMPT_APPLY,
+            Self::Restore => PROMPT_RESTORE,
+            Self::Bundle => PROMPT_BUNDLE,
         }
     }
 }

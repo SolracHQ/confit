@@ -8,8 +8,7 @@ use confit_engine::Engine;
 use confit_events::EventHandles;
 use confit_store::Stores;
 
-use crate::cli;
-use crate::cli::CheckArgs;
+use crate::cli::{self, CheckArgs};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
@@ -52,7 +51,9 @@ impl CheckRunner<'_> {
         let desired = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
         let previous = self.stores.states().load_applied()?;
         let diff = Diff::build(desired, previous).terminal(ErrorKind::Evaluate)?;
-        self.handles.desired_preview(diff.clone());
+        let view = self.args.view.kind();
+        self.handles.preview(diff.clone(), view);
+        self.handles.ask_for_details();
         Ok(CheckReport { diff })
     }
 }

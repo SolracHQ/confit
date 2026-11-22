@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use confit_cli::actions::bundle::BundleRunner;
-use confit_cli::cli::BundleArgs;
+use confit_cli::cli::{BundleArgs, UiView};
 use confit_events::EventHandles;
 use confit_store::{StoreRoots, Stores, state::Picker};
 
@@ -82,6 +82,8 @@ fn bundle_file_holds_bytes() {
         project: site,
         profile: None,
         output: output.clone(),
+        view: UiView::Desired,
+        force: true,
     };
     let report = BundleRunner {
         args: &args,
@@ -108,6 +110,8 @@ fn named_bundle_state_holds_documents() {
         project: site,
         profile: None,
         output: PathBuf::from("@probe"),
+        view: UiView::Desired,
+        force: true,
     };
     let report = BundleRunner {
         args: &args,

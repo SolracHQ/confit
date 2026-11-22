@@ -3,11 +3,12 @@
 pub mod protocol;
 
 use confit_core::error::Error;
-use confit_differ::diff::Diff;
-use crossbeam_channel::Receiver;
-use crossbeam_channel::Sender;
+use confit_differ::{diff::Diff, view::ViewKind};
+use crossbeam_channel::{Receiver, Sender};
 
-use crate::protocol::{Applied, FromUi, Phase, RowUpdate, TaskKind, TaskNote, TaskState, ToUi};
+use crate::protocol::{
+    Applied, FromUi, Phase, PromptKind, RowUpdate, TaskKind, TaskNote, TaskState, ToUi,
+};
 
 /// Panics when the render thread dies.
 const UI_THREAD_DIED: &str = "UI thread died unexpectedly, this must never happen. If you see this message please create an issue with the instructions to replicate it on github.";
@@ -29,7 +30,7 @@ impl EventHandles {
         Self { to_ui, from_ui }
     }
 
-    /// Sends one event to the render thread.
+    /// Sends an event to the render thread.
     ///
     /// - A closed channel panics.
     pub fn send(&self, event: ToUi) {
@@ -38,12 +39,12 @@ impl EventHandles {
         }
     }
 
-    /// Sends one event and returns whether the channel accepts it.
+    /// Returns true if the channel accepts the event.
     pub fn try_send(&self, event: ToUi) -> bool {
         self.to_ui.send(event).is_ok()
     }
 
-    /// Returns one answer from the render thread.
+    /// Returns the answer from the render thread.
     ///
     /// - A closed channel panics.
     pub fn recv(&self) -> FromUi {
@@ -55,10 +56,7 @@ impl EventHandles {
         }
     }
 
-    /// Sends one question to the render thread and returns
-    /// its answer.
-    ///
-    /// - A closed channel panics.
+    /// Sends a question ask and waits for the user reply.
     pub fn ask(&self, prompt: String) -> Option<String> {
         self.send(ToUi::Prompt(prompt));
         match self.recv() {
@@ -68,30 +66,33 @@ impl EventHandles {
         }
     }
 
-    /// Sends one approval and returns whether the execution continues.
+    /// Sends a preview to the render thread.
     ///
     /// - A closed channel panics.
-    pub fn confirm(&self, diff: Diff, force: bool) -> bool {
-        self.send(ToUi::ShowAndConfirm { diff, force });
+    pub fn preview(&self, diff: Diff, view: ViewKind) {
+        self.send(ToUi::Preview { diff, view });
+    }
+
+    /// Sends a details ask and waits for the user reply.
+    pub fn ask_for_details(&self) {
+        self.send(ToUi::AskForDetails);
+        let _ = self.recv();
+    }
+
+    /// Sends a confirm ask and waits for the user reply.
+    pub fn ask_for_confirm(&self, prompt: PromptKind, force: bool) -> bool {
+        self.send(ToUi::AskForConfirm { prompt, force });
         match self.recv() {
             FromUi::Approved => true,
-            FromUi::Close => false,
-            FromUi::Answer(_) => false,
+            FromUi::Close | FromUi::Answer(_) => false,
         }
     }
 
-    /// Sends one phase start to the render thread.
+    /// Sends a phase start to the render thread.
     ///
     /// - A closed channel panics.
     pub fn phase_started(&self, phase: Phase) {
         self.send(ToUi::PhaseStarted(phase));
-    }
-
-    /// Sends one check preview to the render thread.
-    ///
-    /// - A closed channel panics.
-    pub fn desired_preview(&self, diff: Diff) {
-        self.send(ToUi::DesiredPreview(diff));
     }
 
     /// Sends the write results to the render thread.
@@ -101,19 +102,19 @@ impl EventHandles {
         self.send(ToUi::WriteResults(applied));
     }
 
-    /// Sends one failure notice to the render thread.
+    /// Sends a failure notice to the render thread.
     ///
     /// - A closed channel panics.
     pub fn error(&self, error: Box<Error>) {
         self.send(ToUi::Error(error));
     }
 
-    /// Sends one failure notice and returns whether the channel accepts it.
+    /// Returns true if the channel accepts the failure notice.
     pub fn try_error(&self, error: Box<Error>) -> bool {
         self.try_send(ToUi::Error(error))
     }
 
-    /// Opens one background job and returns its reporter.
+    /// Opens a background job and returns its reporter.
     ///
     /// - A closed channel panics.
     pub fn start_task(&self, kind: TaskKind, total: Option<usize>) -> TaskReporter {
@@ -127,7 +128,7 @@ impl EventHandles {
         }
     }
 
-    /// Sends one close notice to the render thread.
+    /// Sends a close notice to the render thread.
     ///
     /// - A closed channel panics.
     pub fn done(&self, undo: bool, rescued: bool, drifted: bool) {
@@ -146,11 +147,15 @@ impl EventHandles {
         let (replies, from_ui) = crossbeam_channel::unbounded::<FromUi>();
         std::thread::spawn(move || {
             for event in incoming {
-                if matches!(event, ToUi::ShowAndConfirm { force: true, .. }) {
+                if matches!(event, ToUi::AskForConfirm { force: true, .. }) {
                     if replies.send(FromUi::Approved).is_err() {
                         break;
                     }
-                } else if matches!(event, ToUi::Prompt(_) | ToUi::ShowAndConfirm { .. }) {
+                } else if matches!(event, ToUi::AskForDetails | ToUi::AskForConfirm { .. }) {
+                    if replies.send(FromUi::Close).is_err() {
+                        break;
+                    }
+                } else if matches!(event, ToUi::Prompt(_)) {
                     break;
                 }
             }
@@ -159,7 +164,7 @@ impl EventHandles {
     }
 }
 
-/// One background job reporter over the worker channels.
+/// A background job reporter over the worker channels.
 #[derive(Debug, Clone)]
 pub struct TaskReporter {
     /// The worker channel pair.
@@ -169,7 +174,7 @@ pub struct TaskReporter {
 }
 
 impl TaskReporter {
-    /// Sends one progress update for the job.
+    /// Sends a progress update for the job.
     ///
     /// - A closed channel panics.
     pub fn progress(&self, done: usize, total: Option<usize>, row: Option<RowUpdate>) {
@@ -179,7 +184,7 @@ impl TaskReporter {
         });
     }
 
-    /// Sends one closing fact for the job.
+    /// Sends a closing fact for the job.
     ///
     /// - A closed channel panics.
     pub fn finish(&self, note: TaskNote) {
@@ -190,7 +195,7 @@ impl TaskReporter {
     }
 }
 
-/// Builds both ends with the channels hidden inside.
+/// Builds both ends.
 pub fn pair() -> (EventHandles, UiHandles) {
     let (to_ui, incoming) = crossbeam_channel::unbounded();
     let (replies, from_ui) = crossbeam_channel::unbounded();
@@ -225,7 +230,7 @@ impl UiHandles {
         self.incoming.try_recv().ok()
     }
 
-    /// Sends one reply to the worker.
+    /// Sends a reply to the worker.
     ///
     /// - A lost main thread panics.
     pub fn send(&self, reply: FromUi) {
@@ -238,18 +243,14 @@ impl UiHandles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use confit_core::sha::Sha;
     use confit_differ::{
-        change::{Change, ChangeKind, Comparability, Side},
         diff::Diff,
         view::{View, ViewKind},
     };
-    use confit_model::document::FileMode;
     use confit_model::manifest::Manifest;
-    use confit_model::routes::{Route, RouteBase};
     use std::sync::Arc;
 
-    /// Builds one empty manifest for a diff side.
+    /// Builds an empty manifest for a diff side.
     fn empty_manifest() -> Manifest {
         Manifest {
             version: [0, 9, 0],
@@ -258,21 +259,7 @@ mod tests {
         }
     }
 
-    /// Builds one addition change for a literal route.
-    fn addition(route: Route, sha: Sha) -> Change {
-        let expanded = route.resolve().unwrap();
-        Change {
-            path: route,
-            expanded,
-            kind: ChangeKind::Addition,
-            comparability: Comparability::Comparable,
-            group: None,
-            before: None,
-            after: Some(Side::new(sha, FileMode::default())),
-        }
-    }
-
-    /// Builds one empty diff with no rows.
+    /// Builds an empty diff with no changes.
     fn empty_diff() -> Diff {
         let wanted = Arc::new(empty_manifest());
         let recorded = Arc::new(empty_manifest());
@@ -301,52 +288,55 @@ mod tests {
     }
 
     #[test]
-    fn confirm_returns_true_on_approval() {
+    fn ask_for_confirm_returns_true_on_approval() {
         let (to_ui, _incoming) = crossbeam_channel::unbounded::<ToUi>();
         let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
         let handles = EventHandles::new(to_ui, from_ui);
-        let route = Route::new(RouteBase::Literal, ".zshrc").unwrap();
-        let wanted = Arc::new(empty_manifest());
-        let recorded = Arc::new(empty_manifest());
-        let expected = Diff {
-            wanted: Arc::clone(&wanted),
-            recorded: Arc::clone(&recorded),
-            desired: View::new(
-                ViewKind::Desired,
-                Vec::new(),
-                Arc::clone(&wanted),
-                Arc::clone(&recorded),
-            ),
-            drift: View::new(
-                ViewKind::Drift,
-                Vec::new(),
-                Arc::clone(&wanted),
-                Arc::clone(&recorded),
-            ),
-            effective: View::new(
-                ViewKind::Effective,
-                vec![addition(route, Sha::hash(b"hi"))],
-                Arc::clone(&wanted),
-                Arc::clone(&recorded),
-            ),
-        };
         outgoing.send(FromUi::Approved).unwrap();
-        assert!(handles.confirm(expected, false));
+        assert!(handles.ask_for_confirm(PromptKind::Apply, false));
     }
 
     #[test]
-    fn confirm_returns_false_on_close() {
+    fn ask_for_confirm_returns_false_on_close() {
         let (to_ui, _incoming) = crossbeam_channel::unbounded::<ToUi>();
         let (outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
         let handles = EventHandles::new(to_ui, from_ui);
         outgoing.send(FromUi::Close).unwrap();
-        assert!(!handles.confirm(empty_diff(), false));
+        assert!(!handles.ask_for_confirm(PromptKind::Restore, false));
+    }
+
+    #[test]
+    fn preview_carries_the_picked_view() {
+        let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
+        let (_outgoing, from_ui) = crossbeam_channel::unbounded::<FromUi>();
+        let handles = EventHandles::new(to_ui, from_ui);
+        let diff = empty_diff();
+        handles.preview(diff.clone(), ViewKind::Effective);
+        assert_eq!(
+            incoming.try_recv(),
+            Ok(ToUi::Preview {
+                diff,
+                view: ViewKind::Effective,
+            })
+        );
     }
 
     #[test]
     fn silent_approves_force_without_a_reader() {
         let handles = EventHandles::silent();
-        assert!(handles.confirm(empty_diff(), true));
+        assert!(handles.ask_for_confirm(PromptKind::Bundle, true));
+    }
+
+    #[test]
+    fn silent_closes_plain_confirm_without_a_reader() {
+        let handles = EventHandles::silent();
+        assert!(!handles.ask_for_confirm(PromptKind::Apply, false));
+    }
+
+    #[test]
+    fn silent_closes_details_without_a_reader() {
+        let handles = EventHandles::silent();
+        handles.ask_for_details();
     }
 
     #[test]

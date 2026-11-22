@@ -38,7 +38,7 @@ pub struct KeyDiff {
 /// One text line change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineDiff {
-    /// Line addition or removal.
+    /// The change tag.
     pub tag: LineTag,
     /// Line text.
     pub text: String,

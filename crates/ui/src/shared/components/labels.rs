@@ -31,7 +31,7 @@ pub(crate) fn row_symbol(change: &Change) -> Symbol {
     }
 }
 
-/// Returns the row text.
+/// Returns the change text.
 pub(crate) fn row_text(view: &View, change: &Change, name: &str) -> String {
     if let Comparability::Incomparable(reason) = &change.comparability {
         return format!("{name}: {}", reason.text());

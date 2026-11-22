@@ -1,12 +1,18 @@
 //! Wanted and recorded comparison with three views.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use confit_core::error::ContextualResult;
 use confit_model::manifest::Manifest;
+use confit_model::routes::Route;
 use serde::Serialize;
 
-use crate::{entries::rows, fingerprint::read, view::View};
+use crate::{
+    entries::rows,
+    fingerprint::read,
+    view::{View, ViewKind},
+};
 
 /// Wanted, recorded, and disk comparison with three views.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -24,6 +30,15 @@ pub struct Diff {
 }
 
 impl Diff {
+    /// Returns the matching view.
+    pub fn view(&self, kind: ViewKind) -> &View {
+        match kind {
+            ViewKind::Desired => &self.desired,
+            ViewKind::Effective => &self.effective,
+            ViewKind::Drift => &self.drift,
+        }
+    }
+
     /// Builds the comparison with three views.
     ///
     /// # Errors
@@ -38,6 +53,14 @@ impl Diff {
         let wanted_rows = rows(wanted.as_ref())?;
         let recorded_rows = rows(recorded.as_ref())?;
         let disk = read(wanted_rows.values().chain(recorded_rows.values()))?;
+        let drift = View::drift(
+            &recorded_rows,
+            &disk,
+            Arc::clone(&wanted),
+            Arc::clone(&recorded),
+        )?;
+        let drifted: BTreeSet<Route> =
+            drift.changes.iter().map(|change| change.path.clone()).collect();
         Ok(Self {
             desired: View::desired(
                 &wanted_rows,
@@ -45,16 +68,12 @@ impl Diff {
                 Arc::clone(&wanted),
                 Arc::clone(&recorded),
             )?,
-            drift: View::drift(
-                &recorded_rows,
-                &disk,
-                Arc::clone(&wanted),
-                Arc::clone(&recorded),
-            )?,
+            drift,
             effective: View::effective(
                 &wanted_rows,
                 &recorded_rows,
                 &disk,
+                &drifted,
                 Arc::clone(&wanted),
                 Arc::clone(&recorded),
             )?,

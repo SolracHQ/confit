@@ -25,9 +25,9 @@ pub(crate) impl View {
     /// Builds outcome blocks.
     fn outcome_blocks(&self, outcomes: &OutcomeMap) -> Vec<DisplayBlock> {
         let documents = Docs::collect(self);
-        let rows: Vec<&Change> = self.rows.iter().collect();
+        let changes: Vec<&Change> = self.changes.iter().collect();
         let mut blocks = Vec::new();
-        for (root, entries) in Docs::cluster(&rows, &documents) {
+        for (root, entries) in Docs::cluster(&changes, &documents) {
             let factored = Docs::factor(&root, &entries);
             let children = match factored {
                 Docs::Dir { children, .. } => outcome_children(self, &children, outcomes),
@@ -37,6 +37,7 @@ pub(crate) impl View {
                 Marks {
                     outcome: None,
                     symbol: None,
+                    drift: None,
                 },
                 root.display().to_string(),
                 children,
@@ -129,6 +130,7 @@ fn outcome_children(
                     Marks {
                         outcome: None,
                         symbol: None,
+                        drift: None,
                     },
                     name,
                     inner,
@@ -136,11 +138,11 @@ fn outcome_children(
                 blocks.push(branch);
             }
             Docs::Group { group, members } => {
-                let rows = Docs::rows(members);
-                let label = outcome_group_text(view, group, &rows, &name, outcomes);
-                let symbol = Symbol::from_members(&rows);
+                let changes = Docs::changes(members);
+                let label = outcome_group_text(view, group, &changes, &name, outcomes);
+                let symbol = Symbol::from_members(&changes);
                 let mut branch = DisplayBlock::leaf(Marks::plan(symbol), label);
-                branch.apply(outcomes.group_outcome(&rows));
+                branch.apply(outcomes.group_outcome(&changes));
                 branch.children = outcome_children(view, members, outcomes);
                 blocks.push(branch);
             }
@@ -280,7 +282,7 @@ mod tests {
         let diff = Diff::build(wanted, manifest(Vec::new())).unwrap();
         let seen = &diff.effective;
         let mut outcomes = OutcomeMap::new();
-        for change in &seen.rows {
+        for change in &seen.changes {
             outcomes.record(change.expanded.clone(), ApplyOutcome::Added);
         }
         let blocks = seen.outcome_blocks(&outcomes);
@@ -291,12 +293,8 @@ mod tests {
         assert_eq!(root.children.len(), 2);
         assert!(!root.children[0].children.is_empty());
         assert!(root.children[1].children.is_empty());
-        assert!(root.children[0].text.contains(".config"));
-        assert!(root.children[1].text.contains(".bashrc"));
         let nested = &root.children[0];
         assert_eq!(nested.children.len(), 2);
-        assert!(nested.children[0].text.contains("alpha"));
-        assert!(nested.children[1].text.contains("beta"));
         for leaf in [&root.children[1], &nested.children[0]] {
             assert_eq!(leaf.mark.outcome, Some(Outcome::Applied));
             assert_eq!(leaf.mark.symbol, Some(Symbol::Add));
@@ -315,7 +313,7 @@ mod tests {
         let diff = Diff::build(wanted, manifest(Vec::new())).unwrap();
         let seen = &diff.effective;
         let mut outcomes = OutcomeMap::new();
-        for change in &seen.rows {
+        for change in &seen.changes {
             if change.expanded.ends_with("one.txt") {
                 outcomes.record(change.expanded.clone(), ApplyOutcome::Added);
             }

@@ -10,7 +10,10 @@ use confit_core::error::{
 use confit_core::version::VERSION;
 use confit_differ::diff::Diff;
 use confit_engine::Engine;
-use confit_events::{EventHandles, protocol::Phase};
+use confit_events::{
+    EventHandles,
+    protocol::{Phase, PromptKind},
+};
 use confit_model::manifest::Manifest;
 use confit_store::{Stores, state::Picker};
 
@@ -52,6 +55,18 @@ impl BundleRunner<'_> {
             );
         }
         let desired = Engine::new(self.stores.clone(), self.handles.clone()).evaluate(&path)?;
+        let diff = preview_diff(&desired)?;
+        let view = self.args.view.kind();
+        self.handles.preview(diff, view);
+        if !self
+            .handles
+            .ask_for_confirm(PromptKind::Bundle, self.args.force)
+        {
+            return Ok(ArtifactReport {
+                output: String::new(),
+                manifest: desired,
+            });
+        }
         let output = self.args.output.as_path();
         let rendered = if is_named_output(output) {
             self.handles.phase_started(Phase::Persisting);
@@ -60,8 +75,6 @@ impl BundleRunner<'_> {
             self.handles.phase_started(Phase::Packaging);
             self.write_file(&desired, output)?
         };
-        let diff = preview_diff(&desired)?;
-        self.handles.desired_preview(diff);
         Ok(ArtifactReport {
             output: rendered,
             manifest: desired,

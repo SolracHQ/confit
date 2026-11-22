@@ -25,7 +25,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_files.rs"));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
-    /// The file or folder that the execution wrote.
+    /// The output path.
     pub path: PathBuf,
     /// The number of files the execution wrote.
     pub written: usize,

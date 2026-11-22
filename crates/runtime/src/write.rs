@@ -1,4 +1,4 @@
-//! Destination writes driven by effective rows.
+//! Destination writes.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use confit_model::document::{Data, Document, TreeMember};
 use confit_model::routes::Route;
 use confit_store::Stores;
 
-/// One write target for an effective row.
+/// A write target.
 enum Target<'a> {
     /// One whole document.
     Whole(&'a Document),
@@ -37,16 +37,16 @@ impl Writer {
         Self { stores }
     }
 
-    /// Returns the row count for the whole apply.
+    /// Returns the change count for the whole apply.
     pub fn apply_total(view: &View) -> usize {
         view.len()
     }
 
-    /// Writes and removes the effective rows.
+    /// Writes and removes the changes.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a row
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a change
     ///   references a missing document.
     /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when a write fails.
     /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when a removal fails.
@@ -77,11 +77,11 @@ impl Writer {
         (applied, Ok(()))
     }
 
-    /// Applies one effective row and returns its write outcome.
+    /// Applies a change and returns its outcome.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a row
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when a change
     ///   references a missing document.
     /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when a write fails.
     /// - [`confit_core::error::kind::ErrorKind::RemoveDestination`] when a removal fails.
@@ -117,11 +117,11 @@ impl Writer {
         }
     }
 
-    /// Writes one addition or change row and returns its outcome.
+    /// Writes one addition or change and returns its outcome.
     ///
     /// # Errors
     ///
-    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the row
+    /// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the change
     ///   references a missing document.
     /// - [`confit_core::error::kind::ErrorKind::WriteDestination`] when the write fails.
     fn write_change(
@@ -145,7 +145,7 @@ impl Writer {
         Ok((path, outcome))
     }
 
-    /// Removes one removal row and reports whether a file left.
+    /// Removes one removal change and reports whether a file left.
     ///
     /// # Errors
     ///
@@ -159,7 +159,7 @@ impl Writer {
         }
     }
 
-    /// Attempts one incomparable row without an update.
+    /// Attempts one incomparable change without an update.
     ///
     /// # Errors
     ///
@@ -188,7 +188,7 @@ impl Writer {
         Ok(())
     }
 
-    /// Writes one resolved target to its row path.
+    /// Writes one resolved target to its change path.
     ///
     /// # Errors
     ///
@@ -204,7 +204,7 @@ impl Writer {
         }
     }
 
-    /// Removes one row path from disk and reports whether a file leaves.
+    /// Removes one change path from disk and reports whether a file leaves.
     ///
     /// # Errors
     ///
@@ -321,7 +321,7 @@ impl Writer {
         );
     }
 
-    /// Sends one progress event for the row that fails the execution.
+    /// Sends one progress event for the change that fails.
     fn emit_failure(reporter: &TaskReporter, change: &Change, done: usize, total: usize) {
         reporter.progress(
             done,
@@ -334,7 +334,7 @@ impl Writer {
     }
 }
 
-/// Returns the attempted path for a failed row.
+/// Returns the attempted path for a failed change.
 fn failure_path(change: &Change) -> String {
     change.expanded.display().to_string()
 }
@@ -348,7 +348,7 @@ fn remove(path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// Returns the write target that one effective row holds.
+/// Returns the write target for a change.
 fn target<'a>(view: &'a View, change: &'a Change) -> Option<Target<'a>> {
     let Some(group) = &change.group else {
         return view
@@ -374,7 +374,7 @@ fn target<'a>(view: &'a View, change: &'a Change) -> Option<Target<'a>> {
         .map(|(_, member)| Target::Member(member))
 }
 
-/// Returns the member name of one row path under its tree route.
+/// Returns the member name of one change path under its tree.
 fn member_relative<'a>(group: &Route, path: &'a Route) -> Option<&'a str> {
     if group.base() != path.base() {
         return None;

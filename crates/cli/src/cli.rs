@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use confit_differ::view::ViewKind;
 use confit_driver::paths::BaseDirs;
 
 /// The parsed command line.
@@ -59,8 +60,27 @@ pub enum UiMode {
     None,
 }
 
+/// The preview view choice from the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum UiView {
+    /// wanted against recorded changes
+    Desired,
+    /// wanted against disk changes
+    Effective,
+}
+
 /// Default profile file under the project.
 pub const DEFAULT_PROFILE: &str = "main.lua";
+
+impl UiView {
+    /// Returns the differ view for the flag.
+    pub fn kind(self) -> ViewKind {
+        match self {
+            UiView::Desired => ViewKind::Desired,
+            UiView::Effective => ViewKind::Effective,
+        }
+    }
+}
 
 /// The environment variable that sets the logs folder.
 pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
@@ -81,6 +101,12 @@ pub struct BundleArgs {
     /// bundle file or named state to write (`.cb` path or `@name`)
     #[arg(short, long)]
     pub output: PathBuf,
+    /// preview view
+    #[arg(long, value_enum, default_value = "desired")]
+    pub view: UiView,
+    /// skip the confirmation prompt
+    #[arg(short, long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +116,9 @@ pub struct CheckArgs {
     /// profile file to evaluate (default: main.lua in the project)
     #[arg(short, long)]
     pub profile: Option<PathBuf>,
+    /// preview view
+    #[arg(long, value_enum, default_value = "desired")]
+    pub view: UiView,
 }
 
 #[derive(Debug, Args)]
@@ -99,8 +128,11 @@ pub struct ApplyArgs {
     /// profile file to evaluate (default: main.lua in the project)
     #[arg(short, long)]
     pub profile: Option<PathBuf>,
+    /// preview view
+    #[arg(long, value_enum, default_value = "effective")]
+    pub view: UiView,
     /// skip the confirmation prompt
-    #[arg(long)]
+    #[arg(short, long)]
     pub force: bool,
 }
 
@@ -108,8 +140,11 @@ pub struct ApplyArgs {
 pub struct RestoreArgs {
     /// package to restore (`.cb`, `@name`, or `%N`)
     pub source: PathBuf,
+    /// preview view
+    #[arg(long, value_enum, default_value = "effective")]
+    pub view: UiView,
     /// skip the confirmation prompt
-    #[arg(long)]
+    #[arg(short, long)]
     pub force: bool,
 }
 

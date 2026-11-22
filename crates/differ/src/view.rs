@@ -40,7 +40,7 @@ pub struct View {
     /// Comparison kind.
     pub kind: ViewKind,
     /// Changes in route order.
-    pub rows: Vec<Change>,
+    pub changes: Vec<Change>,
     /// Wanted manifest.
     #[serde(skip_serializing)]
     pub wanted: Arc<Manifest>,
@@ -59,13 +59,13 @@ impl View {
     /// Builds one view.
     pub fn new(
         kind: ViewKind,
-        rows: Vec<Change>,
+        changes: Vec<Change>,
         wanted: Arc<Manifest>,
         recorded: Arc<Manifest>,
     ) -> Self {
         Self {
             kind,
-            rows,
+            changes,
             wanted,
             recorded,
         }
@@ -73,7 +73,7 @@ impl View {
 
     /// Returns the change for one route.
     pub fn find(&self, path: &Route) -> Option<&Change> {
-        self.rows.iter().find(|change| change.path == *path)
+        self.changes.iter().find(|change| change.path == *path)
     }
 
     /// Returns the wanted else recorded document.
@@ -254,6 +254,7 @@ impl View {
         wanted_rows: &BTreeMap<Route, Entry>,
         recorded_rows: &BTreeMap<Route, Entry>,
         disk: &BTreeMap<Route, DiskOutcome>,
+        drifted: &BTreeSet<Route>,
         wanted: Arc<Manifest>,
         recorded: Arc<Manifest>,
     ) -> ContextualResult<Self> {
@@ -294,7 +295,8 @@ impl View {
                 ),
                 (None, _) => None,
             };
-            if let Some(found) = change {
+            if let Some(mut found) = change {
+                found.drifted = drifted.contains(&found.path);
                 out.push(found);
             }
         }
@@ -354,7 +356,7 @@ impl Deref for View {
 
     /// Borrows the changes.
     fn deref(&self) -> &[Change] {
-        &self.rows
+        &self.changes
     }
 }
 

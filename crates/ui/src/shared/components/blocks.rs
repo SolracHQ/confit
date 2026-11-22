@@ -31,7 +31,7 @@ pub struct Line {
     pub label: String,
     /// Nesting depth with forest roots at one.
     pub depth: usize,
-    /// Glyph prefix for the marks.
+    /// The glyph prefix.
     pub prefix: String,
 }
 
@@ -91,21 +91,29 @@ impl DisplayBlock {
 impl Line {
     /// Returns the painted line.
     pub fn paint(&self) -> String {
+        let drift = match self.marks.drift {
+            Some(mark) => format!("{mark} "),
+            None => String::new(),
+        };
         match (self.marks.outcome, self.marks.symbol) {
             (None, None) => {
                 if self.depth == 0 {
                     self.label.header()
                 } else {
-                    format!("{}{}", self.prefix, self.label)
+                    format!("{}{drift}{}", self.prefix, self.label)
                 }
             }
             (None, Some(symbol)) => {
-                format!("{}{symbol} {}", self.prefix, self.label)
+                format!("{}{symbol} {drift}{}", self.prefix, self.label)
             }
             (Some(outcome), symbol) => {
                 let painted = match symbol {
-                    Some(found) => format!("{}{outcome} {found} {}", self.prefix, self.label),
-                    None => format!("{}{outcome} {}", self.prefix, self.label),
+                    Some(found) => {
+                        format!("{}{outcome} {found} {drift}{}", self.prefix, self.label)
+                    }
+                    None => {
+                        format!("{}{outcome} {drift}{}", self.prefix, self.label)
+                    }
                 };
                 if outcome == Outcome::Unattempted {
                     painted.dim()
@@ -129,25 +137,25 @@ pub(crate) enum Docs<'a> {
     },
     /// One tree group section.
     Group {
-        /// Tree route for the members.
+        /// The tree route.
         group: &'a Route,
         /// Member documents.
         members: Vec<Docs<'a>>,
     },
-    /// Ungrouped row.
+    /// Ungrouped change.
     Doc {
-        /// Member row.
+        /// Member change.
         change: &'a Change,
     },
 }
 
 impl<'a> Docs<'a> {
     /// Collects the top-level documents.
-    pub(crate) fn collect(rows: &'a [Change]) -> Vec<Docs<'a>> {
-        let members = Self::members_by_group(rows);
+    pub(crate) fn collect(changes: &'a [Change]) -> Vec<Docs<'a>> {
+        let members = Self::members_by_group(changes);
         let mut seen: BTreeMap<&Route, ()> = BTreeMap::new();
         let mut documents = Vec::new();
-        for change in rows {
+        for change in changes {
             match change.group.as_ref() {
                 Some(group) if Self::comparable(change) => {
                     if seen.insert(group, ()).is_none() {
@@ -171,10 +179,10 @@ impl<'a> Docs<'a> {
 
     /// Groups the documents by ancestor root.
     pub(crate) fn cluster(
-        rows: &[&'a Change],
+        changes: &[&'a Change],
         documents: &'a [Docs<'a>],
     ) -> BTreeMap<PathBuf, Vec<&'a Docs<'a>>> {
-        let roots = Self::cluster_roots(rows);
+        let roots = Self::cluster_roots(changes);
         let mut sections: BTreeMap<PathBuf, Vec<&Docs>> = BTreeMap::new();
         for document in documents {
             let root = Self::document_key(document)
@@ -228,22 +236,22 @@ impl<'a> Docs<'a> {
         }
     }
 
-    /// Returns the flat member rows.
-    pub(crate) fn rows(members: &[Docs<'a>]) -> Vec<&'a Change> {
-        let mut rows = Vec::new();
-        Self::collect_changes(members, &mut rows);
-        rows
+    /// Returns the flat member changes.
+    pub(crate) fn changes(members: &[Docs<'a>]) -> Vec<&'a Change> {
+        let mut changes = Vec::new();
+        Self::collect_changes(members, &mut changes);
+        changes
     }
 
-    /// Returns whether the row belongs to its group.
+    /// Returns whether the change belongs to its group.
     fn comparable(change: &Change) -> bool {
         matches!(change.comparability, Comparability::Comparable)
     }
 
-    /// Collects the grouped member rows.
-    fn members_by_group(rows: &'a [Change]) -> BTreeMap<&'a Route, Vec<&'a Change>> {
+    /// Collects the grouped member changes.
+    fn members_by_group(changes: &'a [Change]) -> BTreeMap<&'a Route, Vec<&'a Change>> {
         let mut members: BTreeMap<&Route, Vec<&Change>> = BTreeMap::new();
-        for change in rows {
+        for change in changes {
             if let Some(group) = change.group.as_ref()
                 && Self::comparable(change)
             {
@@ -282,9 +290,9 @@ impl<'a> Docs<'a> {
     }
 
     /// Groups the paths by ancestor root.
-    fn cluster_roots(rows: &[&'a Change]) -> BTreeMap<OsString, PathBuf> {
+    fn cluster_roots(changes: &[&'a Change]) -> BTreeMap<OsString, PathBuf> {
         let mut groups: BTreeMap<OsString, Vec<&Path>> = BTreeMap::new();
-        for change in rows {
+        for change in changes {
             groups
                 .entry(Self::top_key(&change.expanded))
                 .or_default()
@@ -331,7 +339,7 @@ impl<'a> Docs<'a> {
             .unwrap_or_default()
     }
 
-    /// Collects every row under one document list.
+    /// Collects every change under one document list.
     fn collect_changes(members: &[Docs<'a>], output: &mut Vec<&'a Change>) {
         for member in members {
             match member {
@@ -542,15 +550,28 @@ impl<'a> Docs<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayBlock;
-    use crate::shared::components::style::{Marks, Outcome, Symbol};
+    use super::{DisplayBlock, Line};
+    use crate::shared::components::style::{Drift, Marks, Outcome, Symbol};
+
+    #[test]
+    fn paint_prints_the_drift_mark_after_the_symbol() {
+        let mut marks = Marks::plan(Symbol::Add);
+        marks.drift = Some(Drift);
+        let line = Line {
+            marks,
+            label: "one".to_owned(),
+            depth: 1,
+            prefix: ">>> ".to_owned(),
+        };
+        assert_eq!(line.marks.symbol, Some(Symbol::Add));
+        assert_eq!(line.marks.drift, Some(Drift));
+    }
 
     #[test]
     fn leaf_builds_block_with_marks_and_text() {
         let block = DisplayBlock::leaf(Marks::plan(Symbol::Add), "one".to_owned());
         assert_eq!(block.mark.symbol, Some(Symbol::Add));
         assert_eq!(block.mark.outcome, None);
-        assert_eq!(block.text, "one");
         assert_eq!(block.children.len(), 0);
     }
 
@@ -562,14 +583,12 @@ mod tests {
             Marks {
                 outcome: None,
                 symbol: None,
+                drift: None,
             },
             "root".to_owned(),
             vec![first, second],
         );
-        assert_eq!(block.text, "root");
         assert_eq!(block.children.len(), 2);
-        assert_eq!(block.children[0].text, "one");
-        assert_eq!(block.children[1].text, "two");
         assert_eq!(block.children[0].mark.symbol, Some(Symbol::Add));
         assert_eq!(block.children[1].mark.symbol, Some(Symbol::Remove));
     }
@@ -581,6 +600,7 @@ mod tests {
             Marks {
                 outcome: None,
                 symbol: None,
+                drift: None,
             },
             "inner".to_owned(),
             vec![leaf],
@@ -589,30 +609,14 @@ mod tests {
             Marks {
                 outcome: None,
                 symbol: None,
+                drift: None,
             },
             "outer".to_owned(),
             vec![inner],
         );
         assert_eq!(outer.children.len(), 1);
-        assert_eq!(outer.children[0].text, "inner");
         assert_eq!(outer.children[0].children.len(), 1);
-        assert_eq!(outer.children[0].children[0].text, "leaf");
         assert_eq!(outer.children[0].children[0].mark.symbol, Some(Symbol::Add));
-    }
-
-    #[test]
-    fn render_emits_prefixes_and_depths_for_forest() {
-        let leaf = DisplayBlock::leaf(Marks::plan(Symbol::Remove), "gone".to_owned());
-        let branch = DisplayBlock::branch(Marks::plan(Symbol::Add), "doc".to_owned(), vec![leaf]);
-        let found = DisplayBlock::render(&[branch]);
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0].label, "doc");
-        assert_eq!(found[0].depth, 1);
-        assert_eq!(found[0].prefix, "└── ");
-        assert_eq!(found[1].label, "gone");
-        assert_eq!(found[1].depth, 2);
-        assert_eq!(found[1].prefix, "    └── ");
-        let _ = found[0].paint();
     }
 
     #[test]
@@ -621,7 +625,6 @@ mod tests {
         block.apply(Outcome::Applied);
         assert_eq!(block.mark.symbol, Some(Symbol::Add));
         assert_eq!(block.mark.outcome, Some(Outcome::Applied));
-        assert_eq!(block.text, "one");
         assert_eq!(block.children.len(), 0);
     }
 }

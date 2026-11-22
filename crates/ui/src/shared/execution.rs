@@ -6,7 +6,10 @@ use std::{
 };
 
 use confit_core::error::Error;
-use confit_differ::view::View;
+use confit_differ::{
+    diff::Diff,
+    view::{View, ViewKind},
+};
 use confit_events::protocol::{Applied, Phase, TaskKind, TaskNote, TaskState};
 
 use crate::shared::{
@@ -97,12 +100,18 @@ impl Execution {
         }
     }
 
-    /// Stores one preview.
-    pub(crate) fn preview(&mut self, view: &View) -> Vec<String> {
-        self.view = Some(view.clone());
+    /// Stores the preview.
+    pub(crate) fn preview(&mut self, diff: &Diff, view: ViewKind) -> Vec<String> {
+        let picked = diff.view(view);
+        self.view = Some(picked.clone());
         let mut out = vec![String::new()];
-        out.extend(view.preview());
+        out.extend(picked.preview());
         out
+    }
+
+    /// Returns the stored preview view.
+    pub(crate) fn view(&self) -> Option<&View> {
+        self.view.as_ref()
     }
 
     /// Stores the write results.

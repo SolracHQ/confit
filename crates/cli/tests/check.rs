@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use confit_cli::actions::check::CheckRunner;
-use confit_cli::cli::CheckArgs;
+use confit_cli::cli::{CheckArgs, UiView};
 use confit_differ::diff::Diff;
 use confit_events::{
     EventHandles,
@@ -94,6 +94,7 @@ fn run_check(dir: &Path, project: &Path, profile: Option<&Path>) -> Diff {
     let args = CheckArgs {
         project: project.to_path_buf(),
         profile: profile.map(Path::to_path_buf),
+        view: UiView::Desired,
     };
     CheckRunner {
         args: &args,
@@ -157,12 +158,16 @@ fn check_shows_the_desired_preview_only() {
     let dir = tempfile::tempdir().unwrap();
     let site = example_project(dir.path());
     let (to_ui, incoming) = crossbeam_channel::unbounded::<ToUi>();
-    let (_, from_ui) = crossbeam_channel::unbounded::<confit_events::protocol::FromUi>();
+    let (outgoing, from_ui) = crossbeam_channel::unbounded::<confit_events::protocol::FromUi>();
+    outgoing
+        .send(confit_events::protocol::FromUi::Close)
+        .unwrap();
     let handles = EventHandles::new(to_ui, from_ui);
     let stores = test_stores(dir.path(), "nest/site");
     let args = CheckArgs {
         project: site,
         profile: None,
+        view: UiView::Desired,
     };
     let diff = CheckRunner {
         args: &args,
@@ -174,11 +179,20 @@ fn check_shows_the_desired_preview_only() {
     .diff;
     let mut previews = Vec::new();
     let mut starts = Vec::new();
+    let mut details = 0;
     let mut rest = Vec::new();
     while let Ok(message) = incoming.try_recv() {
         match message {
-            ToUi::DesiredPreview(found) => previews.push(found),
+            ToUi::Preview { diff: found, view } => {
+                assert_eq!(
+                    view,
+                    confit_differ::view::ViewKind::Desired,
+                    "check renders the desired view"
+                );
+                previews.push(found);
+            }
             ToUi::PhaseStarted(phase) => starts.push(phase),
+            ToUi::AskForDetails => details += 1,
             _ => rest.push(message),
         }
     }
@@ -188,6 +202,7 @@ fn check_shows_the_desired_preview_only() {
         vec![Phase::Evaluation],
         "the execution announces evaluation before the preview"
     );
+    assert_eq!(details, 1, "the execution asks for details once");
     assert!(rest.is_empty(), "the execution sends no other event");
     assert_eq!(
         diff.desired.len(),

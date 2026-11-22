@@ -8,7 +8,8 @@ pub(crate) fn start(handles: UiHandles) {
     while let Some(event) = handles.recv() {
         match event {
             ToUi::Prompt(_) => handles.send(FromUi::Answer(read_line())),
-            ToUi::ShowAndConfirm { force, .. } => {
+            ToUi::AskForDetails => handles.send(FromUi::Close),
+            ToUi::AskForConfirm { force, .. } => {
                 if force {
                     handles.send(FromUi::Approved);
                 } else {
@@ -20,7 +21,7 @@ pub(crate) fn start(handles: UiHandles) {
     }
 }
 
-/// Reads one stdin line with the trailing newline trimmed.
+/// Reads a stdin line.
 fn read_line() -> String {
     use std::io::BufRead as _;
     let mut line = String::new();

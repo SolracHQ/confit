@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use confit_cli::actions::{apply, restore};
-use confit_cli::cli::{ApplyArgs, RestoreArgs};
+use confit_cli::cli::{ApplyArgs, RestoreArgs, UiView};
 use confit_driver::paths::BaseDirs;
 use confit_events::EventHandles;
 use confit_store::{StoreRoots, Stores, state::Picker};
@@ -94,6 +94,7 @@ fn apply_project(dir: &Path) -> confit_cli::actions::commit::WriteReport {
     let args = ApplyArgs {
         project: site,
         profile: None,
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.join("hooks");
@@ -105,6 +106,7 @@ fn restore_source(dir: &Path, source: PathBuf) {
     let stores = test_stores(dir, "site");
     let args = RestoreArgs {
         source,
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.join("hooks");
@@ -218,6 +220,7 @@ fn rescue_missing_state_fails() {
     let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("@!"),
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.path().join("hooks");

@@ -105,7 +105,7 @@ impl OutcomeMap {
         Outcome::Unattempted
     }
 
-    /// Returns the count of rows with no outcome.
+    /// Returns the count of changes with no outcome.
     pub fn pending(&self, view: &View) -> usize {
         view.iter()
             .filter(|change| self.get(&change.expanded).is_none())
@@ -141,9 +141,9 @@ impl HookLog {
 /// One job progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct JobProgress {
-    /// Finished units for the job.
+    /// The finished count.
     pub done: usize,
-    /// Known total units for the job.
+    /// The total count.
     pub total: Option<usize>,
 }
 

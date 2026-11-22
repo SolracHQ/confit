@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use confit_core::error::Error;
-use confit_differ::diff::Diff;
+use confit_differ::{diff::Diff, view::ViewKind};
 use confit_model::{arg::Arg, url::Url};
 
-/// One apply outcome for a route.
+/// An apply outcome for a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ApplyOutcome {
@@ -42,30 +42,30 @@ impl ApplyOutcome {
     }
 }
 
-/// The counts for one effective apply.
+/// The counts for an apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Applied {
-    /// The addition rows the execution wrote.
+    /// The added change count.
     pub added: usize,
-    /// The change rows the execution wrote.
+    /// The updated change count.
     pub changed: usize,
-    /// The removal rows the execution removed.
+    /// The removed change count.
     pub removed: usize,
-    /// The written rows in view order.
+    /// The written changes in view order.
     pub changes: Vec<AppliedChange>,
 }
 
-/// One recorded write.
+/// A recorded write.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct AppliedChange {
-    /// The expanded host path the execution wrote.
+    /// The expanded host path.
     pub path: String,
-    /// The outcome the execution recorded for the path.
+    /// The write outcome.
     pub outcome: ApplyOutcome,
 }
 
 impl Applied {
-    /// Records one written row.
+    /// Records a written row.
     pub fn push(&mut self, path: &Path, outcome: ApplyOutcome) {
         self.changes.push(AppliedChange {
             path: path.display().to_string(),
@@ -74,33 +74,42 @@ impl Applied {
     }
 }
 
-/// One background job behind the progress bars.
+/// A background job behind the progress bars.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TaskKind {
-    /// One download.
-    Fetch { url: Url },
-    /// One fill of missing pool entries.
+    /// A download.
+    Fetch {
+        /// The fetch URL.
+        url: Url,
+    },
+    /// A fill of missing pool entries.
     PoolFill,
-    /// One prune of unreferenced pool entries.
+    /// A prune of unreferenced pool entries.
     PoolPrune,
-    /// One archive extract.
-    Archive { path: PathBuf },
-    /// One bundle pack.
-    Pack { path: PathBuf },
-    /// The write execution over the effective rows.
+    /// An archive extract.
+    Archive {
+        /// The archive path.
+        path: PathBuf,
+    },
+    /// A bundle pack.
+    Pack {
+        /// The bundle path.
+        path: PathBuf,
+    },
+    /// The write execution.
     Write,
-    /// One hook execution.
+    /// A hook execution.
     Hook {
         /// The hook position in the execution.
         position: usize,
-        /// The hook count for the execution.
+        /// The total hook count.
         total: usize,
         /// The hook arguments.
         argv: Vec<Arg>,
     },
 }
 
-/// One write row in a progress update.
+/// A write row in a progress update.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowUpdate {
     /// Expanded host path bytes.
@@ -109,25 +118,28 @@ pub struct RowUpdate {
     pub outcome: ApplyOutcome,
 }
 
-/// One closing fact for a finished job.
+/// A closing fact for a finished job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskNote {
     /// The fetch served the body from the cache.
     Cached,
-    /// The archive landed with the member count.
+    /// The archive member count.
     Members(usize),
-    /// The spawned command for one hook execution.
+    /// The spawned command for a hook execution.
     Spawned(Vec<String>),
     /// The job landed with no extra fact.
     Closed,
 }
 
-/// One progress update for a background job.
+/// A progress update for a background job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskState {
-    /// The job opened with the known total when present.
-    Started { total: Option<usize> },
-    /// The job advanced with the finished count and the total.
+    /// The job opened.
+    Started {
+        /// The total count when known.
+        total: Option<usize>,
+    },
+    /// The job advanced.
     Progress {
         /// The finished count for this update.
         done: usize,
@@ -137,10 +149,13 @@ pub enum TaskState {
         row: Option<RowUpdate>,
     },
     /// The job closed with its closing fact.
-    Finished { note: TaskNote },
+    Finished {
+        /// The closing fact.
+        note: TaskNote,
+    },
 }
 
-/// One user-visible work phase for a title.
+/// A user-visible work phase for a title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// The profile evaluation execution.
@@ -149,38 +164,56 @@ pub enum Phase {
     Packaging,
     /// The blob and state persistence execution.
     Persisting,
-    /// The write execution over the effective rows.
+    /// The write execution.
     ApplyingChanges,
 }
 
-/// One message to the render thread.
+/// A confirm prompt key for a blocking ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// The apply confirm prompt.
+    Apply,
+    /// The restore confirm prompt.
+    Restore,
+    /// The bundle confirm prompt.
+    Bundle,
+}
+
+/// A message to the render thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToUi {
-    /// One phase start with its title.
+    /// A phase start with its title.
     PhaseStarted(Phase),
-    /// One progress update for a background job.
+    /// A progress update for a background job.
     Task {
         /// The job behind the update.
         kind: TaskKind,
-        /// The update for the job.
+        /// The task state.
         state: TaskState,
     },
-    /// One check preview request.
-    DesiredPreview(Diff),
-    /// One commit preview request with the approval reply.
-    ShowAndConfirm {
-        /// The diff behind the preview.
+    /// A preview render.
+    Preview {
+        /// The full diff behind the preview.
         diff: Diff,
+        /// The active view the backend renders.
+        view: ViewKind,
+    },
+    /// A blocking details ask with no approval.
+    AskForDetails,
+    /// A blocking confirm ask.
+    AskForConfirm {
+        /// The prompt key.
+        prompt: PromptKind,
         /// The skip-confirmation flag.
         force: bool,
     },
     /// The write results with per-row outcomes.
     WriteResults(Applied),
-    /// One question request.
+    /// A question request.
     Prompt(String),
-    /// One failure notice with no reply.
+    /// A failure notice with no reply.
     Error(Box<Error>),
-    /// One close request.
+    /// A close request.
     Done {
         /// The previous entry flag.
         undo: bool,
@@ -191,12 +224,12 @@ pub enum ToUi {
     },
 }
 
-/// One message back from the render thread.
+/// A message back from the render thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FromUi {
-    /// One stdin line without the trailing newline.
+    /// A stdin line without the trailing newline.
     Answer(String),
-    /// The user approved the confirmation. Anything else is a no.
+    /// An approval from the user. Anything else is a no.
     Approved,
     /// The cancelled prompt reply.
     Close,

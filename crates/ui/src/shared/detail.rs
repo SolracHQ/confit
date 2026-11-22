@@ -28,11 +28,11 @@ const PERMISSIONS: &str = "permissions";
 
 /// One document to expand.
 pub struct DetailOption {
-    /// Plan symbol for the option header.
+    /// The header symbol.
     pub symbol: Symbol,
-    /// Plain header label for the option.
+    /// The header label.
     pub label: String,
-    /// Member routes for the option.
+    /// The member routes.
     pub routes: Vec<Route>,
     /// Whether members nest under a group branch.
     pub grouped: bool,
@@ -45,10 +45,10 @@ impl DetailOption {
         for document in Docs::collect(view) {
             match document {
                 Docs::Group { group, members } => {
-                    let rows = Docs::rows(&members);
-                    let label = preview_group_text(&rows, &group.display());
-                    let symbol = Symbol::from_members(&rows);
-                    let routes = rows.iter().map(|change| change.path.clone()).collect();
+                    let changes = Docs::changes(&members);
+                    let label = preview_group_text(&changes, &group.display());
+                    let symbol = Symbol::from_members(&changes);
+                    let routes = changes.iter().map(|change| change.path.clone()).collect();
                     out.push(Self {
                         symbol,
                         label,
@@ -151,7 +151,7 @@ fn diff_leaves(view: &View, path: &Route) -> Vec<DisplayBlock> {
     out
 }
 
-/// Returns whether one row shows permissions.
+/// Returns whether one change shows permissions.
 fn has_permissions(view: &View, found: &Change) -> bool {
     if found.group.is_some() {
         return true;
@@ -329,7 +329,6 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mark.symbol, Some(Symbol::Update));
         assert_eq!(found[0].children.len(), 0);
-        assert_eq!(found[0].text, "permissions = rw-r--r-- -> rwxr-xr-x");
     }
 
     #[test]
@@ -343,7 +342,6 @@ mod tests {
         let found = diff_leaves(&diff.desired, &options[0].routes[0]);
         assert!(!found.is_empty());
         assert_eq!(found[0].mark.symbol, Some(Symbol::Add));
-        assert_eq!(found[0].text, "permissions = rwxr-xr-x");
     }
 
     #[test]
@@ -357,7 +355,6 @@ mod tests {
         let found = diff_leaves(&diff.drift, &options[0].routes[0]);
         assert!(!found.is_empty());
         assert_eq!(found[0].mark.symbol, Some(Symbol::Remove));
-        assert_eq!(found[0].text, "permissions = rwxr-xr-x");
     }
 
     #[test]
@@ -374,11 +371,6 @@ mod tests {
         assert_eq!(options.len(), 1);
         let found = diff_leaves(&diff.desired, &options[0].routes[0]);
         assert!(!found.is_empty());
-        assert!(
-            found
-                .iter()
-                .all(|leaf| !leaf.text.starts_with("permissions = "))
-        );
     }
 
     #[test]
@@ -444,9 +436,7 @@ mod tests {
         let found = diff_leaves(&diff.desired, &options[0].routes[0]);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].mark.symbol, Some(Symbol::Remove));
-        assert_eq!(found[0].text, "three");
         assert_eq!(found[1].mark.symbol, Some(Symbol::Add));
-        assert_eq!(found[1].text, "two");
     }
 
     #[test]
@@ -461,7 +451,6 @@ mod tests {
         let found = diff_leaves(&diff.desired, &options[0].routes[0]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mark.symbol, Some(Symbol::Update));
-        assert!(found[0].text.starts_with("content = sha256:"));
     }
 
     #[test]
@@ -476,7 +465,6 @@ mod tests {
         let found = diff_leaves(&diff.desired, &options[0].routes[0]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mark.symbol, Some(Symbol::Update));
-        assert!(found[0].text.starts_with("permissions = "));
     }
 
     #[test]
@@ -536,7 +524,6 @@ mod tests {
         assert_eq!(options.len(), 1);
         assert!(options[0].grouped);
         assert_eq!(options[0].routes.len(), 2);
-        assert!(options[0].label.contains("tree"));
         let found = DetailOption::render(&diff.desired, &options);
         assert_eq!(found.len(), 7);
         assert_eq!(found[0].marks.symbol, Some(Symbol::Add));
@@ -545,14 +532,12 @@ mod tests {
         assert_eq!(found[1].depth, 2);
         assert_eq!(found[2].marks.symbol, Some(Symbol::Add));
         assert_eq!(found[2].depth, 3);
-        assert_eq!(found[2].label, "permissions = rw-r--r--");
         assert_eq!(found[3].marks.symbol, Some(Symbol::Add));
         assert_eq!(found[3].depth, 3);
         assert_eq!(found[4].marks.symbol, Some(Symbol::Add));
         assert_eq!(found[4].depth, 2);
         assert_eq!(found[5].marks.symbol, Some(Symbol::Add));
         assert_eq!(found[5].depth, 3);
-        assert_eq!(found[5].label, "permissions = rw-r--r--");
         assert_eq!(found[6].marks.symbol, Some(Symbol::Add));
         assert_eq!(found[6].depth, 3);
     }

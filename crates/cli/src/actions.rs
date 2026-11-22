@@ -15,9 +15,9 @@ use confit_model::manifest::Manifest;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 /// One artifact execution record.
 pub struct ArtifactReport {
-    /// The bundle path, the state name, or the source label as display text.
+    /// The output text.
     pub output: String,
-    /// The evaluated or loaded manifest.
+    /// The artifact manifest.
     pub manifest: Manifest,
 }
 

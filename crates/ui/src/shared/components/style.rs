@@ -11,24 +11,24 @@ const RESET: &str = "\x1b[0m";
 /// Plan symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Symbol {
-    /// Added rows.
+    /// Added changes.
     Add,
-    /// Changed rows.
+    /// Updated changes.
     Update,
-    /// Removed rows.
+    /// Removed changes.
     Remove,
-    /// Incomparable rows.
+    /// Incomparable changes.
     Query,
 }
 
 /// Write state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// Row on disk.
+    /// Change on disk.
     Applied,
-    /// Failed row.
+    /// Failed change.
     Failed,
-    /// Unattempted row.
+    /// Unattempted change.
     Unattempted,
 }
 
@@ -39,6 +39,18 @@ pub struct Marks {
     pub outcome: Option<Outcome>,
     /// Plan symbol.
     pub symbol: Option<Symbol>,
+    /// Drift mark for a drifted change.
+    pub drift: Option<Drift>,
+}
+
+/// Drift mark for a drifted change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drift;
+
+impl std::fmt::Display for Drift {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", paint("!", "35"))
+    }
 }
 
 impl std::fmt::Display for Symbol {
@@ -98,6 +110,7 @@ impl Marks {
         Self {
             outcome: None,
             symbol: Some(symbol),
+            drift: None,
         }
     }
 }
@@ -142,6 +155,11 @@ pub impl str {
     /// Paints the binary name.
     fn binary(&self) -> String {
         paint(self, "1;32")
+    }
+
+    /// Paints the kind branch.
+    fn kind(&self) -> String {
+        paint(self, "1;36")
     }
 }
 

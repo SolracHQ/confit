@@ -10,7 +10,7 @@ use crate::shared::state::JobProgress;
 
 /// One bar row for a live job.
 struct Bar {
-    /// Spinner or meter for the row.
+    /// The progress widget.
     bar: ProgressBar,
     /// Metered bar state.
     metered: bool,
@@ -18,7 +18,7 @@ struct Bar {
 
 /// Live progress bars.
 pub struct Bars {
-    /// Widget set for the bars.
+    /// The bar widget set.
     multi: MultiProgress,
     /// One bar row per live job.
     bars: BTreeMap<TaskKind, Bar>,

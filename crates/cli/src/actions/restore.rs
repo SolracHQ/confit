@@ -7,7 +7,7 @@ use confit_core::error::{
     FilesystemError, Terminal, TerminalResult, WithContext, contextual, error, kind::ErrorKind,
 };
 use confit_differ::diff::Diff;
-use confit_events::EventHandles;
+use confit_events::{EventHandles, protocol::PromptKind};
 use confit_store::{Stores, state::Picker};
 
 use super::commit::{Applier, WriteReport};
@@ -54,6 +54,8 @@ pub fn run(
     let diff = Diff::build(desired, previous).terminal(ErrorKind::Evaluate)?;
     Applier {
         diff,
+        prompt: PromptKind::Restore,
+        view: args.view.kind(),
         force: args.force,
         stores,
         handles,

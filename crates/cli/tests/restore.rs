@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use confit_cli::actions::{apply, bundle::BundleRunner, restore};
-use confit_cli::cli::{ApplyArgs, BundleArgs, RestoreArgs};
+use confit_cli::cli::{ApplyArgs, BundleArgs, RestoreArgs, UiView};
 use confit_driver::paths::BaseDirs;
 use confit_events::EventHandles;
 use confit_store::{StoreRoots, Stores};
@@ -62,6 +62,8 @@ fn bundle_project(dir: &Path, output: PathBuf) {
         project: site,
         profile: None,
         output,
+        view: UiView::Desired,
+        force: true,
     };
     BundleRunner {
         args: &args,
@@ -77,6 +79,7 @@ fn restore_source(dir: &Path, source: PathBuf) {
     let stores = test_stores(dir, "site");
     let args = RestoreArgs {
         source,
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.join("hooks");
@@ -90,6 +93,7 @@ fn apply_project(dir: &Path) {
     let args = ApplyArgs {
         project: site,
         profile: None,
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.join("hooks");
@@ -184,6 +188,7 @@ fn restore_history_rejects_an_out_of_range_pick() {
     let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("%1"),
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.path().join("hooks");
@@ -201,6 +206,7 @@ fn restore_history_rejects_state_zero() {
     let stores = test_stores(dir.path(), "site");
     let args = RestoreArgs {
         source: PathBuf::from("%0"),
+        view: UiView::Effective,
         force: true,
     };
     let hooks = dir.path().join("hooks");

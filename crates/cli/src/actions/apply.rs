@@ -7,12 +7,11 @@ use confit_core::error::{
 };
 use confit_differ::diff::Diff;
 use confit_engine::Engine;
-use confit_events::EventHandles;
+use confit_events::{EventHandles, protocol::PromptKind};
 use confit_store::Stores;
 
 use super::commit::{Applier, WriteReport};
-use crate::cli;
-use crate::cli::ApplyArgs;
+use crate::cli::{self, ApplyArgs};
 
 /// Resolves the desired documents from the project folder, then commits them.
 ///
@@ -45,6 +44,8 @@ pub fn run(
     let diff = Diff::build(built, previous).terminal(ErrorKind::Evaluate)?;
     Applier {
         diff,
+        prompt: PromptKind::Apply,
+        view: args.view.kind(),
         force: args.force,
         stores,
         handles,

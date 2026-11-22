@@ -4,10 +4,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use confit_core::error::{Terminal, TerminalResult, contextual, error, kind::ErrorKind};
-use confit_differ::diff::Diff;
+use confit_differ::{diff::Diff, view::ViewKind};
 use confit_events::{
     EventHandles,
-    protocol::{Applied, Phase, TaskKind, TaskNote},
+    protocol::{Applied, Phase, PromptKind, TaskKind, TaskNote},
 };
 use confit_model::arg::Arg;
 use confit_model::routes::Route;
@@ -17,7 +17,7 @@ use confit_store::Stores;
 /// Result counts for one commit execution.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WriteReport {
-    /// The applied counts and the written rows.
+    /// The applied counts and the written changes.
     #[serde(flatten)]
     pub applied: Applied,
     /// The number of files the execution saved into the rescue state.
@@ -27,6 +27,10 @@ pub struct WriteReport {
 pub struct Applier {
     /// The diff the execution previews and writes.
     pub diff: Diff,
+    /// The prompt key behind the confirm prompt text.
+    pub prompt: PromptKind,
+    /// The preview view the execution renders.
+    pub view: ViewKind,
     /// The flag that skips the prompts.
     pub force: bool,
     /// The trusted roots and content caches.
@@ -51,7 +55,8 @@ impl Applier {
     /// - [`confit_core::error::kind::ErrorKind::SpawnHook`] when a hook spawn fails.
     /// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when a hook log write fails.
     pub fn execute(self) -> TerminalResult<WriteReport> {
-        if !self.handles.confirm(self.diff.clone(), self.force) {
+        self.handles.preview(self.diff.clone(), self.view);
+        if !self.handles.ask_for_confirm(self.prompt, self.force) {
             return Ok(WriteReport {
                 applied: Applied::default(),
                 saved: 0,
@@ -82,7 +87,7 @@ impl Applier {
         self.stores.states().save_rescue(&self.diff.effective)
     }
 
-    /// Writes the effective rows, then rotates the pool.
+    /// Writes the changes, then rotates the pool.
     ///
     /// # Errors
     ///
