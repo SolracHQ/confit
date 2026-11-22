@@ -274,10 +274,10 @@ mod tests {
     fn text(route: Route, content: &str, mode: FileMode) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode,
-                unmanaged: false,
             }),
         )
     }
@@ -286,10 +286,10 @@ mod tests {
     fn opaque(route: Route, bytes: &[u8], mode: FileMode) -> Document {
         Document::new(
             route,
+            false,
             Data::Opaque(OpaqueDocument {
                 handle: ResourceRef::new(Sha::hash(bytes)),
                 mode,
-                unmanaged: false,
             }),
         )
     }
@@ -302,7 +302,7 @@ mod tests {
             let member = TreeMember::Handle(ResourceRef::new(Sha::hash(bytes)));
             table.insert(key, member);
         }
-        Document::new(route, Data::Tree(TreeDocument { members: table }))
+        Document::new(route, false, Data::Tree(TreeDocument { members: table }))
     }
 
     /// Builds one manifest from documents.
@@ -364,6 +364,7 @@ mod tests {
         let target = Route::new(RouteBase::Literal, "new-target").unwrap();
         let wanted = manifest(vec![Document::new(
             literal(&path),
+            false,
             Data::Link(LinkDocument { target }),
         )]);
         let diff = Diff::build(wanted, manifest(Vec::new())).unwrap();
@@ -385,6 +386,7 @@ mod tests {
         };
         let wanted = manifest(vec![Document::new(
             literal(&path),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data: table(&[
@@ -396,6 +398,7 @@ mod tests {
         )]);
         let recorded = manifest(vec![Document::new(
             literal(&path),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data: table(&[

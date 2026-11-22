@@ -1,0 +1,15 @@
+flowchart TD
+  A["Resolve SOURCE"] --> B{"Source kind?"}
+  B -- "bundle file" --> C["Unpack bundle"]
+  B -- "stored state" --> D["Read manifest from state store"]
+  C --> E["Show preview"]
+  D --> E
+  E --> F{"Force flag?"}
+  F -- "-f present" --> H["Write documents"]
+  F -- "prompt" --> G["Ask confirmation"]
+  G -- "yes" --> H
+  G -- "other answer" --> I["Cancelled exit 0"]
+  H --> J["Store restored state"]
+  J --> K["Rotate history"]
+  K --> L["Drop orphan blobs"]
+  L --> M["Start hooks"]

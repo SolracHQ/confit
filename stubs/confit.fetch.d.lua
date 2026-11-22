@@ -2,8 +2,8 @@
 --- Fetches one url.
 --- @param url string The url to fetch.
 --- @param sha256? string The pinned digest.
---- @return ResourceHandle? The resource handle, else nil.
---- @return string? The failure reason, else nil.
+--- @return ResourceHandle? The resource handle.
+--- @return string? The failure reason.
 function fetch(url, sha256) end
 
 --- A handle to one resource.
@@ -25,8 +25,8 @@ function ResourceHandle:text() end
 function ResourceHandle:load() end
 
 --- Returns the archive handle for one source.
---- @return ArchiveHandle? The archive handle, else nil.
---- @return string? The failure reason, else nil.
+--- @return ArchiveHandle? The archive handle.
+--- @return string? The failure reason.
 function ResourceHandle:archive() end
 
 --- A reference to the data.
@@ -38,14 +38,14 @@ ResourceRef = {}
 ArchiveHandle = {}
 
 --- Lists the member names in archive-relative form with forward slashes.
---- @return string[]? The member names, else nil.
---- @return string? The failure reason, else nil.
+--- @return string[]? The member names.
+--- @return string? The failure reason.
 function ArchiveHandle:members() end
 
 --- Returns the handle for one archive member.
 --- @param name string The member path with forward slashes.
---- @return ResourceHandle? The member handle, else nil.
---- @return string? The failure reason, else nil.
+--- @return ResourceHandle? The member handle.
+--- @return string? The failure reason.
 function ArchiveHandle:member(name) end
 
 return fetch

@@ -17,8 +17,8 @@ impl Render {
     ///
     /// # Returns
     ///
-    /// - The rendered text, else nil.
-    /// - The failure reason, else nil.
+    /// - The rendered text.
+    /// - The failure reason.
     pub fn render(
         lua: &Lua,
         template: String,

@@ -234,10 +234,10 @@ mod tests {
             assert_eq!(handle.sha(), &Sha::hash(body));
             documents.push(Document {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
+                unmanaged: false,
                 data: Data::Opaque(OpaqueDocument {
                     handle,
                     mode: FileMode::new(0o644),
-                    unmanaged: false,
                 }),
             });
         }

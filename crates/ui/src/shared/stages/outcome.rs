@@ -239,10 +239,10 @@ mod tests {
     fn text(route: Route, content: &str) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )
     }
@@ -264,7 +264,7 @@ mod tests {
             let member = TreeMember::Handle(ResourceRef::new(Sha::hash(bytes)));
             table.insert(key, member);
         }
-        Document::new(route, Data::Tree(TreeDocument { members: table }))
+        Document::new(route, false, Data::Tree(TreeDocument { members: table }))
     }
 
     #[test]

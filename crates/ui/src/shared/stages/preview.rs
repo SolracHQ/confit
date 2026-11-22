@@ -287,10 +287,10 @@ mod tests {
     fn text(route: Route, content: &str) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )
     }
@@ -303,7 +303,7 @@ mod tests {
             let member = TreeMember::Handle(ResourceRef::new(Sha::hash(bytes)));
             table.insert(key, member);
         }
-        Document::new(route, Data::Tree(TreeDocument { members: table }))
+        Document::new(route, false, Data::Tree(TreeDocument { members: table }))
     }
 
     #[test]
@@ -374,11 +374,7 @@ mod tests {
 
     #[test]
     fn preview_keeps_drift_marks_on_leaves() {
-        let mut change = based(
-            RouteBase::Home,
-            ".confit-drift-rc",
-            ChangeKind::Addition,
-        );
+        let mut change = based(RouteBase::Home, ".confit-drift-rc", ChangeKind::Addition);
         change.drifted = true;
         let seen = bare(vec![change]);
         let blocks = seen.preview_blocks();

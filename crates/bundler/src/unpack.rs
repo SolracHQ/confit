@@ -254,10 +254,10 @@ mod tests {
             };
             documents.push(Document {
                 path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
+                unmanaged: false,
                 data: Data::Opaque(OpaqueDocument {
                     handle,
                     mode: FileMode::new(0o644),
-                    unmanaged: false,
                 }),
             });
         }
@@ -390,10 +390,10 @@ mod tests {
             version: VERSION,
             documents: vec![Document {
                 path: Route::new(RouteBase::Home, "bin").unwrap(),
+                unmanaged: false,
                 data: Data::Opaque(OpaqueDocument {
                     handle,
                     mode: FileMode::new(0o644),
-                    unmanaged: false,
                 }),
             }],
             hooks: Vec::new(),
@@ -547,10 +547,10 @@ mod tests {
             version: VERSION,
             documents: vec![Document::new(
                 Route::new(RouteBase::Home, "bin").unwrap(),
+                false,
                 Data::Opaque(OpaqueDocument {
                     handle: ResourceRef::new(sha),
                     mode: FileMode::new(0o644),
-                    unmanaged: false,
                 }),
             )],
             hooks: Vec::new(),

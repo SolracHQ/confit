@@ -401,10 +401,10 @@ mod tests {
     fn text(route: Route, content: &str) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )
     }
@@ -432,10 +432,10 @@ mod tests {
         write_file(&dir.path().join("blob"), b"disk bytes");
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Opaque(OpaqueDocument {
                 handle: ResourceRef::new(Sha::hash(b"pool bytes")),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )]);
         let diff = Diff::build(desired, manifest(Vec::new())).unwrap();
@@ -462,6 +462,7 @@ mod tests {
         };
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data: table(&[
@@ -473,6 +474,7 @@ mod tests {
         )]);
         let previous = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data: table(&[
@@ -531,6 +533,7 @@ mod tests {
         std::os::unix::fs::symlink("old-target", dir.path().join("current")).unwrap();
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Link(LinkDocument {
                 target: Route::new(RouteBase::Literal, "new-target").unwrap(),
             }),
@@ -558,6 +561,7 @@ mod tests {
         data.insert("alpha".to_owned(), serde_json::json!(1));
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data,
@@ -586,6 +590,7 @@ mod tests {
         };
         let previous = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Rc(RcData::new(vec![entry("nano")], Vec::new(), Vec::new())),
         )]);
         write_file(&dir.path().join("shell"), b"export EDITOR=vim\n");

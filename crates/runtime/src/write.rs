@@ -404,10 +404,10 @@ mod tests {
     fn text(route: Route, content: &str) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )
     }
@@ -583,6 +583,7 @@ mod tests {
         let tree_doc = |one: &[u8]| {
             Document::new(
                 tree.clone(),
+                false,
                 Data::Tree(TreeDocument {
                     members: [
                         (MemberKey::new("one.txt".to_owned()).unwrap(), member(one)),
@@ -633,6 +634,7 @@ mod tests {
         let held = std::os::unix::net::UnixListener::bind(dir.path().join("socket")).unwrap();
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Link(LinkDocument {
                 target: Route::new(RouteBase::Literal, "new-target").unwrap(),
             }),

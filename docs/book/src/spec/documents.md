@@ -21,19 +21,21 @@ payload kind.
 | Kind | Fields |
 | --- | --- |
 | Structured | `format`, `data` |
-| Text | `text`, `mode`, `unmanaged` |
+| Text | `text`, `mode` |
 | Link | `target` |
 | Rc | `profile`, `config`, `final` |
-| Opaque | `handle`, `mode`, `unmanaged` |
+| Opaque | `handle`, `mode` |
 | Tree | `members` |
+
+Every kind takes an optional `unmanaged` flag beside `path`.
 
 A table that carries fields from two kinds fails. An unknown field fails. A
 table with only `path` is an rc document with three empty sections.
 
 ## Routes
 
-A route is a destination before the host path exists. The `route` function
-takes a base and a relative path.
+A route is a destination before the host path exists. The `route` function takes
+a base and a relative path.
 
 ```lua
 route("home", ".bashrc")
@@ -51,8 +53,8 @@ route("literal", "/opt/tool")
 | `cache` | the platform cache folder |
 | `literal` | the relative path, unchanged |
 
-A route carries two fields. `base` is the base name. `relative` is the
-path below the base.
+A route carries two fields. `base` is the base name. `relative` is the path
+below the base.
 
 ```lua
 local path = route("home", ".bashrc")
@@ -62,12 +64,14 @@ path.relative  -- ".bashrc"
 path:display() -- "home('.bashrc')"
 ```
 
-`:display()` returns call text for a named base and the bare path for
-`literal`. The display text shows the route in output lines and log lines.
+`:display()` returns call text for a named base and the bare path for `literal`.
+The display text shows the route in output lines and log lines. You see the same
+display in trees and in Details. The preview groups documents under `[base]`
+branches with nested relative paths.
 
 A route field takes a value from `route(...)`. A string or a table fails. An
-empty relative path fails. A named base that the host lacks fails when the
-route expands.
+empty relative path fails. A named base that the host lacks fails when the route
+expands.
 
 Expansion happens at write time, when a shell guard renders a path, and when a
 hook resolves an argument. The manifest stores the base and the relative path,
@@ -78,24 +82,25 @@ so a recorded document expands again on the next apply.
 - One document per path. A repeated path fails the plan.
 - Documents sort by route. Tree members sort by relative path.
 - A mode is a string. Octal forms are `755` and `0755`. A symbolic form is
-  `rwxr-xr-x`. Any other text fails.
-- Apply writes `644` for a text or opaque document without a mode. A ref
-  without a mode takes `644`.
-- Structured, link, and rc documents carry no mode. A `mode` field on one of
-  them fails.
-- `unmanaged` marks an existence-only document. Text and opaque documents
-  carry the flag.
+`rwxr-xr-x`. Any other text fails.
+- Apply writes `644` for a text or opaque document that doesn't have a
+mode. A ref that doesn't have a mode takes `644`.
+- Structured, link, and rc documents don't carry a mode. A `mode` field on
+one of them fails.
+- `unmanaged` marks an existence-only document. Every kind carries the
+flag. A tree checks each member for existence.
 - The manifest records one content hash for each document.
 
 An unmanaged document writes on the first apply. A later apply leaves an
 existing destination untouched while the declaration matches the recorded
-state. A changed declaration writes once, then leaves the destination untouched
-again.
+state. A changed declaration writes once, then leaves the destination
+untouched again. An unmanaged tree recreates only missing members. Disk
+changes to present members stay.
 
 | Kind | Hash input |
 | --- | --- |
-| Structured | the rendered bytes |
-| Text | the text bytes |
+| Structured | the rendered content |
+| Text | the text content |
 | Link | the target route text |
 | Rc | the rendered shell text |
 | Opaque | the content hash of the handle |
@@ -120,9 +125,9 @@ A structured document is a table in one serialization format.
 table with string keys. Values are booleans, numbers, strings, arrays, and
 nested tables. An integer key fails.
 
-Rendering runs the serializer for the format. JSON output is pretty printed.
-The rendered text is the file body. Apply creates the file with the process
-file mode, usually `644`.
+Confit starts the serializer for the format. JSON output is pretty printed. The
+rendered text is the file body. Apply creates the file with the process file
+mode, usually `644`.
 
 A structured document is the base for a structured patch. The patch takes the
 same format. See [patches](patches.md#structured-patches).
@@ -140,10 +145,11 @@ A text document is exact file text.
 }
 ```
 
-The `text` field lands byte for byte. `mode` sets the permission bits after the
+The `text` field lands unchanged. `mode` sets the permission bits after the
 write. Apply replaces a symlink at the path with a regular file.
 
-A text document has no patch kind. A structured or rc patch cannot target it.
+A text document doesn't have a patch kind. A structured or rc patch cannot
+target it.
 
 ## Link
 
@@ -159,13 +165,14 @@ A link document places a symbolic link.
 `target` takes a route. A string fails. Apply writes a symlink at the
 destination. The link body is the target route text from `:display()`.
 
-A link carries no mode. A changed target reports under the `target` key, and
-the next apply rewrites the link. A link has no patch kind.
+A link doesn't carry a mode. A changed target reports under the `target`
+key, and the next apply rewrites the link. A link doesn't have a patch
+kind.
 
 ## Rc
 
 An rc document renders shell text. Declare each shell document explicitly. A
-path such as `.bashrc` selects no shell on its own.
+path such as `.bashrc` doesn't select a shell on its own.
 
 ```lua
 {
@@ -234,12 +241,12 @@ fi
 
 Entries render in declaration order inside each section. The blocks join with
 one blank line, and the file ends with one newline. A document with three empty
-sections renders zero bytes. An rc document has no mode, and apply creates the
-file with the process file mode, usually `644`.
+sections renders empty content. An rc document doesn't have a mode, and apply
+creates the file with the process file mode, usually `644`.
 
 ## Opaque
 
-An opaque document writes bytes from a handle.
+An opaque document writes content from a handle.
 
 ```lua
 {
@@ -250,15 +257,14 @@ An opaque document writes bytes from a handle.
 ```
 
 A handle comes from `confit.open`, `confit.fetch`, or `archive:member`. Call
-`ref` first: documents take the ref form. See the
-[Lua surface](lua.md#handles).
+`ref` first: documents take the ref form. See the [Lua surface](lua.md#handles).
 
-Apply streams the handle bytes to the path, then sets the mode. A missing mode
-takes `644`. A handle hash is the content, so the manifest copies the hash
-without reading the bytes again.
+Apply streams the handle content to the path, then sets the mode. A missing
+mode takes `644`. A handle hash is the content, so the manifest copies the
+hash and doesn't read the content again.
 
-An opaque document has no rendered form. A tree or opaque document cannot be
-rendered as text.
+An opaque document doesn't have a rendered form. A tree or opaque document
+cannot be rendered as text.
 
 ## Tree
 
@@ -274,11 +280,11 @@ A tree document writes a set of files under one folder.
 }
 ```
 
-A member value is a ref or a table with `handle` and `mode`. A ref
-without a mode takes `644`.
+A member value is a ref or a table with `handle` and `mode`. A ref that
+doesn't have a mode takes `644`.
 
-A member key is a relative path with forward slashes. Profile decode
-rejects these keys:
+A member key is a relative path with forward slashes. Profile decode rejects
+these keys:
 
 - an empty key
 - an absolute key
@@ -287,24 +293,15 @@ rejects these keys:
 - an empty segment
 - a backslash
 
-Apply writes each member under the destination folder and creates parent
-folders on demand. Files that you place under the folder by hand stay. A member
-that a later declaration drops is removed on apply.
+Apply writes each member under the destination folder and creates parent folders
+on demand. Files that you place under the folder by hand stay. A member that a
+later declaration drops is removed on apply.
 
 The tree is one document at one path. Its hash covers the member list, so a
 member change reads as a document update.
 
 ## Kind changes
 
-The recorded manifest identifies one entry by display path. The kind selects
-the comparison method. A kind change at one path reads as one update.
+The recorded manifest identifies one entry by display path. [Difference](difference.md) states how the kinds compare.
 
-The same hash means unchanged, and no comparison runs. Differing hashes
-compare once with the coarser method. Structured against text, rc, and link
-target text compares as rendered bytes. Anything against opaque compares as
-hashes. Those hashes already differ, so the document updates with no further
-lines. Equal bytes on disk mean unchanged, even across kinds. A mode mismatch
-forces an update.
-
-Apply writes the new payload at the path. The recorded entry takes the new
-kind.
+Apply writes the new payload at the path. The recorded entry takes the new kind.

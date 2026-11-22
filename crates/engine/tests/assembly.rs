@@ -163,6 +163,7 @@ fn placed_documents_convert_every_kind() {
         placed_structured("config.json"),
         Document::new(
             Route::new(RouteBase::Home, "linked").unwrap(),
+            false,
             Data::Link(LinkDocument {
                 target: Route::new(RouteBase::Home, "origin").unwrap(),
             }),
@@ -171,6 +172,7 @@ fn placed_documents_convert_every_kind() {
         placed_opaque(&stores, "blob.bin"),
         Document::new(
             Route::new(RouteBase::Home, "fonts").unwrap(),
+            false,
             Data::Tree(TreeDocument { members }),
         ),
     ];
@@ -182,48 +184,41 @@ fn placed_documents_convert_every_kind() {
                 found
                     .iter()
                     .find(|document| document.path.display() == display)
-                    .map(|document| &document.data)
                     .unwrap_or_else(|| panic!("expected {display}"))
             };
-            match by_display("home('note.txt')") {
-                Data::Text(TextDocument {
-                    content,
-                    mode,
-                    unmanaged,
-                }) => {
+            match &by_display("home('note.txt')").data {
+                Data::Text(TextDocument { content, mode }) => {
                     assert_eq!(content, "hi");
                     assert_eq!(mode.bits(), 0o644);
-                    assert!(!unmanaged);
+                    assert!(!by_display("home('note.txt')").unmanaged);
                 }
                 _ => panic!("the text document keeps its text"),
             }
-            match by_display("home('config.json')") {
+            match &by_display("home('config.json')").data {
                 Data::Structured(StructuredDocument { format, data }) => {
                     assert_eq!(*format, StructuredFormat::Json);
                     assert_eq!(data.get("seed").and_then(|item| item.as_u64()), Some(0));
                 }
                 _ => panic!("the document is structured"),
             }
-            match by_display("home('linked')") {
+            match &by_display("home('linked')").data {
                 Data::Link(LinkDocument { target }) => {
                     assert_eq!(target.display(), "home('origin')")
                 }
                 _ => panic!("the document is a link"),
             }
             assert_eq!(
-                rc_names(by_display("home('.bashrc')")),
+                rc_names(&by_display("home('.bashrc')").data),
                 vec!["SEED".to_owned()]
             );
-            match by_display("home('blob.bin')") {
-                Data::Opaque(OpaqueDocument {
-                    mode, unmanaged, ..
-                }) => {
+            match &by_display("home('blob.bin')").data {
+                Data::Opaque(OpaqueDocument { mode, .. }) => {
                     assert_eq!(mode.bits(), 0o644);
-                    assert!(unmanaged);
+                    assert!(by_display("home('blob.bin')").unmanaged);
                 }
                 _ => panic!("the document is opaque"),
             }
-            match by_display("home('fonts')") {
+            match &by_display("home('fonts')").data {
                 Data::Tree(TreeDocument { members: found }) => {
                     assert_eq!(
                         found.keys().map(MemberKey::as_str).collect::<Vec<_>>(),
@@ -1258,10 +1253,10 @@ fn assemble_rejects_a_filter_error() {
 fn placed_text(relative: &str, text: &str) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
+        false,
         Data::Text(TextDocument {
             content: text.to_owned(),
             mode: FileMode::new(0o644),
-            unmanaged: false,
         }),
     )
 }
@@ -1270,6 +1265,7 @@ fn placed_text(relative: &str, text: &str) -> Document {
 fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
+        false,
         Data::Rc(RcData::new(entries, Vec::new(), Vec::new())),
     )
 }
@@ -1278,6 +1274,7 @@ fn placed_rc(relative: &str, entries: Vec<RcEntry>) -> Document {
 fn placed_structured(relative: &str) -> Document {
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
+        false,
         Data::Structured(StructuredDocument {
             format: StructuredFormat::Json,
             data: BTreeMap::from([("seed".to_owned(), serde_json::json!(0))]),
@@ -1306,10 +1303,10 @@ fn placed_opaque(stores: &Stores, relative: &str) -> Document {
     std::fs::write(root.join("blob.bin"), b"hi").unwrap();
     Document::new(
         Route::new(RouteBase::Home, relative).unwrap(),
+        true,
         Data::Opaque(OpaqueDocument {
             handle: ResourceRef::new(Sha::hash(b"hi")),
             mode: FileMode::new(0o644),
-            unmanaged: true,
         }),
     )
 }

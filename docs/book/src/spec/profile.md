@@ -2,7 +2,7 @@
 
 A profile is one Lua chunk. Its return value is one table with optional
 `configs` and `documents` fields. Both fields default to empty. Any other field
-fails the run and shows the field.
+fails evaluation. Confit shows the field.
 
 ```lua
 return {
@@ -18,12 +18,12 @@ and [hooks](hooks.md) pages define the fields that a config carries.
 
 | Field | Type | Default | Content |
 | --- | --- | --- | --- |
-| `configs` | list | empty | configs in declaration order |
+| `configs` | list | empty | profile configs |
 | `documents` | list | empty | documents at profile level |
 
-A profile with neither field builds an empty manifest. A profile-level document
-carries no config name. Its bytes still belong to the manifest, and its path
-still must be unique.
+A profile with neither field builds an empty manifest. A profile-level
+document belongs to the profile scope. Its content still belongs to the
+manifest, and its path still must be unique.
 
 ```lua
 return {
@@ -36,8 +36,8 @@ return {
 }
 ```
 
-A value that is not a table fails the evaluation. A field with a table but
-not a list fails with the field path.
+A value that is not a table fails the evaluation. A field with a table but not a
+list fails with the field path.
 
 ## Config table
 
@@ -46,10 +46,10 @@ A config groups one name with documents, patches, hooks, and requirements.
 | Field | Required | Default | Content |
 | --- | --- | --- | --- |
 | `name` | yes | | identity from `id(name)` |
-| `documents` | no | empty | document tables |
-| `patches` | no | empty | patch tables |
-| `hooks` | no | empty | hook tables |
-| `requirements` | no | empty | target name to hint |
+| `documents` | optional | empty | document tables |
+| `patches` | optional | empty | patch tables |
+| `hooks` | optional | empty | hook tables |
+| `requirements` | optional | empty | target name to hint |
 
 `name` takes the value from `id`. A plain string fails the shape. The identity
 string is the name that other configs use in requirements.
@@ -78,21 +78,21 @@ local shell = {
 ```
 
 Each optional field defaults to an empty list or map. A config with only a name
-is valid. An unknown field fails the run.
+is valid. An unknown field fails evaluation.
 
 ## Order and duplicates
 
-Configs keep profile declaration order. That order decides where a config's
-hooks run and where its patches sit among patches of the same priority. The
-[patches](patches.md) page states priority.
+Config order decides where a config's
+hooks start. It also decides where its patches sit among patches of the same
+priority. The [patches](patches.md) page states priority.
 
 Documents collect in this order:
 
 1. Profile-level documents in declaration order.
 2. Config documents in config order, and within a config in declaration order.
 
-The assembled manifest then sorts documents by route. Tree members
-sort by relative path.
+The assembled manifest then sorts documents by route. Tree members sort by
+relative path.
 
 Config names are unique. A repeated name fails with a duplicate-document error.
 The log records each config that declares the name.
@@ -112,16 +112,16 @@ requirements = {
 }
 ```
 
-The key is a config name, not an identity value. Every key must be a config in
-the same profile. A missing target fails the run. The error shows the missing
-config as `document '{name}'` and ends with `config requires missing document`.
+The key is a config name as plain text. Every key must be a config in
+the same profile. A missing target fails evaluation. The error shows the missing
+config as `document '{name}'`. It ends with `config requires missing document`.
 The log records the config with the requirement and any near name.
 
-A requirement is a presence check. It does not run the target, merge its
-documents, or change declaration order.
+A requirement is a presence check. It confirms presence and leaves start
+behavior, document merge, and declaration order to the profile.
 
-The value is a hint string. The run keeps it with the requirement and does not
-print it in the terminal error. A value that is not a string fails the shape.
+The value is a hint string. Confit keeps it with the requirement as internal
+hint text. A value that is not a string fails the shape.
 
 ## Data rules
 
@@ -131,7 +131,7 @@ Fields that carry JSON data accept only JSON values:
 | --- | --- |
 | `nil` | absent field |
 | boolean | true or false |
-| number | number, or null when not finite |
+| number | number, or null for infinite and NaN values |
 | string | string |
 | table with keys 1 to n | array |
 | table with string keys | object |

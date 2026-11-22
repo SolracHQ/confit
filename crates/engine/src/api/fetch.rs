@@ -17,13 +17,13 @@ impl Fetch {
     ///
     /// # Arguments
     ///
-    /// - [url] with http or https scheme and a present host.
+    /// - [url] The url to fetch.
     /// - [sha256] The pinned digest.
     ///
     /// # Returns
     ///
-    /// - The resource handle, else nil.
-    /// - The failure reason, else nil.
+    /// - The resource handle.
+    /// - The failure reason.
     pub fn fetch(
         lua: &Lua,
         url: String,

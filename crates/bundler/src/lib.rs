@@ -79,10 +79,10 @@ mod tests {
     fn opaque_doc(name: &str, blob: ResourceRef) -> Document {
         Document {
             path: Route::new(RouteBase::Home, name).unwrap(),
+            unmanaged: false,
             data: Data::Opaque(OpaqueDocument {
                 handle: blob,
                 mode: FileMode::new(0o644),
-                unmanaged: false,
             }),
         }
     }
@@ -130,6 +130,7 @@ mod tests {
                 opaque_doc("blob.bin", ResourceRef::new(opaque_sha)),
                 Document::new(
                     Route::new(RouteBase::Home, "fonts").unwrap(),
+                    false,
                     Data::Tree(TreeDocument { members }),
                 ),
             ],
@@ -167,10 +168,10 @@ mod tests {
         let handle = project_handle(&stores, dir.path(), "note.txt", body);
         let documents = vec![Document::new(
             Route::new(RouteBase::Home, "note").unwrap(),
+            false,
             Data::Opaque(OpaqueDocument {
                 handle,
                 mode: FileMode::new(0o644),
-                unmanaged: false,
             }),
         )];
         let manifest = Manifest {
@@ -221,10 +222,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let documents = vec![Document::new(
             Route::new(RouteBase::Home, "gone").unwrap(),
+            false,
             Data::Opaque(OpaqueDocument {
                 handle,
                 mode: FileMode::new(0o644),
-                unmanaged: false,
             }),
         )];
         let manifest = Manifest {

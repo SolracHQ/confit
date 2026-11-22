@@ -1,0 +1,10 @@
+flowchart TD
+  A["Evaluate profile"] --> B["Build manifest"]
+  B --> C["Show preview"]
+  C --> D{"Force flag?"}
+  D -- "-f present" --> F{"Output kind?"}
+  D -- "prompt" --> E["Ask confirmation"]
+  E -- "yes" --> F
+  E -- "other answer" --> G["Cancelled exit 0"]
+  F -- "PATH" --> H["Write bundle file"]
+  F -- "@name" --> I["Store state and pool"]

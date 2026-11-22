@@ -15,7 +15,7 @@ Id = {}
 function route(base, relative) end
 
 --- A standard userspace folder.
---- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
+--- @alias RouteBase "cache" | "config" | "data" | "home" | "literal"
 
 --- A destination route.
 --- @class Route

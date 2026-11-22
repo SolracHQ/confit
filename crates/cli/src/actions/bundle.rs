@@ -81,7 +81,7 @@ impl BundleRunner<'_> {
         })
     }
 
-    /// Saves the manifest under the `@name` output with pack events.
+    /// Saves the manifest under the `@name` output.
     ///
     /// # Errors
     ///
@@ -106,6 +106,10 @@ impl BundleRunner<'_> {
                 contextual(StateReason::BareState).with_state(raw.to_owned()),
             );
         };
+        self.stores
+            .resources()
+            .persist(&desired.handles())
+            .terminal(ErrorKind::StoreState)?;
         self.stores.states().save_named(name, desired)?;
         Ok(raw.to_owned())
     }

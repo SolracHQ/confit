@@ -14,9 +14,9 @@ The specification covers the command line, the project folder, profile
 evaluation, the Lua surface, documents, patches, conditions, hooks, the
 manifest, bundles, and the state store.
 
-It covers the bytes that ConfIt writes and the files that it reads. It does not
-cover the behavior of a shell that reads an rc document, a program that a hook
-starts, or a file that a managed document points at.
+It covers the content that ConfIt writes and the files that it reads; shell
+rc behavior, hook program behavior, and pointed-at file behavior belong to
+other systems.
 
 An operating system convention, such as the location of the config folder,
 appears as the convention. A statement that this page leaves out is outside the
@@ -28,9 +28,9 @@ A path argument expands a leading `~` to the home folder. A relative path
 resolves against the folder that the command accepts, unless the text says
 otherwise. File paths in examples use forward slashes.
 
-A condition is true or is false. The verb `fails` means that the run stops with
-exit 1 and an `error:` line. The verb `refuses` means that the run stops before
-the write.
+A condition is true or is false. The verb `fails` means that the command stops
+with exit 1 and an `error:` line. The verb `refuses` means that the command
+stops before the write.
 
 Fenced blocks carry the language that they show:
 
@@ -52,9 +52,9 @@ The text uses these names:
 
 ## System model
 
-A run reads one project, evaluates one profile, assembles documents, applies
-patches, and builds a manifest. The manifest is the desired state. A command
-compares it with the applied state and with the disk before it writes.
+The command reads one project, evaluates one profile, assembles documents,
+applies patches, and builds a manifest. The manifest is the desired state. A
+command compares it with the applied state and with the disk before it writes.
 
 | Term | Meaning |
 | --- | --- |
@@ -63,25 +63,25 @@ compares it with the applied state and with the disk before it writes.
 | config | named group of documents, patches, hooks, requirements |
 | document | one destination path with one payload |
 | patch | callback that edits a document or a hook |
-| hook | command that runs after the writes |
-| state | manifest for the applied run, a history entry, or a name |
+| hook | command that Confit starts after the writes |
+| state | manifest for the applied command, a history entry, or a name |
 | bundle | gzipped tar with a manifest and content |
-| pool | content-addressed store of document bytes |
+| pool | content-addressed document store |
 
-The stages of one run are:
+The stages of one command are:
 
 1. Read `project.toml` and evaluate the profile.
 2. Assemble documents from the profile and its configs, then sort by path.
 3. Apply patches in priority order to working document and hook tables.
 4. Validate conditions and build one manifest.
 5. Compare the manifest with the applied state and with the disk.
-6. Write documents, remove dropped ones, store state, prune the pool, and run
-   hooks for `apply` and `restore`.
+6. Write documents, remove dropped ones, store state, prune the pool, and
+start hooks for `apply` and `restore`.
 
 The [project](project.md) and [profile](profile.md) pages define the inputs. The
 [documents](documents.md), [patches](patches.md), [conditions](conditions.md),
 and [hooks](hooks.md) pages define the manifest content. The [state](state.md)
-page defines what a run records.
+page defines what the command records.
 
 ## State layout
 
@@ -92,7 +92,7 @@ Every path is under the OS config folder and `confit`. On Linux the folder is
 | --- | --- |
 | `history/{stamp}.json` | one rotated manifest |
 | `states/{name}.json` | named manifests |
-| `states/!.json` | rescue capture, replaced per run |
+| `states/!.json` | rescue capture, replaced per command |
 | `blobs/{sha}` | gzipped content at level 6 |
 
 `{stamp}` is nanoseconds since the Unix epoch. A collision increments the value
@@ -111,13 +111,13 @@ The default logs folder is the OS temp folder and `confit-{pid}`:
 
 | Path | Contents |
 | --- | --- |
-| `confit.log` | the run log |
-| `hooks/{slug}-{hash}.log` | output of one hook run |
+| `confit.log` | the command log |
+| `hooks/{slug}-{hash}.log` | output of one hook |
 
-`{slug}` is up to 40 lowercase alphanumeric characters from the hook id,
-joined by hyphens. `{hash}` is the first 12 hex characters of the SHA-256 digest
-of the hook id. The `--logs-dir` flag and `CONFIT_LOG_DIR` change the logs
-folder. The [CLI](cli.md) page states the order.
+`{slug}` is up to 40 lowercase alphanumeric characters from the hook id, joined
+by hyphens. `{hash}` is the first 12 hex characters of the SHA-256 digest of the
+hook id. The `--logs-dir` flag and `CONFIT_LOG_DIR` change the logs folder. The
+[CLI](cli.md) page states the order.
 
 ## Version compatibility
 
@@ -130,17 +130,17 @@ applies:
 - Before 1.0, the minor number matches as well. A different fix number loads.
 - From 1.0, the minor number may differ. A different fix number loads.
 
-A different major number fails. A manifest without a version fails. Both
-failures stop the run.
+A different major number fails. A manifest that doesn't have a version fails.
+Both failures stop the command.
 
 The `version` field of `project.toml` records the scaffold that wrote the file.
-Evaluation does not compare it with the binary.
+Evaluation keeps the field as a scaffold record alongside the binary version.
 
 ## Map
 
 | Page | Covers |
 | --- | --- |
-| [CLI](cli.md) | commands, flags, output streams, and exit codes |
+| [CLI](cli.md) | commands, flags, views, JSON, output streams, and exit codes |
 | [Project](project.md) | the folder, `project.toml`, require, sandbox |
 | [Profile](profile.md) | the profile table, the config table, and order |
 | [Documents](documents.md) | routes, payload kinds, modes, and trees |

@@ -31,4 +31,5 @@
 - [Apply](spec/apply.md)
 - [Restore](spec/restore.md)
 - [Output](spec/output.md)
+- [Schemas](spec/schemas.md)
 - [Init](spec/init.md)

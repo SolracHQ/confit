@@ -89,6 +89,7 @@ fn manifest_bytes(members: &BTreeMap<MemberKey, TreeMember>) -> Vec<u8> {
 fn hash_of(data: Data) -> Sha {
     let document = Document {
         path: literal("pinned/subject"),
+        unmanaged: false,
         data,
     };
     match document.hash() {
@@ -157,7 +158,6 @@ fn text_hash_pins_the_rendered_bytes() {
     let hash = hash_of(Data::Text(TextDocument {
         content: "pinned text\n".into(),
         mode: FileMode::new(0o644),
-        unmanaged: false,
     }));
     assert_eq!(
         hash,
@@ -195,6 +195,29 @@ fn tree_hash_covers_the_manifest_bytes() {
 }
 
 #[test]
+fn unmanaged_flag_decodes_on_every_kind() {
+    let lua = fresh_lua();
+    let note = publish_ref(&lua, "note", b"hello");
+    let target = Route::new(RouteBase::Home, "origin").unwrap();
+    lua.globals()
+        .set("link_target", target.encode(&lua).unwrap())
+        .unwrap();
+    for body in [
+        r#"{ text = "hi", unmanaged = true }"#.to_owned(),
+        format!(r#"{{ handle = {note}, unmanaged = true }}"#),
+        r#"{ format = "json", data = {}, unmanaged = true }"#.to_owned(),
+        r#"{ target = link_target, unmanaged = true }"#.to_owned(),
+        r#"{ unmanaged = true }"#.to_owned(),
+        format!(r#"{{ members = {{ ["a.txt"] = {note} }}, unmanaged = true }}"#),
+    ] {
+        let document = document_from(&lua, &body);
+        assert!(document.unmanaged, "the flag decodes: {body}");
+    }
+    let plain = document_from(&lua, r#"{ text = "hi" }"#);
+    assert!(!plain.unmanaged, "the flag defaults to false");
+}
+
+#[test]
 fn tree_hash_covers_bare_and_full_members_with_their_modes() {
     let bare = ResourceRef::new(Sha::hash(b"bare bytes"));
     let full = ResourceRef::new(Sha::hash(b"full bytes"));
@@ -209,6 +232,7 @@ fn tree_hash_covers_bare_and_full_members_with_their_modes() {
     );
     let document = Document::new(
         Route::new(RouteBase::Home, "tree").unwrap(),
+        false,
         Data::Tree(TreeDocument { members }),
     );
     match &document.data {
@@ -269,10 +293,10 @@ fn document_flat_round_trips_path_beside_text() {
     let lua = fresh_lua();
     let source = Document::new(
         Route::new(RouteBase::Home, "subject").unwrap(),
+        false,
         Data::Text(TextDocument {
             content: "hi".to_owned(),
             mode: FileMode::new(0o644),
-            unmanaged: false,
         }),
     );
     let encoded = source.encode(&lua).unwrap();
@@ -327,21 +351,17 @@ fn mode_strings_decode_and_encode() {
     let lua = fresh_lua();
     let octal = document_from(&lua, r#"{ text = "hi", mode = "644", unmanaged = true }"#);
     match octal.data {
-        Data::Text(TextDocument {
-            mode, unmanaged, ..
-        }) => {
+        Data::Text(TextDocument { mode, .. }) => {
             assert_eq!(mode.bits(), 0o644);
-            assert!(unmanaged);
+            assert!(octal.unmanaged);
         }
         _ => panic!("expected a text body"),
     }
     let symbolic = document_from(&lua, r#"{ text = "hi", mode = "rwxr-xr-x" }"#);
     match symbolic.data {
-        Data::Text(TextDocument {
-            mode, unmanaged, ..
-        }) => {
+        Data::Text(TextDocument { mode, .. }) => {
             assert_eq!(mode.bits(), 0o755);
-            assert!(!unmanaged);
+            assert!(!symbolic.unmanaged);
         }
         _ => panic!("expected a text body"),
     }
@@ -349,7 +369,6 @@ fn mode_strings_decode_and_encode() {
     let source = Data::Text(TextDocument {
         content: "hi".to_owned(),
         mode: FileMode::new(0o755),
-        unmanaged: false,
     });
     let encoded = source.encode(&lua).unwrap();
     let Value::Table(table) = encoded else {
@@ -369,7 +388,6 @@ fn handles_serialize_as_bare_sha() {
     let data = Data::Opaque(OpaqueDocument {
         handle,
         mode: FileMode::new(0o644),
-        unmanaged: false,
     });
     match data.encode(&lua) {
         Ok(Value::Table(table)) => {
@@ -399,7 +417,6 @@ fn handles_serialize_as_bare_sha() {
     let stored = Data::Opaque(OpaqueDocument {
         handle: ResourceRef::new(blob),
         mode: FileMode::new(0o644),
-        unmanaged: false,
     });
     let text = match serde_json::to_string(&stored) {
         Ok(found) => found,

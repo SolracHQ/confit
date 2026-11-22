@@ -4,239 +4,204 @@
 confit apply PROJECT [--profile FILE] [--force]
 ```
 
-`apply` evaluates a project and writes its documents to the machine. Without
-`--profile`, the run reads `main.lua` inside `PROJECT`. A relative `--profile`
-name resolves against the project folder, and an absolute name stays as is. A
-project folder without the default profile fails as a missing project.
+This command writes one project to the machine. By default Apply reads
+`main.lua` inside `PROJECT`. A relative `--profile` name resolves against the
+project folder. An absolute `--profile` name stays as is. A project folder
+that doesn't include the default profile fails as a missing project.
 
-The run follows this sequence:
+Apply follows these steps in order:
 
-1. Evaluate the profile into documents and hooks.
-1. Build the desired manifest with the documents in path order.
-1. Persist opaque and tree content into the pool.
-1. Load the applied state and compare it with the desired manifest and disk.
-1. Print the preview and ask for confirmation.
-1. Write documents, remove dropped paths, store state and history, prune the
-   pool, and run hooks.
+1. Evaluates the profile into documents and hooks.
+1. Builds the desired manifest in path order.
+1. Persists opaque and tree content into the pool.
+1. Loads the applied state and compares it with disk.
+1. Prints the preview.
+1. Asks for confirmation.
+1. Writes documents.
+1. Removes dropped paths.
+1. Stores the applied state.
+1. Adds the state to the history.
+1. Prunes the pool.
+1. Starts the hooks.
 
 [State](state.md) covers the stored manifest. [Difference](difference.md) covers
-the comparisons. [Restore](restore.md) runs the same commit sequence from a
-stored source.
-
-Content from `open` and `fetch` handles lands in the pool before the preview. A
-declined run leaves the pool filled and writes no document.
+the comparisons. [Restore](restore.md) uses the same commit sequence from a
+stored source. Content from `open` and `fetch` handles lands in the pool before
+the preview. After a decline the pool stays filled. The command limits writes
+to the pool.
 
 ## Preview
 
-The preview prints to stderr. It shows up to four sections, and an empty section
-skips its title. [Output](output.md) covers the section order, the sigils, and
-the color rule.
+The preview appears on stderr with five sections in this order:
+`Evaluation` first, `Comparison` next, `Documents` next, `Hooks` next, and
+`Summary` last. Each section with content shows its title, and `Comparison`
+shows its title in all cases. [Output](output.md) covers the order and the
+colors.
 
-A first run has no applied state, so the preview starts with `Resources`:
+The preview limits titles to the five named sections, marks drift as `!`
+after the change sigil, shows `~ ! .bashrc: rc` for a drifted update, and
+shows `- ! .bashrc: rc` for a drifted delete.
+
+`Documents` is a route tree. The tree holds one branch per base. The
+branches are `[home]` and `[config]` and `[data]` and `[literal]`. A based
+branch nests relative paths under folders. A `[literal]` branch shows full
+paths as a flat list. Each leaf shows its sigil, shows its name, and shows
+its kind. A tree group shows one leaf with bracket counts. A first apply
+shows additions against disk. A later apply shows wanted content against
+disk with drift marks.
 
 ```text
-Resources
-+ config('starship.toml'): toml
-  + add_newline = false
-  + scan_timeout = 10
-+ data('fonts/JetBrainsMono'): tree
-  + tree (2 files)
-+ home('.bashrc'): rc
-  + profile EDITOR = hx
-  + alias ll = ls -l
-  + init[0] = eval "$(zoxide init bash)"
-+ home('.config/bat/config'): text
-  + --theme="catppuccin"
-Hooks
-+ mise install
+Documents
+├── [config]
+│   └── mise
+│       └── + config.toml: toml
+└── [home]
+    ├── + .bashrc: rc
+    └── .config
+        └── + bat: text
+```
+
+`Hooks` shows the hook lifecycle lines. `Summary` shows one table only. The
+table has `+` and `~` and `-` columns. It has one `Documents` row and has
+one `Hooks` row while hooks change. The table appears with zeros when counts
+are zero.
+
+```text
 Summary
-Documents: 4 to add, 0 to change, 0 to destroy.
-Hooks: 1 to add, 0 to change, 0 to destroy.
+            +  ~  -
+ Documents  1  0  1
+ Hooks      1  0  0
 ```
 
-A later run starts with
-`Changes outside Confit will be overwritten on next apply` when the disk differs
-from the applied state, then lists the resource blocks. A document whose
-declaration matches the state and the disk adds no block.
-
-After the preview, each destination whose difference failed prints one warning,
-and the run continues:
-
-```text
-Cannot state the difference for '{route}': {cause}
-```
-
-`check` prints the same preview to stdout and writes no document. Use it to
-review a profile without a prompt.
+`check` prints the same preview to stdout, limits writes to the log file,
+and ends after the preview. You use it to review a profile in a single
+pass.
 
 ## Prompt
 
-The run asks one question on stderr:
+One question appears on stderr. The question reads:
 
 ```text
-Apply these changes? Type 'yes' to continue:
+Do you want to apply these changes? Type 'yes' to continue:
 ```
 
-The question ends with one space. A reply whose trimmed text is `yes` continues.
-Any other reply prints this line and stops the run:
+The question ends with one space. You answer on stdin. Only a trimmed `yes`
+continues the command. Any other answer declines the command. A typed `details`
+declines the command. After a decline the command prints this line:
 
 ```text
-no confirmation, the run stops
+Cancelled.
 ```
 
-A stopped run writes no document, prints `applied: 0 files, 0 removed`, and
-exits 0.
-
-`--force` skips this question. The preview still prints.
-
-The run compares the applied state against disk again before the first write. A
-fresh difference set prints its lines and the run continues with the confirmed
-plan. The rescue state holds the pre-write capture either way.
+A declined command prints only `Cancelled.` and the log path and exits 0.
+`--force` skips this question. The preview still prints with `--force`. The
+command asks the question once.
 
 ## Write order
 
-After confirmation the run commits in this order:
+Apply commits the effective view changes in view order. An addition or change
+writes its destination. A removal removes its destination.
 
-1. Write the documents in manifest path order.
-1. Remove recorded destinations that the manifest lacks.
-1. Remove tree members that the manifest drops.
-1. Store the applied state.
-1. Add the state to the history.
-1. Prune pool entries that no state references.
-1. Run the hooks.
+After the changes land, the command stores the applied state, adds the state to
+the history, and prunes pool entries outside the referenced set. Then the
+command starts the hooks.
 
-Path order is the display order of the route, so `cache('...')` and
-`config('...')` documents land before `home('...')` documents.
+Parents build on demand. The command creates parent folders for destinations
+needing them. A pre-existing symlink at a destination is unlinked first. The
+old link target stays at its path.
 
-- `text` lands the content byte for byte.
-- `structured` lands the serializer output for `json`, `toml`, or `yaml`.
-- `rc` lands the rendered sections and the interactive guard.
-- `opaque` lands the raw handle bytes.
-- `tree` lands one file per member under the destination.
-- `link` lands a symlink at the destination.
+Text and opaque documents carry a mode, and the mode lands after the content.
+Each tree member carries its own mode, and each member mode lands after the
+member content.
 
-Parents build on demand, so a missing parent folder is created. Text and opaque
-documents carry a mode, and the mode lands after the bytes. Each tree member
-carries its own mode, and each lands after the member bytes.
-
-A destination that is a pre-existing symlink is unlinked before a regular
-document lands there. The target of the old link stays untouched.
-
-An unmanaged text or opaque document writes only when its declaration changed or
-its destination is absent. A present unmanaged destination whose declaration
-matches the recorded manifest skips the write.
-
-A tree member in the previous manifest but missing from the desired manifest is
-removed from the destination. Files placed by hand under the tree destination
-stay.
-
-Each written destination reports one line on stderr:
-
-```text
-Added home('.bashrc')
-```
-
-Each removed destination reports one line:
-
-```text
-Removed home('.old')
-```
-
-The run ends with a count line:
-
-```text
-2 of 3 files applied
-```
+An unmanaged text document writes on declaration change and at first creation,
+and retains disk content under a matching recorded manifest. An unmanaged tree
+recreates only missing members. A dropped tree member from the previous
+manifest has its disk copy removed. Files placed by hand under the tree
+destination stay.
 
 ## Hooks
 
-Hooks run after the documents, the state, and the history land. They run in
-profile config order. Every hook decides against the host facts after the
-writes:
+The command starts hooks after the documents and the state and the history land
+and starts them in profile config order. Every hook decides against the host
+facts after the writes. An unmet `requires` condition stops the command before
+that hook. An unmet `when` condition skips the hook and continues. A met `check`
+condition skips the hook and continues. An unmet `check` condition starts the
+hook. An unmet `check` condition after the hook blocks later hooks.
 
-- An unmet `requires` condition stops the run before this hook and the remaining
-  hooks.
-- An unmet `when` condition skips the hook, and the run continues.
-- A met `check` condition skips the hook, and the run continues.
-- An unmet `check` condition runs the hook.
-- An unmet `check` condition after the run stops the run before the remaining
-  hooks.
-
-The changed set is every built path on a first run. Later runs cover the
-rewritten paths and the differenced paths. A changed tree member marks its
-parent destination.
-
-A hook that runs prints one line to stderr:
+A finished hook prints its command line:
 
 ```text
-hook 1 of 3: mise install
+> mise install
 ```
 
-Hook output streams into `logs_dir/hooks/{slug}-{hash}.log`. The slug is the id
-with each non-alphanumeric run replaced by a hyphen and the letters lowercased,
-cut to 40 characters. The hash is the first 12 hex characters of the id hash. A
-nonzero exit fails the hook, and a signal death reads as exit code 1. A timeout
-kills the process and fails the hook.
-
-[Hooks](hooks.md) covers the declarations and the conditions.
+Hook output streams into `hooks/{slug}-{hash}.log`. The slug is the id
+lowercased with each group outside letters and digits replaced by hyphen and
+is cut to 40 characters. The hash is the first 12 hex characters of the id
+hash. A nonzero exit fails the hook. A signal death reads as exit code 1. A
+timeout kills the process and fails the hook. [Hooks](hooks.md) covers the
+declarations and the conditions.
 
 ## Report
 
-A completed run prints the count line to stdout:
+`Results` follows the write tree when counts exist. The table adds one
+failed column. The failed column uses `✗`.
 
 ```text
-applied: 4 files, 1 removed
+Results
+
+            +  ~  -  ✗
+ Documents  1  0  0  0
+ Hooks      1  0  0  0
 ```
 
-The written count adds one per document. A tree adds one for its destination
-rather than one per member. The removed count adds one per removed document and
-one per dropped tree member.
-
-While the run wrote or removed at least one document, it prints the restore
-hint:
+With zero changes and zero hook moves the output consists of restore hints
+after `Applying Changes`. With table content the hints follow the table. The
+exact disk hint prints while the rescue capture holds files:
 
 ```text
-restore: confit restore %1
+To restore previous exact disk state:
+> confit restore '@!'
 ```
 
-The hint is the previous history entry, so the command undoes the run. It
-prints only when a previous entry exists. A run that changed
-nothing prints only the count line.
-
-Before the writes, the run saves unmanaged destinations into the rescue state.
-When the capture holds at least one file, the report gains a saved line:
+The undo hint prints while a previous entry exists:
 
 ```text
-saved: 3 files, confit restore @!
+To restore previous state:
+> confit restore %1
 ```
 
-`confit restore @!` writes the saved bytes back. The [state](state.md) page
-covers the state.
-
-Every run prints the log path to stderr:
+A drifted disk changes the undo title:
 
 ```text
-log: /tmp/confit-4242/confit.log
+To restore previous state (dropping disk changes):
+> confit restore %1
 ```
 
-A declined run prints `applied: 0 files, 0 removed`, no hint, and the log path,
-then exits 0.
+The undo hint prints with zero changes and names the previous entry. Every
+command prints the log path to stderr:
+
+```text
+Log: /tmp/confit-4242/confit.log
+```
+
+A declined command prints `Cancelled.` and the log path and exits 0.
 
 ## Failures
 
-A failed write stops the run at that document. The remaining documents,
-removals, state, history, prune, and hooks do not run. Documents that already
-landed stay on disk. A failed removal stops the run before the state lands.
+A failed write stops the command at that document. Remaining documents and
+removals stay unapplied. The command skips state and history and prune and
+hooks. Documents that already landed stay on disk. A failed removal stops the
+command before the state lands. State and history land only after every write
+and removal succeeds. A failed hook starts after state and history land. The
+files and the state stay. The command stops before later hooks and doesn't
+print the hint table on failure except the rescue hint.
 
-The state and the history land only after every write and removal succeeds. A
-failed hook runs after the state and history land, so the files and the state
-stay. The run stops before the remaining hooks and prints no count line.
-
-Every failure prints one summary line and a closing line to stderr, then exits
-1:
+Every failure prints one summary line and one closing line on stderr. The
+command exits 1:
 
 ```text
-error: Cannot write the destination at '/home/ada/.bashrc'
+Error: Cannot write the destination at '/home/solrac/.bashrc'
 For more information please see the log
 ```
 

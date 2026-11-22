@@ -1,8 +1,8 @@
 # Lua surface
 
 A profile is one Lua chunk that returns a table with `configs` and `documents`.
-See [Profile](profile.md). Every chunk runs in a sandbox with two global
-constructors and six builtin modules.
+See [Profile](profile.md). Every chunk uses a sandbox. The sandbox has two
+global constructors. It has six builtin modules.
 
 ```lua
 local open = require("confit.open")
@@ -28,8 +28,8 @@ libraries  string, table, math, utf8
 confit     require, id, route
 ```
 
-The sandbox omits `os`, `io`, `package`, `debug`, and `coroutine`.
-An unknown global is nil. A write to a builtin module table fails.
+The sandbox omits `os`, `io`, `package`, `debug`, and `coroutine`. An unknown
+global is nil. A write to a builtin module table fails.
 
 The `require` function is described in [Plugins](plugins.md).
 
@@ -51,7 +51,7 @@ failure and in the stored manifest. A repeated config name fails the plan.
 
 `route(base, relative)` returns one destination route. The base is `home`,
 `config`, `data`, `cache`, or `literal`. The relative path is a string. An empty
-relative path fails the call. The base folder expands when a run writes.
+relative path fails the call. The base folder expands at write time.
 
 ```lua
 route("home", ".bashrc")          -- home('.bashrc')
@@ -92,9 +92,8 @@ end
 | `"absent.toml"` | Nil and a reason |
 
 A drive prefix fails like an absolute path. A symlink that points outside the
-project fails. A non-string path fails the call. The reason text is the
-failing rule or the missing file. A project handle reads the file again on each
-call.
+project fails. A non-string path fails the call. The reason text is the failing
+rule or the missing file. A project handle reads the file again on each call.
 
 ## confit.fetch
 
@@ -110,17 +109,17 @@ local handle, reason = fetch(
 
 - `url` is a non-empty string. An empty string fails the call.
 - `sha256` is 64 hexadecimal characters. Malformed text fails the call.
-- A cache hit serves the stored body with no request.
+- A cache hit serves the stored body and doesn't make a request.
 - A cache miss downloads the body and stores it under its content hash.
 - A failed download, a failed cache write, or a digest mismatch returns nil and
-  a reason.
+a reason.
 
-One fetch returns a handle for text or binary bytes alike. A cache hit serves
+One fetch returns a handle for text or binary content alike. A cache hit serves
 the stored body even when the remote body changed. Remove the cached body to
 fetch again. A pin checks the served body on a hit and on a download.
 
 Each fetch reports `collecting artifacts: {url}` when it starts. The end line
-shows the transferred byte count, or `cached` for a hit.
+shows the transferred size, or `cached` for a hit.
 
 ## Handles
 
@@ -133,16 +132,16 @@ A handle comes from `open`, `fetch`, or `archive:member`.
 | `handle:archive()` | An archive handle, else nil and a reason |
 | `handle:ref()` | The content reference for document handles |
 
-Documents take the ref form. Call `ref` where a document wants
-a handle.
+Documents take the ref form. Call `ref` where a document wants a handle.
 
-`text` fails on bytes that are not UTF-8. A project handle reads the project
+`text` fails on non-UTF-8 content. A project handle reads the project
 file, so a changed or deleted file shows on the next call.
 
 `load` sniffs the body format and parses JSON, TOML, YAML, or INI into one
-table. The file extension has no role. The parsers run in that order. The root
-must be an object, a table, a mapping, or an INI key set. A binary body fails
-with the detected format kind. A text body with no object fails with a
+table. The file extension doesn't have a role. Confit tries the parsers in
+that order.
+The root must be an object, a table, a mapping, or an INI key set. A binary body
+fails with the detected format kind. A text body with no object fails with a
 reason.
 
 ```lua
@@ -219,8 +218,8 @@ local name = input("Theme name: ")
 ```
 
 When the profile calls it, every evaluation asks, so `check`, `apply`, and
-`bundle` all prompt. An empty answer returns an empty string. A closed prompt
-channel fails the call.
+`bundle` all prompt. An empty answer returns an empty string. End of input
+returns an empty string.
 
 ## confit.validate
 

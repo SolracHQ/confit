@@ -42,15 +42,6 @@ pub(crate) impl Data {
         }
     }
 
-    /// Returns whether the content check covers existence only.
-    fn unmanaged(&self) -> bool {
-        match self {
-            Self::Text(found) => found.unmanaged,
-            Self::Opaque(found) => found.unmanaged,
-            Self::Structured(_) | Self::Link(_) | Self::Rc(_) | Self::Tree(_) => false,
-        }
-    }
-
     /// Returns the table format.
     fn format(&self) -> Option<StructuredFormat> {
         match self {
@@ -77,7 +68,7 @@ pub(crate) impl Document {
             group: None,
             sha,
             mode: self.data.mode(),
-            unmanaged: self.data.unmanaged(),
+            unmanaged: self.unmanaged,
             format: self.data.format(),
             link: matches!(self.data, Data::Link(_)),
         })
@@ -121,7 +112,7 @@ pub(crate) fn rows(manifest: &Manifest) -> ContextualResult<BTreeMap<Route, Entr
                         group: Some(document.path.clone()),
                         sha: *member.handle().sha(),
                         mode: member.mode(),
-                        unmanaged: false,
+                        unmanaged: document.unmanaged,
                         format: None,
                         link: false,
                     },
@@ -165,6 +156,7 @@ mod tests {
         let handle = ResourceRef::new(Sha::hash(b"member"));
         let document = Document::new(
             tree.clone(),
+            false,
             Data::Tree(TreeDocument {
                 members: [(
                     MemberKey::new("one.txt".to_owned()).unwrap(),
@@ -190,10 +182,33 @@ mod tests {
     }
 
     #[test]
+    fn unmanaged_tree_rows_carry_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = literal(dir.path(), "shared");
+        let handle = ResourceRef::new(Sha::hash(b"member"));
+        let document = Document::new(
+            tree.clone(),
+            true,
+            Data::Tree(TreeDocument {
+                members: [(
+                    MemberKey::new("one.txt".to_owned()).unwrap(),
+                    TreeMember::Handle(handle),
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        );
+        let found = rows(&manifest(vec![document])).unwrap();
+        let member = found.get(&tree.join("one.txt")).unwrap();
+        assert!(member.unmanaged, "the member row keeps the flag");
+    }
+
+    #[test]
     fn rows_fail_on_unrenderable_documents() {
         let dir = tempfile::tempdir().unwrap();
         let document = Document::new(
             literal(dir.path(), "broken.toml"),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Toml,
                 data: [("empty".to_owned(), serde_json::Value::Null)]

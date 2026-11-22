@@ -24,8 +24,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn document(lua: &Lua, body: Value) -> mlua::Result<(Option<Document>, Option<String>)> {
         checked(lua, &body)
     }
@@ -38,8 +38,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn config(lua: &Lua, config: Value) -> mlua::Result<(Option<Config>, Option<String>)> {
         checked(lua, &config)
     }
@@ -52,8 +52,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn patch(lua: &Lua, patch: Value) -> mlua::Result<(Option<Patch>, Option<String>)> {
         checked(lua, &patch)
     }
@@ -66,8 +66,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn hook(lua: &Lua, value: Value) -> mlua::Result<(Option<Hook>, Option<String>)> {
         checked(lua, &value)
     }
@@ -80,8 +80,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn condition(lua: &Lua, value: Value) -> mlua::Result<(Option<Condition>, Option<String>)> {
         checked(lua, &value)
     }
@@ -94,8 +94,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn entry(lua: &Lua, value: Value) -> mlua::Result<(Option<RcEntry>, Option<String>)> {
         checked(lua, &value)
     }
@@ -108,8 +108,8 @@ impl Validate {
     ///
     /// # Returns
     ///
-    /// - The decoded value, else nil.
-    /// - The failure reason, else nil.
+    /// - The decoded value.
+    /// - The failure reason.
     pub fn route(lua: &Lua, value: Value) -> mlua::Result<(Option<Route>, Option<String>)> {
         checked(lua, &value)
     }

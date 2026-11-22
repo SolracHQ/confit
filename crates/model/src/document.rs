@@ -123,10 +123,6 @@ pub struct TextDocument {
     #[serde(default)]
     #[shape(default)]
     pub mode: FileMode,
-    /// Whether the document checks the route for existence alone.
-    #[serde(default)]
-    #[shape(default)]
-    pub unmanaged: bool,
 }
 
 impl TextDocument {
@@ -146,10 +142,6 @@ pub struct OpaqueDocument {
     #[serde(default)]
     #[shape(default)]
     pub mode: FileMode,
-    /// Whether the document checks the route for existence alone.
-    #[serde(default)]
-    #[shape(default)]
-    pub unmanaged: bool,
 }
 
 /// A structured data file.
@@ -309,6 +301,10 @@ pub enum Data {
 pub struct Document {
     /// The destination route.
     pub path: Route,
+    /// Whether the document checks only the route existence.
+    #[serde(default)]
+    #[shape(default)]
+    pub unmanaged: bool,
     /// The document payload.
     #[shape(flatten)]
     #[serde(flatten)]
@@ -317,8 +313,12 @@ pub struct Document {
 
 impl Document {
     /// Builds one document.
-    pub fn new(path: Route, data: Data) -> Self {
-        Self { path, data }
+    pub fn new(path: Route, unmanaged: bool, data: Data) -> Self {
+        Self {
+            path,
+            unmanaged,
+            data,
+        }
     }
 
     /// Computes the content hash of one document.

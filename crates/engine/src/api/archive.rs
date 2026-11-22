@@ -28,8 +28,8 @@ impl ArchiveHandle {
     ///
     /// # Returns
     ///
-    /// - The member names, else nil.
-    /// - The failure reason, else nil.
+    /// - The member names.
+    /// - The failure reason.
     fn members(&self, lua: &Lua) -> mlua::Result<(Option<Vec<String>>, Option<String>)> {
         let stores = stores_from(lua)?;
         match stores.archives().members(&self.reference) {
@@ -46,8 +46,8 @@ impl ArchiveHandle {
     ///
     /// # Returns
     ///
-    /// - The member handle, else nil.
-    /// - The failure reason, else nil.
+    /// - The member handle.
+    /// - The failure reason.
     fn member(
         &self,
         lua: &Lua,

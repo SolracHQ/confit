@@ -17,8 +17,8 @@ impl Input {
     ///
     /// # Returns
     ///
-    /// - The input line, else nil.
-    /// - The failure reason, else nil.
+    /// - The input line.
+    /// - The failure reason.
     pub fn input(lua: &Lua, prompt: String) -> (Option<String>, Option<String>) {
         let Some(handles) = lua.app_data_ref::<EventHandles>() else {
             return (None, Some("the confit input is not installed".to_owned()));

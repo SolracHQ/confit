@@ -3,8 +3,8 @@
 A plugin is Lua code that returns a value a profile can use: a config, a
 document, a patch, a hook, or a function that builds one. The shipped plugins
 are scaffold copies under `plugins/_`. `init` writes them into the project, and
-the project owns them from then on. They are ordinary Lua modules that load
-from the project folder.
+the project owns them from then on. They are ordinary Lua modules that load from
+the project folder.
 
 See [Profile](profile.md) for the profile table and [Project](project.md) for
 the plugin folder setting.
@@ -22,13 +22,13 @@ local shell = require("tools.shell")       -- tools/shell.lua
 
 - `confit.<name>` loads a builtin module.
 - A name whose first component is `plugins` resolves under the plugin folder.
-  The prefix stays `plugins` when the folder has another name.
+The prefix stays `plugins` when the folder has another name.
 - Another name resolves under the project root.
 - A name with a backslash, a drive prefix, or a leading slash fails.
 - A project caller loads any file inside the project root.
 - A plugin caller loads only files inside the plugin folder.
 - A module cycle fails and shows the chain.
-- Module values cache for one run.
+- Module values cache for one evaluation.
 
 A plugin caller that needs a sibling module uses the full name:
 
@@ -95,7 +95,8 @@ sugar.cmd(argv)            { cmd = { argv = argv } }
 sugar.source(path)         { source = { path = path } }
 ```
 
-A constructor adds no `when` field. Add the condition inside the entry variant:
+A constructor doesn't add a `when` field. Add the condition inside the
+entry variant:
 `entry.alias.when = condition`, `entry.env.when = condition`, or
 `entry.eval.when = condition`.
 
@@ -115,9 +116,8 @@ A constructor adds no `when` field. Add the condition inside the entry variant:
 `is.assert(pred, value, message)` returns `value` when `pred(value)` is true. It
 raises `message` otherwise.
 
-`is.keys(prefix, checked, allowed, name)` raises when `checked` has a key
-absent from `allowed`. The message is
-`{prefix}: field '{name}' unknown field '{key}'`.
+`is.keys(prefix, checked, allowed, name)` raises when `checked` has a key absent
+from `allowed`. The message is `{prefix}: field '{name}' unknown field '{key}'`.
 
 `is.must(prefix, value, reason)` returns `value` when it is not nil. It raises
 `prefix .. reason` otherwise. The prefix carries its own trailing separator.
@@ -150,20 +150,19 @@ asset  mise-v{version}-{platform}.tar.gz
 | `macos` | `x86_64` | `macos-x64` |
 | `macos` | `aarch64` | `macos-arm64` |
 
-Any other pair fails the plan with
-`mise: unsupported platform '{os}/{arch}'`.
+Any other pair fails the plan with `mise: unsupported platform '{os}/{arch}'`.
 
 The installer config:
 
 - An opaque document at `~/.local/bin/mise` with mode `755`.
 - A TOML document at `~/.config/mise/config.toml` with an empty `[tools]` table.
 - A filter patch on every home dot-rc document (`~/.{shell}rc`). The patch
-  prepends `~/.local/bin` to `PATH` and adds `eval "$(mise activate {shell})"`
-  in the profile section, before the interactive guard.
+prepends `~/.local/bin` to `PATH` and adds `eval "$(mise activate {shell})"` in
+the profile section, before the interactive guard.
 - One install hook with id `plugin:_/mise:install`, argv
-  `{ "mise", "install" }`, the `~/.local/bin` PATH entry, a `requires` check for
-  `mise` on PATH, a `when` check on the config document hash, and a ten minute
-  timeout.
+`{ "mise", "install" }`, the `~/.local/bin` PATH entry, a `requires` check for
+`mise` on PATH, a `when` check on the config document hash, and a ten minute
+timeout.
 
 Add the returned config to the profile `configs` list.
 
@@ -191,20 +190,20 @@ mise.package({
 | `options` | Backend tool options. Optional. |
 | `rc` | Rc entries. Optional. |
 
-The package config has no documents, only patches and one requirement:
+The package config doesn't have documents, only patches and one requirement:
 
 - A structured patch adds `tools.{name}` to the shared
-  `~/.config/mise/config.toml`. The value is the version string, or a table of
-  `options` and `version`.
+`~/.config/mise/config.toml`. The value is the version string, or a table of
+`options` and `version`.
 - A hook patch adds one check to the shared install hook: `exists` on
-  `data/mise/shims/{bin}`. Repeated packages join the checks with `all`.
+`data/mise/shims/{bin}`. Repeated packages join the checks with `all`.
 - A filter patch adds the `rc` entries to every home dot-rc document. Each entry
-  gains the guard `in_path(bin)`. An entry with its own `when` gains
-  `{ all = { guard, when } }`.
+gains the guard `in_path(bin)`. An entry with its own `when` gains `{ all = {
+guard, when } }`.
 - `requirements` records `plugin:_/mise:install` with the hint
-  `add mise.init() to the profile configs`. A profile without the installer
-  fails the plan with a missing-config error. The hint stays in the requirement
-  and is not printed.
+`add mise.init() to the profile configs`. A profile without the installer fails
+the plan with a missing-config error. The hint stays in the requirement and is
+not printed.
 
 A positional `rc` list lands in `config`. A named `profile`, `config`, or
 `final` list lands in that section. `options` has non-empty string keys with
@@ -231,12 +230,12 @@ https://github.com/ryanoasis/nerd-fonts/releases/download/v{version}/{name}.zip
 The config:
 
 - One tree document at `data('fonts/{name}')`.
-- Every archive member whose name ends in `.ttf`, keyed by its archive path. A
-  ref without a mode takes 644. An archive without a `.ttf` member
-  fails.
+- Every archive member whose name ends in `.ttf`, keyed by its archive path.
+A ref that doesn't have a mode takes 644. An archive without a `.ttf`
+member fails.
 - One hook with id `plugin:_/nerd_fonts:{name}`, argv
-  `{ "fc-cache", "-f", dest }`, a `requires` check for `fc-cache` on PATH, and a
-  `when` check on the tree document. The default timeout applies.
+`{ "fc-cache", "-f", dest }`, a `requires` check for `fc-cache` on PATH, and a
+`when` check on the tree document. The default timeout applies.
 
 The plugin declares its own refresh hook. It does not share one with other
 fonts.
@@ -271,16 +270,16 @@ end
 
 - A config table and a function that returns one are the common shapes.
 - `open` paths are project relative, so a plugin reads a project resource by its
-  project path.
+project path.
 - A plugin caller loads a sibling module by its `plugins.` name.
 - Return the validated table. An unknown field then fails at the plugin boundary
-  with the plugin's own message.
+with the plugin's own message.
 - Config names and hook ids are unique across the profile. A repeated name fails
-  the plan.
+the plan.
 
-The module annotation is in the plugin file as
-`---@module "plugins.user.name"`. `.luarc.json` at the project root maps the
-plugin folder and the stubs folder on the library path. `confit init --lsp`
-writes the file. `confit init --stubs` writes the stub files that describe
-`id`, `route`, the six modules, and every document shape. Run both after a
-version change. See [init](init.md).
+The module annotation is in the plugin file as `---@module "plugins.user.name"`.
+`.luarc.json` at the project root maps the plugin folder and the stubs folder on
+the library path. `confit init --lsp` writes the file. `confit init --stubs`
+writes the stub files that describe `id`, `route`, the six modules, and every
+document shape. Repeat both commands after a version change. See
+[init](init.md).

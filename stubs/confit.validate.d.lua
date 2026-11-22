@@ -1,13 +1,14 @@
 --- @meta confit.validate
 --- Checks one document table.
 --- @param body any The document table.
---- @return Document? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Document? The decoded value.
+--- @return string? The failure reason.
 function document(body) end
 
 --- A document with structured data in one format.
 --- @class Document_Structured
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field format StructuredFormat The serialization format.
 --- @field data {[string]: any} Structured content for the file.
 
@@ -22,7 +23,7 @@ Route = {}
 function Route:display() end
 
 --- A standard userspace folder.
---- @alias RouteBase "home" | "config" | "data" | "cache" | "literal"
+--- @alias RouteBase "cache" | "config" | "data" | "home" | "literal"
 
 --- A serialization format for structured data.
 --- @alias StructuredFormat "json" | "toml" | "yaml"
@@ -30,18 +31,20 @@ function Route:display() end
 --- A document with exact text.
 --- @class Document_Text
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field text string The exact file text.
 --- @field mode string? The file permission mode.
---- @field unmanaged boolean? Whether the document checks the route for existence alone.
 
 --- A document that points at another route.
 --- @class Document_Link
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field target Route The link target route.
 
 --- A document with shell rc entries in three stages.
 --- @class Document_Rc
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field profile RcEntry[]? Entries before the guard.
 --- @field config RcEntry[]? Entries after the guard.
 --- @field final RcEntry[]? Entries that close the rc file.
@@ -49,7 +52,7 @@ function Route:display() end
 --- One rc entry in any section.
 --- @alias RcEntry { env: RcEntry_Env } | { path: RcEntry_Path } | { alias: RcEntry_Alias } | { eval: RcEntry_Eval } | { cmd: RcEntry_Cmd } | { source: RcEntry_Source }
 
---- A variable that the shell exports with a value.
+--- One exported shell variable.
 --- @class RcEntry_Env
 --- @field name string The variable name, like `EDITOR`.
 --- @field value string The exported value.
@@ -85,7 +88,7 @@ function Route:display() end
 --- @field dir Route The directory that the entry appends.
 --- @field when Condition? The shell session guard.
 
---- A shell alias with its expansion.
+--- One shell alias.
 --- @class RcEntry_Alias
 --- @field name string The alias name, like `ll`.
 --- @field expansion string The alias expansion.
@@ -112,9 +115,9 @@ function Route:display() end
 --- A document with bytes from a handle.
 --- @class Document_Opaque
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field handle ResourceRef The opaque file handle.
 --- @field mode string? The file permission mode.
---- @field unmanaged boolean? Whether the document checks the route for existence alone.
 
 --- A reference to the data.
 --- @class ResourceRef
@@ -123,6 +126,7 @@ ResourceRef = {}
 --- A document with a set of file members under one route.
 --- @class Document_Tree
 --- @field path Route The destination route.
+--- @field unmanaged boolean? Whether the document checks only the route existence.
 --- @field members {[string]: TreeMember} Tree members keyed by relative path.
 
 --- One tree member.
@@ -138,8 +142,8 @@ ResourceRef = {}
 
 --- Checks one config table.
 --- @param config any The config table.
---- @return Config? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Config? The decoded value.
+--- @return string? The failure reason.
 function config(config) end
 
 --- One decoded config.
@@ -217,32 +221,32 @@ function HookPatch.apply(hook) end
 
 --- Checks one patch table.
 --- @param patch any The patch table.
---- @return Patch? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Patch? The decoded value.
+--- @return string? The failure reason.
 function patch(patch) end
 
 --- Checks one hook table.
 --- @param value any The hook table.
---- @return Hook? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Hook? The decoded value.
+--- @return string? The failure reason.
 function hook(value) end
 
 --- Checks one condition table.
 --- @param value any The condition table.
---- @return Condition? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Condition? The decoded value.
+--- @return string? The failure reason.
 function condition(value) end
 
 --- Checks one rc entry table.
 --- @param value any The rc entry table.
---- @return RcEntry? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return RcEntry? The decoded value.
+--- @return string? The failure reason.
 function entry(value) end
 
 --- Checks one route handle.
 --- @param value any The route handle.
---- @return Route? The decoded value, else nil.
---- @return string? The failure reason, else nil.
+--- @return Route? The decoded value.
+--- @return string? The failure reason.
 function route(value) end
 
 return {document = document, config = config, patch = patch, hook = hook, condition = condition, entry = entry, route = route}

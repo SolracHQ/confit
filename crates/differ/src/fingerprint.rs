@@ -303,6 +303,7 @@ fn synthetic_hash(
 ) -> Sha {
     let probe = Document::new(
         entry.path.clone(),
+        false,
         Data::Structured(StructuredDocument {
             format,
             data: table,

@@ -59,8 +59,13 @@ impl Assembler<'_> {
                 },
             };
             let data = self.run_callbacks(target, &display, &format, data, patches)?;
+            let unmanaged = placed
+                .iter()
+                .find(|document| document.path == *target)
+                .is_some_and(|document| document.unmanaged);
             finished.push(Document::new(
                 target.clone(),
+                unmanaged,
                 Data::Structured(StructuredDocument { format, data }),
             ));
         }
@@ -99,9 +104,13 @@ impl Assembler<'_> {
                 },
             };
             let display = target.display();
+            let unmanaged = placed
+                .iter()
+                .find(|document| document.path == *target)
+                .is_some_and(|document| document.unmanaged);
             let patched = self.run_rc_callbacks(target, &display, document, patches)?;
             let data = RcData::new(patched.profile, patched.config, patched.r#final);
-            finished.push(Document::new(target.clone(), Data::Rc(data)));
+            finished.push(Document::new(target.clone(), unmanaged, Data::Rc(data)));
         }
         Ok(())
     }

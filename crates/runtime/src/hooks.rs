@@ -323,10 +323,10 @@ mod tests {
     fn text_doc(path: &Path, mode: u32) -> Document {
         Document {
             path: literal(path),
+            unmanaged: false,
             data: Data::Text(TextDocument {
                 content: "probe bytes".into(),
                 mode: FileMode::new(mode),
-                unmanaged: false,
             }),
         }
     }

@@ -1,0 +1,6 @@
+flowchart TD
+  A["Resolve DIR"] --> B{"Flags?"}
+  B -- "none" --> C["Scaffold project"]
+  B -- "--stubs or --plugins or --lsp" --> D["Refresh flagged targets"]
+  C --> E["Write profile and project file and stubs and plugins"]
+  D --> F["Overwrite flagged targets"]

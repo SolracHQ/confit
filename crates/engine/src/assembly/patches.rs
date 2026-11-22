@@ -320,6 +320,7 @@ mod tests {
     fn placed_structured(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data: BTreeMap::from([("seed".to_owned(), serde_json::json!(0))]),
@@ -331,6 +332,7 @@ mod tests {
     fn placed_rc(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
+            false,
             Data::Rc(RcData::new(Vec::new(), Vec::new(), Vec::new())),
         )
     }
@@ -339,10 +341,10 @@ mod tests {
     fn placed_text(relative: &str) -> Document {
         Document::new(
             Route::new(RouteBase::Home, relative).unwrap(),
+            false,
             Data::Text(TextDocument {
                 content: "hi".to_owned(),
                 mode: FileMode::new(0o644),
-                unmanaged: false,
             }),
         )
     }

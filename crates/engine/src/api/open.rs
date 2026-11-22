@@ -19,8 +19,8 @@ impl Open {
     ///
     /// # Returns
     ///
-    /// - The resource handle, else nil.
-    /// - The failure reason, else nil.
+    /// - The resource handle.
+    /// - The failure reason.
     pub fn open(lua: &Lua, path: String) -> mlua::Result<(Option<ResourceHandle>, Option<String>)> {
         let stores = stores_from(lua)?;
         match stores.resources().resource(&path) {

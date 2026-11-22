@@ -213,10 +213,10 @@ impl StateStore {
                 .unchecked(&before.sha, change.expanded.clone());
             documents.push(Document::new(
                 change.path.clone(),
+                false,
                 Data::Opaque(OpaqueDocument {
                     handle: ResourceRef::new(before.sha),
                     mode: before.mode,
-                    unmanaged: false,
                 }),
             ));
         }

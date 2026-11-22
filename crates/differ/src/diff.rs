@@ -59,8 +59,11 @@ impl Diff {
             Arc::clone(&wanted),
             Arc::clone(&recorded),
         )?;
-        let drifted: BTreeSet<Route> =
-            drift.changes.iter().map(|change| change.path.clone()).collect();
+        let drifted: BTreeSet<Route> = drift
+            .changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect();
         Ok(Self {
             desired: View::desired(
                 &wanted_rows,
@@ -120,10 +123,10 @@ mod tests {
     fn text(route: Route, content: &str) -> Document {
         Document::new(
             route,
+            false,
             Data::Text(TextDocument {
                 content: content.to_owned(),
                 mode: FileMode::default(),
-                unmanaged: false,
             }),
         )
     }
@@ -281,6 +284,7 @@ mod tests {
         data.insert("alpha".to_owned(), serde_json::json!([1, 2]));
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Json,
                 data,
@@ -304,6 +308,7 @@ mod tests {
         data.insert("alpha".to_owned(), serde_json::json!(1));
         let desired = manifest(vec![Document::new(
             route.clone(),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Toml,
                 data,
@@ -347,10 +352,10 @@ mod tests {
         write_file(&dir.path().join("marker"), b"other bytes");
         let previous = manifest(vec![Document::new(
             route.clone(),
+            true,
             Data::Text(TextDocument {
                 content: "recorded".to_owned(),
                 mode: FileMode::default(),
-                unmanaged: true,
             }),
         )]);
         let diff = Diff::build(manifest(Vec::new()), previous).unwrap();
@@ -360,13 +365,41 @@ mod tests {
         assert!(diff.drift.is_empty(), "empty recorded means empty drift");
         let previous = manifest(vec![Document::new(
             route,
+            true,
             Data::Text(TextDocument {
                 content: "recorded".to_owned(),
                 mode: FileMode::default(),
-                unmanaged: true,
             }),
         )]);
         let diff = Diff::build(manifest(Vec::new()), previous).unwrap();
+        assert_eq!(diff.drift.len(), 1);
+        assert_eq!(diff.drift[0].kind, ChangeKind::Removal);
+    }
+    #[test]
+    fn unmanaged_tree_recreates_only_missing_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = literal(dir.path(), "shared");
+        std::fs::create_dir(dir.path().join("shared")).unwrap();
+        write_file(&dir.path().join("shared/one.txt"), b"changed");
+        let handle = |bytes: &[u8]| ResourceRef::new(Sha::hash(bytes));
+        let recorded = || {
+            manifest(vec![Document::new(
+                tree.clone(),
+                true,
+                Data::Tree(TreeDocument {
+                    members: [(
+                        MemberKey::new("one.txt".to_owned()).unwrap(),
+                        TreeMember::Handle(handle(b"recorded")),
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+            )])
+        };
+        let diff = Diff::build(manifest(Vec::new()), recorded()).unwrap();
+        assert!(diff.drift.is_empty(), "content leaves drift empty");
+        std::fs::remove_file(dir.path().join("shared/one.txt")).unwrap();
+        let diff = Diff::build(manifest(Vec::new()), recorded()).unwrap();
         assert_eq!(diff.drift.len(), 1);
         assert_eq!(diff.drift[0].kind, ChangeKind::Removal);
     }
@@ -380,6 +413,7 @@ mod tests {
         let handle = |bytes: &[u8]| ResourceRef::new(Sha::hash(bytes));
         let previous = manifest(vec![Document::new(
             tree.clone(),
+            false,
             Data::Tree(TreeDocument {
                 members: [
                     (
@@ -503,6 +537,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let document = Document::new(
             literal(dir.path(), "broken.toml"),
+            false,
             Data::Structured(StructuredDocument {
                 format: StructuredFormat::Toml,
                 data: [("empty".to_owned(), serde_json::Value::Null)]
@@ -575,10 +610,10 @@ mod tests {
         let opaque = |bytes: &[u8], mode: u32| {
             Document::new(
                 route.clone(),
+                false,
                 Data::Opaque(OpaqueDocument {
                     handle: ResourceRef::new(Sha::hash(bytes)),
                     mode: FileMode::new(mode),
-                    unmanaged: false,
                 }),
             )
         };
@@ -606,10 +641,10 @@ mod tests {
         let opaque = |mode: u32| {
             Document::new(
                 route.clone(),
+                false,
                 Data::Opaque(OpaqueDocument {
                     handle: ResourceRef::new(Sha::hash(b"kept")),
                     mode: FileMode::new(mode),
-                    unmanaged: false,
                 }),
             )
         };
@@ -635,6 +670,7 @@ mod tests {
         let members = |member: TreeMember| {
             Document::new(
                 tree.clone(),
+                false,
                 Data::Tree(TreeDocument {
                     members: [(MemberKey::new("one.txt".to_owned()).unwrap(), member)]
                         .into_iter()

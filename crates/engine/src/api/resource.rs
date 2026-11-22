@@ -76,8 +76,8 @@ impl ResourceHandle {
     ///
     /// # Returns
     ///
-    /// - The archive handle, else nil.
-    /// - The failure reason, else nil.
+    /// - The archive handle.
+    /// - The failure reason.
     fn archive(&self, lua: &Lua) -> mlua::Result<(Option<ArchiveHandle>, Option<String>)> {
         let stores = stores_from(lua)?;
         match stores.archives().archive(&self.r#ref()) {
