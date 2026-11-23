@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+Design spec: `docs/design/v0.9.md`.
+
 ### Added
 
 - Added bundles to runtime. Export packs slots and
@@ -51,9 +53,70 @@
 - Added the plugins folder mount to the test container as
   read only. Examples resolve the same shared tree on host
   and in the container.
+- Added terminal backends. The `inline`, `plain`
+  and `none` backends render one event protocol.
+  The `--ui` flag picks the backend with `auto`
+  as default.
+- Added preview views. The `--view` flag picks
+  `desired` or `effective`. Check defaults to
+  desired. Apply and restore default to effective.
+  Disk drift marks with `!`.
+- Added the preview sections. Evaluation,
+  Comparison, Documents, Hooks and Summary precede
+  every write. Results and Details follow it. The
+  Created tree follows init.
+- Added prompted input with `confit.input`. The
+  prompt goes to stderr and one line shapes the
+  config. The 5-interactivity example proves it.
+- Added the rescue state. The first apply stores
+  replaced files before the write. `restore @!`
+  writes them back.
+- Added unix-only support. Confit runs on unix
+  systems. Windows stays unsupported.
+- Added the differ with three views. Desired
+  compares wanted against recorded. Drift compares
+  recorded against disk. Effective compares wanted
+  against disk and drives writes.
+- Added the store layer. One crate owns all
+  managed files with fixed paths. Resources serve
+  project files. Pool keeps shared blobs. State
+  keeps named and history states. Fetch and archive
+  fill cache during evaluation. Main builds the set
+  once per execution.
+- Added JSON output. The `--json` flag prints
+  artifact, check, write, delete and init results
+  as pretty JSON. Errors print the log payload as
+  JSON.
+- Added the restore command. `restore` writes
+  stored state from `.cb` bundles, `@name` slots
+  and `%N` history. Other sources fail as restore
+  errors.
+- Added the bundle command. `bundle` evaluates the
+  profile and writes a portable `.cb` file or a
+  named slot.
+- Added archive handles. `handle:archive` opens
+  zips and tarballs. `archive:members` lists names.
+  `archive:member` returns member handles with
+  reasons.
+- Added facts. `confit.fact` returns `version`
+  triplets, `os` and `arch` names. Unknown names
+  fail the call.
+- Added history rotation. History keeps five
+  previous entries. `%N` picks newest-first. Bad
+  names, numbers and ranges fail the pick.
+- Added suggestions. Unknown names report near
+  matches. Error contexts carry file, cache, url,
+  document and hook values.
+- Added structured loads. `handle:load` decodes
+  JSON, TOML, YAML and INI objects. Non-tables
+  and binary files return nil with reasons.
 
 ### Changed
 
+- Changed the Lua surface to a full rewrite. Profiles
+  require builtin modules and build plain tables with
+  handles. Constructors, methods, `{{shell}}` slots and
+  the old namespaces are gone with no compat layer.
 - Changed engine from globals to `require` with plain
   tables over handles.
 - Changed configs, documents, hooks and patches to plain
@@ -97,8 +160,9 @@
 - Changed caches to hold across runs. Warm plans take
   about a second.
 - Changed the default profile to `main.lua`. Project
-  folders feed `plan` with an optional profile choice.
-  Single profiles skip the flag.
+  folders feed `bundle`, `check` and `apply` with
+  an optional profile choice. Single profiles skip
+  the flag.
 - Changed the prompt to drain queued prints before the
   question.
 - Changed the log surface to a logs folder. Logs folders
@@ -106,12 +170,18 @@
   lines carry millis stamps. Hook outputs land one file
   per hook under the hooks folder.
 - Changed the apply tail to print restore with
-  `confit apply %1`.
+  `confit restore %1`.
 - Changed examples to `main.lua` profiles. `main.lua`,
   `project.toml` and the editor config ship in each
   example. Tool files require the shared plugins.
 - Changed core plugins to normal plugins. Init scaffolds
   them, profiles never require them. Users drop them freely.
+- Changed the command split. `bundle` and `check`
+  split the old preview. `apply` and `restore`
+  split the old write.
+- Changed hooks from `checks` to `check`. Hooks
+  carry one `check` condition. Old `checks` arrays
+  fail validation.
 
 ### Removed
 
@@ -128,6 +198,10 @@
   clones tables now.
 - Removed the `--root`, `--plugins` and `--re-fetch`
   flags. Project folders with `project.toml` replace them.
+- Removed the plan command. `bundle` and `check`
+  cover its jobs.
+- Removed apply pickers. `apply` reads project folders
+  only. `restore` reads bundles, slots and history.
 
 ## [0.8.1] (never released)
 
