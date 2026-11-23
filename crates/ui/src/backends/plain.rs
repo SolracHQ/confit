@@ -101,6 +101,7 @@ pub(crate) fn start(handles: UiHandles) {
             ToUi::AskForDetails => ui.on_details(&handles),
             ToUi::AskForConfirm { prompt, force } => ui.on_confirm(&handles, prompt, force),
             ToUi::WriteResults(applied) => ui.emit(|execution| execution.write_results(&applied)),
+            ToUi::InitResults(created) => ui.emit(|execution| execution.init_results(&created)),
             ToUi::Prompt(question) => match read_answer(&question) {
                 Ok(answer) => handles.send(FromUi::Answer(answer)),
                 Err(error) => {

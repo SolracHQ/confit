@@ -45,6 +45,8 @@ fn main() {
             Command::Apply(args) => roots.project_root = args.project.clone(),
             Command::Restore(_) | Command::Init(_) | Command::Export(_) | Command::Delete(_) => {}
         }
+        roots.project_root =
+            std::path::absolute(&roots.project_root).unwrap_or(roots.project_root.clone());
         let stores = Stores::new(roots, handles.clone());
         match &cli.command {
             Command::Bundle(args) => BundleRunner {
@@ -67,7 +69,12 @@ fn main() {
             Command::Restore(args) => {
                 restore::run(args, stores, handles, hooks_dir).map(ActionResult::Wrote)
             }
-            Command::Init(args) => InitRunner { args }.execute().map(ActionResult::Init),
+            Command::Init(args) => InitRunner {
+                args,
+                handles: handles.clone(),
+            }
+            .execute()
+            .map(ActionResult::Init),
             Command::Export(args) if args.manifest => {
                 ExportRunner::run(args, stores).map(ActionResult::Export)
             }

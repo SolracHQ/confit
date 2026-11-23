@@ -4,6 +4,7 @@ The output is a visual language.
 Phase titles mark progress.
 Route trees show planned files.
 Route trees also show landed files.
+Created trees show scaffold files.
 
 Count tables show plan totals.
 Count tables also show close totals.
@@ -76,6 +77,7 @@ Check ends after the preview.
 | `Applying Changes` | Shows for apply restore |
 | `Results` | Shows when counts exist |
 | `Details` | Shows for check with yes |
+| `Created` | Shows for init |
 
 A spinner marks the active fetch task on a terminal.
 A spinner also marks the active pool task on a terminal.
@@ -102,6 +104,10 @@ The `Applying Changes` tree is rooted at the parent path.
 Each landed change shows a check mark.
 Each landed change also shows its plan sigil.
 
+The `Created` tree is rooted at the init `DIR`.
+Each leaf shows `+` with the created path and no kind.
+The count line follows the tree, as in `wrote 18 files`.
+
 | Base | Holds |
 | --- | --- |
 | `[cache]` | Cache files |
@@ -127,6 +133,13 @@ Documents
 Applying Changes
 └── /home/solrac
     └── ✓ + .bashrc: text
+```
+
+```text
+Created
+site
+└── + main.lua
+wrote 1 file
 ```
 
 ## Tables

@@ -7,7 +7,7 @@ use confit_differ::{diff::Diff, view::ViewKind};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::protocol::{
-    Applied, FromUi, Phase, PromptKind, RowUpdate, TaskKind, TaskNote, TaskState, ToUi,
+    Applied, FromUi, InitCreated, Phase, PromptKind, RowUpdate, TaskKind, TaskNote, TaskState, ToUi,
 };
 
 /// Panics when the render thread dies.
@@ -100,6 +100,13 @@ impl EventHandles {
     /// - A closed channel panics.
     pub fn write_results(&self, applied: Applied) {
         self.send(ToUi::WriteResults(applied));
+    }
+
+    /// Sends the created files to the render thread.
+    ///
+    /// - A closed channel panics.
+    pub fn init_results(&self, created: InitCreated) {
+        self.send(ToUi::InitResults(created));
     }
 
     /// Sends a failure notice to the render thread.

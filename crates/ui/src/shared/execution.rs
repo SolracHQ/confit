@@ -10,7 +10,7 @@ use confit_differ::{
     diff::Diff,
     view::{View, ViewKind},
 };
-use confit_events::protocol::{Applied, Phase, TaskKind, TaskNote, TaskState};
+use confit_events::protocol::{Applied, InitCreated, Phase, TaskKind, TaskNote, TaskState};
 
 use crate::shared::{
     components::{style::strExt as _, tables::hints},
@@ -121,6 +121,11 @@ impl Execution {
             .as_ref()
             .map(|view| view.outcome(&self.outcomes))
             .unwrap_or_default()
+    }
+
+    /// Builds the created tree with its count line.
+    pub(crate) fn init_results(&self, created: &InitCreated) -> Vec<String> {
+        crate::shared::stages::init::init_results(&created.root, &created.files)
     }
 
     /// Builds the closing table and restore hints.

@@ -9,6 +9,7 @@ use confit_core::error::{
 use confit_driver as driver;
 use confit_engine::project::{FILE as PROJECT_FILE, Project};
 use confit_engine::stubs::generate_stubs;
+use confit_events::{EventHandles, protocol::InitCreated};
 
 use crate::cli::{DEFAULT_PROFILE, InitArgs};
 
@@ -29,6 +30,8 @@ pub struct InitReport {
     pub path: PathBuf,
     /// The number of files the execution wrote.
     pub written: usize,
+    /// The created files.
+    pub files: Vec<PathBuf>,
 }
 
 /// One init outcome.
@@ -45,6 +48,8 @@ pub struct InitItem {
 pub struct InitRunner<'a> {
     /// The flags that choose the folder and the artifacts to refresh.
     pub args: &'a InitArgs,
+    /// The UI communication channel.
+    pub handles: EventHandles,
 }
 
 impl InitRunner<'_> {
@@ -60,15 +65,22 @@ impl InitRunner<'_> {
         let project = Project::read(&root)?;
         if !self.args.stubs && !self.args.plugins && !self.args.lsp {
             let report = scaffold(&root, &project)?;
-            return Ok(vec![InitItem {
+            let items = vec![InitItem {
                 stage: "init".to_owned(),
                 path: report.path.display().to_string(),
                 written: report.written,
-            }]);
+            }];
+            self.handles.init_results(InitCreated {
+                root: root.clone(),
+                files: report.files.clone(),
+            });
+            return Ok(items);
         }
         let mut items = Vec::new();
+        let mut files = Vec::new();
         if self.args.stubs {
             let report = write_stubs(&root.join(&project.stubs.folder))?;
+            files.extend(report.files.iter().cloned());
             items.push(InitItem {
                 stage: "stubs".to_owned(),
                 path: report.path.display().to_string(),
@@ -77,6 +89,7 @@ impl InitRunner<'_> {
         }
         if self.args.plugins {
             let report = write_plugins(&root, &project.plugins.folder)?;
+            files.extend(report.files.iter().cloned());
             items.push(InitItem {
                 stage: "plugins".to_owned(),
                 path: report.path.display().to_string(),
@@ -85,12 +98,17 @@ impl InitRunner<'_> {
         }
         if self.args.lsp {
             let report = write_lsp(&root, &project)?;
+            files.extend(report.files.iter().cloned());
             items.push(InitItem {
                 stage: "lsp".to_owned(),
                 path: report.path.display().to_string(),
                 written: report.written,
             });
         }
+        self.handles.init_results(InitCreated {
+            root: root.clone(),
+            files,
+        });
         Ok(items)
     }
 }
@@ -150,6 +168,7 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     Ok(InitReport {
         path: profile,
         written: destinations.len(),
+        files: destinations,
     })
 }
 
@@ -162,13 +181,16 @@ fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a stub write fails.
 fn write_stubs(dir: &Path) -> TerminalResult<InitReport> {
     let documents = generate_stubs().map_err(map_stubs)?;
+    let mut files = Vec::new();
     for document in &documents {
         let destination = dir.join(format!("{}.d.lua", document.module));
         write_file(&destination, document.text.as_bytes())?;
+        files.push(destination);
     }
     Ok(InitReport {
         path: dir.to_path_buf(),
         written: documents.len(),
+        files,
     })
 }
 
@@ -193,12 +215,16 @@ fn map_stubs(contextual: ContextualCause) -> Error {
 /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a plugin write fails.
 fn write_plugins(root: &Path, folder: &Path) -> TerminalResult<InitReport> {
     let dir = root.join(folder);
+    let mut files = Vec::new();
     for (relative, text) in PLUGIN_FILES.iter().copied() {
-        write_file(&dir.join(relative), text.as_bytes())?;
+        let destination = dir.join(relative);
+        write_file(&destination, text.as_bytes())?;
+        files.push(destination);
     }
     Ok(InitReport {
         path: dir,
         written: PLUGIN_FILES.len(),
+        files,
     })
 }
 
@@ -210,7 +236,11 @@ fn write_plugins(root: &Path, folder: &Path) -> TerminalResult<InitReport> {
 fn write_lsp(root: &Path, project: &Project) -> TerminalResult<InitReport> {
     let (path, text) = render_lsp(root, project)?;
     write_file(&path, text.as_bytes())?;
-    Ok(InitReport { path, written: 1 })
+    Ok(InitReport {
+        path: path.clone(),
+        written: 1,
+        files: vec![path],
+    })
 }
 
 /// Renders the editor config that maps the plugin and stubs folders.

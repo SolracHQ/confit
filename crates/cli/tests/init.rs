@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use confit_cli::actions::init::InitRunner;
 use confit_cli::cli::InitArgs;
 use confit_driver::fs;
+use confit_events::{EventHandles, pair, protocol::ToUi};
 
 /// Scaffolds the site folder with the default flags and returns the root.
 fn scaffold(dir: &Path) -> PathBuf {
@@ -19,7 +20,12 @@ fn scaffold(dir: &Path) -> PathBuf {
         plugins: false,
         lsp: false,
     };
-    let items = InitRunner { args: &args }.execute().unwrap();
+    let items = InitRunner {
+        args: &args,
+        handles: EventHandles::silent(),
+    }
+    .execute()
+    .unwrap();
     assert_eq!(items.len(), 1, "the scaffold reports one item");
     let item = &items[0];
     assert_eq!(item.stage, "init", "the scaffold reports the init stage");
@@ -56,6 +62,42 @@ fn init_scaffold_writes_the_editor_config() {
 }
 
 #[test]
+fn init_sends_the_created_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("site");
+    let args = InitArgs {
+        dir: Some(root.clone()),
+        stubs: false,
+        plugins: false,
+        lsp: false,
+    };
+    let (handles, ui) = pair();
+    let items = InitRunner {
+        args: &args,
+        handles,
+    }
+    .execute()
+    .unwrap();
+    assert_eq!(items.len(), 1, "the scaffold reports one item");
+    let mut files = Vec::new();
+    while let Some(event) = ui.recv() {
+        if let ToUi::InitResults(created) = event {
+            assert_eq!(created.root, root, "the event roots at DIR");
+            files = created.files;
+        }
+    }
+    assert_eq!(files.len(), 18, "the event carries every file");
+    assert!(
+        files.contains(&root.join("main.lua")),
+        "the event carries the profile"
+    );
+    assert!(
+        files.contains(&root.join(".luarc.json")),
+        "the event carries the editor config"
+    );
+}
+
+#[test]
 fn init_rejects_a_present_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let root = scaffold(dir.path());
@@ -65,7 +107,11 @@ fn init_rejects_a_present_scaffold() {
         plugins: false,
         lsp: false,
     };
-    let outcome = InitRunner { args: &args }.execute();
+    let outcome = InitRunner {
+        args: &args,
+        handles: EventHandles::silent(),
+    }
+    .execute();
     match outcome {
         Err(error) if error.summary().contains("Cannot overwrite existing") => {}
         Err(other) => panic!("the init fails to reject the present scaffold: {other}"),
@@ -85,7 +131,12 @@ fn init_flags_rewrite_stubs_plugins_and_lsp() {
         plugins: true,
         lsp: true,
     };
-    let items = InitRunner { args: &args }.execute().unwrap();
+    let items = InitRunner {
+        args: &args,
+        handles: EventHandles::silent(),
+    }
+    .execute()
+    .unwrap();
     assert_eq!(items.len(), 3, "every flag reports one item");
     assert_eq!(items[0].stage, "stubs", "the first item reports stubs");
     assert_eq!(items[1].stage, "plugins", "the second item reports plugins");

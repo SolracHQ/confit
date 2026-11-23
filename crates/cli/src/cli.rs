@@ -8,7 +8,7 @@ use confit_driver::paths::BaseDirs;
 
 /// The parsed command line.
 #[derive(Debug, Parser)]
-#[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
+#[command(name = "confit", version, about = "user space configuration manager", long_about = None)]
 pub struct Cli {
     /// subcommand to run
     #[command(subcommand)]

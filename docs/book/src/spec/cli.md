@@ -201,7 +201,8 @@ confit init [DIR] [--stubs] [--plugins] [--lsp]
 | `--plugins` | none | off | overwrites the core plugins folder |
 | `--lsp` | none | off | overwrites the editor config |
 
-A refresh flag limits the command to flagged targets. Flags combine and each flagged target prints one line.
+A refresh flag limits the command to flagged targets. Flags combine and the
+tree shows every flagged target.
 
 `init` scaffolds a project in `DIR` with a profile, a project
 file, stubs, core plugins, and editor config. `DIR` defaults

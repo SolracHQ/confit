@@ -62,6 +62,10 @@ impl Inline {
                 self.emit(|execution| execution.write_results(applied));
                 None
             }
+            ToUi::InitResults(created) => {
+                self.emit(|execution| execution.init_results(created));
+                None
+            }
             ToUi::Error(error) => {
                 self.emit(|execution| execution.failure(error));
                 None

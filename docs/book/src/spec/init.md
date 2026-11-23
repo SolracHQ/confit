@@ -29,7 +29,8 @@ scaffold.
 4. For the plain scaffold, check every destination for a clash. A clash fails
 before any write.
 5. Write the target files and create parent folders.
-6. Leave stdout empty. The command prints only the `Log:` line.
+6. Show the `Created` tree with the count line. The command prints the
+`Log:` line last.
 
 `init` uses resource copies and API shapes as its inputs. A broken `main.lua`
 still leaves `init --stubs` and `init --lsp` working. A failed write stops the
@@ -176,16 +177,52 @@ keeps other files in the folder as is.
 
 ## Output
 
-The command doesn't produce a result line and keeps stdout empty. Stderr
-carries only the `Log:` line on success.
+Stdout stays empty. Stderr shows the `Created` tree with the count line,
+then the `Log:` line. Backend `none` shows only the `Log:` line.
+
+The tree is rooted at `DIR`. Each leaf shows `+` with the created path.
+A refresh shows only flagged targets. The count line states the total.
+
+```text
+Created
+site
+├── plugins
+│   └── _
+│       ├── is
+│       │   └── + init.lua
+│       ├── mise
+│       │   ├── + init.lua
+│       │   ├── + rc.lua
+│       │   ├── + release.lua
+│       │   └── + spec.lua
+│       ├── nerd_fonts
+│       │   └── + init.lua
+│       ├── sugar
+│       │   └── + init.lua
+│       └── tab
+│           └── + init.lua
+├── stubs
+│   ├── + confit.d.lua
+│   ├── + confit.fact.d.lua
+│   ├── + confit.fetch.d.lua
+│   ├── + confit.input.d.lua
+│   ├── + confit.open.d.lua
+│   ├── + confit.render.d.lua
+│   └── + confit.validate.d.lua
+├── + .luarc.json
+├── + main.lua
+└── + project.toml
+wrote 18 files
+```
 
 The file counts are fixed per target: 18 for the scaffold, 7 for the stubs, 8
 for the plugins, and 1 for the editor config. You get 18 files from a plain
 command: the profile, the project file, 7 stubs, 8 plugins, and the editor
 config.
 
-A refresh overwrites the files of its target and exits 0. A second command with
-the same flags writes the same files again.
+A refresh overwrites the files of its target and exits 0. The tree lists
+only the flagged targets. A second command with the same flags writes the
+same files again.
 
 A failed command exits 1. The command prints `Log:` and `Error:` lines to
 stderr. A usage error exits 2 before the logs folder is resolved.

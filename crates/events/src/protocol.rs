@@ -64,6 +64,15 @@ pub struct AppliedChange {
     pub outcome: ApplyOutcome,
 }
 
+/// One created file set for the init tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitCreated {
+    /// The scaffold root.
+    pub root: PathBuf,
+    /// The created files.
+    pub files: Vec<PathBuf>,
+}
+
 impl Applied {
     /// Records a written row.
     pub fn push(&mut self, path: &Path, outcome: ApplyOutcome) {
@@ -209,6 +218,8 @@ pub enum ToUi {
     },
     /// The write results with per-row outcomes.
     WriteResults(Applied),
+    /// The created files for the init tree.
+    InitResults(InitCreated),
     /// A question request.
     Prompt(String),
     /// A failure notice with no reply.
