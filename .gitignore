@@ -3,3 +3,4 @@
 docs/book/book
 .*/
 !.github/
+/index.scip

@@ -1,166 +1,165 @@
 # ConfIt
 
-Configure It. CaC (Configuration as Code) scoped in the user
-space. One static binary to bootstrap user setups and maintain
-user-space files. Same job as a dotfiles setup, declarative,
-with a preview before anything gets touched.
+User space configuration manager. Following the configuration as code principle,
+allows defining your configuration as Lua code, previewing the changes and
+applying them idempotently.
 
 ## Demo
 
-<video src="assets/confit-demo.mp4" controls width="100%"></video>
+![Confit demo](assets/confit-demo.gif)
 
-## Objectives
+## Index
 
-- Idempotent changes. Applying twice gives the same result.
-- Readable diffs before anything lands.
-- Configs shaped per user from Lua.
-- Profiles sharing one config pool across runs.
-- Editor-checked key names, configs landing where loaders read them.
-- A preview loop comparing desired plus previous plus actual
-  files, with hand edits reported before they get overwritten.
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Configs](#configs)
+- [Preview and rescue](#preview-and-rescue)
+- [Scope](#scope)
+- [Examples](#examples)
+- [Commands](#commands)
+- [Book](#book)
+- [Build from source](#build-from-source)
+- [License](#license)
 
-## State
+## Install
 
-One Rust binary, Lua 5.4 vendored inside, plan before apply.
-Five commands work today. `plan` previews the change and
-writes a portable `.cb` bundle holding `manifest.json` plus blobs.
-`apply` previews, prompts, and writes the files. `export` packs
-a slot into a portable bundle. `delete` drops a named slot.
-`init` scaffolds a project.
+For one-shot configuration you can just run this.
 
-Slots hold manifests, one shared pool holds blobs under content hashes.
-First runs compare desired documents against disk bytes and report
-creates plus overwrites. One spinner carries progress counters through
-hash plus compression plus fetch phases. Serde derives serve as the schema.
+```sh
+curl -L https://github.com/SolracHQ/confit/releases/download/v0.9.0/confit-linux-x64 -o /tmp/confit
+chmod u+x /tmp/confit
+/tmp/confit {YOUR_PROFILE}
+```
 
-Profiles declare documents plus configs. Configs hold documents plus
-patches plus hooks. Documents cover shell entries plus structured configs plus
-literal files plus binaries plus symlinks plus managed file sets. Patches tweak documents through callbacks
-in pipeline order. Hooks hand tools their post-config steps after
-the files land. The mise plugin ships package configs plus shell
-activation entries plus a generic `options` table folding tool
-options into the shared TOML. The nerd fonts plugin ships one
-`fonts/{name}` folder per font plus one `fc-cache -f` hook scoped
-to that folder.
+For develop and test profiles, repeated usage.
+
+```sh
+mkdir -p ~/.local/bin
+curl -LO https://github.com/SolracHQ/confit/releases/download/v0.9.0/confit-linux-x64
+install -m 755 confit-linux-x64 ~/.local/bin/confit
+confit --version
+```
+
+```text
+confit 0.9.0
+```
+
+## Quick start
+
+To start creating profiles run `confit init /your/dotfiles/path` to init a new
+dotfiles project. You can modify the default main.lua profile and guide based on
+the generated stubs and plugin folder. For a step by step guide please see the
+guide part of the book at <https://solrachq.github.io/confit/>
+
+To apply an existing profile just run `confit apply /path/to/profile`. Ensure to
+see what the profile will create and which hooks will execute. In case you want
+to recover your files execute `confit restore @!`.
+
+## Configs
+
+Configs are the logical units. A config correlates created files with others via
+patches. If you add a new CLI tool you not only add the binary but the aliases
+in the shell files with its configs in `.config` and a trigger for the install
+hook. It is a core and powerful concept.
+
+```lua
+-- tools/bat.lua
+local mise = require("plugins._.mise")
+local sugar = require("plugins._.sugar")
+
+return mise.package({
+  name = "bat",
+  rc = {
+    sugar.alias("cat", "bat"),
+  },
+})
+```
+
+This config adds the binary entry with the shell alias and the install hook
+trigger in one place. Disabling the config disables every part.
+
+## Preview and rescue
+
+Check shows what a profile produces. It uses the desired view by default. The
+desired view compares the profile against stored state. It gives the ideal
+result on a clean machine. It fits profile development and portable bundles. Run
+it as often as needed while editing. The view can be changed with `--view`.
+
+Apply uses the effective view by default. It compares the profile against disk
+and marks drift with `!`. It fits the machine in front of you.
+
+The first apply has no history to undo. It copies replaced files into the rescue
+state first and reports it.
+
+```sh
+confit restore '@!'
+```
+
+> [!NOTE] Quote `'@!'` in some shells. In some of them a bare `!` triggers
+> history expansion.
+
+A later apply prints the history hint.
+
+```sh
+confit restore %1
+```
+
+`%1` is the previous run and `%2` is the run before that. History keeps five
+previous entries.
 
 ## Scope
 
-User-space files. Everything runs in user space.
-External tools handle system software.
+Confit does not support and will never support scaling mechanisms nor native
+support for system-wide package managers. It was designed to be user space only.
 
-## Show
+## Examples
 
-A profile declares configs, configs collect entries:
-
-```lua
--- examples/0-basic_tool/tools/bat.lua
-local mise = confit.plugin.solrachq.mise
-
-local bat = mise.package({
- name = "bat",
- aliases = { cat = "bat" },
-})
-return bat
-```
-
-A plan run previews the change:
-
-```sh
-$ confit plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool
-Hooks
-+ mise install
-  + requires (in_path(mise))
-  + when (changed(~/.config/mise/config.toml))
-  + checks (exists(/home/tester/.local/share/mise/shims/bat))
-Summary
-Documents: 1 to add, 1 to change, 0 to destroy.
-Hooks: 1 to add, 0 to change, 0 to destroy.
-```
-
-Beyond packages, tools finish their own setup. One font call
-lands 96 files as one manifest line and refreshes the font cache:
-
-```lua
--- examples/3-dotfiles-tools/tools/fonts.lua
-local nerd_fonts = confit.plugin.solrachq.nerd_fonts
-
-return nerd_fonts.font("JetBrainsMono", "3.5.1")
-```
-
-```sh
-$ confit plan examples/3-dotfiles-tools/profile.lua --root examples/3-dotfiles-tools
-Resources
-+ /home/tester/.local/share/fonts/JetBrainsMono: tree
-  + tree (96 files)
-Hooks
-+ fc-cache -f /home/tester/.local/share/fonts/JetBrainsMono
-  + requires (in_path(fc-cache))
-Summary
-Documents: 3 to add, 1 to change, 0 to destroy.
-Hooks: 2 to add, 0 to change, 0 to destroy.
-```
-
-| Fixture | Proves |
+| Example | Shows |
 |---|---|
-| `0-basic_tool` | mise package plus alias plus init |
-| `1-structured_resource` | starship config declared plus patched |
-| `2-templated_resource` | starship config rendered from a template with profile vars |
-| `3-dotfiles-tools` | multi-config profile plus fetch plus unpack plus rc patch plus hooks plus tree |
+| `0-basic_tool` | mise package, alias, init |
+| `1-structured_resource` | declared and patched config |
+| `2-templated_resource` | rendered config with profile vars |
+| `3-fonts` | font tree, fetch, `fc-cache` hook |
+| `4-dotfiles` | multi config profile, rc patch |
+| `5-interactivity` | prompted input shaping config |
+| `book-example` | didactic profiles from the book |
+
+The book example is didactic, not the cleanest setup. The starship chapter
+downloads the binary by hand to teach binary fetch. Real setups prefer the mise
+plugin. Read the book narrative first, then open `book-example`.
+
+## Commands
 
 | Command | Does |
 |---|---|
-| `plan PROFILE` | writes a portable `.cb` bundle, warnings on stderr |
-| `apply SOURCE` | previews, prompts on literal `yes`, writes files |
-| `export [PICKER]` | packs one slot into a portable bundle, prints the path |
-| `delete @name` | drops one named slot plus its orphaned blobs |
-| `init [DIR]` | scaffolds a profile plus stubs, default `.` |
+| `bundle PROJECT -o PATH\|@name` | writes a `.cb` bundle or named slot |
+| `check PROJECT` | shows the desired preview fast for profile development |
+| `apply PROJECT` | previews effective, prompts `yes`, writes files |
+| `restore SOURCE` | previews and writes one `.cb`, `@name`, `@!`, or `%N` |
+| `export [PICKER]` | packs one stored slot into a portable bundle |
+| `delete @name` | drops one named slot and its orphaned entries |
+| `init [DIR]` | scaffolds a profile with stubs and plugins, default `.` |
 
-`--root` defaults to the profile file parent directory.
-`apply` reads SOURCE by shape. `.lua` plus extensionless paths run
-a profile, `.cb` runs a bundle file, `@name` runs a named slot,
-`%N` runs history newest-first from 1.
-`-o @name` stores a slot manifest, `apply @name` replays it.
-Slots hold manifests, one pool holds blobs, history reads newest-first.
-`export` packs `%N` plus `@name` plus the applied slot into `.cb`,
-`-m` prints the manifest. First runs diff desired state against disk
-and close with create plus overwrite counts.
-`just plan-example` smokes the basic fixture and writes only to
-`./target`.
+Full flags with streams and exit codes live in `docs/book/src/spec/cli.md`. JSON
+shapes live in `docs/book/src/spec/schemas.md`.
 
-## Build
+## Book
+
+The manual and the spec live as one book at `docs/book/`. It is published at
+<https://solrachq.github.io/confit/>
+
+Intent per version lives under `docs/design/`. Changes live in
+`docs/changelog.md`.
+
+## Build from source
+
+The binary is the recommended use. Build from source only for users who build
+their own software from source.
 
 ```sh
 cargo run -- --help
-just check   # fmt + clippy (-D warnings) + test
+just check
 ```
-
-The manual plus the spec live as one book at `docs/book/`, published at
-[solrachq.github.io/confit](https://solrachq.github.io/confit/). Intent per version
-lives under `docs/design/`. Changes live in `docs/changelog.md`.
-
-Old setup lives at [SolracHQ/dotfiles](https://github.com/SolracHQ/dotfiles).
-
-## Testing in docker
-
-Manual testing runs in a persistent Fedora-minimal container as user
-`tester`. HOME inside the container is the `confit-test-home` volume.
-Host `./target` is mounted `:ro` at `/opt/confit`; `./examples` is mounted
-at `~/examples` for fixture profiles.
-Requires the Docker daemon (`sudo dnf install -y docker-cli moby-engine`,
-`sudo systemctl enable --now docker`) and your user in the `docker` group
-(log out/in once after `usermod -aG docker`).
-
-```sh
-just test-build-image  # once: build confit-test:latest
-just test-up           # cargo build + start `confit-test` (idempotent)
-just test-shell        # interactive bash as tester
-just test-run -- --help # one-shot run of the mounted binary
-just test-down         # stop+rm container, keep home volume
-just test-nuke         # stop+rm container AND delete home volume
-```
-
-Scripts live in `scripts/` (`test-up/shell/run/down/nuke.sh`) and are thin
-wrappers over `docker run/exec/volume`; `justfile` only forwards to them.
 
 ## License
 

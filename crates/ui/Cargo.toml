@@ -1,0 +1,25 @@
+[package]
+name = "confit-ui"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anstream = "1.0.0"
+comfy-table = { version = "8.0.1", default-features = false, features = ["custom_styling"] }
+confit-core.workspace = true
+confit-differ.workspace = true
+confit-events.workspace = true
+confit-model.workspace = true
+crossbeam-channel.workspace = true
+dirs.workspace = true
+extend = "1.2"
+indicatif = "0.18.6"
+inquire = "0.9.4"
+log.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

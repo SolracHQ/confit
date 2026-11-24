@@ -1,12 +1,4 @@
-//! Confit cli
-//!
-//! Terminal surface over engine evaluation plus core plans.
-
-#![deny(missing_docs)]
+//! Terminal surface for profile evaluation and plans.
 
 pub mod actions;
 pub mod cli;
-pub mod fs;
-pub mod hooks;
-pub mod presentation;
-pub mod seams;

@@ -1,157 +1,287 @@
-//! Init run
-//!
-//! Project scaffolding from embedded resources.
+//! Scaffolds a project from current shapes and embedded resources.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
+use confit_core::error::{
+    ContextualCause, DocumentError, Error, ErrorCause, EvalError, FilesystemError, Terminal,
+    TerminalResult, WithContext, contextual, error, kind::ErrorKind,
+};
+use confit_driver as driver;
+use confit_engine::project::{FILE as PROJECT_FILE, Project};
+use confit_engine::stubs::generate_stubs;
+use confit_events::{EventHandles, protocol::InitCreated};
 
-use crate::cli::InitArgs;
+use crate::cli::{DEFAULT_PROFILE, InitArgs};
 
-/// Starter profile text written by init.
-///
-/// Ships from `resources/profile.lua` beside the crate. One shell
-/// config holds one alias patch to config plus one eval patch
-/// to final. Comments guide first use.
-const PROFILE_TEXT: &str = include_str!("../../resources/profile.lua");
+const PROFILE_TEXT: &str = include_str!("../../resources/main.lua");
 
-/// Stub files shipped inside the binary, keyed by target-relative path.
-///
-/// Namespace stubs land in a stubs dir beside the profile. Plugin
-/// stubs mirror the plugin load layout beside their plugin names.
-const STUB_FILES: &[(&str, &str)] = &[
-    (
-        "stubs/confit.d.lua",
-        include_str!("../../../../stubs/confit.d.lua"),
-    ),
-    (
-        "stubs/namespaces/config.d.lua",
-        include_str!("../../../../stubs/namespaces/config.d.lua"),
-    ),
-    (
-        "stubs/namespaces/document.d.lua",
-        include_str!("../../../../stubs/namespaces/document.d.lua"),
-    ),
-    (
-        "stubs/namespaces/hook.d.lua",
-        include_str!("../../../../stubs/namespaces/hook.d.lua"),
-    ),
-    (
-        "stubs/namespaces/patch.d.lua",
-        include_str!("../../../../stubs/namespaces/patch.d.lua"),
-    ),
-    (
-        "stubs/namespaces/paths.d.lua",
-        include_str!("../../../../stubs/namespaces/paths.d.lua"),
-    ),
-    (
-        "stubs/namespaces/plugin.d.lua",
-        include_str!("../../../../stubs/namespaces/plugin.d.lua"),
-    ),
-    (
-        "stubs/namespaces/resources.d.lua",
-        include_str!("../../../../stubs/namespaces/resources.d.lua"),
-    ),
-    (
-        "stubs/namespaces/runtime.d.lua",
-        include_str!("../../../../stubs/namespaces/runtime.d.lua"),
-    ),
-    (
-        "stubs/namespaces/utils.d.lua",
-        include_str!("../../../../stubs/namespaces/utils.d.lua"),
-    ),
-    (
-        "plugins/solrachq/mise/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/mise/plugin.d.lua"),
-    ),
-    (
-        "plugins/solrachq/merge/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/merge/plugin.d.lua"),
-    ),
-    (
-        "plugins/solrachq/template/plugin.d.lua",
-        include_str!("../../../engine/plugins/solrachq/template/plugin.d.lua"),
-    ),
-];
+/// The editor config file that the execution writes at the project root.
+const LSP_FILE: &str = ".luarc.json";
 
-/// Outcome of one init run.
-///
+/// The editor config template that maps the plugin and stubs folders.
+const LSP_TEXT: &str = include_str!("../../resources/luarc.json");
+
+// Core plugins.
+include!(concat!(env!("OUT_DIR"), "/plugin_files.rs"));
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitReport {
-    /// Holds the scaffolded profile path.
-    pub profile: PathBuf,
-    /// Counts files written, profile plus stubs.
+    /// The output path.
+    pub path: PathBuf,
+    /// The number of files the execution wrote.
+    pub written: usize,
+    /// The created files.
+    pub files: Vec<PathBuf>,
+}
+
+/// One init outcome.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InitItem {
+    /// The stage label.
+    pub stage: String,
+    /// The written path text.
+    pub path: String,
+    /// The written file count.
     pub written: usize,
 }
 
-/// One init run from flags on an injected backend.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::init::InitRunner;
-/// use confit_cli::cli::InitArgs;
-/// use confit_core::fs::{Filesystem, memory::MemoryFs};
-/// use std::path::{Path, PathBuf};
-///
-/// let fs = MemoryFs::new();
-/// let args = InitArgs { dir: PathBuf::from("demo") };
-/// let runner = InitRunner { args: &args, fs: &fs };
-/// assert!(matches!(runner.execute(), Ok(_)));
-/// assert!(fs.exists(Path::new("demo/profile.lua")));
-/// assert!(fs.exists(Path::new("demo/stubs/confit.d.lua")));
-/// ```
 pub struct InitRunner<'a> {
-    /// Holds the init flags under running.
+    /// The flags that choose the folder and the artifacts to refresh.
     pub args: &'a InitArgs,
-    /// Holds the backend under reading plus writing.
-    pub fs: &'a dyn Filesystem,
+    /// The UI communication channel.
+    pub handles: EventHandles,
 }
 
 impl InitRunner<'_> {
-    /// Writes one profile holding one rc document plus editor
-    /// stubs copied from the binary. Present profile or stubs abort
-    /// with nothing written.
-    ///
-    /// # Returns
-    ///
-    /// The scaffolded profile path plus the written file count.
+    /// Runs the scaffold, or refreshes each flagged artifact.
     ///
     /// # Errors
     ///
-    /// Present profile or stubs fail as plan errors. Write
-    /// failures surface as io errors.
-    pub fn execute(self) -> Result<InitReport> {
-        let profile = self.args.dir.join("profile.lua");
-        let mut dests = vec![profile.clone()];
-        dests.extend(STUB_FILES.iter().map(|entry| self.args.dir.join(entry.0)));
-        let stubs_dir = self.args.dir.join("stubs");
-        if self.fs.exists(&stubs_dir) {
-            return Err(Error::Plan(format!(
-                "init: '{}' already exists, remove it or pick another target",
-                stubs_dir.display()
-            )));
+    /// - [`confit_core::error::kind::ErrorKind::OverwriteRefused`] when a scaffold file is present.
+    /// - [`confit_core::error::kind::ErrorKind::InitProject`] when a scaffold write fails.
+    /// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project read fails.
+    pub fn execute(self) -> TerminalResult<Vec<InitItem>> {
+        let root = self.args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        let project = Project::read(&root)?;
+        if !self.args.stubs && !self.args.plugins && !self.args.lsp {
+            let report = scaffold(&root, &project)?;
+            let items = vec![InitItem {
+                stage: "init".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            }];
+            self.handles.init_results(InitCreated {
+                root: root.clone(),
+                files: report.files.clone(),
+            });
+            return Ok(items);
         }
-        for dest in &dests {
-            if self.fs.exists(dest) {
-                return Err(Error::Plan(format!(
-                    "init: '{}' already exists, remove it or pick another target",
-                    dest.display()
-                )));
-            }
+        let mut items = Vec::new();
+        let mut files = Vec::new();
+        if self.args.stubs {
+            let report = write_stubs(&root.join(&project.stubs.folder))?;
+            files.extend(report.files.iter().cloned());
+            items.push(InitItem {
+                stage: "stubs".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
         }
-        self.fs
-            .write(&profile, PROFILE_TEXT.as_bytes())
-            .map_err(Error::from)?;
-        for (rel, text) in STUB_FILES.iter().copied() {
-            self.fs
-                .write(&self.args.dir.join(rel), text.as_bytes())
-                .map_err(Error::from)?;
+        if self.args.plugins {
+            let report = write_plugins(&root, &project.plugins.folder)?;
+            files.extend(report.files.iter().cloned());
+            items.push(InitItem {
+                stage: "plugins".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
         }
-        Ok(InitReport {
-            profile,
-            written: dests.len(),
-        })
+        if self.args.lsp {
+            let report = write_lsp(&root, &project)?;
+            files.extend(report.files.iter().cloned());
+            items.push(InitItem {
+                stage: "lsp".to_owned(),
+                path: report.path.display().to_string(),
+                written: report.written,
+            });
+        }
+        self.handles.init_results(InitCreated {
+            root: root.clone(),
+            files,
+        });
+        Ok(items)
     }
+}
+
+/// Writes the profile, the current stubs, the core plugins, the project
+/// file, and the editor config.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::OverwriteRefused`] when a scaffold file is present.
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when a scaffold write fails.
+/// - [`confit_core::error::kind::ErrorKind::LoadProject`] when the project read fails.
+fn scaffold(root: &Path, project: &Project) -> TerminalResult<InitReport> {
+    let profile = root.join(DEFAULT_PROFILE);
+    let stubs_dir = root.join(&project.stubs.folder);
+    let project_path = root.join(PROJECT_FILE);
+    let plugins_dir = root.join(&project.plugins.folder);
+    let (lsp_path, lsp_text) = render_lsp(root, project)?;
+    let documents = generate_stubs().map_err(map_stubs)?;
+    let stub_destinations: Vec<PathBuf> = documents
+        .iter()
+        .map(|document| stubs_dir.join(format!("{}.d.lua", document.module)))
+        .collect();
+    let mut destinations = vec![profile.clone(), project_path.clone()];
+    destinations.extend(stub_destinations.iter().cloned());
+    destinations.extend(PLUGIN_FILES.iter().map(|entry| plugins_dir.join(entry.0)));
+    destinations.push(lsp_path.clone());
+    if stubs_dir.exists() {
+        return error(
+            ErrorKind::OverwriteRefused,
+            contextual(FilesystemError::FileExists).with_fs_path(stubs_dir),
+        );
+    }
+    for destination in &destinations {
+        if destination.exists() {
+            return error(
+                ErrorKind::OverwriteRefused,
+                contextual(FilesystemError::FileExists).with_fs_path(destination),
+            );
+        }
+    }
+    write_file(&profile, PROFILE_TEXT.as_bytes())?;
+    write_file(
+        &project_path,
+        &project
+            .render()
+            .terminal(ErrorKind::InitProject)?
+            .into_bytes(),
+    )?;
+    for (document, destination) in documents.iter().zip(stub_destinations.iter()) {
+        write_file(destination, document.text.as_bytes())?;
+    }
+    for (relative, text) in PLUGIN_FILES.iter().copied() {
+        write_file(&plugins_dir.join(relative), text.as_bytes())?;
+    }
+    write_file(&lsp_path, lsp_text.as_bytes())?;
+    Ok(InitReport {
+        path: profile,
+        written: destinations.len(),
+        files: destinations,
+    })
+}
+
+/// Writes the generated stubs and overwrites present files.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::Evaluate`] when the evaluation fails.
+/// - [`confit_core::error::kind::ErrorKind::LuaFailed`] when Lua fails.
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when a stub write fails.
+fn write_stubs(dir: &Path) -> TerminalResult<InitReport> {
+    let documents = generate_stubs().map_err(map_stubs)?;
+    let mut files = Vec::new();
+    for document in &documents {
+        let destination = dir.join(format!("{}.d.lua", document.module));
+        write_file(&destination, document.text.as_bytes())?;
+        files.push(destination);
+    }
+    Ok(InitReport {
+        path: dir.to_path_buf(),
+        written: documents.len(),
+        files,
+    })
+}
+
+/// Maps one stub failure to the stub error kind.
+fn map_stubs(contextual: ContextualCause) -> Error {
+    let kind = match contextual.cause() {
+        ErrorCause::EvalError(EvalError::LuaFailed) => ErrorKind::LuaFailed,
+        ErrorCause::EvalError(_) | ErrorCause::DocumentError(_) => ErrorKind::Evaluate,
+        _ => ErrorKind::InitProject,
+    };
+    if contextual.context.detail.is_none() {
+        let message = contextual.cause().to_string();
+        return contextual.with_detail(message).terminal(kind);
+    }
+    contextual.terminal(kind)
+}
+
+/// Writes the core plugins and overwrites present files.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when a plugin write fails.
+fn write_plugins(root: &Path, folder: &Path) -> TerminalResult<InitReport> {
+    let dir = root.join(folder);
+    let mut files = Vec::new();
+    for (relative, text) in PLUGIN_FILES.iter().copied() {
+        let destination = dir.join(relative);
+        write_file(&destination, text.as_bytes())?;
+        files.push(destination);
+    }
+    Ok(InitReport {
+        path: dir,
+        written: PLUGIN_FILES.len(),
+        files,
+    })
+}
+
+/// Writes the editor config that maps the plugin and stubs folders.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when a config write fails.
+fn write_lsp(root: &Path, project: &Project) -> TerminalResult<InitReport> {
+    let (path, text) = render_lsp(root, project)?;
+    write_file(&path, text.as_bytes())?;
+    Ok(InitReport {
+        path: path.clone(),
+        written: 1,
+        files: vec![path],
+    })
+}
+
+/// Renders the editor config that maps the plugin and stubs folders.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when the template fails to render.
+fn render_lsp(root: &Path, project: &Project) -> TerminalResult<(PathBuf, String)> {
+    let path = root.join(LSP_FILE);
+    let context = minijinja::context!(
+        plugins => escape(&project.plugins.folder.display().to_string()),
+        stubs => escape(&project.stubs.folder.display().to_string()),
+    );
+    let mut text = minijinja::Environment::new()
+        .render_str(LSP_TEXT, context)
+        .map_err(|error| {
+            contextual(DocumentError::RenderFailed)
+                .with_fs_path(&path)
+                .with_detail(error.to_string())
+                .terminal(ErrorKind::InitProject)
+        })?;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    Ok((path, text))
+}
+
+/// Escapes the backslashes and the double quotes in one string.
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Writes one scaffold file and creates the parent folders first.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::InitProject`] when a folder or file write fails.
+fn write_file(destination: &Path, text: &[u8]) -> TerminalResult<()> {
+    driver::fs::create_parent(destination).terminal(ErrorKind::InitProject)?;
+    std::fs::write(destination, text)
+        .map_err(ContextualCause::from)
+        .with_fs_path(destination)
+        .terminal(ErrorKind::InitProject)
 }

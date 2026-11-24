@@ -1,201 +1,189 @@
-//! Cli
-//!
 //! Argument shapes for the terminal surface.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use confit_differ::view::ViewKind;
+use confit_driver::paths::BaseDirs;
 
-/// CaC: configuration as code for one user, with plan-before-apply.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::Cli;
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli, Ok(_)));
-/// ```
+/// The parsed command line.
 #[derive(Debug, Parser)]
-#[command(name = "confit", version, about = "CaC: configuration as code for one user", long_about = None)]
+#[command(name = "confit", version, about = "user space configuration manager", long_about = None)]
 pub struct Cli {
-    /// Subcommand selecting the run shape.
+    /// subcommand to run
     #[command(subcommand)]
     pub command: Command,
-    /// Log file. Omitted means a per-process temp path.
+    /// logs folder path (default: per-process temp folder)
     #[arg(long)]
-    pub log_file: Option<PathBuf>,
-    /// Log level. Omitted means warn.
+    pub logs_dir: Option<PathBuf>,
+    /// log level (default: warn)
     #[arg(long, default_value_t = log::LevelFilter::Warn)]
     pub log_level: log::LevelFilter,
+    /// print the result as pretty JSON on stdout
+    #[arg(long)]
+    pub json: bool,
+    /// ui backend (default: auto)
+    #[arg(long, value_enum, default_value_t = UiMode::Auto)]
+    pub ui: UiMode,
 }
 
-/// Available subcommands.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Plan(_))));
-/// ```
+/// The subcommand the user picks.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Evaluate the profile, diff against previous state, write the output.
-    Plan(PlanArgs),
-    /// Preview the manifest, confirm, and create every document in place.
+    /// write the evaluated profile to a bundle file or named state
+    Bundle(BundleArgs),
+    /// preview the profile evaluation with differences against previous state
+    Check(CheckArgs),
+    /// write the project onto the machine
     Apply(ApplyArgs),
-    /// Scaffold one profile plus stubs in the target folder.
+    /// write one package onto the machine
+    Restore(RestoreArgs),
+    /// scaffold a profile or rewrite stubs and plugins in the target folder
     Init(InitArgs),
-    /// Pack one slot into a portable bundle file or print its manifest.
+    /// pack one state into a portable bundle file or print its manifest
     Export(ExportArgs),
-    /// Drop one named slot plus its orphaned blobs.
+    /// delete one named state with its unreferenced entries
     Delete(DeleteArgs),
 }
 
-/// Shared run flags carried by plan plus apply.
-///
-/// Profiles ride positionally: `plan` takes one, `apply`
-/// takes a source in every shape.
-#[derive(Debug, Args)]
-pub struct SharedArgs {
-    /// Require resolution base. Defaults to the profile parent.
-    #[arg(long)]
-    pub root: Option<PathBuf>,
-    /// Plugin folder shaped `{user}/{name}/plugin.lua`. Omitted means `{root}/plugins`.
-    #[arg(long)]
-    pub plugins: Option<PathBuf>,
-    /// Forces remote downloads past the sidecar cache.
-    #[arg(long = "re-fetch")]
-    pub re_fetch: bool,
+/// The ui backend choice from the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum UiMode {
+    /// choose the ui from the terminal type
+    #[default]
+    Auto,
+    /// simple non-interactive ui for pipes and unattended executions
+    Plain,
+    /// inline interactive ui
+    Inline,
+    /// silent ui with no output
+    None,
 }
 
-/// Arguments for `confit plan`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "plan", "p.lua"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Plan(_))));
-/// ```
+/// The preview view choice from the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum UiView {
+    /// wanted against recorded changes
+    Desired,
+    /// wanted against disk changes
+    Effective,
+}
+
+/// Default profile file under the project.
+pub const DEFAULT_PROFILE: &str = "main.lua";
+
+impl UiView {
+    /// Returns the differ view for the flag.
+    pub fn kind(self) -> ViewKind {
+        match self {
+            UiView::Desired => ViewKind::Desired,
+            UiView::Effective => ViewKind::Effective,
+        }
+    }
+}
+
+/// The environment variable that sets the logs folder.
+pub const LOGS_DIR_ENV: &str = "CONFIT_LOG_DIR";
+
+/// The log file that the app writes under the logs folder.
+pub const APP_LOG_NAME: &str = "confit.log";
+
+/// The folder under the logs folder that holds the hook logs.
+pub const HOOKS_DIR_NAME: &str = "hooks";
+
 #[derive(Debug, Args)]
-pub struct PlanArgs {
-    /// Profile Lua file under evaluation.
-    pub profile: PathBuf,
-    /// Shared seam flags.
-    #[command(flatten)]
-    pub shared: SharedArgs,
-    /// Bundle destination. Omitted writes nothing and previews only.
+pub struct BundleArgs {
+    /// project folder to evaluate
+    pub project: PathBuf,
+    /// profile file to evaluate (default: main.lua in the project)
     #[arg(short, long)]
-    pub output: Option<PathBuf>,
-}
-
-/// Arguments for `confit apply`.
-///
-/// The positional sniffs its shape: `.lua` plus extensionless
-/// paths read a profile, `.cb` reads a bundle file, `@name`
-/// reads a named slot, `%N` reads history newest-first from one.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "apply", "p.lua", "--force"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Apply(_))));
-/// ```
-#[derive(Debug, Args)]
-pub struct ApplyArgs {
-    /// Source under applying.
-    pub source: PathBuf,
-    /// Shared seam flags.
-    #[command(flatten)]
-    pub shared: SharedArgs,
-    /// Skips the confirmation prompt. Drift still re-prompts.
-    #[arg(long)]
+    pub profile: Option<PathBuf>,
+    /// bundle file or named state to write (`.cb` path or `@name`)
+    #[arg(short, long)]
+    pub output: PathBuf,
+    /// preview view
+    #[arg(long, value_enum, default_value = "desired")]
+    pub view: UiView,
+    /// skip the confirmation prompt
+    #[arg(short, long)]
     pub force: bool,
 }
 
-/// Arguments for `confit init`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "init", "demo"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Init(_))));
-/// ```
 #[derive(Debug, Args)]
-pub struct InitArgs {
-    /// Target folder gaining the profile plus stubs. Omitted means the current folder.
-    #[arg(default_value = ".")]
-    pub dir: PathBuf,
+pub struct CheckArgs {
+    /// project folder to evaluate
+    pub project: PathBuf,
+    /// profile file to evaluate (default: main.lua in the project)
+    #[arg(short, long)]
+    pub profile: Option<PathBuf>,
+    /// preview view
+    #[arg(long, value_enum, default_value = "desired")]
+    pub view: UiView,
 }
 
-/// Arguments for `confit export`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "export", "@personal", "-o", "backup.cb"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Export(_))));
-/// ```
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// project folder to evaluate
+    pub project: PathBuf,
+    /// profile file to evaluate (default: main.lua in the project)
+    #[arg(short, long)]
+    pub profile: Option<PathBuf>,
+    /// preview view
+    #[arg(long, value_enum, default_value = "effective")]
+    pub view: UiView,
+    /// skip the confirmation prompt
+    #[arg(short, long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RestoreArgs {
+    /// package to restore (`.cb`, `@name`, or `%N`)
+    pub source: PathBuf,
+    /// preview view
+    #[arg(long, value_enum, default_value = "effective")]
+    pub view: UiView,
+    /// skip the confirmation prompt
+    #[arg(short, long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// folder to scaffold or refresh (default: current folder)
+    #[arg()]
+    pub dir: Option<PathBuf>,
+    /// rewrite the stubs folder under the target
+    #[arg(long)]
+    pub stubs: bool,
+    /// rewrite the core plugins folder under the target
+    #[arg(long)]
+    pub plugins: bool,
+    /// refresh the editor config beside the profile
+    #[arg(long)]
+    pub lsp: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct ExportArgs {
-    /// Slot picker: `%N` history newest-first from one, `@name` named slot. Omitted means the applied slot.
+    /// state to export (`%N` history or `@name`, default: applied state)
     pub picker: Option<String>,
-    /// Bundle destination. Omitted derives the name from the slot. Gains `.cb` unless present.
+    /// write the bundle to a file (default: state name with `.cb`)
     #[arg(short, long, conflicts_with = "manifest")]
     pub output: Option<PathBuf>,
-    /// Prints pretty manifest JSON to stdout instead of writing a bundle file.
+    /// print the manifest as pretty JSON
     #[arg(short, long)]
     pub manifest: bool,
 }
 
-/// Arguments for `confit delete`.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::{Cli, Command};
-/// use clap::Parser;
-///
-/// let cli = Cli::try_parse_from(["confit", "delete", "@personal"]);
-/// assert!(matches!(cli.map(|parsed| parsed.command), Ok(Command::Delete(_))));
-/// ```
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
-    /// Named slot under deleting, shaped `@name`.
+    /// state to delete (shaped `@name`)
     pub name: String,
 }
 
-/// Expands one leading `~` against the OS home folder.
-///
-/// Bare `~` plus `~/` prefixes resolve, everything else passes
-/// through untouched. Missing home folders pass through too,
-/// letting the caller fail with its own context.
-///
-/// # Arguments
-///
-/// * `path` - the raw arg path.
-///
-/// # Returns
-///
-/// The home-joined path, else the input unchanged.
-///
-pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
+/// Expands a leading `~` into the home folder.
+pub fn expand_tilde(path: &Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
     };
@@ -206,7 +194,7 @@ pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     } else {
         return path.to_path_buf();
     };
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = BaseDirs::new().home else {
         return path.to_path_buf();
     };
     if rest.is_empty() {
@@ -215,29 +203,32 @@ pub fn expand_tilde(path: &std::path::Path) -> PathBuf {
     home.join(rest)
 }
 
-/// Expands tildes across every path arg of one command.
+/// Expands tildes in the path arguments of the picked subcommand.
 pub fn expand_command(command: &mut Command) {
-    fn opt(slot: &mut Option<PathBuf>) {
-        if let Some(path) = slot {
+    fn opt(target: &mut Option<PathBuf>) {
+        if let Some(path) = target {
             *path = expand_tilde(path);
         }
     }
-    fn shared(shared: &mut SharedArgs) {
-        opt(&mut shared.root);
-        opt(&mut shared.plugins);
-    }
     match command {
-        Command::Plan(args) => {
-            args.profile = expand_tilde(&args.profile);
-            shared(&mut args.shared);
-            opt(&mut args.output);
+        Command::Bundle(args) => {
+            args.project = expand_tilde(&args.project);
+            opt(&mut args.profile);
+            args.output = expand_tilde(&args.output);
+        }
+        Command::Check(args) => {
+            args.project = expand_tilde(&args.project);
+            opt(&mut args.profile);
         }
         Command::Apply(args) => {
+            args.project = expand_tilde(&args.project);
+            opt(&mut args.profile);
+        }
+        Command::Restore(args) => {
             args.source = expand_tilde(&args.source);
-            shared(&mut args.shared);
         }
         Command::Init(args) => {
-            args.dir = expand_tilde(&args.dir);
+            opt(&mut args.dir);
         }
         Command::Export(args) => {
             opt(&mut args.output);
@@ -246,101 +237,66 @@ pub fn expand_command(command: &mut Command) {
     }
 }
 
-/// Resolves the require base, defaulting to the profile parent.
-///
-/// # Arguments
-///
-/// * `root` - the configured override.
-/// * `profile` - the profile path owning the default parent.
-///
-/// # Returns
-///
-/// The override, else the profile parent, else the current folder.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::resolve_root;
-/// use std::path::Path;
-///
-/// let root = resolve_root(&None, Some(Path::new("/tmp/profiles/desktop.lua")));
-/// assert!(matches!(root.to_str(), Some("/tmp/profiles")));
-/// ```
-pub fn resolve_root(root: &Option<PathBuf>, profile: Option<&std::path::Path>) -> PathBuf {
-    if let Some(configured) = root {
-        return configured.clone();
+/// Resolves the logs folder from the flag, the environment, or the default.
+pub fn resolve_logs_dir(explicit: Option<&Path>) -> PathBuf {
+    if let Some(dir) = explicit {
+        return expand_tilde(dir);
     }
-    profile
-        .and_then(|profile| profile.parent())
-        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
+    if let Some(dir) = std::env::var_os(LOGS_DIR_ENV) {
+        return expand_tilde(Path::new(&dir));
+    }
+    std::env::temp_dir().join(format!("confit-{}", std::process::id()))
 }
 
-/// Resolves the plugin folder, defaulting under the root.
-///
-/// Configured paths win. Otherwise `{root}/plugins` applies, matching
-/// the init scaffold. Missing folders change nothing downstream; the
-/// loader skips paths holding no `plugin.lua`.
-///
-/// # Arguments
-///
-/// * `root` - the resolved require base.
-/// * `plugins` - the configured override.
-///
-/// # Returns
-///
-/// The override, else the plugins folder under the root.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::resolve_plugins;
-/// use std::path::PathBuf;
-///
-/// let folder = resolve_plugins(&PathBuf::from("project"), &None);
-/// assert!(matches!(folder.to_str(), Some("project/plugins")));
-/// let folder = resolve_plugins(&PathBuf::from("project"), &Some(PathBuf::from("elsewhere")));
-/// assert!(matches!(folder.to_str(), Some("elsewhere")));
-/// ```
-pub fn resolve_plugins(root: &std::path::Path, plugins: &Option<PathBuf>) -> PathBuf {
-    plugins.clone().unwrap_or_else(|| root.join("plugins"))
+/// Resolves an explicit profile or the default against the project.
+pub fn resolve_profile(project: &Path, profile: Option<&Path>) -> PathBuf {
+    match profile {
+        Some(explicit) if explicit.is_absolute() => explicit.to_path_buf(),
+        Some(explicit) => project.join(explicit),
+        None => project.join(DEFAULT_PROFILE),
+    }
 }
 
-/// Resolves one slot file path with `@` sugar.
-///
-/// Values starting with `@` strip the sigil and resolve under
-/// the plans folder. Explicit paths pass through unchanged.
-///
-/// # Arguments
-///
-/// * `raw` - the output or input value under resolving.
-///
-/// # Returns
-///
-/// The named slot path for `@` values, else the input unchanged.
-///
-/// # Errors
-///
-/// Empty names plus separator carriers plus dot segments fail
-/// as plan errors.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::cli::resolve_slot_file;
-/// use std::path::Path;
-///
-/// assert!(matches!(resolve_slot_file(Path::new("slot.json")), Ok(path) if path == Path::new("slot.json")));
-/// assert!(matches!(
-///     resolve_slot_file(Path::new("@work")),
-///     Ok(path) if path.ends_with("confit/plans/work.json")
-/// ));
-/// ```
-pub fn resolve_slot_file(raw: &std::path::Path) -> Result<PathBuf, confit_core::error::Error> {
-    let Some(text) = raw.to_str() else {
-        return Ok(raw.to_path_buf());
-    };
-    let Some(name) = text.strip_prefix('@') else {
-        return Ok(raw.to_path_buf());
-    };
-    confit_core::store::slots::resolve_named_slot(name)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn resolve_profile_resolves_the_default_and_explicit_paths() {
+        assert_eq!(
+            resolve_profile(Path::new("site"), None),
+            PathBuf::from("site/main.lua"),
+            "the resolver picks the default profile"
+        );
+        assert_eq!(
+            resolve_profile(Path::new("site"), Some(Path::new("laptop.lua"))),
+            PathBuf::from("site/laptop.lua"),
+            "a relative name joins the project folder"
+        );
+        assert_eq!(
+            resolve_profile(Path::new("site"), Some(Path::new("/elsewhere/laptop.lua"))),
+            PathBuf::from("/elsewhere/laptop.lua"),
+            "an absolute name keeps its path"
+        );
+    }
+
+    #[test]
+    fn expand_tilde_expands_the_home_folder() {
+        let home = BaseDirs::new().home.unwrap();
+        assert_eq!(expand_tilde(Path::new("~")), home);
+        assert_eq!(
+            expand_tilde(Path::new("~/site/main.lua")),
+            home.join("site/main.lua")
+        );
+    }
+
+    #[test]
+    fn logs_dir_prefers_the_flag_over_the_default() {
+        let home = BaseDirs::new().home.unwrap();
+        let out = resolve_logs_dir(Some(Path::new("~/logs")));
+        assert_eq!(out, home.join("logs"));
+        let out = resolve_logs_dir(None);
+        assert!(out.starts_with(std::env::temp_dir()));
+    }
 }

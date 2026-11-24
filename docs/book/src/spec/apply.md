@@ -1,267 +1,208 @@
 # Apply
 
-`confit apply SOURCE` carries one desired manifest to disk through a
-guarded sequence. The source decides the load path. Every path
-shares the preview, the prompts, the write order, plus the hook
-run. The flow reads:
-
-![Apply flow](resources/apply.svg)
-
-### Profile source
-
-`confit apply PROFILE` evaluates a profile path. Tilde expansion
-runs first across the source plus the shared flags. A missing
-profile file fails naming the path:
-
-```
-apply reads no profile '{path}'
+```sh
+confit apply PROJECT [--profile FILE] [--force]
 ```
 
-Evaluation runs through the engine under the shared flags. The
-fixed slot loads as the previous manifest. The build fills hashes
-plus sorts documents by path. The preview renders.
+This command writes one project to the machine. By default Apply reads
+`main.lua` inside `PROJECT`. A relative `--profile` name resolves against the
+project folder. An absolute `--profile` name stays as is. A project folder
+that doesn't include the default profile fails as a missing project.
 
-### Bundle source
+Apply follows these steps in order:
 
-A source carrying the `.cb` suffix loads as a bundle file. The
-suffix match reads case-insensitive. The archive hydrates from
-its own bytes alone, so the run stands free of profiles. Stored
-hashes read trusted, so the run renders nothing. This branch
-moves from load straight to prompts. The fixed slot still loads as the
-previous manifest, plus prompts still guard the writes.
+1. Evaluates the profile into documents and hooks.
+1. Builds the desired manifest in path order.
+1. Persists opaque and tree content into the pool.
+1. Loads the applied state and compares it with disk.
+1. Prints the preview.
+1. Asks for confirmation.
+1. Writes documents.
+1. Removes dropped paths.
+1. Stores the applied state.
+1. Adds the state to the history.
+1. Prunes the pool.
+1. Starts the hooks.
 
-### Named slot source
+[State](state.md) covers the stored manifest. [Difference](difference.md) covers
+the comparisons. [Restore](restore.md) uses the same commit sequence from a
+stored source. Content from `open` and `fetch` handles lands in the pool before
+the preview. After a decline the pool stays filled. The command limits writes
+to the pool.
 
-`confit apply @name` loads one named slot from
-`plans/{name}.json`. An absent slot fails with the command name
-up front:
+## Preview
 
-```
-apply: '@name' reads absent
-```
+The preview appears on stderr with five sections in this order:
+`Evaluation` first, `Comparison` next, `Documents` next, `Hooks` next, and
+`Summary` last. Each section with content shows its title, and `Comparison`
+shows its title in all cases. [Output](output.md) covers the order and the
+colors.
 
-Slot names hold one file stem. The preview renders. Every slot
-failure carries the `apply:` prefix.
+The preview limits titles to the five named sections, marks drift as `!`
+after the change sigil, shows `~ ! .bashrc: rc` for a drifted update, and
+shows `- ! .bashrc: rc` for a drifted delete.
 
-### History source
+`Documents` is a route tree. The tree holds one branch per base. The
+branches are `[home]` and `[config]` and `[data]` and `[literal]`. A based
+branch nests relative paths under folders. A `[literal]` branch shows full
+paths as a flat list. Each leaf shows its sigil, shows its name, and shows
+its kind. A tree group shows one leaf with bracket counts. A first apply
+shows additions against disk. A later apply shows wanted content against
+disk with drift marks.
 
-`confit apply %N` loads one history entry. Picks start at one
-with newest-first order, so `%1` names the just-previous entry.
-A malformed pick fails naming the shape:
-
-```
-apply: '{raw}' reads unsupported, want '%N' holding a number from 1
-```
-
-An out-of-range pick fails naming the stored count:
-
-```
-apply: '{raw}' reads out of range, holding {total} stored manifests
-```
-
-The preview renders. A past apply records a fresh history
-entry, so history keeps moving forward.
-
-### Preview
-
-The preview renders the summary through the stderr print sender.
-Lifecycle lines lead
-the hooks section. Added hooks print `+` with full gates.
-Changed hooks print `~` with slot diffs. Removed hooks trail
-with `-`. Evaluated lines follow in plan order. Runnable hooks
-print one resolved line each:
-
-```
-! run: /opt/tool --flag
-```
-
-Closed gates print skip lines instead. Requires speaks first,
-when speaks second, passing checks speak third. Unresolvable
-binaries fail the run naming the hook:
-
-```
-hook 'absent install' cannot resolve 'absent'
+```text
+Documents
+├── [config]
+│   └── mise
+│       └── + config.toml: toml
+└── [home]
+    ├── + .bashrc: rc
+    └── .config
+        └── + bat: text
 ```
 
-Document counts close the preview:
+`Hooks` shows the hook lifecycle lines. `Summary` shows one table only. The
+table has `+` and `~` and `-` columns. It has one `Documents` row and has
+one `Hooks` row while hooks change. The table appears with zeros when counts
+are zero.
 
-```
-Documents: 1 to add, 0 to change, 1 to destroy.
-```
-
-While the fixed slot reads absent, the run counts as first. The
-drift reference reads the desired manifest, the order reads
-disk-first, plus the preview frames impact as desired versus
-disk. Past the first run the reference reads the previous manifest
-with recorded-first order.
-
-### Prompts
-
-The run prompts once before writing:
-
-```
-Apply these changes? Type 'yes' to continue:
+```text
+Summary
+            +  ~  -
+ Documents  1  0  1
+ Hooks      1  0  0
 ```
 
-Terminal runs print that line to stderr. Piped runs read the
-answer line straight from stdin.
-The run continues for the literal `yes` alone. `--force` skips this first
-prompt. A fresh drift check runs before every write. Matching
-snapshots proceed straight to disk. Differing snapshots print
-fresh drift lines plus prompt again. Any other answer aborts the
-run:
+`check` prints the same preview to stdout, limits writes to the log file,
+and ends after the preview. You use it to review a profile in a single
+pass.
 
-```
-apply aborted: answer reads no 'yes'
-```
+## Prompt
 
-Aborted runs leave disk plus slots plus history untouched.
+One question appears on stderr. The question reads:
 
-### Write order
-
-Documents write first in manifest path order, one branch per
-kind:
-
-- Text, structured, plus rc documents render through the core
-  renderer.
-- Opaque documents write raw blob bytes. Present unmanaged
-  documents skip the write while their declaration matches
-  the recorded manifest.
-- Tree documents write each member to its joined path with
-  per-member modes.
-- Link documents land as symlinks.
-- A pre-existing symlink under a plain document unlinks
-  first, leaving its target alone, then the fresh regular
-  file lands in its place.
-- Modes land after bytes. Parents build on demand.
-
-Recorded orphans delete next. Orphans hold state-recorded paths
-missing from desired documents. Tree destinations stay out of
-this pass. Dropped tree members delete after that. Members hold
-recorded manifest entries missing from the desired manifest at a
-kept destination. Hand-placed files stay put. Destinations stay
-put.
-
-The fixed slot writes next. Missing pool blobs land first, so
-the stored manifest stays resolvable. The archive follows with
-one fresh stamp entry plus rotation past five. Pool pruning
-follows the archive, so a rotated-out entry releases its bytes
-at once. Hooks run last, after files plus state plus history
-land.
-
-The report counts the run:
-
-- `written` counts written documents.
-- `removed` counts orphans plus dropped members.
-- `stored` holds the fresh archive path.
-
-### Hooks
-
-Hooks run in plan order after the writes land. Changed gates
-read the apply-start set. The first run holds every built path.
-Later runs hold rewritten plus drift-touched paths, with tree
-member drift mapping to the parent destination. Each run prints
-its position:
-
-```
-hook 1 of 2: mise install
+```text
+Do you want to apply these changes? Type 'yes' to continue:
 ```
 
-Hook output lands in the run log under that header line.
+The question ends with one space. You answer on stdin. Only a trimmed `yes`
+continues the command. Any other answer declines the command. A typed `details`
+declines the command. After a decline the command prints this line:
 
-#### Eval order
-
-Each hook passes three gates in order:
-
-- `requires` holds capability. A closed gate warns plus moves on:
-
-```
-warn: mise install cannot run (in_path(mise))
+```text
+Cancelled.
 ```
 
-- `when` holds need. A closed gate skips plus moves on:
+A declined command prints only `Cancelled.` and the log path and exits 0.
+`--force` skips this question. The preview still prints with `--force`. The
+command asks the question once.
 
-```
-skipped: mise install (no need: changed(dest))
-```
+## Write order
 
-- `checks` holds proof. Passing checks skip plus move on:
+Apply commits the effective view changes in view order. An addition or change
+writes its destination. A removal removes its destination.
 
-```
-skipped: mise install (checks pass)
-```
+After the changes land, the command stores the applied state, adds the state to
+the history, and prunes pool entries outside the referenced set. Then the
+command starts the hooks.
 
-Open hooks spawn through the runner. The preview uses the same
-order.
+Parents build on demand. The command creates parent folders for destinations
+needing them. A pre-existing symlink at a destination is unlinked first. The
+old link target stays at its path.
 
-#### Merge rules
+Text and opaque documents carry a mode, and the mode lands after the content.
+Each tree member carries its own mode, and each member mode lands after the
+member content.
 
-Hooks sharing argv plus path merge into one run. First-seen
-order wins. Requires gates join with AND, flattening nested AND
-branches. When gates join with OR, flattening nested OR
-branches. An ungated side keeps the merged hook ungated on that
-side. Checks concatenate. The timeout keeps the max. Single
-hooks pass through untouched.
+An unmanaged text document writes on declaration change and at first creation,
+and retains disk content under a matching recorded manifest. An unmanaged tree
+recreates only missing members. A dropped tree member from the previous
+manifest has its disk copy removed. Files placed by hand under the tree
+destination stay.
 
-#### Timeout parsing plus kill
+## Hooks
 
-Profile timeouts read duration strings. Units read `h`, `m`, `s`
-in that order, each holding at most once. A bare number reads as
-seconds. The shape `1h10m10s` totals 4210 seconds. Omitted timeouts read
-`10m`, backing 600 seconds. Bad values fail quoting the text.
-The runner kills past the cap:
+The command starts hooks after the documents and the state and the history land
+and starts them in profile config order. Every hook decides against the host
+facts after the writes. An unmet `requires` condition stops the command before
+that hook. An unmet `when` condition skips the hook and continues. A met `check`
+condition skips the hook and continues. An unmet `check` condition starts the
+hook. An unmet `check` condition after the hook blocks later hooks.
 
-```
-hook 'mise install' timed out after 600s
-```
+A finished hook prints its command line:
 
-#### Signal death
-
-Signal deaths read as exit code 1. The runner maps a missing
-status code to 1 before comparing.
-
-#### Nonzero
-
-The runner treats a nonzero code as failure, naming the argv plus
-the code:
-
-```
-hook 'mise install' failed with code 1
+```text
+> mise install
 ```
 
-The failure aborts the rest of the hooks.
+Hook output streams into `hooks/{slug}-{hash}.log`. The slug is the id
+lowercased with each group outside letters and digits replaced by hyphen and
+is cut to 40 characters. The hash is the first 12 hex characters of the id
+hash. A nonzero exit fails the hook. A signal death reads as exit code 1. A
+timeout kills the process and fails the hook. [Hooks](hooks.md) covers the
+declarations and the conditions.
 
-#### Still-failing abort
+## Report
 
-Post checks re-evaluate after each run. Passing checks prove the
-work. Failing checks abort the rest naming the hook plus the
-open gates:
+`Results` follows the write tree when counts exist. The table adds one
+failed column. The failed column uses `✗`.
 
-```
-hook 'mise install' failed checks after run: in_path(bat)
-```
+```text
+Results
 
-### Reports
-
-Stdout carries the counts plus the archive path:
-
-```
-applied: 4 files, 1 removed
-previous: {base}/previous/{stamp}.json
-```
-
-The preview plus drift lines plus prompts plus the spinner plus
-the run log path land on stderr:
-
-```
-log: /tmp/confit-1234.log
+            +  ~  -  ✗
+ Documents  1  0  0  0
+ Hooks      1  0  0  0
 ```
 
-The print sender runs on terminals, so piped runs skip preview
-plus drift lines plus prompt text. The `log:` line lands on
-stderr for failed runs too. Plan
-errors print through the command wrapper with exit code 1:
+With zero changes and zero hook moves the output consists of restore hints
+after `Applying Changes`. With table content the hints follow the table. The
+exact disk hint prints while the rescue capture holds files:
 
+```text
+To restore previous exact disk state:
+> confit restore '@!'
 ```
-confit: plan error: {message}
+
+The undo hint prints while a previous entry exists:
+
+```text
+To restore previous state:
+> confit restore %1
 ```
+
+A drifted disk changes the undo title:
+
+```text
+To restore previous state (dropping disk changes):
+> confit restore %1
+```
+
+The undo hint prints with zero changes and names the previous entry. Every
+command prints the log path to stderr:
+
+```text
+Log: /tmp/confit-4242/confit.log
+```
+
+A declined command prints `Cancelled.` and the log path and exits 0.
+
+## Failures
+
+A failed write stops the command at that document. Remaining documents and
+removals stay unapplied. The command skips state and history and prune and
+hooks. Documents that already landed stay on disk. A failed removal stops the
+command before the state lands. State and history land only after every write
+and removal succeeds. A failed hook starts after state and history land. The
+files and the state stay. The command stops before later hooks and doesn't
+print the hint table on failure except the rescue hint.
+
+Every failure prints one summary line and one closing line on stderr. The
+command exits 1:
+
+```text
+Error: Cannot write the destination at '/home/solrac/.bashrc'
+For more information please see the log
+```
+
+[Output](output.md) covers the closing lines and the exit codes.

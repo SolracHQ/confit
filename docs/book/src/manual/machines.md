@@ -1,84 +1,94 @@
 # Machines
 
-You stand at `~/confit-demo` with tools installed through plugins. This chapter splits the demo across two machines. This is the payoff for the whole book.
+Now that the laptop setup is finished, we will add a smaller server profile.
 
-One shared pool of configs, one profile per machine. The laptop profile declares laptop tools, the server profile declares server tools, both load the same shared files. A fresh machine needs only the binary plus the project folder.
+Your laptop setup works. Your server needs less. The server needs no prompt
+theme, no fonts, and no bat config. One profile installs tools that the server
+never uses.
 
-## One profile per machine
-
-Keep the demo folder with one profile per machine plus shared tool files beside them:
-
-```text
-~/confit-demo/
-  laptop.lua
-  server.lua
-  tools/
-    shared.lua
-```
-
-Each profile returns shells plus documents plus configs. Shared tools load through `require` under the root. The root defaults to the profile folder, so sibling files resolve out of the box. The demo laptop profile reads:
+Add a second profile beside `main.lua`:
 
 ```lua
-local shared = require("tools.shared")
+local sugar = require("plugins._.sugar")
+
+local installer = require("tools.mise")
+local shell = require("tools.shell")
+local ripgrep = require("tools.ripgrep")
 
 return {
-  shells = { "bash" },
-  documents = {},
-  configs = { shared },
+   configs = { installer, shell, ripgrep },
+   documents = {
+      sugar.rc(sugar.home(".bashrc")),
+   },
 }
 ```
 
-The server profile mirrors it with server tools in place of laptop tools.
+`server.lua` returns three configs and one shell document. It skips the prompt,
+the fonts, and the theme. One project describes two machines.
 
-## Switching with named slots
-
-Render each profile into its own named slot:
-
-```sh
-confit plan laptop.lua -o @laptop
-confit plan server.lua -o @server
-```
-
-Replay a slot by name:
+Select the profile with a flag:
 
 ```sh
-confit apply @laptop
+confit check ~/dotfiles --profile server.lua
 ```
 
-`apply @laptop` previews the stored result, prompts, writes. Switch back any time:
+```text
+Summary
+Documents: 3 to add, 0 to change, 0 to destroy.
+Hooks: 1 to add, 0 to change, 0 to destroy.
+```
+
+`--profile FILE` resolves against the project folder. The default profile stays
+`main.lua`. One run evaluates one profile.
 
 ```sh
-confit apply @server
+confit apply ~/dotfiles --profile server.lua
 ```
 
-Every switch diffs against the same applied result, so drift stays honest. Empty names plus separators fail, so keep slot names to simple words.
+```text
+applied: 3 files, 0 removed
+restore: confit restore %1
+```
 
-## Reinstall from scratch
+The server gets the shell and two tools. The laptop keeps the full setup. You
+change one folder for both machines.
 
-A clean machine needs the binary plus the project folder. Bring both, then apply the profile for that machine:
+## A minimal laptop
+
+The server profile also works on your laptop. Bundle it once as a named state,
+and restore it when you need the fancy setup gone:
 
 ```sh
-confit apply laptop.lua
+confit bundle ~/dotfiles --profile server.lua -o @minimal
 ```
 
-Type `yes` at the prompt. Every managed file lands as declared. The machine matches the profile.
-
-## Moving with export
-
-Pack the applied result into one portable file:
+```text
+bundle: @minimal
+```
 
 ```sh
-confit export -o backup.cb
+confit restore @minimal
 ```
 
-No picker means the applied slot. Copy `backup.cb` to the new machine, then replay it:
+The laptop loses the prompt, the fonts, and the theme. Your shell keeps working
+because the profile still manages `.bashrc`.
+
+Name the normal profile too, and rollback is one command:
 
 ```sh
-confit apply backup.cb
+confit bundle ~/dotfiles -o @laptop
 ```
 
-The bundle carries the full desired state. The new machine converges from that file alone. Install the binary, copy the file, apply it. Fresh machine, same setup.
+```text
+bundle: @laptop
+```
 
-For the exact contract see [spec storage](../spec/storage.md).
+Try the minimal setup, break things, experiment. `confit restore @laptop` brings
+the full setup back.
 
-The demo now runs per machine from one pool. Next, [Applying safely](applying.md) covers prompts, drift, plus history.
+> [!NOTE]
+> Named states share one pool, so `@laptop` and `@minimal` store common
+> bytes once. Blobs are compressed, with a compression ratio around 50%.
+
+Run the bundle after an apply of the main profile, so the shared bytes are
+already stored.

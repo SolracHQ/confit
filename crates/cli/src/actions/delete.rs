@@ -1,65 +1,64 @@
-//! Delete run
-//!
-//! Named slot removal with orphan pruning.
+//! Removes one named state with its unreferenced pruning.
 
-use confit_core::error::{Error, Result};
-use confit_core::store::blobs::prune_blobs;
-use confit_core::store::slots::resolve_named_slot;
+use confit_core::error::{
+    StateReason, Terminal, TerminalResult, contextual, error, kind::ErrorKind,
+};
+use confit_store::Stores;
+use confit_store::state::Picker;
 
 use crate::cli::DeleteArgs;
 
-use crate::seams::Seams;
-
-/// Outcome of one delete run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeleteReport {
-    /// Holds the deleted slot name without the `@` sigil.
+    /// The deleted state name.
     pub name: String,
-    /// Counts pool blobs pruned as orphaned by the removal.
+    /// The number of unreferenced pool entries the removal pruned.
     pub pruned: usize,
 }
 
-/// Removes one named manifest, then prunes orphan pool blobs.
+/// Removes one named manifest, then prunes the unreferenced pool entries.
 ///
-/// Takes one `@name` value. Blobs shared with remaining slots
-/// stay kept through the prune.
-///
-/// # Returns
-///
-/// The deleted slot name plus the pruned blob count.
+/// - An entry shared with a remaining state survives the prune.
 ///
 /// # Errors
 ///
-/// Non-`@name` values plus absent slots plus removal
-/// failures surface as plan or io errors.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::seams::Seams;
-/// use confit_cli::cli::DeleteArgs;
-/// use confit_cli::fs::OsFs;
-/// use std::io::Cursor;
-///
-/// let args = DeleteArgs { name: "@personal".to_string() };
-/// let fs = OsFs;
-/// let mut input = Cursor::new(String::new());
-/// let report = confit_cli::actions::delete::run(&args, Seams::memory(&fs, &mut input));
-/// assert!(matches!(report, Ok(_) | Err(_)));
-/// ```
-pub fn run(args: &DeleteArgs, seams: Seams<'_>) -> Result<DeleteReport> {
-    let Some(name) = args.name.strip_prefix('@') else {
-        return Err(Error::Plan(format!(
-            "delete: '{}' reads unsupported, want '@name'; history and the current slot never delete",
-            args.name
-        )));
-    };
-    let path = resolve_named_slot(name)?;
-    if !seams.fs.exists(&path) {
-        return Err(Error::Plan(format!("delete: '@{name}' reads absent")));
+/// - [`confit_core::error::kind::ErrorKind::DeleteNonNamed`] when the name is not a named state.
+/// - [`confit_core::error::kind::ErrorKind::DeleteState`] when the state picker text is malformed.
+/// - [`confit_core::error::kind::ErrorKind::DeleteState`] when the state removal fails.
+/// - [`confit_core::error::kind::ErrorKind::PruneBlobs`] when the unreferenced prune fails.
+pub fn run(args: &DeleteArgs, stores: Stores) -> TerminalResult<DeleteReport> {
+    if !args.name.starts_with('@') {
+        return error(
+            ErrorKind::DeleteNonNamed,
+            contextual(StateReason::BareState).with_state(&args.name),
+        );
     }
-    seams.fs.remove(&path).map_err(Error::from)?;
-    let pruned = prune_blobs(seams.fs)?;
+    let picker: Picker = match args.name.parse() {
+        Ok(picker) => picker,
+        Err(contextual) => {
+            return Err(contextual
+                .with_state(&args.name)
+                .terminal(ErrorKind::DeleteState));
+        }
+    };
+    let Picker::Named(name) = &picker else {
+        return error(
+            ErrorKind::DeleteNonNamed,
+            contextual(StateReason::BareState).with_state(&args.name),
+        );
+    };
+    let store = stores.states();
+    match store.remove_state(&picker) {
+        Ok(()) => {}
+        Err(contextual) => {
+            return Err(contextual
+                .with_state(&args.name)
+                .terminal(ErrorKind::DeleteState));
+        }
+    }
+    let pruned = stores
+        .prune_unreferenced()
+        .terminal(ErrorKind::PruneBlobs)?;
     Ok(DeleteReport {
         name: name.to_string(),
         pruned,

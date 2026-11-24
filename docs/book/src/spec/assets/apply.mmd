@@ -1,0 +1,12 @@
+flowchart TD
+  A["Evaluate profile"] --> B["Persist content in pool"]
+  B --> C["Show preview"]
+  C --> D{"Force flag?"}
+  D -- "-f present" --> F["Write documents"]
+  D -- "prompt" --> E["Ask confirmation"]
+  E -- "yes" --> F
+  E -- "other answer" --> G["Cancelled exit 0"]
+  F --> H["Store state"]
+  H --> I["Rotate history"]
+  I --> J["Drop orphan blobs"]
+  J --> K["Start hooks"]

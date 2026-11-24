@@ -1,0 +1,220 @@
+//! Exposes the id and route constructors.
+
+use mlua::Lua;
+
+use lua_binding::lua_globals;
+
+use confit_model::id::Id;
+use confit_model::routes::{Route, RouteBase};
+
+/// The global constructors.
+pub struct Global;
+
+#[lua_globals("confit")]
+impl Global {
+    /// Builds one traced id.
+    ///
+    /// # Arguments
+    ///
+    /// - [name] The id text.
+    ///
+    /// # Returns
+    ///
+    /// - The new id.
+    #[allow(clippy::self_named_constructors)]
+    pub fn id(lua: &Lua, name: String) -> mlua::Result<Id> {
+        Ok(Id::traced(
+            lua,
+            Id {
+                id: name,
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// Builds one traced route.
+    ///
+    /// # Arguments
+    ///
+    /// - [base] The destination base.
+    /// - [relative] The relative path.
+    ///
+    /// # Returns
+    ///
+    /// - The new route.
+    #[allow(clippy::self_named_constructors)]
+    pub fn route(lua: &Lua, base: RouteBase, relative: String) -> mlua::Result<Route> {
+        let built =
+            Route::new(base, relative).map_err(|cause| mlua::Error::external(cause.to_string()))?;
+        Ok(Route::traced(lua, built))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    use confit_events::EventHandles;
+    use confit_model::id::Id;
+    use confit_store::{StoreRoots, Stores};
+    use lua_binding::value::Decode;
+    use mlua::Value;
+
+    use crate::engine::Engine;
+    use crate::loader::{install, load_chunk};
+
+    fn test_stores(dir: &Path) -> Stores {
+        Stores::new(
+            StoreRoots {
+                config_base: dir.join("config"),
+                temp_base: dir.join("temp"),
+                project_root: dir.join("project"),
+            },
+            EventHandles::silent(),
+        )
+    }
+
+    fn project_root(dir: &Path) -> PathBuf {
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn fresh_lua(stores: &Stores) -> Lua {
+        let lua = Lua::new();
+        lua.set_app_data(stores.clone());
+        install(&lua).unwrap();
+        lua
+    }
+
+    /// Builds silent renderer channels.
+    fn silent_handles() -> EventHandles {
+        EventHandles::silent()
+    }
+
+    #[test]
+    fn id_visible_in_chunk_nested_and_plugin_envs() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let root = project_root(dir.path());
+        std::fs::write(root.join("helper.lua"), b"return id(\"nested\")").unwrap();
+        let entry = root.join("plugins").join("alice").join("tool");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("init.lua"), b"return id(\"plugin\")").unwrap();
+        let chunk = root.join("chunk.lua");
+        std::fs::write(&chunk, b"return id(\"chunk\")").unwrap();
+        let nested = root.join("nested.lua");
+        std::fs::write(&nested, b"return require(\"helper\")").unwrap();
+        let plugin = root.join("plugin.lua");
+        std::fs::write(&plugin, b"return require(\"plugins.alice.tool\")").unwrap();
+        let lua = fresh_lua(&stores);
+        match load_chunk(&lua, &chunk) {
+            Ok(Value::UserData(found)) => {
+                let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
+                assert_eq!(decoded.as_str(), "chunk");
+            }
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the chunk fails to return an id: {error}"),
+        }
+        match load_chunk(&lua, &nested) {
+            Ok(Value::UserData(found)) => {
+                let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
+                assert_eq!(decoded.as_str(), "nested");
+            }
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the nested chunk fails to return an id: {error}"),
+        }
+        match load_chunk(&lua, &plugin) {
+            Ok(Value::UserData(found)) => {
+                let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
+                assert_eq!(decoded.as_str(), "plugin");
+            }
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the plugin fails to return an id: {error}"),
+        }
+    }
+
+    #[test]
+    fn id_capture_holds_file_line_and_plugin_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = test_stores(dir.path());
+        let root = project_root(dir.path());
+        let entry = root.join("plugins").join("alice").join("capture");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(
+            entry.join("init.lua"),
+            b"return function() return id(\"captured\") end",
+        )
+        .unwrap();
+        let chunk = root.join("test.lua");
+        std::fs::write(
+            &chunk,
+            b"local make = require(\"plugins.alice.capture\")\nlocal myid = make()\nreturn myid",
+        )
+        .unwrap();
+        let lua = fresh_lua(&stores);
+        match load_chunk(&lua, &chunk) {
+            Ok(Value::UserData(found)) => {
+                let decoded = Id::decode(&Value::UserData(found), &lua).unwrap();
+                assert_eq!(decoded.as_str(), "captured");
+                let trace = decoded.trace.0.clone();
+                assert!(trace.len() >= 2, "the trace holds two frames");
+                assert!(
+                    trace[0].file.contains("init.lua"),
+                    "the first frame shows the plugin file"
+                );
+                assert!(
+                    trace[0].line.parse::<usize>().unwrap_or(0) > 0,
+                    "the first frame shows the line"
+                );
+                assert!(
+                    trace[1].file.contains("test"),
+                    "the second frame shows the chunk file"
+                );
+                assert!(
+                    trace[1].line.parse::<usize>().unwrap_or(0) > 0,
+                    "the second frame shows the line"
+                );
+            }
+            Ok(_) => panic!("expected userdata"),
+            Err(error) => panic!("the plugin fails to return an id: {error}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_ids_keep_the_terminal_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = Stores::new(
+            StoreRoots {
+                config_base: dir.path().join("config"),
+                temp_base: dir.path().join("temp"),
+                project_root: dir.path().join("project"),
+            },
+            EventHandles::silent(),
+        );
+        let root = stores.resources().roots.project_root.clone();
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = root.join("profile.lua");
+        std::fs::write(
+            &profile,
+            br#"
+                return {
+                    configs = {
+                        { name = id("same"), documents = { { path = route("home", "a"), text = "one" } } },
+                        { name = id("same"), documents = { { path = route("home", "b"), text = "two" } } },
+                    },
+                }
+            "#,
+        )
+        .unwrap();
+        let engine = Engine::new(stores, silent_handles());
+        match engine.evaluate(&profile) {
+            Ok(_) => panic!("the engine accepts duplicate ids"),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "Cannot render the manifest, duplicate document 'same'"
+            ),
+        }
+    }
+}

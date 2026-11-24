@@ -1,136 +1,313 @@
 # Output
 
-The summary renders titled sections in fixed order. Drift
-notes lead. Resources follow. Hooks trail resources. Summary
-plus counts close the text. Sections holding zero lines skip
-their title. Titles read as follows:
+The output is a visual language.
+Phase titles mark progress.
+Route trees show planned files.
+Route trees also show landed files.
+Created trees show scaffold files.
 
+Count tables show plan totals.
+Count tables also show close totals.
+Stderr holds all text views.
+Stdout holds JSON only.
+
+[Schemas](schemas.md) holds JSON shapes.
+[CLI](cli.md) lists flags that select each case.
+
+## Symbols
+
+Each mark has one meaning.
+
+| Mark | Meaning |
+| --- | --- |
+| `+` | Addition |
+| `~` | Change |
+| `-` | Removal |
+| `!` | Drift |
+| `?` | Incomparable |
+| `✓` | Landed |
+| `✗` | Failed |
+| `·` | Unattempted |
+| `>` | Hook line |
+
+## Colors
+
+Color appears only on a terminal.
+Piped output doesn't use color.
+A set `NO_COLOR` value doesn't show color.
+An empty `NO_COLOR` value keeps color on.
+
+| Mark | Color |
+| --- | --- |
+| `+` | Green |
+| `~` | Yellow |
+| `-` | Red |
+| `?` | Red |
+| `!` | Magenta |
+| `✓` | Green |
+| `✗` | Bold red |
+| `·` | Dim |
+| `>` | Dim |
+| Title | Bold blue underline |
+| `Documents` | Bold |
+| `[base]` | Bold cyan |
+| `Log` | Dim with bold path |
+| Binary | Bold green |
+| Task | Dim |
+
+## Phases
+
+Phases appear in a fixed order.
+The preview holds `Evaluation` through `Summary`.
+The close holds `Persisting` onward.
+
+Restore doesn't show `Evaluation`.
+Bundle ends with `Packaging`.
+Check ends after the preview.
+
+| Phase | Rule |
+| --- | --- |
+| `Evaluation` | Shows for bundle check apply |
+| `Comparison` | Always shows |
+| `Documents` | Always shows |
+| `Hooks` | Shows when hooks change |
+| `Summary` | Always shows |
+| `Persisting` | Shows for apply restore |
+| `Packaging` | Shows for bundle |
+| `Applying Changes` | Shows for apply restore |
+| `Results` | Shows when counts exist |
+| `Details` | Shows for check with yes |
+| `Created` | Shows for init |
+
+A spinner marks the active fetch task on a terminal.
+A spinner also marks the active pool task on a terminal.
+A spinner also marks the active hook task on a terminal.
+Piped output keeps finished lines with dim text.
+
+## Trees
+
+Based branches nest relative paths under folders.
+Literal branches list full paths as a flat list.
+Each leaf shows a sigil.
+Each leaf also shows a name.
+Each leaf also shows a kind.
+
+Drift adds `!` after the sigil. A drifted change shows `~ ! .bashrc: rc` and a
+drifted delete shows `- ! .bashrc: rc`.
+An incomparable destination shows `?` with a reason.
+A collapsed group shows one leaf with bracket counts. A tree removal with one
+pending member shows `[-: 95, ·: 1]`.
+`Details` reuses the same leaf shape under a header. The Details view shows the
+plain route, and the `!` marker stays only in the preview.
+
+The `Applying Changes` tree is rooted at the parent path.
+Each landed change shows a check mark.
+Each landed change also shows its plan sigil.
+
+The `Created` tree is rooted at the init `DIR`.
+Each leaf shows `+` with the created path and no kind.
+The count line follows the tree, as in `wrote 18 files`.
+
+| Base | Holds |
+| --- | --- |
+| `[cache]` | Cache files |
+| `[config]` | Config files |
+| `[data]` | Data files |
+| `[home]` | Home files |
+| `[literal]` | Full paths |
+
+| Reason | Case |
+| --- | --- |
+| `unreadable` | Cannot read path |
+| `directory blocks the managed path` | Dir at path |
+| `ancestor blocks the path` | Blocked parent |
+| `special file blocks the path` | Special at path |
+
+```text
+Documents
+└── [home]
+    └── + .bashrc: text
 ```
-Changes outside Confit will be overwritten on next apply
-Resources
-Hooks
+
+```text
+Applying Changes
+└── /home/solrac
+    └── ✓ + .bashrc: text
+```
+
+```text
+Created
+site
+└── + main.lua
+wrote 1 file
+```
+
+## Tables
+
+The `Summary` table shows plan counts.
+It holds a `Documents` row.
+It also holds a `Hooks` row when hooks change.
+
+The `Results` table adds a failed column.
+It holds the same rows with close totals.
+A failed hook shows compact lines.
+A blocked hook also shows compact lines.
+Compact lines show only nonzero categories.
+
+| Column | Counts |
+| --- | --- |
+| `+` | Additions |
+| `~` | Changes |
+| `-` | Removals |
+| `✗` | Failures |
+| `·` | Pending |
+
+```text
 Summary
+            +  ~  -
+ Documents  1  0  1
 ```
 
-## Drift section
+## Lines
 
-Steady drift groups hunk content under one header per path
-with key lines inline beside it:
+A key line is one route, one key, and two values:
 
-```
-Changes outside Confit will be overwritten on next apply
-~ note: text
-  -old line
-  +new line
-~ app.toml: tools.bat = recorded -> disk
-```
+| Line | Form |
+| --- | --- |
+| change | `~ {path}: {key} = {old} -> {new}` |
+| addition | `+ {path}: {key} = {value}` |
+| removal | `- {path}: {key} = {value}` |
 
-Headers carry the update sigil. Hunk lines carry per symbol
-paint through shared hunk rendering. Key lines reuse drift
-grammar from the drift page.
+A key is a dotted leaf key. An array position starts at 1, as in `tools[1]`.
+A link uses `target`. An opaque document uses `content`. A tree member uses its
+relative path. A mode uses `mode` or `{member}:mode`.
 
-## Resources section
+A text value renders bare. A number, a boolean, and null render as literals.
+An array and an object render as compact JSON.
 
-Create blocks open with `+` plus list full bodies under the
-add sigil. Bodies vary by kind as follows:
+A text diff keeps a context line with one leading space. An addition uses `+`
+and a removal uses `-`. The preview adds two spaces of indentation. Each line
+is painted by its sign.
 
-```
-+ note: text
-  + hello
-+ app.toml: toml
-  + tools.bat = latest
-+ shortcut: link
-  + /opt/target
-+ blob.bin: opaque
-  + opaque (2 bytes)
-+ fonts: tree
-  + tree (2 files)
-+ ~/.bashrc: rc
-  + alias cat = bat
-  + init[1] = eval "$(mise activate bash)"
+A document mode change yields `~ {path}: mode = {wanted} -> {seen}`. A tree
+member mode change yields `~ {path}: {member}:mode = {wanted} -> {seen}`. Modes
+render in octal starting with the first significant digit, as in `755` and
+`644`. A text content change may carry a mode line after it. An opaque content
+change reports only the content line. A symlink destination reports only the
+target line.
+
+A recorded hash without pooled content produces a warning:
+
+```text
+Cannot state the difference for '{route}': {cause}
 ```
 
-Update blocks open with `~` plus render per kind shapes from
-the drift page. Delete blocks close with `-` plus carry zero
-bodies:
+The command continues. The line shows the bare hash.
 
-```
-- gone: text
-- fonts: tree (1 files)
-```
+| Command | JSON shape |
+| --- | --- |
+| `bundle` | [Bundle result](schemas.md#bundle-result) |
+| `check` | [Check result](schemas.md#check-result) |
+| `apply` | [Apply result](schemas.md#apply-result) |
+| `restore` | [Restore result](schemas.md#restore-result) |
+| `delete` | [Delete result](schemas.md#delete-result) |
+| `init` | [Init result](schemas.md#init-result) |
+| `export -m` | [Manifest](schemas.md#manifest) |
 
-## Hooks section
+## Approval
 
-Plan hooks render as lifecycle data. Added hooks print `+`
-with full gates. Modified hooks print `~` with gate diffs.
-Removed hooks print `-` with zero detail. Unchanged hooks
-render zero lines:
+Approval sits between `Summary` and `Persisting`.
+The preview still prints when force skips the question.
+Only a trimmed `yes` approves.
+Any other answer declines.
+A decline prints `Cancelled.`.
+A decline exits with `0`.
 
-```
-+ mise install
-  + requires (in_path(mise))
-~ fc-cache -f
-  ~ when (before) -> (after)
-- old hook
-```
+| Backend | Approval | Details |
+| --- | --- | --- |
+| `plain` | Typed line | Typed line |
+| `inline` | yes/no/details | yes/no |
+| `none` | Force only | Closes directly |
 
-Detail lines nest under two spaces, so top level sigils
-alone drive hook counts.
+The `plain` backend accepts a typed line.
+The `inline` backend shows a picker on a terminal.
+The `none` backend closes details with the stored view.
+The `none` backend approves only with force.
 
-## Sigils plus color
+## Hints
 
-`+` marks additions with green paint. `~` marks changes with
-yellow paint. `-` marks removals with red paint. Headers plus
-counts carry bold paint. Paint applies while stderr runs as a
-terminal with `NO_COLOR` unset. The check runs once per
-summary. Piped output stays plain text.
+Hints follow `Results` as `>` lines.
+The rescue hint points at `@!` while capture holds files.
+The undo hint points at the prior entry while one exists.
 
-## Stdout against stderr
+The drift hint names dropping disk changes while drift exists.
+Zero changes don't show a `Results` table.
+Zero changes still show hints.
 
-Result lines stay pipeable on stdout. Transient plus
-diagnostic lines ride stderr. Routing reads as follows:
+| Case | Hint target |
+| --- | --- |
+| Rescue holds files | `@!` |
+| Undo entry exists | `%1` |
+| Drift exists | Drop note |
 
-| Line                     | Stream |
-| ------------------------ | ------ |
-| Summary text plus counts | stdout |
-| Spinner plus progress    | stderr |
-| Prompts                  | stderr |
-| `log: {path}`            | stderr |
+## Logs
 
-Prompts park widgets plus write to stderr, so stdout keeps
-carrying pipeable lines through answers.
+The logs folder defaults to the temp folder with the pid.
+`CONFIT_LOG_DIR` sets the folder.
+The `--logs-dir` flag wins over the environment.
+The flags come before the subcommand.
 
-## Log line
+The log file is `confit.log`.
+Each record is a pretty JSON object.
+Hook output lands under `hooks` with a slug hash name.
+[Hooks](hooks.md) covers hook log names.
 
-`log: {path}` prints to stderr on every plan plus apply run
-through success plus failure paths alike. The default path reads
-`{temp}/confit-{pid}.log`. The log file flag overrides the
-path with tilde expansion. Collision warnings plus debug
-facts land in that file through the log channel.
-
-## Collision lines
-
-Colliding slots keep the first writer with later writers
-yielding. Each yield logs one warning line in this shape:
-
-```
-collision on {label} "{name}": "{owner}" overwritten, "{winner}" wins
+```sh
+confit --logs-dir ~/logs --log-level debug apply ~/dotfiles
 ```
 
-Rc plus structured collisions share the shape with kind
-fitting labels. Winners surface in the log file alone with
-zero summary lines spent on losers.
+| Level | Use |
+| --- | --- |
+| `off` | Doesn't write |
+| `error` | Error only |
+| `warn` | Default |
+| `info` | Informative |
+| `debug` | Verbose |
+| `trace` | Most verbose |
 
-## Counts grammar
+## Errors
 
-The documents line always renders under the Summary title.
-The hooks line joins while hooks move:
+A failure closes with a summary line.
+A failure also closes with a closing line.
+The `Log` line comes last.
 
+A pool trim failure shows only the summary line.
+A usage failure doesn't write a log file.
+
+| Case | Shows |
+| --- | --- |
+| Write fail | Error with log |
+| Pool trim fail | Summary only |
+| Usage fail | Parser only |
+
+```text
+Error: Cannot load the project
+For more information please see the log
+Log: /tmp/confit-4242/confit.log
 ```
-Documents: {adds} to add, {changes} to change, {deletes} to destroy.
-Hooks: {added} to add, {changed} to change, {destroyed} to destroy.
-```
 
-Hook counts read top level sigils alone with nested detail
-skipping counts. First run counts derive from drift groups
-with destroy pinned at zero.
+## Exits
+
+Exit `0` marks success.
+A declined approval also exits with `0`.
+Exit `1` marks a failed command.
+Exit `2` marks a usage error.
+
+`--help` exits with `0`.
+`--version` also exits with `0`.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Success with decline |
+| `1` | Failed command |
+| `2` | Usage error |

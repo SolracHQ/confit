@@ -1,0 +1,14 @@
+[package]
+name = "confit-events"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-core.workspace = true
+confit-differ.workspace = true
+confit-model.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "confit-driver"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-core.workspace = true
+crossbeam-channel.workspace = true
+dirs.workspace = true
+flate2.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+ureq = "3.4.2"
+zip.workspace = true
+
+[features]
+test-support = []

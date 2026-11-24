@@ -1,0 +1,23 @@
+local sugar = require("plugins._.sugar")
+
+---@param route Route
+---@return boolean True for the managed shell documents alone.
+local function is_shell(route)
+	return route.base == "home" and (route.relative == ".bashrc" or route.relative == ".zshrc")
+end
+
+---@return Config
+return {
+	name = id("shell"),
+	patches = {
+		{
+			filter = is_shell,
+			---@param document Document_Rc
+			apply = function(document)
+				table.insert(document.config, sugar.alias("..", "cd .."))
+				table.insert(document.config, sugar.alias("g", "git"))
+				table.insert(document.config, sugar.env("EDITOR", "nvim"))
+			end,
+		},
+	},
+}

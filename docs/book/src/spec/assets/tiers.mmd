@@ -1,0 +1,16 @@
+flowchart TD
+  A["Compare two entries"] --> B{"Recorded entry absent?"}
+  B -- "yes" --> C["Delete"]
+  B -- "no" --> D{"Same hash?"}
+  D -- "yes" --> E["Unchanged, no comparison"]
+  D -- "no" --> F["Compare once, coarser method"]
+  F --> G{"Kind pair?"}
+  G -- "anything vs opaque" --> H["Hashes differ: update"]
+  G -- "structured vs text, rc, link" --> I["Rendered content"]
+  G -- "same kind" --> J["Kind method"]
+  I --> K{"Equal content?"}
+  J --> K
+  K -- "no" --> L["Update"]
+  K -- "yes" --> M{"Mode matches?"}
+  M -- "yes" --> E
+  M -- "no" --> L

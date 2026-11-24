@@ -1,191 +1,250 @@
 # CLI
 
-## Commands
+Confit accepts one command. Top level flags come before the
+command name. Short flags follow the subcommand name. A top
+level flag after the subcommand ends with exit 2.
 
-### plan
+| Command | Purpose |
+| --- | --- |
+| `bundle` | evaluate a profile into a bundle or named state |
+| `check` | preview the profile against stored state |
+| `apply` | write the project onto the machine |
+| `restore` | write one bundle or stored state |
+| `export` | pack one state or print its manifest |
+| `delete` | delete one named state and prune blobs |
+| `init` | scaffold a project or refresh a target |
 
-```sh
-confit plan PROFILE [-o PATH | -o @name] [--root DIR] [--plugins DIR] [--re-fetch]
-```
+`PROJECT` is a folder. The default profile is `main.lua`
+inside that folder. An absent folder fails as a missing
+project. An explicit profile that is absent fails as an
+unreadable profile. A relative `--profile` path resolves
+against the project folder. An absolute path stays as is.
+A state picker stays literal. `@name` and `%N` keep picker
+meaning. The command creates the logs folder and opens
+`confit.log` before dispatch. A folder or file failure ends
+with exit 1.
 
-`confit plan` evaluates one profile file into documents plus
-hooks, diffs drift against the fixed slot, and stores the
-result. The positional holds the profile path.
+`--json` writes the result object on stdout. Full shapes live
+in [Schemas](schemas.md). Each command names its shape below.
+Only `--json` and `export -m` write stdout. All other output
+uses stderr. [Output](output.md) states previews, prompts,
+tables, and log lines in full.
 
-`-o PATH` writes a bundle file, adding `.cb` to names missing
-it. The match reads case-insensitively, so `plan.CB` keeps its
-spelling. `-o @name` writes a slot manifest under the plans
-folder and adds no suffix. Omitted output writes nothing;
-the run previews only.
+`--ui` accepts `auto`, `plain`, `inline`, and `none`. The
+default is `auto`. `auto` picks `inline` on a terminal and
+`plain` on a pipe. All interactivity uses stderr. With `none`
+the command prints only the `Log:` line on stderr and asks
+approval only with `-f`. [Output](output.md) states backend
+choice in full.
 
-Stdout carries the summary every run. Stderr carries a `log: {path}` line. Failures exit 1.
-Plan-shaped failures print `confit: plan error: {message}` on
-stderr; remaining failures print `confit: {message}`. The
-prefix wraps command messages from every subcommand. Drift
-leaves the exit at 0.
+`--view` selects the preview view. [Views](#views) lists
+accepted values and defaults per command.
 
-### apply
-
-```sh
-confit apply SOURCE [--force] [--root DIR] [--plugins DIR] [--re-fetch]
-```
-
-SOURCE is a required positional. Values starting with `@` or
-`%` load a slot manifest with preview plus prompts. Values ending
-in `.cb` in any letter case load a bundle file and run from
-that file alone; the preview stays skipped. Remaining values
-evaluate as a profile path in any extension, extensionless
-included. A missing profile path fails as a plan error:
-
-```sh
-apply reads no profile '{path}'
-```
-
-Slot failures carry the command name as an `apply: ` prefix.
-The preview stream plus the prompt flow live on the apply
-page. With `--force`, the first confirmation prompt drops out.
-A fresh drift check ahead of writes still asks again.
-
-Stdout carries `applied: {written} files, {removed} removed`
-plus `previous: {history path}`. The `previous:` line names
-the fresh history entry. Stderr carries a `log: {path}` line
-on success plus failure runs. Failures exit 1 under the same
-`confit: ` shapes as plan. Drift leaves the exit at 0.
-
-### export
+The complete synopsis:
 
 ```sh
-confit export [PICKER] [-o PATH] [-m | --manifest]
+confit bundle PROJECT [--profile FILE] -o PATH|@name [--view VIEW] [--force]
+confit check PROJECT [--profile FILE] [--view VIEW]
+confit apply PROJECT [--profile FILE] [--view VIEW] [--force]
+confit restore SOURCE [--view VIEW] [--force]
+confit export [PICKER] [-o PATH] [-m|--manifest]
+confit delete @name
+confit init [DIR] [--stubs] [--plugins] [--lsp]
 ```
 
-The picker selects the slot. Omitted pickers read the applied
-slot. `@name` reads a named slot. `%N` reads history
-newest-first from 1. `-o PATH` writes a bundle file at the
-literal path, adding `.cb` to names missing it, in any letter
-case. Without `-o`, the name follows the slot: `applied.cb`,
-`{name}.cb`, or `prev-{N}.cb`. `-m` renders the manifest as
-pretty JSON on stdout instead and writes no bundle file. The
-JSON carries blob references only; document bytes stay in the
-pool.
-
-A file export answers with `export: {path}` on stdout.
-Manifest runs print the JSON alone to stdout. Export refuses `-o` plus `--manifest`
-together:
+## bundle
 
 ```sh
-export: '-o' plus '--manifest' refuse together, pick one
+confit bundle PROJECT [--profile FILE] -o PATH|@name [--view VIEW] [--force]
 ```
 
-Picker failures carry the command name as an `export: `
-prefix. The exact shapes live under Pickers and slot names.
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `-p`, `--profile` | file | `main.lua` | profile file to evaluate |
+| `-o`, `--output` | path or `@name` | required | a path writes a bundle file and gains a `.cb` extension when absent, an existing `.cb` or `.CB` extension is kept; `@name` stores a named state and persists referenced content in the pool; an empty name, `/`, `\`, NUL byte, `.`, or `..` fails |
+| `--view` | view name | `desired` | see [Views](#views) |
+| `-f`, `--force` | none | off | skips the prompt; a decline ends with `Cancelled.` and exit 0 |
 
-### delete
+`bundle` evaluates the profile and builds the manifest. The
+manifest records hooks for later commands.
+
+`--json` prints [Bundle result](schemas.md#bundle-result).
+
+![bundle phases](assets/bundle.svg)
+
+## check
+
+```sh
+confit check PROJECT [--profile FILE] [--view VIEW]
+```
+
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `-p`, `--profile` | file | `main.lua` | profile file to evaluate |
+| `--view` | view name | `desired` | see [Views](#views) |
+
+`check` evaluates the profile and builds the manifest. It
+compares the manifest with the applied state and with disk,
+shows the preview, and ends after the preview. Disk writes
+stay limited to the log file.
+
+`--json` prints [Check result](schemas.md#check-result).
+
+![check phases](assets/check.svg)
+
+## apply
+
+```sh
+confit apply PROJECT [--profile FILE] [--view VIEW] [--force]
+```
+
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `-p`, `--profile` | file | `main.lua` | profile file to evaluate |
+| `--view` | view name | `effective` | see [Views](#views) |
+| `-f`, `--force` | none | off | skips the prompt; a decline ends with `Cancelled.` and exit 0 |
+
+`apply` evaluates the profile and persists content in the
+pool. After approval the command writes documents, removes
+dropped paths, stores the applied state, rotates history,
+drops orphan blobs, and starts hooks in profile order.
+
+`--json` prints [Apply result](schemas.md#apply-result).
+
+![apply phases](assets/apply.svg)
+
+## restore
+
+```sh
+confit restore SOURCE [--view VIEW] [--force]
+```
+
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `--view` | view name | `effective` | see [Views](#views) |
+| `-f`, `--force` | none | off | skips the prompt; a decline ends with `Cancelled.` and exit 0 |
+
+`SOURCE` takes one of these forms:
+
+| Source | Resolution |
+| --- | --- |
+| path ending in `.cb` | bundle file, case-insensitive extension |
+| `@name` | named state |
+| `@!` | rescue capture, the pre-command capture |
+| `%N` | history entry, newest first from 1 |
+
+`restore` restores a stored state from `SOURCE`. The manifest is already
+built. The artifacts come from the pool or the bundle. The command follows
+the apply sequence. A source with a form outside the table fails as an
+invalid restore source. After approval the restored manifest becomes the
+applied state.
+
+> [!NOTE]
+> Unlike `apply`, the command doesn't receive `PROJECT`.
+
+`--json` prints [Restore result](schemas.md#restore-result).
+
+![restore phases](assets/restore.svg)
+
+## export
+
+```sh
+confit export [PICKER] [-o PATH] [-m|--manifest]
+```
+
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `-o`, `--output` | bundle path | auto name from the picker table | writes a bundle file and gains a `.cb` extension when absent; conflicts with `-m`, exit 2 |
+| `-m`, `--manifest` | none | off | prints the manifest; conflicts with `-o`, exit 2 |
+
+The picker takes one of these forms:
+
+| Picker | File |
+| --- | --- |
+| absent | `applied.cb` |
+| `@name` | `{name}.cb` |
+| `%N` | `prev-{N}.cb` |
+
+`export` packs one stored state into a bundle file in the
+current folder. Content comes from the pool or the cache. An
+absent entry or picker fails.
+
+`-m` prints [Manifest](schemas.md#manifest).
+
+![export phases](assets/export.svg)
+
+## delete
 
 ```sh
 confit delete @name
 ```
 
-The positional names one slot with a leading `@`. Delete
-removes the named manifest first. A pool prune follows and
-drops blobs orphaned by the removal. The prune keeps blobs
-still referenced by remaining slots.
+`delete` accepts only an `@name` picker. A bare name and `%N`
+fail. The command removes `states/{name}.json` and drops pool
+entries referenced only by the deleted state. Entries of the
+applied state, history entries, and other named states stay. A
+name with an absent state fails.
 
-Stdout prints the slot name plus the pruned count:
+`--json` prints [Delete result](schemas.md#delete-result).
 
-```sh
-delete: @{name} ({m} blobs pruned)
-```
+![delete phases](assets/delete.svg)
 
-Shapes outside `@name` fail with the want named:
-
-```sh
-delete: '{value}' reads unsupported, want '@name'; history and the current slot never delete
-```
-
-Absent slots fail as:
+## init
 
 ```sh
-delete: '@{name}' reads absent
+confit init [DIR] [--stubs] [--plugins] [--lsp]
 ```
 
-Names behind the sigil follow the slot-name rules below. `@`
-alone fails as `slot name reads empty`.
+| Flag | Value | Default | Behavior |
+| --- | --- | --- | --- |
+| `--stubs` | none | off | overwrites the stubs folder |
+| `--plugins` | none | off | overwrites the core plugins folder |
+| `--lsp` | none | off | overwrites the editor config |
 
-### init
+A refresh flag limits the command to flagged targets. Flags combine and the
+tree shows every flagged target.
 
-```sh
-confit init [DIR]
-```
+`init` scaffolds a project in `DIR` with a profile, a project
+file, stubs, core plugins, and editor config. `DIR` defaults
+to the current folder. The command refuses a present
+destination.
 
-`confit init` fills DIR with a fresh profile plus editor
-stubs. Omitted DIR means the current folder. The stage flow
-plus the clash matrix live on the init page.
+`--json` prints [Init result](schemas.md#init-result).
+
+![init phases](assets/init.svg)
+
+## Views
+
+`--view` accepts `desired` and `effective`. `desired` shows
+wanted changes against recorded changes. `effective` shows
+wanted changes against disk changes. Defaults per command:
+
+| Command | Default |
+| --- | --- |
+| `bundle` | `desired` |
+| `check` | `desired` |
+| `apply` | `effective` |
+| `restore` | `effective` |
 
 ## Global flags
 
-Three flags tune the run:
+`--logs-dir DIR` sets the folder for `confit.log` and the
+`hooks` subfolder. The flag wins over `CONFIT_LOG_DIR`. The
+fallback is the OS temp folder and `confit-{pid}`.
 
-- `--root DIR` sets the require base for plan plus apply runs. Omitted roots fall back to the profile parent, then to the current folder.
-- `--plugins DIR` sets the plugin folder shaped `{user}/{name}/plugin.lua`. Omitted plugin folders fall back to `{root}/plugins`.
-- `--re-fetch` refetches remotes past the sidecar cache. Omitted runs trust the sidecar cache.
+`--log-level LEVEL` accepts `off`, `error`, `warn`, `info`,
+`debug`, and `trace`. The default is `warn`. The level filters
+messages in `confit.log`. Terminal output keeps the same form
+across levels.
 
-The three flags ride plan plus apply only.
+## Exits
 
-`--log-file PATH` sets the log path for the run. Omitted log
-paths resolve to a per-process file named `confit-{pid}.log`
-under the OS temp folder. Collision lines land in the log
-file; the run prints the path after the summary. `--log-level
-LEVEL` gates verbosity. Levels span `off`, `error`, `warn`,
-`info`, `debug`, `trace`, matched in any letter case. Omitted
-levels mean `warn`. Version output answers `-V` plus
-`--version` with `confit {version}`.
+Exit 0 marks success. A declined prompt ends with
+`Cancelled.` and exit 0. Exit 1 marks a failed command. Exit 2
+marks a usage error. A failure prints a summary line and a
+closing line. A usage error prints the parser message and usage. `--help` and
+`--version` end with exit 0. [Output](output.md) states
+streams, previews, prompts, and log lines in full.
 
-Every path arg expands one leading `~` against the home
-folder. Bare `~` and `~/`-led values resolve; all other
-values pass through untouched. The expansion covers the plan
-profile, `--root`, `--plugins`, plan `-o`, the apply source,
-the init dir, export `-o`, plus `--log-file`. Slot pickers
-stay literal.
-
-## Pickers and slot names
-
-A picker names one stored manifest. Omitted pickers read the
-applied slot. An absent applied slot fails as:
-
-```sh
-the applied slot reads absent, apply first
-```
-
-`@name` reads a named slot. An absent name fails as
-`'@{name}' reads absent`. `%N` reads history newest-first
-from 1. A non-number fails as:
-
-```sh
-'{raw}' reads unsupported, want '%N' holding a number from 1
-```
-
-A pick past the stored count fails as:
-
-```sh
-'{raw}' reads out of range, holding {total} stored manifests
-```
-
-Bare values fail as:
-
-```sh
-'{raw}' reads unsupported, want '%N', '@name', or nothing
-```
-
-Apply prefixes each shape with `apply: `, export with
-`export: `. Names hold one normal path component with no
-separators. Refusals read:
-
-```sh
-slot name reads empty
-slot name '{name}' holds separators
-slot name '{name}' reads unsupported
-```
-
-Empty names hit the first shape, separator carriers the
-second, dot segments plus NUL plus other non-normal
-components the third.
+> [!NOTE]
+> A pool drop failure prints only its summary line.

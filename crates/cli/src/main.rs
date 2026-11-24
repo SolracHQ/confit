@@ -1,159 +1,227 @@
-use clap::Parser;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 
-use confit_cli::cli::{Cli, Command};
-use confit_cli::presentation::spinner::Live;
+use clap::Parser;
+use confit_cli::actions::bundle::BundleRunner;
+use confit_cli::actions::check::CheckRunner;
+use confit_cli::actions::export::ExportRunner;
+use confit_cli::actions::init::InitRunner;
+use confit_cli::actions::{ActionResult, apply, delete, restore};
+use confit_cli::cli::{self, APP_LOG_NAME, Cli, Command, HOOKS_DIR_NAME};
+use confit_core::error::{Error, TerminalResult, contextual, kind::ErrorKind};
+use confit_model::manifest::Manifest;
+use confit_store::{StoreRoots, Stores};
+use confit_ui::Ui;
 
 fn main() {
-    if let Err(error) = run() {
-        match error {
-            confit_core::error::Error::Plan(message) => {
-                eprintln!("confit: plan error: {message}");
-            }
-            other => {
-                eprintln!("confit: {other}");
+    let mut cli = Cli::parse();
+    cli::expand_command(&mut cli.command);
+    let logs_dir = cli::resolve_logs_dir(cli.logs_dir.as_deref());
+    let log_path = logs_dir.join(APP_LOG_NAME);
+    let as_json = cli.json;
+    let backend = match cli.ui {
+        cli::UiMode::Auto => {
+            let stdin_tty = std::io::stdin().is_terminal();
+            let stderr_tty = std::io::stderr().is_terminal();
+            if !stdin_tty && as_json {
+                confit_ui::Backend::None
+            } else if !stdin_tty || !stderr_tty {
+                confit_ui::Backend::Plain
+            } else {
+                confit_ui::Backend::Inline
             }
         }
-        std::process::exit(1);
+        cli::UiMode::Plain => confit_ui::Backend::Plain,
+        cli::UiMode::Inline => confit_ui::Backend::Inline,
+        cli::UiMode::None => confit_ui::Backend::None,
+    };
+    let run_log_path = log_path.clone();
+    let outcome: TerminalResult<ActionResult> = Ui::init(&log_path, backend, move |handles| {
+        let hooks_dir = setup_logging(&logs_dir, &run_log_path, cli.log_level)?;
+        let mut roots = StoreRoots::standard();
+        match &cli.command {
+            Command::Bundle(args) => roots.project_root = args.project.clone(),
+            Command::Check(args) => roots.project_root = args.project.clone(),
+            Command::Apply(args) => roots.project_root = args.project.clone(),
+            Command::Restore(_) | Command::Init(_) | Command::Export(_) | Command::Delete(_) => {}
+        }
+        roots.project_root =
+            std::path::absolute(&roots.project_root).unwrap_or(roots.project_root.clone());
+        let stores = Stores::new(roots, handles.clone());
+        match &cli.command {
+            Command::Bundle(args) => BundleRunner {
+                args,
+                stores,
+                handles,
+            }
+            .execute()
+            .map(ActionResult::Artifact),
+            Command::Check(args) => CheckRunner {
+                args,
+                stores,
+                handles,
+            }
+            .execute()
+            .map(|report| ActionResult::Check(report.diff)),
+            Command::Apply(args) => {
+                apply::run(args, stores, handles, hooks_dir).map(ActionResult::Wrote)
+            }
+            Command::Restore(args) => {
+                restore::run(args, stores, handles, hooks_dir).map(ActionResult::Wrote)
+            }
+            Command::Init(args) => InitRunner {
+                args,
+                handles: handles.clone(),
+            }
+            .execute()
+            .map(ActionResult::Init),
+            Command::Export(args) if args.manifest => {
+                ExportRunner::run(args, stores).map(ActionResult::Export)
+            }
+            Command::Export(args) => ExportRunner::run(args, stores).map(ActionResult::Artifact),
+            Command::Delete(args) => delete::run(args, stores).map(ActionResult::Delete),
+        }
+    });
+    match outcome {
+        Ok(output) => print_output(&output, as_json),
+        Err(error) => {
+            let payload = error.log_payload();
+            log::error!(target: "confit:error", "{payload}");
+            if as_json {
+                print_json(payload);
+            }
+            std::process::exit(1);
+        }
     }
 }
 
-/// Runs the selected subcommand to completion.
-///
-/// Collision lines land in the log file. The path prints after
-/// the summary. Drift notes lead with success, so exit stays 0
-/// while drift exists.
-fn run() -> confit_core::error::Result<()> {
-    let mut cli = Cli::parse();
-    confit_cli::cli::expand_command(&mut cli.command);
-    if let Some(path) = cli.log_file.as_mut() {
-        *path = confit_cli::cli::expand_tilde(path);
+/// Prints the command result to stdout.
+fn print_output(output: &ActionResult, as_json: bool) {
+    if !as_json {
+        if let ActionResult::Export(report) = output {
+            print_manifest(&report.manifest);
+        }
+        return;
     }
-    let log_path = match cli.log_file.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => std::env::temp_dir().join(format!("confit-{}.log", std::process::id())),
+    match output {
+        ActionResult::Artifact(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Check(diff) => {
+            print_json(serde_json::json!(diff));
+        }
+        ActionResult::Wrote(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Export(report) => {
+            print_manifest(&report.manifest);
+        }
+        ActionResult::Delete(report) => {
+            if let Ok(value) = serde_json::to_value(report) {
+                print_json(value);
+            }
+        }
+        ActionResult::Init(items) => {
+            if items.len() == 1 {
+                if let Some(first) = items.first()
+                    && let Ok(value) = serde_json::to_value(first)
+                {
+                    print_json(value);
+                }
+            } else if let Ok(value) = serde_json::to_value(items) {
+                print_json(value);
+            }
+        }
+    }
+}
+
+/// Prints one manifest as pretty JSON text to stdout.
+fn print_manifest(manifest: &Manifest) {
+    match manifest.json() {
+        Ok(text) => println!("{text}"),
+        Err(_) => print_json(serde_json::json!(manifest)),
+    }
+}
+
+/// Prints one JSON value as pretty text to stdout.
+fn print_json(value: serde_json::Value) {
+    match serde_json::to_string_pretty(&value) {
+        Ok(text) => println!("{text}"),
+        Err(_) => println!("{value}"),
+    }
+}
+
+/// Creates the hooks folder, then starts the file log.
+///
+/// # Errors
+///
+/// - [`confit_core::error::kind::ErrorKind::WriteHookLog`] when the hooks folder
+///   is unreachable or the log file fails to open.
+fn setup_logging(
+    logs_dir: &Path,
+    log_path: &Path,
+    log_level: log::LevelFilter,
+) -> TerminalResult<PathBuf> {
+    let hooks_dir = logs_dir.join(HOOKS_DIR_NAME);
+    if let Err(error) = std::fs::create_dir_all(&hooks_dir) {
+        return Err(Error::new(
+            ErrorKind::WriteHookLog,
+            contextual(error).with_fs_path(&hooks_dir),
+        ));
+    }
+    let log_file = match fern::log_file(log_path) {
+        Ok(found) => found,
+        Err(error) => {
+            return Err(Error::new(
+                ErrorKind::WriteHookLog,
+                contextual(error).with_fs_path(log_path),
+            ));
+        }
     };
     let dispatch = fern::Dispatch::new()
-        .format(|out, message, _record| out.finish(format_args!("{message}")))
-        .level(cli.log_level)
-        .chain(
-            fern::log_file(&log_path)
-                .map_err(|error| confit_core::error::Error::Plan(format!("log file: {error}")))?,
-        );
+        .format(|out, message, record| {
+            let now = time::OffsetDateTime::now_local()
+                .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+            let timestamp = format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+                now.year(),
+                now.month() as u8,
+                now.day(),
+                now.hour(),
+                now.minute(),
+                now.second(),
+                now.millisecond(),
+            );
+            let level = record.level().to_string();
+            let body = message.to_string();
+            if record.target() == "confit:error" {
+                let mut value = serde_json::from_str::<serde_json::Value>(&body)
+                    .unwrap_or_else(|_| serde_json::json!({"message": body}));
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("timestamp".to_owned(), serde_json::Value::String(timestamp));
+                    fields.insert("level".to_owned(), serde_json::Value::String(level));
+                }
+                let text =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+                out.finish(format_args!("{text}"));
+            } else {
+                let envelope = serde_json::json!({
+                    "timestamp": timestamp,
+                    "level": level,
+                    "message": body,
+                });
+                let text = serde_json::to_string_pretty(&envelope)
+                    .unwrap_or_else(|_| envelope.to_string());
+                out.finish(format_args!("{text}"));
+            }
+        })
+        .level(log_level)
+        .chain(log_file);
     // Repeat installs keep the first sink; init runs once per process.
     let _ = dispatch.apply();
-    match &cli.command {
-        Command::Plan(args) => run_plan_like(args, false, &log_path),
-        Command::Apply(args) => run_apply(args, &log_path),
-        Command::Init(args) => run_init(args),
-        Command::Export(args) => run_export(args),
-        Command::Delete(args) => run_delete(args),
-    }
-}
-
-/// Runs plan with summary output.
-///
-/// A plan run without a destination previews alone and writes nothing.
-fn run_plan_like(
-    args: &confit_cli::cli::PlanArgs,
-    store_tmp: bool,
-    log_path: &std::path::Path,
-) -> confit_core::error::Result<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let live = Live::new();
-    let mut seams = confit_cli::seams::Seams::host(&mut input);
-    seams.progress = live.sink();
-    seams.print = live.print_handle();
-    seams.suspend = live.suspend_handle();
-    let outcome = confit_cli::actions::plan::PlanRunner {
-        args,
-        store_tmp,
-        seams,
-    }
-    .execute()?;
-    live.finish();
-    let summary = confit_cli::presentation::summary::Summary {
-        built: &outcome.built,
-        previous: &outcome.previous,
-        drift: &outcome.drift,
-        first_run: outcome.first_run,
-        hook_lines: outcome.hook_lines.as_slice(),
-        hook_evaluated: &[],
-    };
-    anstream::println!("{}", summary.render());
-    if let Some(stored) = outcome.stored {
-        anstream::println!("plan: {}", stored.display());
-    }
-    anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
-    Ok(())
-}
-
-/// Runs apply with preview plus prompts on host seams.
-fn run_apply(
-    args: &confit_cli::cli::ApplyArgs,
-    log_path: &std::path::Path,
-) -> confit_core::error::Result<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let live = Live::new();
-    let mut seams = confit_cli::seams::Seams::host(&mut input);
-    seams.progress = live.sink();
-    seams.print = live.print_handle();
-    seams.suspend = live.suspend_handle();
-    seams.log_file = Some(log_path.to_path_buf());
-    let report = match confit_cli::actions::apply::ApplyRunner::run(args, seams) {
-        Ok(report) => report,
-        Err(error) => {
-            live.finish();
-            anstream::eprintln!("log: {}", log_path.display());
-            log::logger().flush();
-            return Err(error);
-        }
-    };
-    live.finish();
-    anstream::println!(
-        "applied: {} files, {} removed",
-        report.written,
-        report.removed
-    );
-    anstream::println!("previous: {}", report.stored.display());
-    anstream::eprintln!("log: {}", log_path.display());
-    log::logger().flush();
-    Ok(())
-}
-
-/// Runs export writing a bundle file or printing its manifest.
-fn run_export(args: &confit_cli::cli::ExportArgs) -> confit_core::error::Result<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let seams = confit_cli::seams::Seams::host(&mut input);
-    let report = confit_cli::actions::export::ExportRunner::run(args, seams)?;
-    if let Some(dest) = report.dest {
-        anstream::println!("export: {}", dest.display());
-    } else if let Some(manifest) = report.manifest {
-        println!("{manifest}");
-    }
-    Ok(())
-}
-
-/// Runs delete dropping one named slot plus orphan blobs.
-fn run_delete(args: &confit_cli::cli::DeleteArgs) -> confit_core::error::Result<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
-    let seams = confit_cli::seams::Seams::host(&mut input);
-    let report = confit_cli::actions::delete::run(args, seams)?;
-    anstream::println!("delete: @{} ({} blobs pruned)", report.name, report.pruned);
-    Ok(())
-}
-
-/// Runs init with project scaffolding on host seams.
-fn run_init(args: &confit_cli::cli::InitArgs) -> confit_core::error::Result<()> {
-    let report = confit_cli::actions::init::InitRunner {
-        args,
-        fs: &confit_cli::fs::OsFs,
-    }
-    .execute()?;
-    anstream::println!(
-        "init: {} ({} files)",
-        report.profile.display(),
-        report.written
-    );
-    Ok(())
+    Ok(hooks_dir)
 }

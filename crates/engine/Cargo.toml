@@ -1,28 +1,30 @@
 [package]
 name = "confit-engine"
-version = "0.8.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lua-binding = { workspace = true }
+confit-core.workspace = true
+confit-driver.workspace = true
+confit-model.workspace = true
+confit-store.workspace = true
+confit-events.workspace = true
+log.workspace = true
+minijinja = { version = "3.0.0", features = ["serde"] }
+mlua = { workspace = true, features = ["lua54", "vendored"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+file-format = { version = "0.29.0", features = ["reader-txt"] }
+serini = "0.3.0"
+noyalib.workspace = true
 
 [lints]
 workspace = true
 
-[dependencies]
-confit-core = { path = "../core" }
-crossbeam-channel = "0.5.17"
-directories.workspace = true
-dirs = "7.0.0"
-flate2 = "1.1.10"
-log.workspace = true
-minijinja.workspace = true
-mlua = { workspace = true, features = ["lua54", "vendored"] }
-noyalib.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-sha2.workspace = true
-tar = "0.4.46"
-toml.workspace = true
-ureq = "3.4.2"
-zip = "8.6.0"
-
 [dev-dependencies]
+confit-driver = { workspace = true, features = ["test-support"] }
+crossbeam-channel = "0.5.17"
 tempfile.workspace = true

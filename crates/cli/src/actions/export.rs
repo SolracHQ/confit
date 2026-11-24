@@ -1,159 +1,93 @@
-//! Export run
-//!
-//! Slot picker into bundle files or manifest prints.
+//! Packs one state into a bundle file or prints its manifest.
 
 use std::path::PathBuf;
 
-use confit_core::error::{Error, Result};
-use confit_core::fs::Filesystem;
-use confit_core::plan::Bundle;
-use confit_core::store::bundle::write_bundle;
-use confit_core::store::manifest::manifest_json;
-use confit_core::store::slots::{SlotKind, resolve_slot};
+use confit_bundler::Bundler;
+use confit_core::error::{ErrorCause, TerminalResult, error, kind::ErrorKind};
+use confit_events::EventHandles;
+use confit_store::{Stores, state::Picker};
 
-use crate::actions::plan::ensure_bundle_extension;
+use crate::actions::ArtifactReport;
 use crate::cli::ExportArgs;
 
-use crate::seams::{Seams, timed};
+/// The auto-name prefix for exports of the applied state.
+const APPLIED_PREFIX: &str = "applied";
+/// The auto-name prefix for exports of history entries.
+const HISTORY_PREFIX: &str = "prev-";
 
-/// Auto-name stem for exports of the applied slot.
-const APPLIED_STEM: &str = "applied";
-/// Auto-name stem prefix for exports of history entries.
-const HISTORY_STEM_PREFIX: &str = "prev-";
-
-/// Outcome of one export run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExportReport {
-    /// Holds the bundle path for file exports, `None` for manifest prints.
-    pub dest: Option<PathBuf>,
-    /// Holds pretty manifest JSON for manifest prints, `None` for file exports.
-    pub manifest: Option<String>,
-}
-
-/// One export run from flags on injected seams.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use confit_cli::actions::export::ExportRunner;
-/// use confit_cli::seams::Seams;
-/// use confit_cli::cli::ExportArgs;
-/// use confit_cli::fs::OsFs;
-/// use std::io::Cursor;
-///
-/// let args = ExportArgs { picker: None, output: None, manifest: true };
-/// let fs = OsFs;
-/// let mut input = Cursor::new(String::new());
-/// let report = ExportRunner::run(&args, Seams::memory(&fs, &mut input));
-/// assert!(matches!(report, Ok(_) | Err(_)));
-/// ```
 pub struct ExportRunner<'a> {
-    /// Holds the export flags under running.
+    /// The flags that pick the state and the output.
     pub args: &'a ExportArgs,
-    /// Holds the injected filesystem plus output plus sink.
-    pub seams: Seams<'a>,
+    /// The trusted roots and content caches.
+    pub stores: Stores,
 }
 
 impl<'a> ExportRunner<'a> {
-    /// Reads flags plus runs the full export flow on injected seams.
-    pub fn run(args: &'a ExportArgs, seams: Seams<'a>) -> Result<ExportReport> {
-        Self { args, seams }.execute()
-    }
-
-    /// Resolves the picker, then writes the bundle file or
-    /// renders pretty manifest JSON through injected seams.
-    ///
-    /// The destination rides `-o` as a literal file path and
-    /// gains `.cb` unless present. Omitted destinations derive
-    /// from the slot. Bundle output prints the path downstream,
-    /// never streams bytes.
-    ///
-    /// # Returns
-    ///
-    /// The bundle path for file exports, else the manifest text.
+    /// Runs the export flow and returns the report.
     ///
     /// # Errors
     ///
-    /// Picker plus load plus write failures surface as plan or
-    /// io errors. `-o` plus `--manifest` together refuse.
-    pub fn execute(self) -> Result<ExportReport> {
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when the state picker text is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
+    pub fn run(args: &'a ExportArgs, stores: Stores) -> TerminalResult<ArtifactReport> {
+        Self { args, stores }.execute()
+    }
+
+    /// Resolves the picker, then writes the file or returns the manifest.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when the state picker text is malformed.
+    /// - [`confit_core::error::kind::ErrorKind::ExportState`] when a state fails.
+    /// - [`confit_core::error::kind::ErrorKind::CorruptManifest`] when a stored manifest is unreadable.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestVersion`] when the manifest version is unsupported.
+    /// - [`confit_core::error::kind::ErrorKind::ManifestNoVersion`] when a stored manifest has no version.
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when the bundle write fails.
+    pub fn execute(self) -> TerminalResult<ArtifactReport> {
         let args = self.args;
-        let seams = self.seams;
-        if args.manifest && args.output.is_some() {
-            return Err(Error::Plan(
-                "export: '-o' plus '--manifest' refuse together, pick one".to_string(),
-            ));
-        }
-        let fs: &dyn Filesystem = seams.fs;
-        let (bundle, auto) = timed("export load", || {
-            resolve_slot_bundle(args.picker.as_deref(), fs)
-        })?;
+        let stores = self.stores;
+        let bundles = Bundler::new(&stores, EventHandles::silent());
+        let states = stores.states();
+        let (manifest, prefix) = match args.picker.as_deref() {
+            None => (states.load_applied()?, APPLIED_PREFIX.to_owned()),
+            Some(raw) => match raw.parse::<Picker>() {
+                Ok(picker) => {
+                    let prefix = match &picker {
+                        Picker::Named(name) => name.clone(),
+                        Picker::History(pick) => format!("{HISTORY_PREFIX}{pick}"),
+                    };
+                    (states.load_state(&picker)?, prefix)
+                }
+                Err(contextual) => match contextual.cause() {
+                    ErrorCause::StateReason(_) => {
+                        return Err(contextual
+                            .with_state(raw.to_owned())
+                            .terminal(ErrorKind::ExportState));
+                    }
+                    _ => return error(ErrorKind::ExportState, contextual),
+                },
+            },
+        };
         if args.manifest {
-            let text = timed("export manifest", || manifest_json(&bundle.manifest))?;
-            return Ok(ExportReport {
-                dest: None,
-                manifest: Some(text),
+            let source = args.picker.as_deref().unwrap_or(APPLIED_PREFIX).to_owned();
+            return Ok(ArtifactReport {
+                output: source,
+                manifest,
             });
         }
+        let auto = PathBuf::from(prefix);
         let dest = match args.output.as_deref() {
-            Some(raw) => ensure_bundle_extension(raw),
+            Some(raw) => raw.to_path_buf(),
             None => auto,
         };
-        seams.emit_writing_manifest(bundle.manifest.documents.len());
-        timed("export write", || {
-            write_bundle(&bundle, &dest, fs, seams.progress.as_ref())
-        })?;
-        Ok(ExportReport {
-            dest: Some(dest),
-            manifest: None,
+        let dest = bundles.write(&manifest, &dest)?;
+        Ok(ArtifactReport {
+            output: dest.display().to_string(),
+            manifest,
         })
     }
-}
-
-/// Resolves one picker to its live bundle plus auto bundle name.
-///
-/// Slot errors carry the export command name.
-///
-/// # Arguments
-///
-/// * `picker` - the raw picker value under resolving.
-/// * `fs` - the backend under reading.
-///
-/// # Returns
-///
-/// The live bundle holding blob refs, plus the slot-derived
-/// bundle destination carrying `.cb`.
-///
-/// # Errors
-///
-/// Absent slots plus malformed plus out-of-range picks plus
-/// load failures surface as plan or io errors.
-///
-/// # Examples
-///
-/// ```rust
-/// use confit_cli::actions::export::resolve_slot_bundle;
-/// use confit_core::fs::memory::MemoryFs;
-///
-/// let fs = MemoryFs::new();
-/// assert!(matches!(resolve_slot_bundle(None, &fs), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("backup.cb"), &fs), Err(_)));
-/// assert!(matches!(resolve_slot_bundle(Some("%1"), &fs), Err(_)));
-/// ```
-pub fn resolve_slot_bundle(picker: Option<&str>, fs: &dyn Filesystem) -> Result<(Bundle, PathBuf)> {
-    let (bundle, kind) = resolve_slot(picker, fs).map_err(|error| match error {
-        Error::Plan(detail) => Error::Plan(format!("export: {detail}")),
-        other => other,
-    })?;
-    let stem = match kind {
-        SlotKind::Applied => APPLIED_STEM.to_string(),
-        SlotKind::Named(name) => name,
-        SlotKind::History(pick) => format!("{HISTORY_STEM_PREFIX}{pick}"),
-    };
-    Ok((bundle, auto_dest(&stem)))
-}
-
-/// Builds one slot-derived bundle destination carrying `.cb`.
-fn auto_dest(stem: &str) -> PathBuf {
-    ensure_bundle_extension(std::path::Path::new(stem))
 }

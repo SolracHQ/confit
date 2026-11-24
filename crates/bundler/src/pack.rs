@@ -1,0 +1,332 @@
+//! Writes one portable bundle with its manifest and contents.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use confit_core::error::kind::ErrorKind;
+use confit_core::error::{ContextualResult, Terminal, TerminalResult, WithContext};
+use confit_core::resource_ref::ResourceRef;
+use confit_core::sha::Sha;
+use confit_driver as driver;
+use confit_events::TaskReporter;
+use confit_events::protocol::{TaskKind, TaskNote};
+
+use crate::BUNDLE_MANIFEST;
+use crate::Bundler;
+use confit_model::manifest::Manifest;
+
+/// The file mode that every bundle member carries.
+const BUNDLE_ENTRY_MODE: u32 = 0o644;
+
+/// The bundle extension that an explicit output carries.
+const BUNDLE_EXTENSION: &str = "cb";
+
+impl Bundler {
+    /// Writes one bundle archive and returns its path.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::kind::ErrorKind::WriteBundle`] when a render or write fails, or the content
+    ///   is unreadable, with the bundle path.
+    pub fn write(&self, manifest: &Manifest, dest: &Path) -> TerminalResult<PathBuf> {
+        let dest = Self::with_extension(dest);
+        Pack::new(self, manifest, &dest)
+            .and_then(|pack| pack.run())
+            .with_bundle_path(dest)
+            .terminal(ErrorKind::WriteBundle)
+    }
+
+    /// Returns the destination with a `.cb` extension.
+    fn with_extension(dest: &Path) -> PathBuf {
+        if dest
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(BUNDLE_EXTENSION))
+        {
+            dest.to_path_buf()
+        } else {
+            let mut name = dest.as_os_str().to_owned();
+            name.push(".cb");
+            PathBuf::from(name)
+        }
+    }
+}
+
+/// The write state of one bundle.
+struct Pack<'a> {
+    /// The bundler that writes the bundle.
+    bundler: &'a Bundler,
+    /// The bundle destination with the bundle extension.
+    dest: PathBuf,
+    /// The rendered manifest text.
+    text: String,
+    /// The content hashes that the bundle writes, sorted by content hash.
+    contents: Vec<ResourceRef>,
+    /// The content files held open for the write.
+    staged: Vec<Staged>,
+}
+
+/// One open content file.
+struct Staged {
+    /// The hash naming the entry.
+    handle: ResourceRef,
+    /// The opened content file.
+    file: std::fs::File,
+}
+
+impl<'a> Pack<'a> {
+    /// Builds one bundle write with one entry per content.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::DocumentError::RenderFailed`] when the manifest render fails.
+    fn new(bundler: &'a Bundler, manifest: &Manifest, dest: &Path) -> ContextualResult<Self> {
+        let dest = dest.to_path_buf();
+        let text = manifest.json()?;
+        let mut seen: BTreeMap<Sha, ResourceRef> = BTreeMap::new();
+        for handle in manifest.handles() {
+            seen.entry(*handle.sha()).or_insert(handle);
+        }
+        Ok(Self {
+            bundler,
+            dest,
+            text,
+            contents: seen.into_values().collect(),
+            staged: Vec::new(),
+        })
+    }
+
+    /// Runs one bundle write and returns the destination path.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::FilesystemError`] when the content is unreadable or a write fails.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
+    fn run(mut self) -> ContextualResult<PathBuf> {
+        let total = self.contents.len();
+        let dest = self.dest.clone();
+        let handles = self.bundler.handles.clone();
+        let reporter = handles.start_task(TaskKind::Pack { path: dest.clone() }, Some(total));
+        self.collect(&reporter)?;
+        let built = self.build(&reporter)?;
+        reporter.finish(TaskNote::Members(total));
+        Ok(built)
+    }
+
+    /// Opens every content file before the atomic write.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::FilesystemError`] when the content is unreadable, with the attempted path.
+    /// - [`confit_core::error::ErrorCause::ContentHashMismatch`] when the content fails the carried sha.
+    fn collect(&mut self, reporter: &TaskReporter) -> ContextualResult<()> {
+        let total = self.contents.len();
+        for handle in &self.contents {
+            let file = self.bundler.resources.open(handle)?;
+            self.staged.push(Staged {
+                handle: *handle,
+                file,
+            });
+            reporter.progress(self.staged.len(), Some(total), None);
+        }
+        Ok(())
+    }
+
+    /// Writes the staged bundle as one archive file.
+    ///
+    /// # Errors
+    ///
+    /// - [`confit_core::error::FilesystemError`] when a write fails.
+    /// - [`confit_core::error::ArchiveError`] when a member fails.
+    fn build(self, reporter: &TaskReporter) -> ContextualResult<PathBuf> {
+        use confit_driver::archive::{Algorithm, Builder, Level};
+
+        let Pack {
+            bundler: _,
+            dest,
+            text,
+            contents: _,
+            mut staged,
+        } = self;
+        let total = staged.len();
+        let scratch = driver::StagedFile::stage(&dest)?;
+        {
+            let sink = std::fs::File::create(scratch.path())?;
+            let mut builder = Builder::create(sink, Algorithm::TarGz, Level::default());
+            let mut manifest_reader = std::io::Cursor::new(text.as_bytes());
+            builder.member(
+                BUNDLE_MANIFEST,
+                BUNDLE_ENTRY_MODE,
+                text.len() as u64,
+                &mut manifest_reader,
+            )?;
+            for (index, entry) in staged.iter_mut().enumerate() {
+                let len = entry.file.metadata()?.len();
+                builder.member(
+                    &entry.handle.sha().hex(),
+                    BUNDLE_ENTRY_MODE,
+                    len,
+                    &mut entry.file,
+                )?;
+                reporter.progress(index + 1, Some(total), None);
+            }
+            let sink = builder.finish()?;
+            drop(sink);
+        }
+        scratch.persist(&dest)?;
+        Ok(dest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read as _;
+
+    use confit_core::error::ErrorCause;
+    use confit_core::version::VERSION;
+    use confit_driver as driver;
+    use confit_events::EventHandles;
+    use confit_model::document::{Data, Document, FileMode, OpaqueDocument};
+    use confit_model::routes::{Route, RouteBase};
+    use confit_store::StoreRoots;
+
+    fn test_roots(dir: &Path) -> StoreRoots {
+        StoreRoots {
+            config_base: dir.join("config"),
+            temp_base: dir.join("temp"),
+            project_root: dir.join("project"),
+        }
+    }
+
+    #[test]
+    fn bundle_extension_adds_a_suffix_to_a_bare_path() {
+        for (input, want) in [
+            ("plan", "plan.cb"),
+            ("plan.cb", "plan.cb"),
+            ("plan.CB", "plan.CB"),
+        ] {
+            let out = Bundler::with_extension(Path::new(input));
+            assert_eq!(out.to_str(), Some(want));
+        }
+    }
+
+    fn project_file(dir: &Path, name: &str, body: &[u8]) -> std::path::PathBuf {
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn opaque_manifest(dir: &Path, bodies: &[&[u8]]) -> (Bundler, Manifest) {
+        use confit_store::Stores;
+
+        let roots = test_roots(dir);
+        let stores = Stores::new(roots, EventHandles::silent());
+        let mut documents = Vec::new();
+        for (index, body) in bodies.iter().enumerate() {
+            let name = format!("bin-{index}");
+            project_file(dir, &name, body);
+            let handle = match stores.resources().resource(&name) {
+                Ok(found) => found,
+                Err(error) => panic!("the project fails to open: {error}"),
+            };
+            assert_eq!(handle.sha(), &Sha::hash(body));
+            documents.push(Document {
+                path: Route::new(RouteBase::Home, name.as_str()).unwrap(),
+                unmanaged: false,
+                data: Data::Opaque(OpaqueDocument {
+                    handle,
+                    mode: FileMode::new(0o644),
+                }),
+            });
+        }
+        let manifest = Manifest {
+            version: VERSION,
+            documents,
+            hooks: Vec::new(),
+        };
+        (Bundler::new(&stores, EventHandles::silent()), manifest)
+    }
+
+    fn entry_bodies(path: &Path) -> Vec<Vec<u8>> {
+        use std::io::Read as _;
+
+        let file = std::fs::File::open(path).unwrap();
+        let mut bodies = Vec::new();
+        driver::archive::uncompress(file, |entry| -> ContextualResult<()> {
+            let name = entry.name;
+            let mut body = entry.reader;
+            if name == BUNDLE_MANIFEST {
+                std::io::copy(&mut body, &mut std::io::sink()).unwrap();
+                return Ok(());
+            }
+            let mut found = Vec::new();
+            body.read_to_end(&mut found).unwrap();
+            bodies.push(found);
+            Ok(())
+        })
+        .unwrap();
+        bodies
+    }
+
+    #[test]
+    fn bundle_write_lands_the_finished_file_with_every_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"leading bytes", b"streamed body"]);
+        let plan = dir.path().join("plan");
+        let dest = match store.write(&manifest, &plan) {
+            Ok(dest) => dest,
+            Err(error) => panic!("the manifest fails to write: {error}"),
+        };
+        assert_eq!(
+            dest,
+            dir.path().join("plan.cb").as_path(),
+            "the write returns the bundle destination"
+        );
+        let raw = std::fs::read(&dest).unwrap();
+        assert!(!raw.is_empty(), "the bundle holds bytes");
+        let mut bodies = entry_bodies(&dest);
+        bodies.sort();
+        let mut expected = Vec::new();
+        for document in &manifest.documents {
+            let Data::Opaque(found) = &document.data else {
+                continue;
+            };
+            let mut reader = match store.resources.open(&found.handle) {
+                Ok(reader) => reader,
+                Err(error) => panic!("the content fails to open: {error}"),
+            };
+            let mut body = Vec::new();
+            reader.read_to_end(&mut body).unwrap();
+            expected.push(body);
+        }
+        expected.sort();
+        assert_eq!(bodies, expected, "the streamed contents match");
+    }
+
+    #[test]
+    fn write_reports_a_denied_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, manifest) = opaque_manifest(dir.path(), &[b"written bytes"]);
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        driver::fs::set_mode(&locked, Some(0o555)).unwrap();
+        let dest = locked.join("plan");
+        match store.write(&manifest, &dest) {
+            Ok(_) => panic!("expected a write rejection"),
+            Err(error) => match error.cause() {
+                ErrorCause::FilesystemError(_) | ErrorCause::ArchiveError(_) => {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains(&locked.join("plan.cb").display().to_string()),
+                        "the rejection keeps the destination"
+                    );
+                }
+                other => panic!("expected a write fault: {other:?}"),
+            },
+        }
+        driver::fs::set_mode(&locked, Some(0o755)).unwrap();
+    }
+}

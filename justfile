@@ -1,51 +1,45 @@
 default:
   @just --list
 
-# Build the host binary (mounted :ro into the test container).
 build:
   cargo build
 
 build-release:
   cargo build --release
 
-# Build the Fedora-minimal test image.
 test-build-image:
   docker build -f Containerfile.test -t confit-test:latest .
 
-# Start (idempotent) the persistent test container.
 test-up: build
   ./scripts/test-up.sh
 
-# Open an interactive shell as `tester` inside the container.
 test-shell:
   ./scripts/test-shell.sh
 
-# One-shot run of the mounted binary: `just test-run -- --help` / `just test-run -- plan ...`
 test-run *ARGS="--help":
   ./scripts/test-run.sh {{ARGS}}
 
-# Stop + rm container, keep home volume.
 test-down:
   ./scripts/test-down.sh
 
-# Stop + rm container AND delete home volume (fresh HOME next up).
 test-nuke:
   ./scripts/test-nuke.sh
 
-# Plan the basic_tool fixture (host smoke; writes only ./target).
-plan-example:
-  cargo run -- plan examples/0-basic_tool/profile.lua --root examples/0-basic_tool -o ./target/plan-example.json
+demo-build:
+  docker build -f Containerfile.demo -t confit-demo:latest .
 
-# Show the living spec as of a sealed tag.
-show-spec VERSION="0.1":
-  git show v{{VERSION}}:docs/book/src/spec/index.md
+demo:
+  ./scripts/demo.sh
 
-# Full local verification.
+stubs:
+  ./scripts/stubs.sh
+
+bundle-example:
+  cargo run -- bundle examples/0-basic_tool -o ./target/bundle-example
+
+check-example:
+  cargo run -- check examples/0-basic_tool
+
 check:
   cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 
-# Bump all three crates to one version. The release flow tags from cli.
-set-version VERSION:
-  sed -i 's/^version = ".*"/version = "{{VERSION}}"/' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml
-  cargo check --workspace --offline >/dev/null 2>&1 || cargo check --workspace >/dev/null
-  grep -h '^version' crates/core/Cargo.toml crates/engine/Cargo.toml crates/cli/Cargo.toml

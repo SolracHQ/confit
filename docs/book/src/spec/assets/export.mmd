@@ -1,0 +1,8 @@
+flowchart TD
+  A["Resolve picker"] --> B{"Mode?"}
+  B -- "-m" --> C["Print manifest"]
+  B -- "-o PATH" --> D["Pack bundle file"]
+  B -- "default" --> E["Pack auto named file"]
+  D --> F["Read pool or cache"]
+  E --> F
+  F --> G["Write bundle file"]

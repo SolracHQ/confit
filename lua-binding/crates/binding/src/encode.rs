@@ -1,0 +1,132 @@
+//! Encoding for container and standard-library types.
+//!
+//! The derive encodes `Box`, maps, `serde_json::Value`, paths, functions, and
+//! machine words through the standard traits.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+
+use mlua::{Function, Lua, Value};
+
+use crate::value::Encode;
+
+/// Encodes a boxed value through its inner value.
+impl<T: Encode> Encode for Box<T> {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        self.as_ref().encode(lua)
+    }
+}
+
+/// Encodes a hash map as a Lua table.
+impl<K: Encode, V: Encode> Encode for HashMap<K, V> {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        let table = lua.create_table()?;
+        for (key, item) in self {
+            table.set(key.encode(lua)?, item.encode(lua)?)?;
+        }
+        Ok(Value::Table(table))
+    }
+}
+
+/// Encodes a sorted map as a Lua table.
+impl<K: Encode, V: Encode> Encode for BTreeMap<K, V> {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        let table = lua.create_table()?;
+        for (key, item) in self {
+            table.set(key.encode(lua)?, item.encode(lua)?)?;
+        }
+        Ok(Value::Table(table))
+    }
+}
+
+/// Encodes a JSON value through the serde bridge.
+impl Encode for serde_json::Value {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        use mlua::LuaSerdeExt as _;
+        lua.to_value(self)
+    }
+}
+
+/// Encodes a path as its display string.
+impl Encode for PathBuf {
+    fn encode(&self, lua: &Lua) -> mlua::Result<Value> {
+        lua.create_string(self.to_string_lossy().as_ref())
+            .map(Value::String)
+    }
+}
+
+/// Encodes a function as itself.
+impl Encode for Function {
+    fn encode(&self, _lua: &Lua) -> mlua::Result<Value> {
+        Ok(Value::Function(self.clone()))
+    }
+}
+
+/// Encodes an unsigned machine word as an integer.
+impl Encode for usize {
+    fn encode(&self, _lua: &Lua) -> mlua::Result<Value> {
+        Ok(Value::Integer(*self as i64))
+    }
+}
+
+/// Encodes a signed machine word as an integer.
+impl Encode for isize {
+    fn encode(&self, _lua: &Lua) -> mlua::Result<Value> {
+        Ok(Value::Integer(*self as i64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::Decode;
+
+    #[test]
+    fn maps_encode_entries_with_decode_round_trip() {
+        let lua = Lua::new();
+        let mut source = BTreeMap::new();
+        source.insert("alpha".to_owned(), "one".to_owned());
+        source.insert("beta".to_owned(), "two".to_owned());
+        let encoded = source.encode(&lua).unwrap();
+        let back = BTreeMap::<String, String>::decode(&encoded, &lua).unwrap();
+        assert_eq!(back, source);
+        let mut hashed = HashMap::new();
+        hashed.insert("alpha".to_owned(), 1u32);
+        let encoded = hashed.encode(&lua).unwrap();
+        let Value::Table(table) = encoded else {
+            panic!("map encodes a table");
+        };
+        let found: u32 = table.get("alpha").unwrap();
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn json_objects_encode_tables_with_decode_round_trip() {
+        let lua = Lua::new();
+        let source = serde_json::json!({"alpha": "one", "count": 2});
+        let encoded = source.encode(&lua).unwrap();
+        let back = serde_json::Value::decode(&encoded, &lua).unwrap();
+        assert_eq!(back, source);
+    }
+
+    #[test]
+    fn paths_encode_display_strings() {
+        let lua = Lua::new();
+        let route = PathBuf::from("home/bin");
+        let encoded = route.encode(&lua).unwrap();
+        assert!(matches!(encoded, Value::String(found) if found.to_string_lossy() == "home/bin"));
+    }
+
+    #[test]
+    fn functions_and_words_encode_plain_shapes() {
+        let lua = Lua::new();
+        let function: Function = lua.load("return function() end").call(()).unwrap();
+        let encoded = function.encode(&lua).unwrap();
+        assert!(matches!(encoded, Value::Function(_)));
+        assert!(matches!(3usize.encode(&lua).unwrap(), Value::Integer(3)));
+        assert!(matches!(
+            (-2isize).encode(&lua).unwrap(),
+            Value::Integer(-2)
+        ));
+    }
+}

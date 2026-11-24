@@ -1,102 +1,267 @@
 # ConfIt architecture
 
-Three crates form the app, each holding one main
-responsibility.
+Eleven crates form one acyclic graph. Each crate is a single
+domain unit. Each crate owns a single conceptual set of actions.
+Each crate definition fits in a single line.
 
-The engine converts a Lua profile into manifest documents
-plus blob bytes. The core manages state plus diffs across bundles, manifests,
-the pool, and rotation.
-The cli orchestrates both, calling engine plus core where
-needed, and provides user experience across prompts, progress,
-previews, listings, scaffolding, and arg shapes.
+## Store
 
-The call flow is `main` to `actions`, with `main` rendering
-reports through `presentation`. Effects hide behind traits
-(`Filesystem`, `Fetch`, progress sink). `main` plus `cli`
-name nothing effectful. Test seams keep every crate hermetic:
-memory filesystem, memory fetcher, silent progress.
+Store is the confit controlled resource management. It owns all managed files
+with a fixed path at evaluation time. That includes:
 
-## Dependencies
+- User project files.
+- Pool blobs.
+- Cache files.
+- Named states.
+- History states.
 
-```text
-confit-cli --> confit-engine --> confit-core
-confit-cli --> confit-core
+One Stores set exists per execution. Main builds it once and all phases use
+that set. The set splits into subdomains because placement and generation need
+different owners. Placement owns where files live. Generation fills the cache
+during evaluation.
+
+### Placement stores
+
+They own where confit files live during the execution.
+
+#### Resources store
+
+It owns user project files and the cache files derived from them. It is the
+only subdomain that serves project paths to the rest of the execution.
+
+#### Pool store
+
+It owns confit blobs. It keeps the long term content that states reference
+and that the cache reuses across executions.
+
+#### State store
+
+It owns named states and history states. It keeps the applied history and the
+rescue state for the next comparison.
+
+### Operation stores
+
+They generate managed files in the cache during evaluation.
+
+#### Fetch store
+
+It is in charge of web resources. It downloads, verifies, and stores each
+requested URL in the cache.
+
+#### Archive store
+
+It is in charge of archive members. It lists, verifies, and stores each
+unpacked member in the cache.
+
+## Engine
+
+Engine is the Lua profile evaluator. It evaluates one profile file into one
+manifest. It keeps the require jail during evaluation. The jail decides what
+require loads and what it rejects:
+
+- `confit.*` loads a builtin module.
+- Other names load a project file relative to the project root.
+- `plugins.*` loads a plugin file relative to the plugins folder.
+- Paths outside the scope fail.
+
+Project config controls the jail:
+
+- `project.toml` sets the plugins folder.
+- `allow_external_folders` controls whether plugins resolve outside the root.
+
+Assembly validates the profile, merges patches into documents, and collects
+hooks from the same value.
+
+```mermaid
+graph TD
+    profile["profile file"]-->project["project config"]
+    project-->jail["require jail"]
+    jail-->api["builtin modules"]
+    api-->chunk["loaded chunk"]
+    chunk-->decoded["decoded profile"]
+    decoded-->validate["validation"]
+    validate-->patches["patches"]
+    patches-->assembly["documents and hooks"]
+    assembly-->manifest["manifest"]
 ```
 
-These three edges are the whole graph.
+Api exposes one module per file:
 
-## confit-core
+- `archive`, `config`, `fact`, `fetch`, `global`, `input`, `open`, `patch`,
+  `profile`, `render`, `resource`, `validate`.
 
-Pure data plus render. Every function here runs as a unit test on data alone.
+For module shapes and calls see `../crates/engine/src/stubs.rs`.
 
-- `document` owns `ManifestDocument` plus `ManifestData`:
-  structured, text, link, rc, opaque, tree. One path holds
-  one document. Paths expand tildes. Opaque plus tree
-  payloads persist as blob refs in manifests, raw bytes
-  in the bundle blob map.
-- `ids` owns `DocPath` plus `ReadOutcome` (present, absent,
-  unreadable).
-- `plan` owns versioned `Bundle` (`manifest` plus `blobs`)
-  plus on-demand counts against previous bundles.
-  The state slot holds the applied manifest.
-- `drift` owns `Drift` entries comparing recorded manifests
-  against disk, plus their display lines.
-- `render` owns shell-agnostic document bytes plus text.
-- `error` owns the plan-or-io failure shape.
+## Differ
 
-## confit-engine
+Differ is the state and disk comparison engine. It compares wanted, recorded,
+and disk state. It builds three views. Each view answers one question.
 
-Lua profiles evaluate into manifest documents plus blobs
-through `evaluate(profile, EvalOpts)`. `EvalOpts` carries root, plugins, re-fetch, cache override,
-fetcher override, plus the progress sink. Overrides keep
-tests off the network plus the OS cache.
+### Desired view
 
-- `surface` owns one namespace module per kind. Config,
-  document, patch, shell, paths, resources, utils,
-  plugin. Resources jail reads to the project root plus the
-  fetch cache. `require` jails module loads the same way.
-- `model` owns Config plus Patch handles, internal to the
-  crate. `level` owns priority sorting. `exec` owns the live
-  wrappers across first-writer-wins slots, collision logging,
-  and per-shell materialization.
-- `fetch` owns the `Fetch` trait with HTTP plus memory
-  sources. Sidecar shas guard the OS cache. Re-download
-  fires on missing files, mismatched bytes, or re-fetch.
-- `progress` owns slow-run facts across fetch, unpack, patch,
-  hash, read, and write.
-- Embedded plugins ship beside the loader under
-  `solrachq` (mise, merge, template). External plugin
-  folders attach beside them. Plugin Lua composes surface
-  primitives only.
+It compares wanted against recorded. It shows what changed since the last
+applied state.
 
-## confit-cli
+### Drift view
 
-Terminal surface over evaluation plus bundles.
+It compares recorded against disk. It shows what moved on disk outside of
+confit.
 
-- `main` owns command dispatch plus report printing.
-- `cli` owns arg shapes for plan, apply, export, delete,
-  init. Tildes expand across every path arg after parsing.
-- `actions` owns the flows (see the plan, apply, plus init
-  spec pages). Plan
-  evaluates, diffs, and stores payloads; apply previews,
-  prompts, writes per kind, removes recorded orphans, writes
-  state, and rotates history; export packs slots; delete
-  drops named slots; init scaffolds profiles plus stubs
-  from embedded text.
-- `fs` owns the `Filesystem` seam with OS plus memory
-  backends. Memory fakes keep tests hermetic.
-- `presentation` owns summaries, drift lines, plus report
-  text. Summaries cover moving documents plus counts.
-- Logging rides `fern` into one file per run. The global
-  `--log-level` gates verbosity, warn by default.
+### Effective view
 
-## Data flow
+It compares wanted against disk. It drives file writes and hook decisions.
 
-The profile evaluates to manifest documents plus blobs. The build diffs desired
-documents against the previous manifest plus disk snapshots,
-hashing rendered bytes. The payload writes as pretty JSON,
-metadata always. Binary bytes gzip once into the shared
-pool under content hashes. Apply writes documents per kind, removes
-state-recorded paths absent from desired documents, records
-the fixed state slot, and rotates manifest history. Apply
-re-applies past slots through the same write path.
+## Runtime
+
+Runtime is file changes and hook execution. It consumes the
+effective rows in view order. It writes files and removes
+dropped paths. It runs hooks after the files land. Checks
+decide the hooks. Each hook resolves its binary against the
+hook PATH and the process PATH, runs without a shell, and
+writes its output to a log file under the run hooks folder.
+
+Runtime holds no pool and no history. Store keeps those.
+
+## Model
+
+Model holds the high level domain entities. It is the shared
+confit language. Its entities live from Lua to disk. Document,
+Route, Hook, Condition, Manifest, Arg, and the state pickers.
+A profile builds them. A manifest stores them as references.
+Stores resolve the resource side. Runtime fills the disk side.
+
+Routes keep bundles portable. A route pairs a base with a
+relative path. The host path resolves at write time.
+
+## Bundler
+
+Bundler is the confit package protocol. It packs the manifest with all files
+needed to reconstruct the whole state into one portable `.cb` file. It
+unpacks in the opposite direction and restores the same state on any system
+with the same facts. Routes stay symbolic inside, so a bundle applies across
+systems.
+
+## Driver
+
+Driver is the confit layer over third-party libs. It makes
+third-party code talk the confit language. It is the weakest
+domain crate. It wraps filesystems, http, archives, processes,
+and paths in the small surface confit needs. Side effects stay
+contained behind traits. Test doubles stand behind feature
+guards. Real backends link in production builds.
+
+## Core
+
+Core holds the basic shared entities across the program.
+Errors, hashes, and references. Every crate needs them.
+
+## Events
+
+Events is the ui protocol. Progress, preview, prompts, and
+confirmations travel as typed variants. Workers send. Ui
+renders and answers.
+
+## Ui
+
+Ui is the multi-backend terminal system over the events
+protocol. It owns stderr and stdin. It manages user interaction
+and progress reporting. Workers send typed events, so each
+backend renders the same protocol. The split lets each backend
+present one execution in the way its users need.
+
+## Cli
+
+Cli is the entry point. It takes flags and the user request, prepares
+logging, the Ui backend, the store roots, and the store set, executes one
+command flow through the domain crates, and prints the deliverable to stdout
+when requested.
+
+## Commands
+
+A command is one full user request. It runs phases in order
+and returns one deliverable. The phase sequence defines the
+command.
+
+## Phases
+
+A phase is one complete task. It states inputs, outputs, and
+side effects. Its value is the derivable. Evaluate gives the
+profile. Assembly gives the manifest. Compare gives the diff.
+Packaging gives the bundle. Commit gives the written disk.
+
+## Life cycle
+
+One apply runs evaluate, assembly, compare, then commit. The
+diff passes between them. Each phase reads the last derivable
+and produces the next.
+
+## Crate map
+
+Eleven members. One charge each.
+
+| Crate | Charge |
+| --- | --- |
+| `core` | Basic shared entities across the program |
+| `events` | The ui protocol |
+| `driver` | Confit layer over third-party libs |
+| `bundler` | Confit package protocol |
+| `store` | Confit controlled resource management |
+| `model` | High level entities from Lua to disk |
+| `engine` | Lua profile evaluator |
+| `differ` | State and disk comparison engine |
+| `runtime` | File changes and hook execution |
+| `ui` | Multi-backend terminal over the events protocol |
+| `cli` | Flags, commands, deliverable printing, and exit codes |
+
+## Dependencies stay acyclic
+
+The graph shows the production edges. The domain crates build
+in one direction.
+
+```mermaid
+graph TD
+    cli["confit-cli"] --> engine["confit-engine"]
+    cli --> runtime["confit-runtime"]
+    cli --> ui["confit-ui"]
+    cli --> model["confit-model"]
+    cli --> store["confit-store"]
+    cli --> driver["confit-driver"]
+    cli --> core["confit-core"]
+    cli --> events["confit-events"]
+    cli --> bundler["confit-bundler"]
+    cli --> differ["confit-differ"]
+    engine --> model
+    engine --> store
+    engine --> driver
+    engine --> core
+    engine --> events
+    runtime --> model
+    runtime --> store
+    runtime --> driver
+    runtime --> core
+    runtime --> events
+    runtime --> bundler
+    runtime --> differ
+    ui --> differ
+    ui --> events
+    ui --> model
+    ui --> core
+    store --> differ
+    store --> events
+    store --> model
+    store --> driver
+    store --> core
+    bundler --> model
+    bundler --> store
+    bundler --> driver
+    bundler --> core
+    differ --> model
+    differ --> driver
+    differ --> core
+    events --> differ
+    events --> model
+    events --> core
+    model --> driver
+    model --> core
+    driver --> core
+```

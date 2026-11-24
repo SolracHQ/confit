@@ -1,0 +1,20 @@
+[package]
+name = "lua-binding-macros"
+version = "0.1.0"
+edition = "2024"
+readme = "../../README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "3.0.7", features = ["full"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+lua-binding = { workspace = true }
+mlua = { workspace = true, features = ["lua54", "vendored"] }

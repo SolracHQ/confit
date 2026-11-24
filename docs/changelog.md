@@ -1,24 +1,243 @@
 # Changelog
 
+## [Unreleased]
+
+Design spec: `docs/design/v0.9.md`.
+
+### Added
+
+- Added bundles to runtime. Export packs slots and
+  history into portable files.
+- Added routes. Documents key by routes with `home`,
+  `config`, `data`, `cache` and `literal` bases. Hook
+  argv with `rc` path entries take strings or routes.
+- Added validate verbs (`validate.document`,
+  `validate.config`, `validate.patch`, `validate.hook`,
+  `validate.condition`, `validate.entry` and
+  `validate.route`). Checks return values with reasons.
+- Added filter patches. Filter callbacks cover matched
+  documents in destination order. Target and filter never
+  mix in one patch.
+- Added hook ids. Hook patches target one id and patch
+  the live hook. Repeated ids fail the plan.
+- Added dotted require paths. Dotted paths address any
+  file inside the project. Folder paths fall back to
+  `init.lua` entries. Plugins require only siblings.
+  Project code requires anything contained.
+- Added the is plugin with `is.string`, `is.nonempty`,
+  `is.num`, `is.bool`, `is.tab` and `is.fun` checks with
+  `assert`, `keys` and `must` helpers.
+- Added the tab plugin with `tab.clone` for shallow table
+  copies.
+- Added the sugar plugin. Builders cover home, config,
+  data, cache and literal routes, empty rc sections,
+  patch, alias, env, path, eval, cmd and source entries.
+- Added in-flight fetch progress with byte counts.
+- Added document removal counts.
+- Added project folders to `apply` sources with a profile
+  choice.
+- Added init flags. New profiles ship with live stubs,
+  core plugins and a project file. The `--stubs`,
+  `--plugins` and `--lsp` flags refresh the stubs folder,
+  the core plugins folder and `.luarc.json` in old
+  scaffolds. Present targets fail with nothing written.
+- Added the delete line with pruned blob counts.
+- Added `project.toml` with the plugin folder path, the
+  outside-folder flag and the stubs folder path.
+- Added the 3-fonts example. The dotfiles tools moved to
+  4-dotfiles.
+- Added stub generation from live faces. Stub files cover
+  `confit.fetch`, `confit.open`, `confit.render`,
+  `confit.fact` and `confit.validate`. Committed copies
+  refresh through `just stubs`.
+- Added the plugins folder mount to the test container as
+  read only. Examples resolve the same shared tree on host
+  and in the container.
+- Added terminal backends. The `inline`, `plain`
+  and `none` backends render one event protocol.
+  The `--ui` flag picks the backend with `auto`
+  as default.
+- Added preview views. The `--view` flag picks
+  `desired` or `effective`. Check defaults to
+  desired. Apply and restore default to effective.
+  Disk drift marks with `!`.
+- Added the preview sections. Evaluation,
+  Comparison, Documents, Hooks and Summary precede
+  every write. Results and Details follow it. The
+  Created tree follows init.
+- Added prompted input with `confit.input`. The
+  prompt goes to stderr and one line shapes the
+  config. The 5-interactivity example proves it.
+- Added the rescue state. The first apply stores
+  replaced files before the write. `restore @!`
+  writes them back.
+- Added unix-only support. Confit runs on unix
+  systems. Windows stays unsupported.
+- Added the differ with three views. Desired
+  compares wanted against recorded. Drift compares
+  recorded against disk. Effective compares wanted
+  against disk and drives writes.
+- Added the store layer. One crate owns all
+  managed files with fixed paths. Resources serve
+  project files. Pool keeps shared blobs. State
+  keeps named and history states. Fetch and archive
+  fill cache during evaluation. Main builds the set
+  once per execution.
+- Added JSON output. The `--json` flag prints
+  artifact, check, write, delete and init results
+  as pretty JSON. Errors print the log payload as
+  JSON.
+- Added the restore command. `restore` writes
+  stored state from `.cb` bundles, `@name` slots
+  and `%N` history. Other sources fail as restore
+  errors.
+- Added the bundle command. `bundle` evaluates the
+  profile and writes a portable `.cb` file or a
+  named slot.
+- Added archive handles. `handle:archive` opens
+  zips and tarballs. `archive:members` lists names.
+  `archive:member` returns member handles with
+  reasons.
+- Added facts. `confit.fact` returns `version`
+  triplets, `os` and `arch` names. Unknown names
+  fail the call.
+- Added history rotation. History keeps five
+  previous entries. `%N` picks newest-first. Bad
+  names, numbers and ranges fail the pick.
+- Added suggestions. Unknown names report near
+  matches. Error contexts carry file, cache, url,
+  document and hook values.
+- Added structured loads. `handle:load` decodes
+  JSON, TOML, YAML and INI objects. Non-tables
+  and binary files return nil with reasons.
+
+### Changed
+
+- Changed the Lua surface to a full rewrite. Profiles
+  require builtin modules and build plain tables with
+  handles. Constructors, methods, `{{shell}}` slots and
+  the old namespaces are gone with no compat layer.
+- Changed engine from globals to `require` with plain
+  tables over handles.
+- Changed configs, documents, hooks and patches to plain
+  tables. Profiles build literals and return them.
+- Changed fetch and open calls to handles. Fetch and open
+  calls return handles with `text`, `load`, `archive` and
+  `sha` verbs. Bytes load on call. Text files open through
+  `text`. Structured files open through `load`. Absent Load
+  returns nil with reason.
+- Changed opaque documents to blob refs with hashes.
+  Bytes stream on write. Plan labels show hashes.
+- Changed blob payloads to refs at build. Decoded handles
+  produce refs. Decode and validate compress nothing.
+- Changed tree documents to member tables. Members map
+  relative paths to resource handles or handle tables with
+  a required mode. Bare handles take 644. Empty, absolute
+  and parent keys fail the plan.
+- Changed conditions to plain tables. Profiles write
+  `in_path`, `exists`, `changed`, `env_eq`, `env_set`,
+  `all`, `any` and `nop` literals.
+- Changed patch destinations to routes. Patches to missing
+  documents fail the plan instead of creating them.
+- Changed requirements to a plain table field. Configs
+  list required configs with hints. Missing installers
+  fail with the hint.
+- Changed mise to plain configs with patches. `mise.init`
+  builds one shared installer config with the base toml,
+  the binary, one rc filter patch and one install hook.
+  `mise.package` folds one tool entry into the base toml,
+  and shim checks join the shared hook through a hook
+  patch. Activation shells come from matched routes.
+- Changed nerd fonts to tree member tables. Fonts fetch
+  one release zip each, keep only ttf members, and write
+  them as a tree document with an `fc-cache` hook. Missing
+  versions resolve from the releases feed.
+- Changed blob compression progress to a done count.
+- Changed archive extraction to stream each member under
+  a pending folder with a streamed hash.
+- Changed storage to stream bytes with 14 MB peak on
+  example 3.
+- Changed caches to hold across runs. Warm plans take
+  about a second.
+- Changed the default profile to `main.lua`. Project
+  folders feed `bundle`, `check` and `apply` with
+  an optional profile choice. Single profiles skip
+  the flag.
+- Changed the prompt to drain queued prints before the
+  question.
+- Changed the log surface to a logs folder. Logs folders
+  come from the `--logs-dir` flag or `CONFIT_LOG_DIR`. Log
+  lines carry millis stamps. Hook outputs land one file
+  per hook under the hooks folder.
+- Changed the apply tail to print restore with
+  `confit restore %1`.
+- Changed examples to `main.lua` profiles. `main.lua`,
+  `project.toml` and the editor config ship in each
+  example. Tool files require the shared plugins.
+- Changed core plugins to normal plugins. Init scaffolds
+  them, profiles never require them. Users drop them freely.
+- Changed the command split. `bundle` and `check`
+  split the old preview. `apply` and `restore`
+  split the old write.
+- Changed hooks from `checks` to `check`. Hooks
+  carry one `check` condition. Old `checks` arrays
+  fail validation.
+
+### Removed
+
+- Removed the core crate.
+- Removed the confit global. Profiles call `require`
+  with `confit.fetch`, `confit.open`,
+  `confit.validate`, `confit.render` and `confit.fact`.
+- Removed the shells list. Profiles list rc documents
+  beside configs now.
+- Removed the solrachq globals plugins. Core plugins moved
+  to `plugins/_`. Profiles `require` them as dotted paths.
+- Removed the merge and template globals plugins.
+  `confit.render` renders templates now. `tab.clone`
+  clones tables now.
+- Removed the `--root`, `--plugins` and `--re-fetch`
+  flags. Project folders with `project.toml` replace them.
+- Removed the plan command. `bundle` and `check`
+  cover its jobs.
+- Removed apply pickers. `apply` reads project folders
+  only. `restore` reads bundles, slots and history.
+
+## [0.8.1] (never released)
+
+### Fixed
+
+- `confit init` scaffolds the `nerd_fonts` plugin stub beside
+  the other three, so profiles following the lua page get
+  editor completion for it. The scaffold writes 15 files now,
+  the profile and 14 stubs.
+- Editor stubs match the v0.8 surface again. `runtime` gains
+  the `changed` gate, `hook` gains the `requires` slot, `mise`
+  gains the package `options` field, `resources` teaches the
+  three-zone jail on every loader, `document` scopes
+  `unmanaged` to text and opaque and documents callback args
+  for the member identity, `config` notes that bare rc entry
+  tables fail `add_document`.
+
 ## [0.8]
 
 Design spec: `docs/design/v0.8.md`.
 
 ### Added
 
-- `confit.runtime.changed(path)` reads true while the preview for
+- `confit.runtime.changed(path)` shows true while the preview for
   `path` is anything but already-in-place, true on first runs. Hooks
   carrying it skip quiet applies and run touching ones. Unknown paths
-  fail the plan naming the path, rc guards refuse the shape. The mise
-  plus nerd fonts plugins gate their hooks on it, so unrelated applies
-  stop re-running `mise install` plus `fc-cache`.
-- Plan shows hooks as data with lifecycle markers plus
+  fail the plan with the path, rc guards refuse the shape. The mise
+  and nerd fonts plugins gate their hooks on it, so unrelated applies
+  stop re-running `mise install` and `fc-cache`.
+- Plan shows hooks as data with lifecycle markers and
   unevaluated gates, so bundles carry a readable behavioral
   contract across machines. Evaluation lines stay apply-only.
 - The summary renders titled sections holding drift notes,
   resources, hooks, then counts. Headers carry `+`, `~`, `-`
   sigils with detail lines nested beneath, empty sections stay
-  out, and the counts read one documents line plus one hooks
+  out, and the counts show one documents line, and one hooks
   line while hooks move.
 - Hook gates render simplified infix with full parens, so merged
   duplicate gates collapse to one branch instead of repeating it.
@@ -27,29 +246,29 @@ Design spec: `docs/design/v0.8.md`.
   closed `when` skips as unneeded instead of warning inability.
   Profiles carrying capability leaves in `when` move them to
   `requires`.
-- Disk symlinks resolve before non-link comparisons, so opaque
-  plus text plus rc plus structured documents compare the bytes
-  behind the link. Dangling links read absent. A pre-existing
+- Disk symlinks resolve before non-link comparisons, so opaque,
+  text, rc, and structured documents compare the bytes
+  behind the link. Dangling links show absent. A pre-existing
   symlink under a plain document unlinks first, leaving its
-  target alone, then the fresh file lands as a normal write.
-- Text plus opaque documents take an `unmanaged` flag. Drift
+  target in place, then the fresh file lands as a normal write.
+- Text and opaque documents take an `unmanaged` flag. Drift
   skips the comparison for present unmanaged documents and
-  checks existence alone. Present ones skip the write while
+  checks existence. Present ones skip the write while
   their declaration matches the recorded manifest, rewritten
   declarations land once, missing ones land from declared
   content. `written` counts written documents.
 - Structured patch paths count from 1, so `servers[1].host`
-  names the first server. `servers[0]` fails the plan naming
-  the path. Drift keys plus summary lines echo the same
+  addresses the first server. `servers[0]` fails the plan with
+  the path. Drift keys and summary lines echo the same
   1-based shapes back.
-- Plan with no destination previews alone and writes nothing,
+- Plan with no destination previews and writes nothing,
   so the safe path runs cheaper than the apply it previews.
   Explicit outputs mint artifacts on purpose, a file output
   builds the portable bundle, a named output fills the slot.
 - Bytes live in files, memory holds hashes. `opaque` takes a
   source path, archive callbacks receive member paths from an
   extract-once temp root, and every consumer streams through
-  blob refs holding sha plus size plus path. Example 3 peaks
+  blob refs holding sha, size, and path. Example 3 peaks
   near 300 MB where it hit 1.5 GB, the plain preview lower.
 
 ## [0.7] - 2026-09-19
@@ -63,38 +282,38 @@ Design spec: `docs/design/v0.7.md`.
   version, so a rust toolchain declares its components
   beside its version. Omitted `options` keeps the bare
   version string.
-- Bundle nouns land. `Plan` reads `Bundle`, manifests plus
-  members plus history entries carry their names, summaries
+- Bundle nouns land. `Plan` shows `Bundle`, manifests,
+  members and history entries carry their names, summaries
   report `Bundle:`, tree members hold `relative`. One runtime
-  language. `Manifest` serves runtime plus disk, `Bundle`
-  carries the manifest plus its blob map and never
-  serializes, the live trio plus base64 leave with it.
+  language. `Manifest` serves runtime, disk, `Bundle`
+  carries the manifest, its blob map, and never
+  serializes, the live trio, and base64 leave with it.
   Bundle format version 6 breaks v5 without migration,
   decoders reject unknown fields, and the serde derives
   stand as the schema with no checked-in file.
 - Slots store manifests now, binary bytes live once gzipped
   in a shared pool under content hashes. `plan -o` writes
   portable `.cb` bundles holding their own blobs, the pool
-  fills on apply alone, and apply prunes unreferenced bytes
+  fills on apply, and apply prunes unreferenced bytes
   after archiving. Hunk markers never render, and rc updates
   render content hunks against recorded documents.
 - First-run impact. A missing state slot diffs desired
   documents against disk bytes through `DriftOrder::DiskFirst`,
   rendering one lifecycle block per document holding drift
-  entries. Whole disk-absent documents read as creates,
-  remaining groups read as updates with disk values first,
+  entries. Whole disk-absent documents show as creates,
+  remaining groups show as updates with disk values first,
   text hunks render verbatim disk-first, trees collapse to
-  one changed member count, documents holding no entries read
+  one changed member count, documents holding no entries show
   no lines outside the add count. The apply preview renders
   the same form. Past the first run the steady behavior
   returns unchanged.
 - `export` packs any slot (`%N` history newest-first, `@name`
   named, nothing applied) into a portable `.cb` bundle and
-  prints the path, with `-o` naming the destination and `-m`
+  prints the path, with `-o` setting the destination and `-m`
   printing the manifest. `delete @name` drops named
   slots and prunes orphaned pool bytes. Missing apply
-  profiles fail naming the path.
-- `apply` reads its positional by shape now: `.lua` plus
+  profiles fail with the path.
+- `apply` runs Load over its positional by shape now: `.lua` and
   extensionless paths evaluate a profile, `.cb` runs a bundle,
   `@name` runs a named slot, `%N` runs history newest-first
   from one. The `--plan` flag retires, `recover` retires with
@@ -107,7 +326,7 @@ Design spec: `docs/design/v0.7.md`.
   `patching artifacts (done/total)`), and painting parks
   around the `yes` prompt so ticks never cover it.
 - Core reports compression progress. `CompressStarted` carries
-  blob plus byte totals upfront, one `BlobCompressed` lands per
+  blob and byte totals upfront, one `BlobCompressed` lands per
   finished blob, so the spinner counter stays honest across
   parallel workers. Skipped pool blobs stay silent.
 
@@ -119,9 +338,9 @@ Design spec: `docs/design/v0.7.md`.
   resolution 404'd on a ghost version.
 - `nerd_fonts.font` lands each font under its own
   `fonts/{name}` folder with its own `fc-cache -f` hook
-  scoped to that folder. The shared installer config plus
+  scoped to that folder. The shared installer config and
   `nerd_fonts.init` disappear with it.
-- CI runs on pull requests alone, so tag pushes run only
+- CI runs on pull requests, so tag pushes run only
   the CD workflow.
 - `write_documents` uses `?` over a manual `Ok`/`Err` match
   for the rendered bytes. Newer clippy demands it.
@@ -139,7 +358,7 @@ Design spec: `docs/design/v0.7.md`.
 ### Added
 
 - MIT license in `LICENSE`, copyright SolracHQ 2026.
-- CI workflow running format, lints, plus tests on push and
+- CI workflow running format, lints, and tests on push and
   pull requests. CD workflow building the release binary and
   publishing it as `confit-linux-x64` on version tags after
   proving the tag matches every crate version.
@@ -147,7 +366,7 @@ Design spec: `docs/design/v0.7.md`.
 ### Changed
 
 - Doc examples are real doctests. Every `text` fence holding
-  Rust now reads `rust` and runs under `cargo test`. The pass
+  Rust now shows `rust` and runs under `cargo test`. The pass
   fixed drifted snippets, mostly the `mode` field on document
   data.
 
@@ -158,37 +377,37 @@ Design spec: `docs/design/v0.6.md`.
 ### Added
 
 - Hooks: configs carry post-config steps through
-  `confit.hook.run(argv, opts)` plus `config:add_hook`. Argv
+  `confit.hook.run(argv, opts)` and `config:add_hook`. Argv
   lists execute directly with no shell in between. Opts hold
-  `path` (subprocess PATH dirs alone), `when` (run gate),
-  `checks` (prove the run before plus after), `timeout`
+  `path` (subprocess PATH dirs), `when` (run gate),
+  `checks` (prove the run before and after), `timeout`
   (Lua-shaped durations, default `10m`). Plan previews each
   hook as a `! run:` line with the resolved absolute binary.
   Apply runs hooks after documents land with `hook n of m`
-  plus a spinner, output streaming into the run log file.
-  Passing checks skip, closed gates warn and excuse,
+  and a spinner, output streaming into the run log file.
+  Passing checks skip, closed gates warn, and excuse,
   failures abort the rest with exit 1.
-- Hook merge: identical argv plus path collapse into one run
+- Hook merge: identical argv and path collapse into one run
   in first-declaration order. Gates join with OR, checks
   concatenate, timeout takes the max. Each check binds to its
   own gate on the merged run.
-- Condition evaluator in Rust over path, file, plus
+- Condition evaluator in Rust over path, file, and
   environment shapes: `in_path`, `exists`, `env_eq`,
   `env_set`, `all`, `any`, `nop`.
 - Plan format version 3 carrying `hooks`. Hooks persist into
   state as pure data and re-evaluate each plan: failed checks
-  read as drift, passing checks read as applied.
+  show as drift, passing checks show as applied.
 - Named plans: `-o @work` stores under the user config
   folder as `plans/work.json`, `--plan @work` replays it.
-  Empty names plus separators fail as plan errors.
+  Empty names and separators fail as plan errors.
 - `config:require(name, hint?)`: missing siblings fail the
-  plan naming both configs, hint on its own line. Existence
-  alone, cycles resolve fine. The
+  plan with both configs, hint on its own line. The check
+  covers existence, and cycles resolve fine. The
   `plugin:{user}/{name}:{capability}` shape stays pure
   convention.
 - `mise.init(version?)` returns the installer config: the
-  mise binary composed from fetch plus unpack plus an opaque
-  document, plus the activation patch. Explicit version wins,
+  mise binary composed from fetch, unpack, an opaque
+  document, and the activation patch. Explicit version wins,
   omitted resolves the
   latest tag. No `activate` call lives on the public contract;
   profiles list the installer once and gain activation with
@@ -198,15 +417,15 @@ Design spec: `docs/design/v0.6.md`.
   The callback keeps the `(name, info, content)` shape and
   returns a relative path per kept member, nil per skip.
   Manifests sort by relative path, modes inherit the archive
-  executable bit, empty picks fail naming the filter. Plans
-  read one line either way: `tree (n files)` adds,
+  executable bit, empty picks fail with the filter. Plans
+  show one line either way: `tree (n files)` adds,
   `tree (changed of total files changed)` updates. Drift
-  walks members, apply rewrites changed members plus removes
+  walks members, apply rewrites changed members, and removes
   dropped ones while hand-placed files stay untouched.
 - `solrachq.nerd_fonts` embedded plugin:
   `font(name, version?)` builds one font config holding a
   tree document flattened under the managed fonts folder,
-  the shared `fc-cache -f` hook, plus an implicit require
+  the shared `fc-cache -f` hook, and an implicit require
   on the installer. The hook carries no checks and fires
   every apply while `fc-cache` resolves.
   `init()` returns that installer holding the shared hook.
@@ -215,8 +434,8 @@ Design spec: `docs/design/v0.6.md`.
 ### Changed
 
 - Plan format version 4 carrying the tree kind. State files
-  at version 3 read as unsupported.
-- Crates version 0.6.0 across core, engine, plus cli.
+  at version 3 show as unsupported.
+- Crates version 0.6.0 across core, engine, and cli.
 - `mise.package` takes a table: `name` required, `version`
   defaulting to `latest`, `bin` defaulting to the name for the
   shim proof, `aliases` mapping alias names to expansions with
@@ -226,16 +445,16 @@ Design spec: `docs/design/v0.6.md`.
   The old positional shape breaks outright.
 - `confit.shell` renames to `confit.runtime`. `{{shell}}`
   template slots stay.
-- The built binary names `confit` again through a `[[bin]]`
+- The built binary is `confit` again through a `[[bin]]`
   section, so the test harness mounts the real name.
 - Patch collisions settle by config declaration order
-  instead of owner name. Rc plus structured patches share the
+  instead of owner name. Rc and structured patches share the
   one sort.
 - Spec at 0.6.0.
 
 ### Removed
 
-- The `--state` flag. Every run reads plus writes the fixed
+- The `--state` flag. Load and writes serve every run through the fixed
   slot. Experiments point `--plan` at a rendered file,
   backups copy a plan file, sharing sends a plan file.
 
@@ -246,27 +465,27 @@ Design spec: `docs/design/v0.5.md`.
 ### Added
 
 - `init` scaffolds a project: `confit init [DIR]` (default `.`)
-  writes plugin plus namespace stubs and one profile holding one
+  writes plugin and namespace stubs and one profile holding one
   rc document with manual pointers. Stubs copy as files.
 - `apply` over files with preview-then-prompt: literal `yes`
   proceeds, a plan file flag skips the preview, a force flag
   skips the prompt, drift re-prompts always.
-- Previous-states rotation plus `recover`: one fixed live slot
+- Previous-states rotation and `recover`: one fixed live slot
   under the OS config folder, `--state` override per run, five
   kept plans, `recover` lists `index @ created_at` and re-applies
   the picked one.
-- `fetch_text` plus `fetch_file` with optional sha guarantee.
+- `fetch_text` and `fetch_file` with optional sha guarantee.
   `fetch_file` streams into the OS cache folder beside a sha
   sidecar owned by the `Cache` type; re-download runs on missing
   file or sidecar, sidecar mismatch, or `--re-fetch`.
-- `confit.document.compressed` unpacks gzip, tar, plus zip through
+- `confit.document.compressed` unpacks gzip, tar, and zip through
   a per-member callback returning a document, nil skipping the
-  member. Filters read path plus meta plus data.
+  member. Filters receive path, meta, and data.
 - Opaque document kind for binaries: base64 payloads in the plan,
-  raw bytes on apply, hash plus size drift.
+  raw bytes on apply, hash, and size drift.
 - `confit.utils` namespace: `render` (moved from `confit.text`),
   `holds_cycle`, `is_array`.
-- Rc api: `rc.prepend` constructor plus the `add` verb on patch
+- Rc api: `rc.prepend` constructor and the `add` verb on patch
   handles, with `RcPatch`/`StructuredPatch` split types behind
   the callbacks.
 
@@ -276,7 +495,7 @@ Design spec: `docs/design/v0.5.md`.
   (`ValueExt`/`TableExt` `req_*` extractors), and `path_expr`;
   surface impls thin out onto the extractors.
 - Error prefix fix: core `Display` shapes stay bare, the CLI owns
-  the `confit:` plus `plan error:` prefixes at the edge.
+  the `confit:` and `plan error:` prefixes at the edge.
 - Spec at 0.5.0.
 
 ### Removed
@@ -287,11 +506,11 @@ Design spec: `docs/design/v0.5.md`.
 ## [0.4] - 2026-09-14
 
 Design spec: `docs/design/v0.4.md`. v0.3 was planned and half
-built, then superseded without sealing.
+built, then superseded with no release.
 
 ### Added
 
-- Workspace with three crates: `confit-core` (types plus pure
+- Workspace with three crates: `confit-core` (types and pure
   functions), `confit-engine` (every Lua touch), `confit-cli`
   (args, files, terminal, logging). `engine::evaluate` returns
   finished `Vec<Document>`; configs, patches, shells, and owners
@@ -299,20 +518,20 @@ built, then superseded without sealing.
 - Documents, patches, configs, profiles as the only concepts.
   Profiles declare machine-owned bases, configs contribute,
   patches modify through live callbacks in pipeline order
-  (priority desc plus owner asc, op order verbatim).
+  (priority desc and owner asc, op order verbatim).
 - Five priority levels on patches (`MINOR` to `MAJOR`, default
   `NORMAL`). The engine sorts and never interprets beyond order.
 - Plugin namespaces (`confit.plugin.{user}.{name}`), embedded
   `solrachq` defaults (mise, merge, template) in external shape,
-  lazy loading, note-and-skip collisions, reads jailed to the
+  lazy loading, note-and-skip collisions, Load jailed to the
   project root.
-- Rc sections as position plus guard: any entry in any section,
+- Rc sections as position and guard: any entry in any section,
   profile always runs, guard splits the rest, declaration order
   inside sections. One `RcOp`/`RcEntry` model replaces the four
   entry structs.
-- Plan format version 2. Version 1 covered artifacts and reads
+- Plan format version 2. Version 1 covered artifacts and shows
   incompatible.
-- `Filesystem` trait plus `MemoryFs` fake in the cli crate. Tests
+- `Filesystem` trait and `MemoryFs` fake in the cli crate. Tests
   run on memory and never touch home folders.
 
 ### Changed
@@ -320,7 +539,7 @@ built, then superseded without sealing.
 - Everything rewritten from the v0.3 tree, nothing copied. Behavior
   colocates with data; no separate model layer, no free functions
   with long parameter lists.
-- One path holds one document. Repeats fail as plan errors naming
+- One path holds one document. Repeats fail as plan errors with
   the path. Documents carry no owner.
 - Collision slots span sections by name; exec entries accumulate
   with no collision. Collision lines keep their shape with op
@@ -331,7 +550,7 @@ built, then superseded without sealing.
 ### Removed
 
 - Artifacts and tools vocabulary, plan format version 1.
-- `--strict` flag plus warn-keep-first conflicts.
+- `--strict` flag and warn-keep-first conflicts.
 - Lanes, document owners, `ProfileGraph`, layered architecture doc.
 - Legacy `plugins/` folder; engine embeds from
   `crates/engine/plugins/`.
@@ -343,21 +562,21 @@ built, then superseded without sealing.
 - `render` module: pure data-to-bytes rendering for every artifact kind.
   Rc files render env, aliases, and init blocks in per-tool
   `# >>> confit:<tool>` sections; tables serialize fixed-order;
-  templates render via minijinja with root-relative `src` reads;
+  templates render via minijinja with root-relative `src` Load;
   rendered bytes hash with SHA-256.
 - `confit.resources` (`load_toml`/`load_json`/`load_yaml` root-relative
-  reads, `merge` with `shallow`/`list_append` opts) and
-  `confit.artifact` constructors plus `tool:append_artifact`, folded
+  Load, `merge` with `shallow`/`list_append` opts) and
+  `confit.artifact` constructors and `tool:append_artifact`, folded
   into the plan by `(kind, path)`; proven by
-  `examples/1-structured_resource` (structured loads plus merge) and
-  `examples/2-templated_resource` (minijinja template plus variables).
+  `examples/1-structured_resource` (structured loads, merge) and
+  `examples/2-templated_resource` (minijinja template and variables).
 - `confit.path` lib (`home`, `config`, `data`, `confroot`): joins over
-  the OS folders plus the project root for `confroot`.
+  the OS folders and the project root for `confroot`.
 - Filesystem-aware `plan`/`status`: each artifact path snapshots behind
-  the `SnapshotStore` trait; absent paths read as absence, unreadable paths
-  warn on stderr naming path and reason, exit stays 0.
+  the `SnapshotStore` trait; absent paths count as absence, unreadable paths
+  warn on stderr with path and reason, exit stays 0.
 - Three-way diff (desired vs previous vs disk): create, update,
-  unchanged, delete counts plus `OverwriteUntracked`,
+  unchanged, delete counts, and `OverwriteUntracked`,
   `ManualModification`, `Unreadable` warnings.
 - Disk diffs: key-value lines for structured kinds, unified diffs for
   scripts and raw bytes, wrapped in the drift note with
@@ -367,11 +586,11 @@ built, then superseded without sealing.
   first init entry of every shell.
 - `tool:init({ source = "path" })` third init shape, rendering
   `source path` next to `eval` and `cmd` entries.
-- New direct dependencies: `anstream` (color honoring `NO_COLOR` plus
-  terminal detection; pipes read plain text), `diffy` (unified hunks for
-  byte kinds behind headers plus line vocabulary), `directories` (home
-  folder expansion plus OS folders for the path lib), `noyalib`
-  (YAML resource loads plus YAML rendering).
+- New direct dependencies: `anstream` (color honoring `NO_COLOR` and
+  terminal detection; pipes show plain text), `diffy` (unified hunks for
+  byte kinds behind headers, line vocabulary), `directories` (home
+  folder expansion, OS folders for the path lib), `noyalib`
+  (YAML resource loads and YAML rendering).
 
 ### Changed
 
@@ -380,31 +599,30 @@ built, then superseded without sealing.
 - Rendering, merging, digests, plan building, and both diffs gather in
   services, so a wrong plan output traces to one layer.
 - The Lua side splits into a framework holding the `resources`,
-  `artifact`, and `path` namespaces plus a read-only evaluator, so the
+  `artifact`, and `path` namespaces and a read-only evaluator, so the
   stdlib replacement and profile loading change independently. One
   `install_confit` call wires every namespace; the evaluator keeps no
   install sequence.
 - Plan assembly moves into actions with one fold per contribution
-  kind. `main` parses, binds the live filesystem backend, and prints
-  alone.
+  kind. `main` parses, binds the live filesystem backend, and prints.
 - Shared shapes centralize in a model split between state entities and
   transfer shapes, with one plan-version constant replacing the magic
   number.
-- The CLI holds argument shapes alone. Every user-facing string moves
+- The CLI holds argument shapes. Every user-facing string moves
   to presentation, which also owns terminal color that stays off on
   pipes.
 - One shared hashing utility in `security` serves snapshots, digests,
   and plan ids, replacing the scattered copies.
-- Modules take the `name.rs` plus `name/` children form with zero
+- Modules take the `name.rs` and `name/` children form with zero
   `mod.rs` files.
 - YAML backend moves from deprecated `serde_yml` to `noyalib`.
   Structured renderers emit each serializer native output with no
   trailing-newline normalization; output stays deterministic per
   serializer.
 - Repository collapses to a single `Filesystem` seam, services own
-  expansion plus parsing plus hashing plus shaping.
+  expansion, parsing, hashing, and shaping.
 - Root escapes fail closed even while the target stays absent;
-  missing escape targets previously read inline silently.
+  missing escape targets previously appeared inline silently.
 
 ### Removed
 
@@ -413,9 +631,9 @@ built, then superseded without sealing.
   part works. Plan still has pending work of its own, alias guards and
   install checks among it, and hooks are not needed in the near
   horizon.
-- `--format` plus the TOML plan export: pretty JSON already covers
+- `--format` and the TOML plan export: pretty JSON already covers
   readability, and the export failed on legal plan data holding nulls.
-  Plans serialize as JSON alone.
+  Plans serialize as JSON.
 
 ## [0.1.0] - 2026-09-09
 
@@ -433,10 +651,10 @@ Design spec: `docs/design/v0.1.md`.
 - `status`: diff desired vs previous state in memory; summary to stderr.
 - Structural-equality env shadowing with `_shadowed` losers (excluded from
   hash and diff); rich summary lists every entry with its winner tool;
-  `--conflicts` names losers (`starship wins over bat`); `--root` defaults
+  `--conflicts` lists losers (`starship wins over bat`); `--root` defaults
   to the profile file's parent.
 - Docker test harness: Fedora-minimal `confit-test` container, `tester`
   user, `confit-test-home` volume, `:ro` target mount, `just test-*`
-  recipes plus `plan-example` smoke.
+  recipes and `plan-example` smoke.
 - Lint policy: `unwrap`/`expect` denied in production code, allowed in
   tests and doctests only.

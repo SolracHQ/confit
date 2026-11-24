@@ -1,7 +1,7 @@
 [package]
 name = "confit-cli"
-version = "0.8.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [[bin]]
 name = "confit"
@@ -11,20 +11,26 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-anstream.workspace = true
 clap = { workspace = true, features = ["derive"] }
-confit-core = { path = "../core" }
-confit-engine = { path = "../engine" }
-crossbeam-channel = "0.5.17"
-dirs = "7.0.0"
+confit-runtime.workspace = true
+confit-model.workspace = true
+confit-engine.workspace = true
+confit-store.workspace = true
+crossbeam-channel.workspace = true
 fern = "0.7.1"
-indicatif = "0.18.6"
 log.workspace = true
-rayon = "1.12.0"
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+confit-driver.workspace = true
+thiserror.workspace = true
+minijinja = "3.0.0"
+confit-core.workspace = true
+time = { workspace = true, features = ["local-offset"] }
+confit-events.workspace = true
+confit-bundler.workspace = true
+confit-ui.workspace = true
+confit-differ.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
-flate2 = "1.1.10"
-tar = "0.4.46"
+confit-driver = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

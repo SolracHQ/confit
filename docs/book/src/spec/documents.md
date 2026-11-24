@@ -1,345 +1,203 @@
 # Documents
 
-A document holds one destination plus one payload. The plan
-builds one document per path. Hashes cover rendered bytes.
-Apply writes each document to its expanded path.
-
-| Kind | Payload | Path rule |
-| --- | --- | --- |
-| `structured` | data table plus format | one path holds one document |
-| `text` | exact file text | one path holds one document |
-| `rc` | three section buckets | one base fans out per shell |
-| `link` | link target | one path holds one document |
-| `opaque` | raw bytes by blob ref | one path holds one document |
-| `tree` | member list under one folder | one path holds one file set |
-
-### Structured
-
-#### Declaration shape
+A document pairs one destination route with one payload. The payload is what
+apply writes at the destination. The profile declares documents, and patches
+mutate them before the write.
 
 ```lua
-confit.document.structured("toml", { path = path, data = data })
+{
+   path = route("home", ".bashrc"),
+   profile = {},
+   config = {
+      { alias = { name = "ll", expansion = "ls -l" } },
+   },
+   final = {},
+}
 ```
 
-The format names one of `json`, `toml`, or `yaml` in any
-letter case. The args table holds `path` plus `data` only.
-The data table holds string keys plus JSON shaped values.
+The `path` field is required and takes a route. The remaining fields name one
+payload kind.
 
-#### Merge rule
+| Kind | Fields |
+| --- | --- |
+| Structured | `format`, `data` |
+| Text | `text`, `mode` |
+| Link | `target` |
+| Rc | `profile`, `config`, `final` |
+| Opaque | `handle`, `mode` |
+| Tree | `members` |
 
-Patches run in pipeline order. Priority sorts descending.
-Declaration order breaks ties. The base seeds leaf owners
-under the declaring owner. Each `set` writes one dotted
-path. Each `append` extends one list. A later write to a
-slot another owner holds drops. One collision line names
-the format plus the path plus the winner.
+Every kind takes an optional `unmanaged` flag beside `path`.
+
+A table that carries fields from two kinds fails. An unknown field fails. A
+table with only `path` is an rc document with three empty sections.
+
+## Routes
+
+A route is a destination before the host path exists. The `route` function takes
+a base and a relative path.
 
 ```lua
-confit.patch.structured("toml", path, function(data)
-  data:set("user.theme", "catppuccin")
-  data:append("user.plugins", "tabnine")
-end):priority(confit.priority.HIGH)
+route("home", ".bashrc")
+route("config", "starship.toml")
+route("data", "fonts/JetBrainsMono")
+route("cache", "tool")
+route("literal", "/opt/tool")
 ```
 
-Paths hold dotted keys plus single indices. List positions
-count from 1, so `servers[1]` names the first entry. One
-path rides each call. `[0]` fails the plan naming the
-path. A `set` past the list tail fails. An `append`
-onto a non-list leaf fails. A write through a scalar leaf
-fails as blocked. A patch naming another format than the
-base fails as a format mismatch. Patches with no base
-create the document. Patches that agree on nothing fail
-as a format mismatch.
+| Base | Expansion |
+| --- | --- |
+| `home` | the user home folder |
+| `config` | the platform config folder |
+| `data` | the platform data folder |
+| `cache` | the platform cache folder |
+| `literal` | the relative path, unchanged |
 
-#### Render rule
-
-Each format serializes through its own renderer. TOML
-renders through the TOML encoder. JSON renders pretty.
-YAML renders through the YAML encoder.
-
-#### Hash rule
-
-The hash covers rendered bytes with SHA-256. The digest
-reads as lowercase hex.
-
-#### Drift shape
-
-Recorded plus disk tables diff leaf by leaf. Dotted keys
-name leaves. Indices ride brackets counting from 1. Changed leaves carry
-old plus new values. Added leaves carry new values only.
-Removed leaves carry old values only. An explicit null
-stays distinct from an absent key. Disk bytes outside the
-format fall back to a hunk.
-
-#### Apply behavior
-
-Apply writes rendered bytes to the expanded path. Recorded
-paths absent from the manifest delete. Kind changes outside
-opaque read as one create plus one delete.
-
-### Text
-
-#### Declaration shape
+A route carries two fields. `base` is the base name. `relative` is the path
+below the base.
 
 ```lua
-confit.document.text(path, content, { mode = "644" })
+local path = route("home", ".bashrc")
+
+path.base      -- "home"
+path.relative  -- ".bashrc"
+path:display() -- "home('.bashrc')"
 ```
 
-The call takes a path plus content plus optional opts. Opts
-holds `mode` plus `unmanaged`. The mode reads octal like
-`755` or symbolic like `rwxr-xr-x`. A missing mode leaves
-the file mode to the process umask. `unmanaged` marks
-existence-only documents, sharing the opaque rule.
+`:display()` returns call text for a named base and the bare path for `literal`.
+The display text shows the route in output lines and log lines. You see the same
+display in trees and in Details. The preview groups documents under `[base]`
+branches with nested relative paths.
 
-#### Merge rule
+A route field takes a value from `route(...)`. A string or a table fails. An
+empty relative path fails. A named base that the host lacks fails when the route
+expands.
 
-Text reads declaration only. No patch targets text. One
-path holds one document. A repeat fails naming both
-owners.
+Expansion happens at write time, when a shell guard renders a path, and when a
+hook resolves an argument. The manifest stores the base and the relative path,
+so a recorded document expands again on the next apply.
 
-#### Render rule
+## Common rules
 
-Content passes through byte for byte. Present unmanaged
-documents skip the write while their declaration matches
-the recorded manifest, rewritten ones land once.
+- One document per path. A repeated path fails the plan.
+- Documents sort by route. Tree members sort by relative path.
+- A mode is a string. Octal forms are `755` and `0755`. A symbolic form is
+`rwxr-xr-x`. Any other text fails.
+- Apply writes `644` for a text or opaque document that doesn't have a
+mode. A ref that doesn't have a mode takes `644`.
+- Structured, link, and rc documents don't carry a mode. A `mode` field on
+one of them fails.
+- `unmanaged` marks an existence-only document. Every kind carries the
+flag. A tree checks each member for existence.
+- The manifest records one content hash for each document.
 
-#### Hash rule
+An unmanaged document writes on the first apply. A later apply leaves an
+existing destination untouched while the declaration matches the recorded
+state. A changed declaration writes once, then leaves the destination
+untouched again. An unmanaged tree recreates only missing members. Disk
+changes to present members stay.
 
-The hash covers content bytes with SHA-256. The digest
-reads as lowercase hex.
+| Kind | Hash input |
+| --- | --- |
+| Structured | the rendered content |
+| Text | the text content |
+| Link | the target route text |
+| Rc | the rendered shell text |
+| Opaque | the content hash of the handle |
+| Tree | one line per member with its mode, path, and content hash |
 
-#### Drift shape
+## Structured
 
-Changed content renders as one unified hunk. The hunk
-carries content lines only. The renderer strips file
-markers. A recorded mode plus a differing disk mode adds
-a `mode` key entry.
-
-#### Apply behavior
-
-Apply writes content bytes to the expanded path. Apply
-sets the recorded mode after the bytes land. A missing
-recorded mode skips the mode step.
-
-### Rc
-
-#### Declaration shape
+A structured document is a table in one serialization format.
 
 ```lua
-confit.document.rc.new({
-  profile = { rc.prepend(home .. "/.local/bin") },
-  config = { rc.alias("ll", "ls -l") },
-  final = { rc.eval({ "starship", "init", confit.runtime.SHELL }) },
-})
+{
+   path = route("config", "starship.toml"),
+   format = "toml",
+   data = {
+      add_newline = false,
+      format = "$all",
+   },
+}
 ```
 
-The base holds section buckets only. Keys name `profile`,
-`config`, or `final`. Each key stays optional. Values hold
-lists of rc entry tables. Bare entries outside `rc.new`
-fail. One manifest holds one rc base. A repeat fails naming
-both owners.
+`format` takes `json`, `toml`, or `yaml` in any letter case. `data` takes a
+table with string keys. Values are booleans, numbers, strings, arrays, and
+nested tables. An integer key fails.
 
-#### Merge rule
+Confit starts the serializer for the format. JSON output is pretty printed. The
+rendered text is the file body. Apply creates the file with the process file
+mode, usually `644`.
 
-Patches run in pipeline order. Each `add` takes a section
-plus an entry. Unknown sections fail. Named slots keep
-the first writer. Exec entries accumulate. Added entries
-follow patch order.
+A structured document is the base for a structured patch. The patch takes the
+same format. See [patches](patches.md#structured-patches).
+
+## Text
+
+A text document is exact file text.
 
 ```lua
-confit.patch.rc(function(data)
-  data:add("config", confit.document.rc.alias("cat", "bat"))
-end)
+{
+   path = route("config", "bat/config"),
+   text = "--theme=\"catppuccin\"\n",
+   mode = "644",
+   unmanaged = false,
+}
 ```
 
-#### Render rule
+The `text` field lands unchanged. `mode` sets the permission bits after the
+write. Apply replaces a symlink at the path with a regular file.
 
-Each shell gains one file. Profile lines render first. The
-guard follows while config or final holds entries. Config
-lines render next. Final lines render last. Blocks join
-with one blank line. The file ends with a trailing
-newline. Plain entries render as bare lines. Guarded
-entries render as `if` blocks.
+A text document doesn't have a patch kind. A structured or rc patch cannot
+target it.
 
-#### Hash rule
+## Link
 
-Each per-shell file hashes separately. The hash covers
-rendered shell text with SHA-256. The digest reads as
-lowercase hex.
-
-#### Drift shape
-
-Changed rc files render as one unified hunk, like text.
-Modes never attach to rc documents.
-
-#### Apply behavior
-
-Apply writes each per-shell file to its shell path. The
-`{{shell}}` slot materializes per shell before the write.
-Recorded shell files absent from the manifest delete.
-
-### Link
-
-#### Declaration shape
+A link document places a symbolic link.
 
 ```lua
-confit.document.link(path, target)
+{
+   path = route("home", ".config-link"),
+   target = route("config", "real"),
+}
 ```
 
-The call takes a link path plus a target string.
+`target` takes a route. A string fails. Apply writes a symlink at the
+destination. The link body is the target route text from `:display()`.
 
-#### Merge rule
+A link doesn't carry a mode. A changed target reports under the `target`
+key, and the next apply rewrites the link. A link doesn't have a patch
+kind.
 
-Links read declaration only. One path holds one document.
-A repeat fails naming both owners.
+## Rc
 
-#### Render rule
-
-The target string forms the link body.
-
-#### Hash rule
-
-The hash covers target bytes with SHA-256. The digest
-reads as lowercase hex.
-
-#### Drift shape
-
-A changed target reports under the `target` key with old
-plus new strings.
-
-#### Apply behavior
-
-Apply places a symlink at the expanded path. A recorded
-mode never attaches to links.
-
-### Opaque
-
-#### Declaration shape
+An rc document renders shell text. Declare each shell document explicitly. A
+path such as `.bashrc` doesn't select a shell on its own.
 
 ```lua
-confit.document.opaque(path, source, { mode = "755" })
+{
+   path = route("home", ".bashrc"),
+   profile = {
+      { path = { name = "PATH", dir = route("home", ".local/bin") } },
+   },
+   config = {
+      { alias = { name = "ll", expansion = "ls -l" } },
+   },
+   final = {
+      { eval = { argv = { "starship", "init", "bash" } } },
+   },
+}
 ```
 
-The call takes a path plus a source path plus optional
-opts. Sources name project files root-relative, fetch
-cache files absolute, or extract member files absolute.
-Opts holds `mode` plus `unmanaged`.
-`unmanaged` marks existence-only documents, present bytes
-read as already in place whatever their content. The flag
-rides outside the data hash, so toggling it with identical
-bytes shows no plan line. Assembly streams the source file
-into the plan and records its hash plus size.
+The three sections are optional and default to empty.
 
-#### Merge rule
+| Section | Position |
+| --- | --- |
+| `profile` | before the guard, in every shell |
+| `config` | after the guard |
+| `final` | after `config` |
 
-Opaque reads declaration only. One path holds one
-document. A repeat fails naming both owners.
-
-#### Render rule
-
-Raw blob bytes land on disk unchanged. Present unmanaged
-documents skip the write while their declaration matches
-the recorded manifest, rewritten ones land once.
-
-#### Hash rule
-
-The hash copies the blob reference. The blob reference
-holds the SHA-256 over raw bytes. The digest reads as
-lowercase hex.
-
-#### Drift shape
-
-Changed bytes report under the `content` key. Values carry
-hash plus size labels. Equal bytes stay quiet. A recorded
-mode plus a differing disk mode adds a `mode` key entry.
-
-#### Apply behavior
-
-Apply writes raw blob bytes to the expanded path. Apply
-sets the recorded mode after the bytes land. A kind change
-to or from opaque reads as an update. All other kind
-changes read as one create plus one delete.
-
-### Tree
-
-#### Declaration shape
-
-```lua
-confit.document.tree(archive, dest, function(name, info, member)
-  if not name:match("%.ttf$") then
-    return nil
-  end
-  return name:match("([^/]+)$")
-end)
-```
-
-The call takes an archive path plus a destination folder
-plus a picker. The picker takes member path plus info
-plus member file path. Info holds `size` plus `executable`. The
-picker returns a destination-relative path per kept
-member. It returns nil per skip. A non-string return
-fails. An empty return fails. An absolute return fails.
-A dot-dot return fails. A repeated return fails. A pick
-that keeps nothing fails naming the filter.
-
-#### Merge rule
-
-Trees read declaration only. One path holds one document.
-A repeat fails naming both owners. Members sort by
-relative path. Member modes follow the archive executable
-bit. Set bits read `755`. Clear bits read `644`. Member
-modes come from the archive alone.
-
-#### Render rule
-
-Members write as separate files under the destination.
-The destination folder itself stays a folder.
-Parents build on demand.
-
-#### Hash rule
-
-The hash covers the canonical manifest with SHA-256. The
-manifest sorts by relative path. Each line holds octal
-mode plus relative path plus member blob hash. The digest
-reads as lowercase hex.
-
-```text
-644 JetBrainsMono.ttf {hex}
-755 setup.sh {hex}
-```
-
-#### Drift shape
-
-Drift walks the destination member by member. Missing
-members report missing under the joined path. Changed
-bytes report hash plus size labels under the member key.
-Changed modes report under the `member:mode` key. Drift
-covers recorded members alone.
-
-#### Apply behavior
-
-Apply writes members to joined paths with per-member
-modes. Apply removes recorded members absent from the
-desired manifest. Hand-placed files plus the destination
-folder stay.
-
-### Shell rc
-
-The rc document carries three sections. `profile` renders
-before the guard. `config` renders after the guard.
-`final` renders last. Any entry kind renders in any
-section. Entries keep declaration order within one
-section.
-
-| Section | Position | Guard |
-| --- | --- | --- |
-| `profile` | file head | no guard |
-| `config` | past the guard | interactive only |
-| `final` | file tail | interactive only |
-
-The guard marks interactive shells. It renders while
-config or final holds entries. Setup-only output skips
-the guard.
+The guard appears when `config` or `final` has an entry.
 
 ```sh
 case $- in
@@ -348,125 +206,102 @@ case $- in
 esac
 ```
 
-Slots decide collisions. Named entries share one slot per
-name plus guard across every section. One name under
-another guard holds its own slot. The first writer wins
-per slot. A later write drops plus one collision line in
-the log.
+The guard returns from a non-interactive shell and lets an interactive shell
+continue.
 
-```text
-collision on alias "ll": "starship" overwritten, "bat" wins
+An entry table carries one entry kind and an optional `when` condition.
+
+| Entry | Fields | Rendered line |
+| --- | --- | --- |
+| `env` | `name`, `value` | `export NAME=value` |
+| `path` | `name`, `dir` | `export NAME=dir:"${NAME}"` |
+| `alias` | `name`, `expansion` | `alias NAME=expansion` |
+| `eval` | `argv` | `eval "$(argv)"` |
+| `cmd` | `argv` | `argv` |
+| `source` | `path` | `source path` |
+
+A `path` entry puts its directory before the current value, so it prepends.
+`dir` and `source.path` take routes that expand to host paths. `argv` takes a
+list of text or routes. Values use Bourne quoting.
+
+A `when` condition wraps the line in a guard.
+
+```lua
+{
+   alias = { name = "ll", expansion = "ls -l" },
+   when = { env_set = { key = "SSH_CONNECTION" } },
+}
 ```
 
-Exec entries carry no slot. `eval` plus `cmd` plus
-`source` accumulate with no collision.
-
-| Entry kind | Builder | Slot |
-| --- | --- | --- |
-| `env` | `rc.env(name, value, opts?)` | name plus guard |
-| `path` | `rc.prepend(dir, opts?)` | name plus guard |
-| `alias` | `rc.alias(name, value, opts?)` | name plus guard |
-| `eval` | `rc.eval(argv, opts?)` | none, accumulates |
-| `cmd` | `rc.cmd(argv, opts?)` | none, accumulates |
-| `source` | `rc.source(path, opts?)` | none, accumulates |
-
-Entry builders take `when` alone through opts. Unknown
-opts fields fail. `prepend` takes a dir alone for `PATH`
-or a var plus a dir. Init strings render the `{{shell}}`
-slot with the target shell name. One entry addresses
-every shell.
-
-`when` scopes per shell session. Each new shell evaluates
-the guard and skips entries lacking their binary or
-state. `when` holds a condition table or a builder
-function over the runtime namespace. The engine calls the
-builder during evaluation. `Changed` rides hooks alone.
-Rc guards holding it fail with a hooks-only plan error.
-
-One file renders per declared shell. `bash` writes
-`~/.bashrc`. `zsh` writes `~/.zshrc`. Other names write
-`~/.{name}rc`.
-
-Layout order holds profile lines, then the guard, then
-config lines, then final lines:
-
 ```sh
-export PATH=/home/u/.local/bin:"${PATH}"
-export EDITOR=hx
-
-case $- in
-*i*) ;;
-*) return ;;
-esac
-
-alias ll='ls -l'
-if command -v bat >/dev/null 2>&1; then
-  alias cat=bat
+if [ -n "${SSH_CONNECTION}" ]; then
+  alias ll='ls -l'
 fi
-
-eval "$(mise activate bash)"
-eval "$(starship init bash)"
 ```
 
-### Archives
+Entries render in declaration order inside each section. The blocks join with
+one blank line, and the file ends with one newline. A document with three empty
+sections renders empty content. An rc document doesn't have a mode, and apply
+creates the file with the process file mode, usually `644`.
 
-`compressed` unpacks one archive into kept documents. The
-callback takes member path plus info plus member file
-path. Info holds `size` plus `executable`. The callback
-returns one document per kept member. It returns nil per
-skip. Other returns fail naming the constructor. Kept
-documents ride the profile `documents` array or
-`config:add_document`. Results follow callback order.
-Transforms read the member file through `load_bytes` or
-`load_text`, and `opaque` takes the member path as its
-source.
+## Opaque
+
+An opaque document writes content from a handle.
 
 ```lua
-local kept = confit.document.compressed(archive, function(name, info, member)
-  if name == "mise/bin/mise" then
-    return confit.document.opaque(bin .. "/mise", member, { mode = "755" })
-  end
-end)
+{
+   path = route("home", ".local/bin/starship"),
+   handle = handle:ref(),
+   mode = "755",
+}
 ```
 
-Byte routing follows magic plus name. Gzip bodies gunzip
-first, then parse as tar with one single-file fallback.
-Names wanting tar skip the fallback. Zip bodies parse as
-zip. Other bodies parse as tar. Directory members skip.
-Empty member names skip.
+A handle comes from `confit.open`, `confit.fetch`, or `archive:member`. Call
+`ref` first: documents take the ref form. See the [Lua surface](lua.md#handles).
 
-| Body | Name | Result |
-| --- | --- | --- |
-| gzip | `.tar.gz`, `.tgz`, `.tar` | tar members, tar failure fails |
-| gzip | other names | tar members, else one single file |
-| zip magic | any | zip members |
-| other bytes | any | tar members |
+Apply streams the handle content to the path, then sets the mode. A missing
+mode takes `644`. A handle hash is the content, so the manifest copies the
+hash and doesn't read the content again.
 
-Path reads stay jailed. Root-relative paths resolve under
-the project root. Cache-absolute paths resolve under the
-fetch cache. Extract-absolute paths resolve under the
-extract root. Absolute paths outside both fail. Empty
-paths fail. Escapes above the root fail. Remote bytes
-ride `fetch_file` first. The cache path feeds
-`compressed` plus `tree` plus `load_bytes` directly.
-Member paths feed `opaque` plus `load_bytes` plus
-`load_text` directly.
+An opaque document doesn't have a rendered form. A tree or opaque document
+cannot be rendered as text.
 
-### Hashing
+## Tree
 
-Each document hashes with SHA-256 over its rendered
-bytes. Digests read as lowercase hex. Opaque hashes copy
-the blob reference. Tree hashes cover the canonical
-manifest instead. Tables hold fixed key order through the
-sorted map. Ordered lists keep declaration order.
+A tree document writes a set of files under one folder.
 
-Blobs gzip at level 6 for pool plus bundle entries. The
-outer bundle tar gzips at level 0. Manifest files hold
-pretty JSON with blob refs into the shared pool. Raw
-bytes travel in the pool beside the manifests.
+```lua
+{
+   path = route("data", "fonts/JetBrainsMono"),
+   members = {
+      ["JetBrainsMono-Regular.ttf"] = regular:ref(),
+      ["JetBrainsMono-Bold.ttf"] = { handle = bold:ref(), mode = "755" },
+   },
+}
+```
 
-Hashes persist in the file and load trusted. Loads skip
-rendering. Hydration stays lazy. Disk bytes matching a
-blob hash win before any pool read. Pool hits verify the
-hash and cache per run. Missing pool blobs fail the load
-naming the hash.
+A member value is a ref or a table with `handle` and `mode`. A ref that
+doesn't have a mode takes `644`.
+
+A member key is a relative path with forward slashes. Profile decode rejects
+these keys:
+
+- an empty key
+- an absolute key
+- a `.` segment
+- a `..` segment
+- an empty segment
+- a backslash
+
+Apply writes each member under the destination folder and creates parent folders
+on demand. Files that you place under the folder by hand stay. A member that a
+later declaration drops is removed on apply.
+
+The tree is one document at one path. Its hash covers the member list, so a
+member change reads as a document update.
+
+## Kind changes
+
+The recorded manifest identifies one entry by display path. [Difference](difference.md) states how the kinds compare.
+
+Apply writes the new payload at the path. The recorded entry takes the new kind.

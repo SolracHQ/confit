@@ -1,0 +1,29 @@
+[package]
+name = "confit-runtime"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+confit-model.workspace = true
+confit-driver.workspace = true
+confit-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+noyalib.workspace = true
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+log.workspace = true
+diffy.workspace = true
+sha2.workspace = true
+confit-core.workspace = true
+confit-events.workspace = true
+confit-bundler.workspace = true
+confit-differ.workspace = true
+
+[dev-dependencies]
+confit-driver = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

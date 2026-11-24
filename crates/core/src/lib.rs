@@ -1,18 +1,14 @@
-//! Confit core
-//!
-//! Pure document plus plan types with rendering and hashing.
+//! Shared vocabulary across crates.
 
 #![deny(missing_docs)]
 
-pub mod condition;
-pub mod document;
-pub mod drift;
+/// Shared failures with causes, context, and terminal kinds.
 pub mod error;
-pub mod fs;
-pub mod hook;
-pub mod ids;
-pub mod plan;
-pub mod progress;
-pub mod render;
-pub mod runtime;
-pub mod store;
+/// Validated content hashes for trusted stores.
+pub mod resource_ref;
+/// Verified content hashes.
+pub mod sha;
+/// Near-match suggestions for unknown names.
+pub mod suggest;
+/// The binary version and the manifest versions it loads.
+pub mod version;
