@@ -16,14 +16,7 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          version="$(grep -m1 '^version' crates/cli/Cargo.toml | cut -d'"' -f2)"
-          for crate in core engine cli; do
-            other="$(grep -m1 '^version' "crates/$crate/Cargo.toml" | cut -d'"' -f2)"
-            if [ "$other" != "$version" ]; then
-              echo "crates/$crate reads $other, want $version."
-              exit 1
-            fi
-          done
+          version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           if git ls-remote --tags origin | grep -q "refs/tags/v$version$"; then
             echo "v$version already tagged, nothing to release."
             echo "release=false" >> "$GITHUB_OUTPUT"
